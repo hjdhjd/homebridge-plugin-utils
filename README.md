@@ -2,9 +2,9 @@
 <DIV ALIGN="CENTER" STYLE="text-align:center">
 
 # Homebridge Plugin Utilities
-[![Downloads](https://img.shields.io/npm/dt/homebridge-plugin-utils?color=%230559C9&logo=icloud&logoColor=%23FFFFFF&style=for-the-badge)](https://www.npmjs.com/package/homebridge-plugin-utils)
-[![Version](https://img.shields.io/npm/v/homebridge-plugin-utils?color=%230559C9&label=Latest%20Version&logo=homebridge&logoColor=%23FFFFFF&style=for-the-badge)](https://www.npmjs.com/package/homebridge-plugin-utils)
-[![Homebridge Discord](https://img.shields.io/discord/432663330281226270?color=0559C9&label=Discord&logo=discord&logoColor=%23FFFFFF&style=for-the-badge)](https://discord.gg/QXqfHEW)
+[![Downloads](https://img.shields.io/npm/dt/homebridge-plugin-utils?color=%23491F59&logo=icloud&logoColor=%23FFFFFF&style=for-the-badge)](https://www.npmjs.com/package/homebridge-plugin-utils)
+[![Version](https://img.shields.io/npm/v/homebridge-plugin-utils?color=%23491F59&label=Latest%20Version&logo=homebridge&logoColor=%23FFFFFF&style=for-the-badge)](https://www.npmjs.com/package/homebridge-plugin-utils)
+[![Homebridge Discord](https://img.shields.io/discord/432663330281226270?color=%23491F59&label=Discord&logo=discord&logoColor=%23FFFFFF&style=for-the-badge)](https://discord.gg/QXqfHEW)
 
 ## Opinionated utilities to provide common capabilities and create rich configuration webUI experiences for [Homebridge](https://homebridge.io) [plugins](https://developers.homebridge.io).
 </DIV>
@@ -30,7 +30,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 ## Plugin Development Dashboard
 This is mostly of interest to the true developer nerds amongst us.
 
-[![License](https://img.shields.io/npm/l/homebridge-plugin-utils?color=%230559C9&logo=open%20source%20initiative&logoColor=%23FFFFFF&style=for-the-badge)](https://github.com/hjdhjd/homebridge-plugin-utils/blob/main/LICENSE.md)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/hjdhjd/homebridge-plugin-utils/ci.yml?branch=main&color=%230559C9&logo=github-actions&logoColor=%23FFFFFF&style=for-the-badge)](https://github.com/hjdhjd/homebridge-plugin-utils/actions?query=workflow%3A%22Continuous+Integration%22)
-[![Dependencies](https://img.shields.io/librariesio/release/npm/homebridge-plugin-utils?color=%230559C9&logo=dependabot&style=for-the-badge)](https://libraries.io/npm/homebridge-plugin-utils)
-[![GitHub commits since latest release (by SemVer)](https://img.shields.io/github/commits-since/hjdhjd/homebridge-plugin-utils/latest?color=%230559C9&logo=github&sort=semver&style=for-the-badge)](https://github.com/hjdhjd/homebridge-plugin-utils/commits/main)
+[![License](https://img.shields.io/npm/l/homebridge-plugin-utils?color=%23491F59&logo=open%20source%20initiative&logoColor=%23FFFFFF&style=for-the-badge)](https://github.com/hjdhjd/homebridge-plugin-utils/blob/main/LICENSE.md)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/hjdhjd/homebridge-plugin-utils/ci.yml?branch=main&color=%23491F59&logo=github-actions&logoColor=%23FFFFFF&style=for-the-badge)](https://github.com/hjdhjd/homebridge-plugin-utils/actions?query=workflow%3A%22Continuous+Integration%22)
+[![Dependencies](https://img.shields.io/librariesio/release/npm/homebridge-plugin-utils?color=%23491F59&logo=dependabot&style=for-the-badge)](https://libraries.io/npm/homebridge-plugin-utils)
+[![GitHub commits since latest release (by SemVer)](https://img.shields.io/github/commits-since/hjdhjd/homebridge-plugin-utils/latest?color=%23491F59&logo=github&sort=semver&style=for-the-badge)](https://github.com/hjdhjd/homebridge-plugin-utils/commits/main)

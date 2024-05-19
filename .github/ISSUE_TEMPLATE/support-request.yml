@@ -1,0 +1,58 @@
+name: Support Request
+description: Report a bug or request help. Please read the homebridge-plugin-utils documentation before creating a support request.
+body:
+
+  - type: input
+    id: hbpuversion
+    attributes:
+      label: Homebridge Plugin Utils
+      description: Which version of Homebridge Plugin Utilities (HBU) are you using?
+      placeholder: e.g. v1.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: homebridgeos
+    attributes:
+      label: Homebridge Platform and OS
+      description: What hardware and operating system are you running Homebridge on?
+      placeholder: e.g. macOS Sonoma
+    validations:
+      required: true
+
+  - type: input
+    id: homebridge
+    attributes:
+      label: Homebridge Version
+      description: Which version of Homebridge are you running on?
+      placeholder: e.g. v1.8.0
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node Version
+      description: Which version of Node are you running on?
+      placeholder: e.g. v18.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Describe the problem
+      description: Please describe the issue you're encountering, and ensure you include steps to reproduce.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Please copy and paste any relevant Homebridge log output. This will be automatically formatted into code, so no need for backticks.
+      placeholder: Please paste the relevant log entries here.
+      render: shell
+    validations:
+      required: true
+

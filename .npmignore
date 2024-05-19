@@ -1,0 +1,11 @@
+# Ignore everything by default.
+*
+
+# Include the following.
+!LICENSE.md
+!README.md
+!build/**
+!config.schema.json
+!dist/**
+!homebridge-ui/**
+!package.json

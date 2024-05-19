@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+
+  "extends": "./build/tsconfig.json",
+
+  "include": [
+
+    "build",
+    "eslint.config.mjs",
+    "src",
+    "ui"
+  ]
+}

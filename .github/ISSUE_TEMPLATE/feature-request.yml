@@ -1,0 +1,29 @@
+name: Feature Request
+description: Suggest an idea for an enhancement to homebridge-plugin-utils.
+labels: enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Features will be added from time to time, with a focus on capabilities that can streamline the process of developing new plugins or adding core capabilities (e.g. MQTT support) that may be helpful.
+  - type: textarea
+    id: feature-request
+    attributes:
+      label: Describe the feature request
+      description: Please describe the feature you are requesting. If the feature request relates to a specific problem you are encountering, please describe the use case.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Describe the proposed solution
+      description: Please describe the proposed solution to the problem or use case described above.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you have considered to the enhancement
+      description: Please describe alternative approaches you've explored or considered to address the requested feature.
+    validations:
+      required: true

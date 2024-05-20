@@ -195,10 +195,7 @@ export class MqttClient {
 
       const value = message.toString().toLowerCase();
 
-      const logResult = (): void => {
-
-        log.info("MQTT: set message received for %s: %s.", type, value);
-      };
+      const logResult = (): void => log.info("MQTT: set message received for %s: %s.", type, value);
 
       // Set our value and inform the user.
       const result = setValue(value, message.toString());
@@ -206,13 +203,7 @@ export class MqttClient {
       // For callbacks that are promises, we wait until they complete before logging the result.
       if(result && typeof result.then === "function") {
 
-        result.then(() => {
-
-          logResult();
-        }).catch(error => {
-
-          log.error("MQTT: error seting message received for %s: %s. %s", type, value, error);
-        });
+        result.then(logResult).catch(error => log.error("MQTT: error seting message received for %s: %s. %s", type, value, error));
 
         return;
       }

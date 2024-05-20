@@ -9,16 +9,24 @@ export class webUi {
   // Feature options class instance.
   #featureOptions;
 
+  // First run webUI callback endpoints for customization.
+  #firstRunInit;
+  #firstRunRequired;
+  #firstRunSubmit;
+
   // Homebridge class instance.
   #homebridge;
 
   // Plugin name.
   #name;
 
-  constructor({ name, featureOptions, homebridge } = {}) {
+  constructor({ name, featureOptions, firstRunInit = true, firstRunRequired = false, firstRunSubmit = true, homebridge } = {}) {
 
     this.homebridge = homebridge;
     this.featureOptions = featureOptions;
+    this.firstRunInit = firstRunInit;
+    this.firstRunRequired = firstRunRequired;
+    this.firstRunSubmit = firstRunSubmit;
     this.name = name;
 
     // Fire off our UI, catching errors along the way.
@@ -41,23 +49,23 @@ export class webUi {
 
     const buttonFirstRun = document.getElementById("firstRun");
 
+    // Run a custom initialization handler the user may have provided.
+    if(!(await this.#processHandler(this.firstRunInit))) {
+
+      return;
+    }
+
     // First run user experience.
     buttonFirstRun.addEventListener("click", async () => {
 
       // Show the beachball while we setup.
       this.homebridge.showSpinner();
 
-      // Get the list of devices the plugin knows about.
-      const devices = await this.homebridge.getCachedAccessories();
+      // Run a custom submit handler the user may have provided.
+      if(!(await this.#processHandler(this.firstRunSubmit))) {
 
-      // Sort it for posterity.
-      devices?.sort((a, b) => {
-
-        const aCase = (a.displayName ?? "").toLowerCase();
-        const bCase = (b.displayName ?? "").toLowerCase();
-
-        return aCase > bCase ? 1 : (bCase > aCase ? -1 : 0);
-      });
+        return;
+      }
 
       // Create our UI.
       document.getElementById("pageFirstRun").style.display = "none";
@@ -77,13 +85,10 @@ export class webUi {
     // Show the beachball while we setup.
     this.homebridge.showSpinner();
 
-    // Create our UI.
-    document.getElementById("menuHome").classList.remove("btn-elegant");
-    document.getElementById("menuHome").classList.add("btn-primary");
-    document.getElementById("menuFeatureOptions").classList.remove("btn-elegant");
-    document.getElementById("menuFeatureOptions").classList.add("btn-primary");
-    document.getElementById("menuSettings").classList.add("btn-elegant");
-    document.getElementById("menuSettings").classList.remove("btn-primary");
+    // Highlight the tab in our UI.
+    this.#toggleClasses("menuHome", "btn-elegant", "btn-primary");
+    this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
+    this.#toggleClasses("menuSettings", "btn-primary", "btn-elegant");
 
     document.getElementById("pageSupport").style.display = "none";
     document.getElementById("pageFeatureOptions").style.display = "none";
@@ -101,13 +106,10 @@ export class webUi {
     this.homebridge.showSpinner();
     this.homebridge.hideSchemaForm();
 
-    // Create our UI.
-    document.getElementById("menuHome").classList.add("btn-elegant");
-    document.getElementById("menuHome").classList.remove("btn-primary");
-    document.getElementById("menuFeatureOptions").classList.remove("btn-elegant");
-    document.getElementById("menuFeatureOptions").classList.add("btn-primary");
-    document.getElementById("menuSettings").classList.remove("btn-elegant");
-    document.getElementById("menuSettings").classList.add("btn-primary");
+    // Highlight the tab in our UI.
+    this.#toggleClasses("menuHome", "btn-primary", "btn-elegant");
+    this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
+    this.#toggleClasses("menuSettings", "btn-elegant", "btn-primary");
 
     document.getElementById("pageSupport").style.display = "block";
     document.getElementById("pageFeatureOptions").style.display = "none";
@@ -131,25 +133,38 @@ export class webUi {
     const devices = await this.homebridge.getCachedAccessories();
 
     // If we've got devices detected, we launch our feature option UI. Otherwise, we launch our first run UI.
-    if(this.featureOptions.currentConfig.length && devices?.length) {
+    if(this.featureOptions.currentConfig.length && devices?.length && !(await this.#processHandler(this.firstRunRequired))) {
 
       document.getElementById("menuWrapper").style.display = "inline-flex";
       this.featureOptions.showUI();
+
       return;
     }
 
-    // If we have no configuration, let's create one.
-    if(!this.featureOptions.currentConfig.length) {
-
-      this.featureOptions.currentConfig.push({ name: this.name });
-    } else if(!("name" in this.featureOptions.currentConfig[0])) {
-
-      // If we haven't set the name, let's do so now.
-      this.featureOptions.currentConfig[0].name = this.name;
-    }
+    // If we have the name property set for the plugin configuration yet, let's do so now. If we don't have a configuration, let's initialize it as well.
+    (this.featureOptions.currentConfig[0] ??= { name: this.name }).name ??= this.name;
 
     // Update the plugin configuration and launch the first run UI.
     await this.homebridge.updatePluginConfig(this.featureOptions.currentConfig);
     this.#showFirstRun();
+  }
+
+  // Utility to process user-provided custom handlers that can handle both synchronous and asynchronous handlers.
+  async #processHandler(handler) {
+
+    if(((typeof handler === "function") && !(await handler())) || ((typeof handler !== "function") && !handler)) {
+
+      return false;
+    }
+
+    return true;
+  }
+
+  // Utility to toggle our classes.
+  #toggleClasses(id, removeClass, addClass) {
+
+    const element = document.getElementById(id);
+    element.classList.remove(removeClass);
+    element.classList.add(addClass);
   }
 }

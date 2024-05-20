@@ -6,14 +6,14 @@ import stylistic from "@stylistic/eslint-plugin";
 import tsEslint from "@typescript-eslint/eslint-plugin";
 
 // ESlint plugins to use.
-const eslintPlugins = {
+const plugins = {
 
   "@stylistic": stylistic,
   "@typescript-eslint": tsEslint
 };
 
 // TypeScript-specific rules.
-const eslintTsRules = {
+const tsRules = {
 
   ...tsEslint.configs.strictTypeChecked,
   ...tsEslint.configs.stylisticTypeChecked,
@@ -28,14 +28,14 @@ const eslintTsRules = {
 };
 
 // JavaScript-specific rules.
-const eslintJsRules = {
+const jsRules = {
 
   ...tsEslint.configs.disableTypeChecked,
   "@typescript-eslint/no-floating-promises": "off"
 };
 
 // Rules that exist across both JavaScript and TypeScript files.
-const eslintCommonRules = {
+const commonRules = {
 
   ...tsEslint.configs.eslintRecommended,
   "@stylistic/brace-style": "error",
@@ -69,14 +69,20 @@ const eslintCommonRules = {
   "sort-vars": "warn"
 };
 
+// Globals that tend to exist in Homebridge projects.
+const globalsUi = Object.fromEntries(["console", "document", "fetch", "homebridge"].map(key => [key, "readonly"]));
+
 export default {
 
-  plugins: eslintPlugins,
+  globals: {
+
+    ui: globalsUi
+  },
+  plugins: plugins,
   rules: {
 
-    common: eslintCommonRules,
-    js: eslintJsRules,
-    ts: eslintTsRules
+    common: commonRules,
+    js: jsRules,
+    ts: tsRules
   }
 };
-

@@ -72,9 +72,7 @@ export default ts.config(
 
       globals: {
 
-        console: "readonly",
-        document: "readonly",
-        homebridge: "readonly"
+        ...hbPluginUtils.globals.ui
       }
     }
   }

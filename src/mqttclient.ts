@@ -48,11 +48,13 @@ export class MqttClient {
           case "Missing protocol":
 
             this.log.error("MQTT Broker: Invalid URL provided: %s.", this.brokerUrl);
+
             break;
 
           default:
 
             this.log.error("MQTT Broker: Error: %s.", error.message);
+
             break;
         }
       }

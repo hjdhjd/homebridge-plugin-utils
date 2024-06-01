@@ -4,25 +4,24 @@
  */
 export interface FeatureOptionEntry {
 
-  default: boolean,           // Default feature option state.
-  defaultValue?: number,      // Default value for value-based feature options.
-  description: string,        // Description of the feature option.
-  group?: string,             // Feature option grouping for related options.
-  name: string                // Name of the feature option.
+  default: boolean,                // Default feature option state.
+  defaultValue?: number | string,  // Default value for value-based feature options.
+  description: string,             // Description of the feature option.
+  group?: string,                  // Feature option grouping for related options.
+  name: string                     // Name of the feature option.
 }
 
 export interface FeatureCategoryEntry {
 
   description: string,
-  name: string,
-  validFor: string[]
+  name: string
 }
 
 // Define the scope hierarchy for HBUP options.
 type OptionScope =  "controller" | "device" | "global" | "none";
 
 // Option information JSON definition.
-interface OptionInfo {
+interface OptionInfoEntry {
 
   scope: OptionScope,
   value: boolean
@@ -39,7 +38,7 @@ export class FeatureOptions {
   private valueOptions: { [index: string]: boolean };
 
   // Create a feature option instance.
-  constructor(categories: FeatureCategoryEntry[], options: { [index: string]: FeatureOptionEntry[] }, configuredOptions: string[]) {
+  constructor(categories: FeatureCategoryEntry[], options: { [index: string]: FeatureOptionEntry[] }, configuredOptions = []) {
 
     // Initialize our defaults.
     this._categories = [];
@@ -55,9 +54,19 @@ export class FeatureOptions {
     this.options = options ?? {};
   }
 
-  public color(option: string, device?: string): string {
+  /**
+   * Return a Bootstrap-specific color reference depending on the scope of a given feature option.
+   *
+   * @param option        - Feature option to check.
+   * @param device        - Optional device scope identifier.
+   * @param controller    - Optional controller scope identifier.
+   *
+   * @returns Returns a Bootstrap color utility class associated with each scope level. `text-info` denotes an entry that's been modified at that scope level, while
+   * `text-success` and `text-warning` denote options that were defined at higher levels in the scope hierarchy - controller and global, respectively.
+   */
+  public color(option: string, device?: string, controller?: string): string {
 
-    switch(this.scope(option, device)) {
+    switch(this.scope(option, device, controller)) {
 
       case "device":
 
@@ -142,39 +151,31 @@ export class FeatureOptions {
   /**
    * Parse a floating point feature option value.
    *
-   * @param value        - Value to parse.
+   * @param option        - Feature option to check.
+   * @param device        - Optional device scope identifier.
+   * @param controller    - Optional controller scope identifier.
    *
-   * @returns Returns a floating point number from a string, or `undefined` if it couldn't be parsed.
+   * @returns Returns the value of a value-centric option as a floating point number or `undefined` if it doesn't exist or couldn't be parsed.
    */
-  public getFloat(value: string | undefined): number | undefined {
-
-    // We don't have the value configured -- we're done.
-    if(value === undefined) {
-
-      return undefined;
-    }
+  public getFloat(option: string, device?: string, controller?: string): number | undefined {
 
     // Parse the number and return the value.
-    return this.parseOptionNumeric(value, parseFloat);
+    return this.parseOptionNumeric(this.value(option, device, controller), parseFloat);
   }
 
   /**
    * Parse an integer feature option value.
    *
-   * @param value        - Value to parse.
+   * @param option        - Feature option to check.
+   * @param device        - Optional device scope identifier.
+   * @param controller    - Optional controller scope identifier.
    *
-   * @returns Returns an integer from a string, or `undefined` if it couldn't be parsed.
+   * @returns Returns the value of a value-centric option as an integer or `undefined` if it doesn't exist or couldn't be parsed.
    */
-  public getInteger(value: string | undefined): number | undefined {
-
-    // We don't have the value configured -- we're done.
-    if(value === undefined) {
-
-      return undefined;
-    }
+  public getInteger(option: string, device?: string, controller?: string): number | undefined {
 
     // Parse the number and return the value.
-    return this.parseOptionNumeric(value, parseInt);
+    return this.parseOptionNumeric(this.value(option, device, controller), parseInt);
   }
 
   /**
@@ -230,7 +231,7 @@ export class FeatureOptions {
    */
   public scope(option: string, device?: string, controller?: string): OptionScope {
 
-    return this.getOptionInfo(option, device, controller).scope;
+    return this.optionInfo(option, device, controller).scope;
   }
 
   /**
@@ -244,7 +245,7 @@ export class FeatureOptions {
    */
   public test(option: string, device?: string, controller?: string): boolean {
 
-    return this.getOptionInfo(option, device, controller).value;
+    return this.optionInfo(option, device, controller).value;
   }
 
   /**
@@ -257,6 +258,12 @@ export class FeatureOptions {
    * @returns Returns the current value associated with `option` or `undefined` if none.
    */
   public value(option: string, device?: string, controller?: string): string | undefined {
+
+    // If this isn't a value-centric feature option, we're done.
+    if(!this.isValue(option)) {
+
+      return undefined;
+    }
 
     const getValue = (checkOption: string, checkId?: string): string | undefined => {
 
@@ -409,7 +416,7 @@ export class FeatureOptions {
   }
 
   // Utility function to return the setting of a particular option and it's position in the scoping hierarchy.
-  private getOptionInfo(option: string, device?: string, controller?: string): OptionInfo {
+  private optionInfo(option: string, device?: string, controller?: string): OptionInfoEntry {
 
     // There are a couple of ways to enable and disable options. The rules of the road are:
     //

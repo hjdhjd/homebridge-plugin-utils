@@ -4,30 +4,43 @@
  */
 "use strict";
 
+import { webUiFeatureOptions } from "./webUi-featureoptions.mjs";
+
 export class webUi {
 
   // Feature options class instance.
-  #featureOptions;
+  featureOptions;
 
   // First run webUI callback endpoints for customization.
-  #firstRunInit;
-  #firstRunRequired;
-  #firstRunSubmit;
-
-  // Homebridge class instance.
-  #homebridge;
+  #firstRun;
 
   // Plugin name.
   #name;
 
-  constructor({ name, featureOptions, firstRunInit = true, firstRunRequired = false, firstRunSubmit = true, homebridge } = {}) {
+  /**
+   * featureOptions - parameters to webUiFeatureOptions.
+   * firstRun - first run handlers:
+   *   isRequired - do we need to run the first run UI workflow?
+   *   onStart - initialization for the first run webUI to populate forms and other startup tasks.
+   *   onSubmit - execute the first run workflow, typically a login or configuration validation of some sort.
+   * name - plugin name.
+   */
+  constructor({ featureOptions, firstRun = {}, name } = {}) {
 
-    this.homebridge = homebridge;
-    this.featureOptions = featureOptions;
-    this.firstRunInit = firstRunInit;
-    this.firstRunRequired = firstRunRequired;
-    this.firstRunSubmit = firstRunSubmit;
+    // Defaults for our first run handlers.
+    this.firstRun = { isRequired: () => false, onStart: () => true, onSubmit: () => true };
+
+    // Figure out the options passed in to us.
+    this.featureOptions = new webUiFeatureOptions(featureOptions);
+    this.firstRun = Object.assign({}, this.firstRun, firstRun);
     this.name = name;
+  }
+
+  /**
+   * Render the webUI.
+   */
+  // Render the UI.
+  show() {
 
     // Fire off our UI, catching errors along the way.
     try {
@@ -36,11 +49,11 @@ export class webUi {
     } catch(err) {
 
       // If we had an error instantiating or updating the UI, notify the user.
-      this.homebridge.toast.error(err.message, "Error");
+      homebridge.toast.error(err.message, "Error");
     } finally {
 
       // Always leave the UI in a usable place for the end user.
-      this.homebridge.hideSpinner();
+      homebridge.hideSpinner();
     }
   }
 
@@ -50,7 +63,7 @@ export class webUi {
     const buttonFirstRun = document.getElementById("firstRun");
 
     // Run a custom initialization handler the user may have provided.
-    if(!(await this.#processHandler(this.firstRunInit))) {
+    if(!(await this.#processHandler(this.firstRun.onStart))) {
 
       return;
     }
@@ -59,10 +72,10 @@ export class webUi {
     buttonFirstRun.addEventListener("click", async () => {
 
       // Show the beachball while we setup.
-      this.homebridge.showSpinner();
+      homebridge.showSpinner();
 
       // Run a custom submit handler the user may have provided.
-      if(!(await this.#processHandler(this.firstRunSubmit))) {
+      if(!(await this.#processHandler(this.firstRun.onSubmit))) {
 
         return;
       }
@@ -70,10 +83,10 @@ export class webUi {
       // Create our UI.
       document.getElementById("pageFirstRun").style.display = "none";
       document.getElementById("menuWrapper").style.display = "inline-flex";
-      this.featureOptions.showUI();
+      this.featureOptions.show();
 
       // All done. Let the user interact with us, although in practice, we shouldn't get here.
-      // this.homebridge.hideSpinner();
+      // homebridge.hideSpinner();
     });
 
     document.getElementById("pageFirstRun").style.display = "block";
@@ -83,7 +96,7 @@ export class webUi {
   #showSettings() {
 
     // Show the beachball while we setup.
-    this.homebridge.showSpinner();
+    homebridge.showSpinner();
 
     // Highlight the tab in our UI.
     this.#toggleClasses("menuHome", "btn-elegant", "btn-primary");
@@ -93,18 +106,18 @@ export class webUi {
     document.getElementById("pageSupport").style.display = "none";
     document.getElementById("pageFeatureOptions").style.display = "none";
 
-    this.homebridge.showSchemaForm();
+    homebridge.showSchemaForm();
 
     // All done. Let the user interact with us.
-    this.homebridge.hideSpinner();
+    homebridge.hideSpinner();
   }
 
   // Show the support tab.
   #showSupport() {
 
     // Show the beachball while we setup.
-    this.homebridge.showSpinner();
-    this.homebridge.hideSchemaForm();
+    homebridge.showSpinner();
+    homebridge.hideSchemaForm();
 
     // Highlight the tab in our UI.
     this.#toggleClasses("menuHome", "btn-primary", "btn-elegant");
@@ -115,28 +128,28 @@ export class webUi {
     document.getElementById("pageFeatureOptions").style.display = "none";
 
     // All done. Let the user interact with us.
-    this.homebridge.hideSpinner();
+    homebridge.hideSpinner();
   }
 
   // Launch our webUI.
   async #launchWebUI() {
 
     // Retrieve the current plugin configuration.
-    this.featureOptions.currentConfig = await this.homebridge.getPluginConfig();
+    this.featureOptions.currentConfig = await homebridge.getPluginConfig();
 
     // Add our event listeners to animate the UI.
     document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
-    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.featureOptions.showUI());
+    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.featureOptions.show());
     document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
 
     // Get the list of devices the plugin knows about.
-    const devices = await this.homebridge.getCachedAccessories();
+    const devices = await homebridge.getCachedAccessories();
 
     // If we've got devices detected, we launch our feature option UI. Otherwise, we launch our first run UI.
-    if(this.featureOptions.currentConfig.length && devices?.length && !(await this.#processHandler(this.firstRunRequired))) {
+    if(this.featureOptions.currentConfig.length && devices?.length && !(await this.#processHandler(this.firstRun.isRequired))) {
 
       document.getElementById("menuWrapper").style.display = "inline-flex";
-      this.featureOptions.showUI();
+      this.featureOptions.show();
 
       return;
     }
@@ -145,7 +158,7 @@ export class webUi {
     (this.featureOptions.currentConfig[0] ??= { name: this.name }).name ??= this.name;
 
     // Update the plugin configuration and launch the first run UI.
-    await this.homebridge.updatePluginConfig(this.featureOptions.currentConfig);
+    await homebridge.updatePluginConfig(this.featureOptions.currentConfig);
     this.#showFirstRun();
   }
 
@@ -164,6 +177,7 @@ export class webUi {
   #toggleClasses(id, removeClass, addClass) {
 
     const element = document.getElementById(id);
+
     element.classList.remove(removeClass);
     element.classList.add(addClass);
   }

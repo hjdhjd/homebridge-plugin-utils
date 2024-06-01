@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2024, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webui-featureoptions.mjs: Device feature option webUI.
+ * webUi-featureoptions.mjs: Device feature option webUI.
  */
 "use strict";
 
@@ -8,57 +8,115 @@ import { FeatureOptions} from "./featureoptions.js";
 
 export class webUiFeatureOptions {
 
-  // The current plugin configuration.
-  currentConfig;
-
   // Table containing the currently displayed feature options.
   #configTable;
 
   // The current controller context.
   #controller;
 
+  // The current plugin configuration.
+  currentConfig;
+
+  // Table containing the details on the currently selected device.
+  deviceStatsTable;
+
   // Current list of devices from the Homebridge accessory cache.
   #devices;
+
+  // Table containing the list of devices.
+  devicesTable;
 
   // Feature options instance.
   #featureOptions;
 
-  // Device sidebar category name.
-  #sidebar;
+  // Get devices handler.
+  #getDevices;
 
   // Enable the use of controllers.
-  #useControllers;
+  #hasControllers;
+
+  // Device information panel handler.
+  #infoPanel;
+
+  // Sidebar configuration parameters.
+  #sidebar;
+
+  // Options UI configuration parameters.
+  #ui;
+
+  // Current list of controllers, for webUI elements.
+  webUiControllerList;
 
   // Current list of devices on a given controller, for webUI elements.
-  #webuiDeviceList;
+  webUiDeviceList;
 
-  constructor({ sidebar = "Devices", useControllers = true } = {}) {
+  /**
+   * Display the feature option webUI. All webUI configuration settings are optional.
+   *
+   * getDevices - return an array of displays to be displayed.
+   * hasControllers - true (default) if the plugin hierarchically has controllers and then devices managed by each controller, rather than just devices.
+   * infoPanel - handler to display information in the device detail information panel.
+   * ui - customize which options are displayed in the feature option webUI:
+   *   isController - validate whether a given device is a controller. Returns true or false.
+   *   validOption - validate whether an option is valid on a given device (or controller).
+   *   validCategory - validate whether a category of options is valid for a given device (or controller).
+   * sidebar - customize the sidebar for the feature option webUI:
+   *   controllerLabel - label to use for the controllers category. Defaults to "Controllers".
+   *   deviceLabel - label to use for the devices category. Defaults to "Devices".
+   *   showDevices - handler for enumerating devices in the sidebar.
+   */
+  constructor(options = {}) {
+
+    // Defaults for the feature option webUI sidebar.
+    this.ui = {
+
+      isController: () => false,
+      validOption: () => true,
+      validOptionCategory: () => true
+    };
+
+    // Defaults for the feature option webUI sidebar.
+    this.sidebar = {
+
+      controllerLabel: "Controllers",
+      deviceLabel: "Devices",
+      showDevices: this.#showSidebarDevices.bind(this)
+    };
+
+    // Defaults for the feature option webUI.
+    const {
+
+      getDevices = this.#getHomebridgeDevices,
+      hasControllers = true,
+      infoPanel = this.#showDeviceInfoPanel,
+      sidebar = {},
+      ui = {}
+    } = options;
 
     this.configTable = document.getElementById("configTable");
     this.controller = null;
     this.currentConfig = [];
+    this.deviceStatsTable = document.getElementById("deviceStatsTable");
     this.devices = [];
+    this.devicesTable = document.getElementById("devicesTable");
     this.featureOptions = null;
-    this.sidebarName = sidebar;
-    this.useControllers = useControllers;
-    this.webuiDeviceList = [];
+    this.getDevices = getDevices;
+    this.hasControllers = hasControllers;
+    this.infoPanel = infoPanel;
+    this.sidebar = Object.assign({}, this.sidebar, sidebar);
+    this.ui = Object.assign({}, this.ui, ui);
+    this.webUiControllerList = [];
+    this.webUiDeviceList = [];
   }
 
-  // Render the feature option webUI.
-  async showUI() {
+  /**
+   * Render the feature options webUI.
+   */
+  async show() {
 
     // Show the beachball while we setup.
     homebridge.showSpinner();
     homebridge.hideSchemaForm();
-
-    // Make sure we have the refreshed configuration.
-    this.currentConfig = await homebridge.getPluginConfig();
-
-    // Retrieve the set of feature options available to us.
-    const features = (await homebridge.request("/getOptions")) ?? [];
-
-    // Initialize our feature option configuration.
-    this.featureOptions = new FeatureOptions(features.categories, features.options, this.currentConfig[0].options ?? []);
 
     // Create our custom UI.
     document.getElementById("menuHome").classList.remove("btn-elegant");
@@ -72,27 +130,58 @@ export class webUiFeatureOptions {
     document.getElementById("pageSupport").style.display = "none";
     document.getElementById("pageFeatureOptions").style.display = "block";
 
-    // What we're going to do is display our global options, followed by the list of devices from the Homebridge accessory cache.
-    // We pre-select our global options by default for the user as a starting point.
+    // Make sure we have the refreshed configuration.
+    this.currentConfig = await homebridge.getPluginConfig();
+
+    // Retrieve the set of feature options available to us.
+    const features = (await homebridge.request("/getOptions")) ?? [];
+
+    // Initialize our feature option configuration.
+    this.featureOptions = new FeatureOptions(features.categories, features.options, this.currentConfig[0].options ?? []);
+
+    // We render our global options, followed by either a list of controllers (if so configured) or by a list of devices from the Homebridge accessory cache.
 
     // Retrieve the table for the our list of controllers and global options.
     const controllersTable = document.getElementById("controllersTable");
 
     // Start with a clean slate.
     controllersTable.innerHTML = "";
-    document.getElementById("devicesTable").innerHTML = "";
+    this.devicesTable.innerHTML = "";
     this.configTable.innerHTML = "";
-    this.webuiDeviceList = [];
+    this.webUiDeviceList = [];
+
+    // Create our hover style for our sidebar.
+    const sidebarHoverStyle = document.createElement("style");
+
+    // We emulate the styles that Bootstrap uses when hovering over a table, accounting for both light and dark modes.
+    sidebarHoverStyle.innerHTML = "@media (prefers-color-scheme: dark) { .hbup-hover td:hover { background-color: #212121; color: #FFA000 } }" +
+      "@media (prefers-color-scheme: light) { .hbup-hover td:hover { background-color: #ECECEC; } }";
+
+    document.head.appendChild(sidebarHoverStyle);
+
+    // Add our hover styles to the controllers and devices tables.
+    controllersTable.classList.add("hbup-hover");
+    this.devicesTable.classList.add("hbup-hover");
 
     // Hide the UI until we're ready.
     document.getElementById("sidebar").style.display = "none";
     document.getElementById("headerInfo").style.display = "none";
     document.getElementById("deviceStatsTable").style.display = "none";
 
+    // If we haven't configured any controllers, we're done.
+    if(this.hasControllers && !this.currentConfig[0]?.controllers?.length) {
+
+      document.getElementById("headerInfo").innerHTML = "Please configure a controller to access in the main settings tab before configuring feature options.";
+      document.getElementById("headerInfo").style.display = "";
+      homebridge.hideSpinner();
+
+      return;
+    }
+
     // Initialize our informational header.
     document.getElementById("headerInfo").innerHTML = "Feature options are applied in prioritized order, from global to device-specific options:" +
       "<br><i class=\"text-warning\">Global options</i> (lowest priority) &rarr; " +
-      (this.useControllers ? "<i class=\"text-success\">Controller options</i> &rarr; " : "") +
+      (this.hasControllers ? "<i class=\"text-success\">Controller options</i> &rarr; " : "") +
       "<i class=\"text-info\">Device options</i> (highest priority)";
 
     // Enumerate our global options.
@@ -100,7 +189,8 @@ export class webUiFeatureOptions {
 
     // Create the cell for our global options.
     const tdGlobal = document.createElement("td");
-    tdGlobal.classList.add("m-0", "p-0");
+
+    tdGlobal.classList.add("m-0", "p-0", "w-100");
 
     // Create our label target.
     const globalLabel = document.createElement("label");
@@ -108,9 +198,9 @@ export class webUiFeatureOptions {
     globalLabel.name = "Global Options";
     globalLabel.appendChild(document.createTextNode("Global Options"));
     globalLabel.style.cursor = "pointer";
-    globalLabel.classList.add("mx-2", "my-0", "p-0", "w-100");
+    globalLabel.classList.add("m-0", "p-0", "pl-1", "w-100");
 
-    globalLabel.addEventListener("click", () => this.#showDevices(true));
+    globalLabel.addEventListener("click", () => this.#showSidebar(null));
 
     // Add the global options label.
     tdGlobal.appendChild(globalLabel);
@@ -122,142 +212,164 @@ export class webUiFeatureOptions {
     // Now add it to the overall controllers table.
     controllersTable.appendChild(trGlobal);
 
-    // Add it as another device, for UI purposes.
-    this.webuiDeviceList.push(globalLabel);
+    // Add it as another controller of device, for UI purposes.
+    (this.hasControllers ? this.webUiControllerList : this.webUiDeviceList).push(globalLabel);
 
-    // All done. Let the user interact with us.
-    homebridge.hideSpinner();
+    if(this.hasControllers) {
 
-    // Default the user on our global settings.
-    this.#showDevices(true);
-  }
+      // Create a row for our controllers.
+      const trController = document.createElement("tr");
 
-  // Show the device list.
-  async #showDevices(isGlobal) {
+      // Disable any pointer events and hover activity.
+      trController.style.pointerEvents = "none";
 
-    // Show the beachball while we setup.
-    homebridge.showSpinner();
+      // Create the cell for our controller category row.
+      const tdController = document.createElement("td");
 
-    const devicesTable = document.getElementById("devicesTable");
-    this.devices = [];
-
-    // If we're not accessing global options, pull the list of devices this plugin knows about from Homebridge.
-    this.devices = (await homebridge.getCachedAccessories()).map(x => ({
-      firmwareVersion: (x.services.find(service => service.constructorName ===
-        "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "FirmwareRevision")?.value ?? ""),
-      name: x.displayName,
-      serial: (x.services.find(service => service.constructorName ===
-        "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "SerialNumber")?.value ?? "")
-    }));
-
-    // Sort it for posterity.
-    this.devices?.sort((a, b) => {
-
-      const aCase = (a.name ?? "").toLowerCase();
-      const bCase = (b.name ?? "").toLowerCase();
-
-      return aCase > bCase ? 1 : (bCase > aCase ? -1 : 0);
-    });
-
-    // Make the UI visible.
-    document.getElementById("sidebar").style.display = "";
-    document.getElementById("headerInfo").style.display = "";
-
-    // Wipe out the device list, except for our global entry.
-    this.webuiDeviceList.splice(1, this.webuiDeviceList.length);
-
-    // Start with a clean slate.
-    devicesTable.innerHTML = "";
-
-    // Show the devices list only if we have actual devices to show.
-    if(this.devices?.length) {
-
-      // Create a row for this device category.
-      const trCategory = document.createElement("tr");
-
-      // Create the cell for our device category row.
-      const tdCategory = document.createElement("td");
-      tdCategory.classList.add("m-0", "p-0");
+      tdController.classList.add("m-0", "p-0", "pl-1", "w-100");
 
       // Add the category name, with appropriate casing.
-      tdCategory.appendChild(document.createTextNode(this.sidebarName));
-      tdCategory.style.fontWeight = "bold";
+      tdController.appendChild(document.createTextNode(this.sidebar.controllerLabel));
+      tdController.style.fontWeight = "bold";
 
       // Add the cell to the table row.
-      trCategory.appendChild(tdCategory);
+      trController.appendChild(tdController);
 
       // Add the table row to the table.
-      devicesTable.appendChild(trCategory);
+      controllersTable.appendChild(trController);
 
-      for(const device of this.devices) {
+      for(const controller of this.currentConfig[0].controllers) {
 
-        // Create a row for this device.
+        // Create a row for this controller.
         const trDevice = document.createElement("tr");
+
         trDevice.classList.add("m-0", "p-0");
 
-        // Create a cell for our device.
+        // Create a cell for our controller.
         const tdDevice = document.createElement("td");
+
         tdDevice.classList.add("m-0", "p-0", "w-100");
 
         const label = document.createElement("label");
 
-        label.name = device.serial;
-        label.appendChild(document.createTextNode(device.name ?? "Unknown"));
+        label.name = controller.address;
+        label.appendChild(document.createTextNode(controller.address));
         label.style.cursor = "pointer";
         label.classList.add("mx-2", "my-0", "p-0", "w-100");
 
-        label.addEventListener("click", () => this.#showDeviceInfo(device.serial));
+        label.addEventListener("click", () => this.#showSidebar(controller));
 
-        // Add the device label to our cell.
+        // Add the controller label to our cell.
         tdDevice.appendChild(label);
 
         // Add the cell to the table row.
         trDevice.appendChild(tdDevice);
 
         // Add the table row to the table.
-        devicesTable.appendChild(trDevice);
+        controllersTable.appendChild(trDevice);
 
-        this.webuiDeviceList.push(label);
+        this.webUiControllerList.push(label);
       }
     }
 
+    // All done. Let the user interact with us.
+    homebridge.hideSpinner();
+
+    // Default the user on our global settings if we have no controller.
+    this.#showSidebar(this.hasControllers ? this.currentConfig[0].controllers[0] : null);
+  }
+
+  // Show the device list taking the controller context into account.
+  async #showSidebar(controller) {
+
+    // Show the beachball while we setup.
+    homebridge.showSpinner();
+
+    // Grab the list of devices we're displaying.
+    this.devices = await this.getDevices(controller);
+
+    if(this.hasControllers) {
+
+      // Make sure we highlight the selected controller so the user knows where we are.
+      this.webUiControllerList.map(webUiEntry => (webUiEntry.name === (controller ? controller.address : "Global Options")) ?
+        webUiEntry.parentElement.classList.add("bg-info", "text-white") : webUiEntry.parentElement.classList.remove("bg-info", "text-white"));
+
+      // Unable to connect to the controller for some reason.
+      if(controller && !this.devices?.length) {
+
+        this.devicesTable.innerHTML = "";
+        this.configTable.innerHTML = "";
+
+        document.getElementById("headerInfo").innerHTML = ["Unable to connect to the controller.",
+          "Check the Settings tab to verify the controller details are correct.",
+          "<code class=\"text-danger\">" + (await homebridge.request("/getErrorMessage")) + "</code>"].join("<br>");
+        document.getElementById("headerInfo").style.display = "";
+        this.deviceStatsTable.style.display = "none";
+
+        homebridge.hideSpinner();
+
+        return;
+      }
+
+      // The first entry returned by getDevices() must always be the controller.
+      this.controller = this.devices[0]?.serial ?? null;
+    }
+
+    // Make the UI visible.
+    document.getElementById("headerInfo").style.display = "";
+    document.getElementById("sidebar").style.display = "";
+
+    // Wipe out the device list, except for our global entry.
+    this.webUiDeviceList.splice(1, this.webUiDeviceList.length);
+
+    // Start with a clean slate.
+    this.devicesTable.innerHTML = "";
+
+    // Populate our devices sidebar.
+    this.sidebar.showDevices(controller, this.devices);
+
     // Display the feature options to the user.
-    this.#showDeviceInfo(isGlobal ? "Global Options" : this.devices[0].serial);
+    this.showDeviceOptions(controller ? this.devices[0].serial : "Global Options");
 
     // All done. Let the user interact with us.
     homebridge.hideSpinner();
   }
 
   // Show feature option information for a specific device, controller, or globally.
-  async #showDeviceInfo(deviceId) {
+  async showDeviceOptions(deviceId) {
 
     homebridge.showSpinner();
 
     // Update the selected device for visibility.
-    this.webuiDeviceList.map(x => (x.name === deviceId) ?
-      x.parentElement.classList.add("bg-info", "text-white") : x.parentElement.classList.remove("bg-info", "text-white"));
+    this.webUiDeviceList.map(webUiEntry => (webUiEntry.name === deviceId) ?
+      webUiEntry.parentElement.classList.add("bg-info", "text-white") : webUiEntry.parentElement.classList.remove("bg-info", "text-white"));
 
     // Populate the device information info pane.
-    const currentDevice = this.devices.find(x => x.serial === deviceId);
-    this.controller = currentDevice?.serial;
+    const currentDevice = this.devices.find(device => device.serial === deviceId);
 
-    // Ensure we have a controller or device. The only time this won't be the case is when we're looking at global options.
+    // Populate the details view. If there's no device specified, the context is considered global and we hide the device details view.
+    if(!currentDevice) {
+
+      this.deviceStatsTable.style.display = "none";
+    }
+
+    this.infoPanel(currentDevice);
+
     if(currentDevice) {
 
-      document.getElementById("device_firmware").innerHTML = currentDevice.firmwareVersion;
-      document.getElementById("device_serial").innerHTML = currentDevice.serial;
-      document.getElementById("deviceStatsTable").style.display = "";
-    } else {
-
-      document.getElementById("deviceStatsTable").style.display = "none";
-      document.getElementById("device_firmware").innerHTML = "N/A";
-      document.getElementById("device_serial").innerHTML = "N/A";
+      this.deviceStatsTable.style.display = "";
     }
 
     // Start with a clean slate.
     this.configTable.innerHTML = "";
 
     for(const category of this.featureOptions.categories) {
+
+      // Validate that we should display this feature option category. This is useful when you want to only display feature option categories for certain device types.
+      if(!this.ui.validOptionCategory(currentDevice, category)) {
+
+        continue;
+      }
 
       const optionTable = document.createElement("table");
       const thead = document.createElement("thead");
@@ -273,7 +385,8 @@ export class webUiFeatureOptions {
       tbody.classList.add("table-bordered");
 
       // Add the feature option category description.
-      th.appendChild(document.createTextNode(category.description + (!currentDevice ? " (Global)" : " (Device-specific)")));
+      th.appendChild(document.createTextNode(category.description + (!currentDevice ? " (Global)" :
+        (this.ui.isController(currentDevice) ? " (Controller-specific)" : " (Device-specific)"))));
 
       // Add the table header to the row.
       trFirst.appendChild(th);
@@ -290,11 +403,18 @@ export class webUiFeatureOptions {
       // Now enumerate all the feature options for a given device.
       for(const option of this.featureOptions.options[category.name]) {
 
+        // Only show feature options that are valid for this device.
+        if(!this.ui.validOption(currentDevice, option)) {
+
+          continue;
+        }
+
         // Expand the full feature option.
         const featureOption = this.featureOptions.expandOption(category, option);
 
         // Create the next table row.
         const trX = document.createElement("tr");
+
         trX.classList.add("align-top");
         trX.id = "row-" + featureOption;
 
@@ -314,7 +434,7 @@ export class webUiFeatureOptions {
         let initialScope;
 
         // Determine our initial option scope to show the user what's been set.
-        switch(initialScope = this.featureOptions.scope(featureOption, currentDevice?.serial)) {
+        switch(initialScope = this.featureOptions.scope(featureOption, currentDevice?.serial, this.controller)) {
 
           case "global":
           case "controller":
@@ -374,6 +494,7 @@ export class webUiFeatureOptions {
         trX.appendChild(tdCheckbox);
 
         const tdLabel = document.createElement("td");
+
         tdLabel.classList.add("w-100");
         tdLabel.colSpan = 2;
 
@@ -383,6 +504,7 @@ export class webUiFeatureOptions {
         if(this.featureOptions.isValue(featureOption)) {
 
           const tdInput = document.createElement("td");
+
           tdInput.classList.add("mr-2");
           tdInput.style.width = "10%";
 
@@ -397,7 +519,7 @@ export class webUiFeatureOptions {
 
             // Find the option in our list and delete it if it exists.
             const optionRegex = new RegExp("^(?:Enable|Disable)\\." + checkbox.id + (!currentDevice ? "" : ("\\." + currentDevice.serial)) + "\\.[^\\.]+$", "gi");
-            const newOptions = this.featureOptions.configuredOptions.filter(x => !optionRegex.test(x));
+            const newOptions = this.featureOptions.configuredOptions.filter(entry => !optionRegex.test(entry));
 
             if(checkbox.checked) {
 
@@ -425,12 +547,13 @@ export class webUiFeatureOptions {
 
         // Create a label for the checkbox with our option description.
         const labelDescription = document.createElement("label");
+
         labelDescription.for = checkbox.id;
         labelDescription.style.cursor = "pointer";
         labelDescription.classList.add("user-select-none", "my-0", "py-0");
 
         // Highlight options for the user that are different than our defaults.
-        const scopeColor = this.featureOptions.color(featureOption, currentDevice?.serial);
+        const scopeColor = this.featureOptions.color(featureOption, currentDevice?.serial, this.controller);
 
         if(scopeColor) {
 
@@ -442,7 +565,7 @@ export class webUiFeatureOptions {
 
           // Find the option in our list and delete it if it exists.
           const optionRegex = new RegExp("^(?:Enable|Disable)\\." + checkbox.id + (!currentDevice ? "" : ("\\." + currentDevice.serial)) + "$", "gi");
-          const newOptions = this.featureOptions.configuredOptions.filter(x => !optionRegex.test(x));
+          const newOptions = this.featureOptions.configuredOptions.filter(entry => !optionRegex.test(entry));
 
           // Figure out if we've got the option set upstream.
           let upstreamOption = false;
@@ -535,7 +658,7 @@ export class webUiFeatureOptions {
           // If we've reset to defaults, make sure our color coding for scope is reflected.
           if((checkbox.checked === option.default) || checkbox.indeterminate) {
 
-            const scopeColor = this.featureOptions.color(featureOption, currentDevice?.serial);
+            const scopeColor = this.featureOptions.color(featureOption, currentDevice?.serial, this.controller);
 
             if(scopeColor) {
 
@@ -596,5 +719,118 @@ export class webUiFeatureOptions {
     }
 
     homebridge.hideSpinner();
+  }
+
+  // Our default device information panel handler.
+  #showDeviceInfoPanel(device) {
+
+    const deviceFirmware = document.getElementById("device_firmware") ?? {};
+    const deviceSerial = document.getElementById("device_serial") ?? {};
+
+    // No device specified, we must be in a global context.
+    if(!device) {
+
+      deviceFirmware.innerHTML = "N/A";
+      deviceSerial.innerHTML = "N/A";
+
+      return;
+    }
+
+    // Display our device details.
+    deviceFirmware.innerHTML = device.firmwareVersion;
+    deviceSerial.innerHTML = device.serial;
+  }
+
+  // Default method for enumerating the device list in the sidebar.
+  async #showSidebarDevices() {
+
+    // Show the devices list only if we have actual devices to show.
+    if(!this.devices?.length) {
+
+      return;
+    }
+
+    // Create a row for this device category.
+    const trCategory = document.createElement("tr");
+
+    // Disable any pointer events and hover activity.
+    trCategory.style.pointerEvents = "none";
+
+    // Create the cell for our device category row.
+    const tdCategory = document.createElement("td");
+
+    tdCategory.classList.add("m-0", "p-0", "pl-1", "w-100");
+
+    // Add the category name, with appropriate casing.
+    tdCategory.appendChild(document.createTextNode(this.sidebar.deviceLabel));
+    tdCategory.style.fontWeight = "bold";
+
+    // Add the cell to the table row.
+    trCategory.appendChild(tdCategory);
+
+    // Add the table row to the table.
+    this.devicesTable.appendChild(trCategory);
+
+    for(const device of this.devices) {
+
+      // Create a row for this device.
+      const trDevice = document.createElement("tr");
+
+      trDevice.classList.add("m-0", "p-0");
+
+      // Create a cell for our device.
+      const tdDevice = document.createElement("td");
+
+      tdDevice.classList.add("m-0", "p-0", "w-100");
+
+      const label = document.createElement("label");
+
+      label.name = device.serial;
+      label.appendChild(document.createTextNode(device.name ?? "Unknown"));
+      label.style.cursor = "pointer";
+      label.classList.add("mx-2", "my-0", "p-0", "w-100");
+
+      label.addEventListener("click", () => this.showDeviceOptions(device.serial));
+
+      // Add the device label to our cell.
+      tdDevice.appendChild(label);
+
+      // Add the cell to the table row.
+      trDevice.appendChild(tdDevice);
+
+      // Add the table row to the table.
+      this.devicesTable.appendChild(trDevice);
+
+      this.webUiDeviceList.push(label);
+    }
+  }
+
+  // Default method for retrieving the device list from the Homebridge accessory cache.
+  async #getHomebridgeDevices() {
+
+    // Retrieve the full list of cached accessories.
+    let devices = await homebridge.getCachedAccessories();
+
+    // Filter out only the components we're interested in.
+    devices = devices.map(device => ({
+
+      firmwareVersion: (device.services.find(service => service.constructorName ===
+        "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "FirmwareRevision")?.value ?? ""),
+      name: device.displayName,
+      serial: (device.services.find(service => service.constructorName ===
+        "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "SerialNumber")?.value ?? "")
+    }));
+
+    // Sort it for posterity.
+    devices.sort((a, b) => {
+
+      const aCase = (a.name ?? "").toLowerCase();
+      const bCase = (b.name ?? "").toLowerCase();
+
+      return aCase > bCase ? 1 : (bCase > aCase ? -1 : 0);
+    });
+
+    // Return the list.
+    return devices;
   }
 }

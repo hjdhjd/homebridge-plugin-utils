@@ -66,7 +66,7 @@ export default ts.config(
 
   {
 
-    files: [ "ui/webUi.mjs", "ui/webui-featureoptions.mjs" ],
+    files: [ "ui/webUi.mjs", "ui/webUi-featureoptions.mjs" ],
 
     languageOptions: {
 

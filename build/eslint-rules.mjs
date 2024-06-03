@@ -209,6 +209,7 @@ const commonRules = {
   "no-await-in-loop": "warn",
   "no-console": "warn",
   "prefer-arrow-callback": "warn",
+  "prefer-const": "warn",
   "quotes": ["warn", "double", { "avoidEscape": true }],
   "sort-imports": "warn",
   "sort-keys": "warn",

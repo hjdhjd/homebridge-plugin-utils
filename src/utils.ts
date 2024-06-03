@@ -52,7 +52,12 @@ export function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
 }
 
 // Retry an operation until we're successful.
-export async function retry(operation: () => Promise<boolean>, retryInterval: number): Promise<boolean> {
+export async function retry(operation: () => Promise<boolean>, retryInterval: number, totalRetries?: number): Promise<boolean> {
+
+  if((totalRetries !== undefined) && (totalRetries < 0)) {
+
+    return false;
+  }
 
   // Try the operation that was requested.
   if(!(await operation())) {
@@ -60,7 +65,7 @@ export async function retry(operation: () => Promise<boolean>, retryInterval: nu
     // If the operation wasn't successful, let's sleep for the requested interval and try again.
     await sleep(retryInterval);
 
-    return retry(operation, retryInterval);
+    return retry(operation, retryInterval, (totalRetries === undefined) ? undefined : totalRetries--);
   }
 
   // We were successful - we're done.

@@ -141,6 +141,7 @@ const tsRules = {
   "@typescript-eslint/no-explicit-any": "warn",
   "@typescript-eslint/no-floating-promises": ["warn", { "ignoreIIFE": true }],
   "@typescript-eslint/no-non-null-assertion": "warn",
+  "@typescript-eslint/promise-function-async": "warn",
   "no-dupe-class-members": "off",
   "no-undef": "off",
   "no-unused-vars": "off"
@@ -150,7 +151,8 @@ const tsRules = {
 const jsRules = {
 
   ...tsEslint.configs.disableTypeChecked,
-  "@typescript-eslint/no-floating-promises": "off"
+  "@typescript-eslint/no-floating-promises": "off",
+  "require-await": "warn"
 };
 
 // Rules that exist across both JavaScript and TypeScript files.

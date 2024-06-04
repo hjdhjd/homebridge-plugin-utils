@@ -46,7 +46,7 @@ export interface HomebridgePluginLogging {
 }
 
 // Emulate a sleep function.
-export function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
+export async function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
 
   return new Promise(resolve => setTimeout(resolve, sleepTimer));
 }

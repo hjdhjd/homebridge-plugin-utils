@@ -336,7 +336,7 @@ export class webUiFeatureOptions {
   }
 
   // Show feature option information for a specific device, controller, or globally.
-  async showDeviceOptions(deviceId) {
+  showDeviceOptions(deviceId) {
 
     homebridge.showSpinner();
 
@@ -742,7 +742,7 @@ export class webUiFeatureOptions {
   }
 
   // Default method for enumerating the device list in the sidebar.
-  async #showSidebarDevices() {
+  #showSidebarDevices() {
 
     // Show the devices list only if we have actual devices to show.
     if(!this.devices?.length) {

@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.4.0 (2024-06-06)
+  * Improvement: additional typechecking.
+
 ## 1.3.0 (2024-06-03)
   * New feature: Added a limit option to the retry utility function.
 

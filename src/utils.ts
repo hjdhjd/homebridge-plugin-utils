@@ -45,12 +45,6 @@ export interface HomebridgePluginLogging {
   warn: (message: string, ...parameters: unknown[]) => void
 }
 
-// Emulate a sleep function.
-export async function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
-
-  return new Promise(resolve => setTimeout(resolve, sleepTimer));
-}
-
 // Retry an operation until we're successful.
 export async function retry(operation: () => Promise<boolean>, retryInterval: number, totalRetries?: number): Promise<boolean> {
 
@@ -70,4 +64,18 @@ export async function retry(operation: () => Promise<boolean>, retryInterval: nu
 
   // We were successful - we're done.
   return true;
+}
+
+// Run a promise with a guaranteed timeout to complete.
+export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): Promise<T | null> {
+
+  const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout));
+
+  return Promise.race([promise, timeoutPromise]);
+}
+
+// Emulate a sleep function.
+export async function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
+
+  return new Promise(resolve => setTimeout(resolve, sleepTimer));
 }

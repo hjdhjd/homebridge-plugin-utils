@@ -11,7 +11,7 @@ import { createSocket } from "node:dgram";
 // How often, in seconds, should we heartbeat FFmpeg in two-way audio sessions. This should be less than 5 seconds, which is FFmpeg's input timeout interval.
 const TWOWAY_HEARTBEAT_INTERVAL = 3;
 
-/*
+/**
  * Here's the problem this class solves: FFmpeg doesn't support multiplexing RTP and RTCP data on a single UDP port (RFC 5761). If it did, we wouldn't need this
  * workaround for HomeKit compatibility, which does multiplex RTP and RTCP over a single UDP port.
  *

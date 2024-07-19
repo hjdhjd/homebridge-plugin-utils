@@ -24,13 +24,6 @@ export type DeepPartial<T> = {
  *
  * @template T - The type to make recursively partial.
  */
-/*
-export type DeepReadonly<T> = {
-
-  readonly [P in keyof T]: DeepReadonly<T[P]>
-};
-*/
-
 export type DeepReadonly<T> = {
 
   readonly [P in keyof T]: T[P] extends Array<infer I> ? Array<DeepReadonly<I>> : DeepReadonly<T[P]>

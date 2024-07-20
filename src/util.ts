@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2024, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * utils.ts: Useful utility functions when writing TypeScript.
+ * util.ts: Useful utility functions when writing TypeScript.
  */
 
 /**

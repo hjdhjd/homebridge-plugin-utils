@@ -2,7 +2,7 @@
  *
  * mqttclient.ts: MQTT connectivity class for Homebridge plugins.
  */
-import { HomebridgePluginLogging } from "./utils.js";
+import { HomebridgePluginLogging } from "./util.js";
 import mqtt from "mqtt";
 import util from "node:util";
 

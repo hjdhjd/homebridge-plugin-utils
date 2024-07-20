@@ -5,7 +5,7 @@
  * This module is heavily inspired by the homebridge and homebridge-camera-ffmpeg source code and borrows from both. Thank you for your contributions to the community.
  */
 import { EventEmitter, once } from "node:events";
-import { HomebridgePluginLogging } from "./utils.js";
+import { HomebridgePluginLogging } from "./util.js";
 import { createSocket } from "node:dgram";
 
 // How often, in seconds, should we heartbeat FFmpeg in two-way audio sessions. This should be less than 5 seconds, which is FFmpeg's input timeout interval.

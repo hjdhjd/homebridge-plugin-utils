@@ -2,8 +2,13 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.6.0 (2024-07-20)
+  * New feature: Add `acquireService` and `validService` functions to allow for convenient service creation, retrieval, naming, and validation.
+  * Improvement: additional linting rules.
+  * Housekeeping.
+
 ## 1.5.0 (2024-06-14)
-  * New feature: Add runWithTimeout function to allow the arbitrary execution of a promise with a guaranteed timeout.
+  * New feature: Add `runWithTimeout` function to allow the arbitrary execution of a promise with a guaranteed timeout.
 
 ## 1.4.0 (2024-06-06)
   * Improvement: additional typechecking.

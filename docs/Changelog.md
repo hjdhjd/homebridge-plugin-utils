@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.6.1 (2024-07-22)
+  * Housekeeping.
+
 ## 1.6.0 (2024-07-20)
   * New feature: Add `acquireService` and `validService` functions to allow for convenient service creation, retrieval, naming, and validation.
   * Improvement: additional linting rules.

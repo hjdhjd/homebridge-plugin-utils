@@ -22,12 +22,24 @@ import { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
 export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceType: WithUUID<typeof Service>, name: string, subtype?: string,
   onServiceCreate?: (svc: Service) => void): Service | null {
 
+  // Services that do not need the Name characteristic added as an optional characteristic.
+  const configuredNameRequiredServices = [ hap.Service.InputSource, hap.Service.Television, hap.Service.WiFiRouter ];
+
   // Services that need the ConfiguredName characteristic added and maintained.
-  const configuredNameServices = [ hap.Service.ContactSensor, hap.Service.Lightbulb, hap.Service.MotionSensor, hap.Service.OccupancySensor, hap.Service.Switch ];
+  const configuredNameServices = [ hap.Service.AccessoryInformation, hap.Service.ContactSensor, hap.Service.Lightbulb, hap.Service.MotionSensor,
+    hap.Service.OccupancySensor, hap.Service.SmartSpeaker, hap.Service.Switch, hap.Service.Valve ];
+
+  // Services that do not need the Name characteristic added as an optional characteristic.
+  const nameRequiredServices = [ hap.Service.AccessoryInformation, hap.Service.Assistant, hap.Service.InputSource ];
 
   // Services that need the Name characteristic maintained.
-  const nameServices = [ hap.Service.Battery, hap.Service.ContactSensor, hap.Service.HumiditySensor, hap.Service.LeakSensor, hap.Service.Lightbulb,
-    hap.Service.LightSensor, hap.Service.MotionSensor, hap.Service.TemperatureSensor ];
+  const nameServices = [ hap.Service.AirPurifier, hap.Service.AirQualitySensor, hap.Service.Battery, hap.Service.CarbonDioxideSensor,
+    hap.Service.CarbonMonoxideSensor, hap.Service.ContactSensor, hap.Service.Door, hap.Service.Doorbell, hap.Service.Fan, hap.Service.Fanv2, hap.Service.Faucet,
+    hap.Service.FilterMaintenance, hap.Service.GarageDoorOpener, hap.Service.HeaterCooler, hap.Service.HumidifierDehumidifier, hap.Service.HumiditySensor,
+    hap.Service.IrrigationSystem, hap.Service.LeakSensor, hap.Service.Lightbulb, hap.Service.LightSensor, hap.Service.LockMechanism, hap.Service.MotionSensor,
+    hap.Service.OccupancySensor, hap.Service.Outlet, hap.Service.SecuritySystem, hap.Service.Slats, hap.Service.SmartSpeaker, hap.Service.SmokeSensor,
+    hap.Service.StatefulProgrammableSwitch, hap.Service.StatelessProgrammableSwitch, hap.Service.Switch, hap.Service.TargetControl, hap.Service.Television,
+    hap.Service.TemperatureSensor, hap.Service.Thermostat, hap.Service.Valve, hap.Service.Window, hap.Service.WindowCovering ];
 
   // Find the service, if it exists.
   let service = subtype ? accessory.getServiceById(serviceType, subtype) : accessory.getService(serviceType);
@@ -35,15 +47,25 @@ export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceTy
   // Add the service to the accessory, if needed.
   if(!service) {
 
-    // @ts-expect-error TypeScript tries to associate this with an overloaded version of the addService method. However, Homebridge/HAP-NodeJS isn't exporting
-    // a version of the method that implements the unexposed interface that's been defined for each service class (e.g. Lightbulb). The constructor on the
-    // service-type-specific version of the service takes the following arguments: constructor(displayName?: string, subtype?: string). We're safe, but because
-    // the type definitions are missing, we need to override it here.
-    service = new serviceType(name, subtype);
+    service = new serviceType(name, subtype as string);
 
     if(!service) {
 
       return null;
+    }
+
+    // Add the Configured Name characteristic if we don't already have it and it's available to us.
+    if(!configuredNameRequiredServices.includes(serviceType) && configuredNameServices.includes(serviceType) &&
+      !service.optionalCharacteristics.some(x => (x.UUID === hap.Characteristic.ConfiguredName.UUID))) {
+
+      service.addOptionalCharacteristic(hap.Characteristic.ConfiguredName);
+    }
+
+    // Add the Name characteristic if we don't already have it and it's available to us.
+    if(!nameRequiredServices.includes(serviceType) && nameServices.includes(serviceType) &&
+      !service.optionalCharacteristics.some(x => (x.UUID === hap.Characteristic.Name.UUID))) {
+
+      service.addOptionalCharacteristic(hap.Characteristic.Name);
     }
 
     accessory.addService(service);
@@ -58,13 +80,6 @@ export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceTy
   service.displayName = name;
 
   if(configuredNameServices.includes(serviceType)) {
-
-    // Add the characteristic if we don't already have it. We do this here instead of at service creation to ensure we catch legacy situations where we may have
-    // already created the service previously without adding the optional characteristics we want.
-    if(!service.optionalCharacteristics.some(x => (x.UUID === hap.Characteristic.ConfiguredName.UUID))) {
-
-      service.addOptionalCharacteristic(hap.Characteristic.ConfiguredName);
-    }
 
     service.updateCharacteristic(hap.Characteristic.ConfiguredName, name);
   }

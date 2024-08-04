@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.7.0 (2024-08-04)
+  * Update to ESlint v9.
+  * Housekeeping.
+
 ## 1.6.1 (2024-07-22)
   * Housekeeping.
 

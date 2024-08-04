@@ -42,7 +42,13 @@ export default ts.config(
       parserOptions: {
 
         ecmaVersion: "latest",
-        project: "./tsconfig.json"
+        project: "./tsconfig.json",
+
+        projectService: {
+
+          allowDefaultProject: [ "build/*.@(js|mjs)", "eslint.config.mjs", "ui/*.@(js|mjs)" ],
+          defaultProject: "./tsconfig.json"
+        }
       },
 
       sourceType: "module"

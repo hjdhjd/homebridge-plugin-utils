@@ -142,7 +142,7 @@ const tsRules = {
   "@typescript-eslint/no-floating-promises": ["warn", { "ignoreIIFE": true }],
   "@typescript-eslint/no-non-null-assertion": "warn",
   "@typescript-eslint/no-unused-expressions": "warn",
-  "@typescript-eslint/no-unused-vars": "warn",
+  "@typescript-eslint/no-unused-vars": ["warn", { "caughtErrors": "none" }],
   "@typescript-eslint/promise-function-async": "warn",
   "no-dupe-class-members": "off",
   "no-undef": "off",

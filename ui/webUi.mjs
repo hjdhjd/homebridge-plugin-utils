@@ -28,12 +28,12 @@ export class webUi {
   constructor({ featureOptions, firstRun = {}, name } = {}) {
 
     // Defaults for our first run handlers.
-    this.firstRun = { isRequired: () => false, onStart: () => true, onSubmit: () => true };
+    this.#firstRun = { isRequired: () => false, onStart: () => true, onSubmit: () => true };
 
     // Figure out the options passed in to us.
     this.featureOptions = new webUiFeatureOptions(featureOptions);
-    this.firstRun = Object.assign({}, this.firstRun, firstRun);
-    this.name = name;
+    this.#firstRun = Object.assign({}, this.#firstRun, firstRun);
+    this.#name = name;
   }
 
   /**
@@ -63,7 +63,7 @@ export class webUi {
     const buttonFirstRun = document.getElementById("firstRun");
 
     // Run a custom initialization handler the user may have provided.
-    if(!(await this.#processHandler(this.firstRun.onStart))) {
+    if(!(await this.#processHandler(this.#firstRun.onStart))) {
 
       return;
     }
@@ -75,7 +75,7 @@ export class webUi {
       homebridge.showSpinner();
 
       // Run a custom submit handler the user may have provided.
-      if(!(await this.#processHandler(this.firstRun.onSubmit))) {
+      if(!(await this.#processHandler(this.#firstRun.onSubmit))) {
 
         return;
       }
@@ -146,7 +146,7 @@ export class webUi {
     const devices = await homebridge.getCachedAccessories();
 
     // If we've got devices detected, we launch our feature option UI. Otherwise, we launch our first run UI.
-    if(this.featureOptions.currentConfig.length && devices?.length && !(await this.#processHandler(this.firstRun.isRequired))) {
+    if(this.featureOptions.currentConfig.length && devices?.length && !(await this.#processHandler(this.#firstRun.isRequired))) {
 
       document.getElementById("menuWrapper").style.display = "inline-flex";
       this.featureOptions.show();
@@ -155,7 +155,7 @@ export class webUi {
     }
 
     // If we have the name property set for the plugin configuration yet, let's do so now. If we don't have a configuration, let's initialize it as well.
-    (this.featureOptions.currentConfig[0] ??= { name: this.name }).name ??= this.name;
+    (this.featureOptions.currentConfig[0] ??= { name: this.#name }).name ??= this.#name;
 
     // Update the plugin configuration and launch the first run UI.
     await homebridge.updatePluginConfig(this.featureOptions.currentConfig);

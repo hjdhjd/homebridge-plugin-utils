@@ -136,6 +136,7 @@ const tsRules = {
 
   ...tsEslint.configs.strictTypeChecked,
   ...tsEslint.configs.stylisticTypeChecked,
+  "@typescript-eslint/await-thenable": "warn",
   "@typescript-eslint/explicit-function-return-type": "warn",
   "@typescript-eslint/explicit-module-boundary-types": "warn",
   "@typescript-eslint/no-explicit-any": "warn",
@@ -144,6 +145,9 @@ const tsRules = {
   "@typescript-eslint/no-unused-expressions": "warn",
   "@typescript-eslint/no-unused-vars": ["warn", { "caughtErrors": "none" }],
   "@typescript-eslint/promise-function-async": "warn",
+  "require-await": "off",
+  // eslint-disable-next-line sort-keys
+  "@typescript-eslint/require-await": "warn",
   "no-dupe-class-members": "off",
   "no-undef": "off",
   "no-unused-expressions": "off",

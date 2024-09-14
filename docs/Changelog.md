@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.8.0 (2024-09-14)
+  * Improvement: additional typechecking.
+
 ## 1.7.0 (2024-08-04)
   * Update to ESlint v9.
   * Housekeeping.

@@ -10,6 +10,7 @@ import { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
  * @param hap             - HAP instance associated with the Homebridge plugin.
  * @param accessory       - Homebridge accessory to check.
  * @param serviceType     - Service type that is being instantiated or retrieved.
+ * @param name            - Name to be displayed to the end user for this service.
  * @param subtype         - Service subtype, if needed.
  * @param onServiceCreate - Callback to be used when a new service is created. It is not called when an existing service is found.
  *

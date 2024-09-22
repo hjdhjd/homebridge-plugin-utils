@@ -391,6 +391,12 @@ export class FeatureOptions {
 
     for(const category of this.categories) {
 
+      // If the category doesn't exist, let's skip it.
+      if(!this.options[category.name]) {
+
+        continue;
+      }
+
       // Now enumerate all the feature options for a given device and add then to the full list.
       for(const option of this.options[category.name]) {
 

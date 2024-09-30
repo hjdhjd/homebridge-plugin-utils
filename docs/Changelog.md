@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.9.0 (2024-10-XX)
+  * New feature: `validateName` to ensure a proper HomeKit name.
+  * Improvement: `acquireService` will now filter names through `validateName` as well.
+  * Housekeeping.
+
 ## 1.8.2 (2024-09-22)
   * Housekeeping.
 

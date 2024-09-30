@@ -3,6 +3,7 @@
  * service.ts: Useful Homebridge service support functions.
  */
 import { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
+import { validateName } from "./util.js";
 
 /**
  * Utility method that either creates a new service on an accessory, if needed, or returns an existing one. It optionally executes a callback to initialize a new
@@ -41,6 +42,9 @@ export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceTy
     hap.Service.OccupancySensor, hap.Service.Outlet, hap.Service.SecuritySystem, hap.Service.Slats, hap.Service.SmartSpeaker, hap.Service.SmokeSensor,
     hap.Service.StatefulProgrammableSwitch, hap.Service.StatelessProgrammableSwitch, hap.Service.Switch, hap.Service.TargetControl, hap.Service.Television,
     hap.Service.TemperatureSensor, hap.Service.Thermostat, hap.Service.Valve, hap.Service.Window, hap.Service.WindowCovering ];
+
+  // Ensure we have HomeKit approved naming.
+  name = validateName(name);
 
   // Find the service, if it exists.
   let service = subtype ? accessory.getServiceById(serviceType, subtype) : accessory.getService(serviceType);

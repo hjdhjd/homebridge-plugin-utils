@@ -72,3 +72,16 @@ export async function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
 
   return new Promise(resolve => setTimeout(resolve, sleepTimer));
 }
+
+// Validate a name according to HomeKit naming conventions.
+export function validateName(name: string): string {
+
+  // Validate our names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names):
+  //
+  // - Use only alphanumeric, space, and apostrophe characters.
+  // - Start and end with an alphabetic or numeric character.
+  // - Don’t include emojis.
+  //
+  // Invalid characters will be replaced by a space, and multiple spaces will be squashed.
+  return name.replace(/[^\p{L}\p{N} ']+/gu, " ").replace(/\s+/g, " ").trim();
+}

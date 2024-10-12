@@ -29,6 +29,12 @@ export type DeepReadonly<T> = {
   readonly [P in keyof T]: T[P] extends Array<infer I> ? Array<DeepReadonly<I>> : DeepReadonly<T[P]>
 };
 
+/**
+ * @internal
+ *
+ * A utility type that makes a given type assignable to it's type or null.
+ */
+export type Nullable<T> = T | null;
 
 export interface HomebridgePluginLogging {
 

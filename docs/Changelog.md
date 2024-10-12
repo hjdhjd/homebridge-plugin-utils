@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.10.0 (2024-10-12)
+  * New feature: Nullable as a template utility type.
+  * Housekeeping.
+
 ## 1.9.0 (2024-09-29)
   * New feature: `validateName` to ensure a proper HomeKit name.
   * Improvement: `acquireService` will now filter names through `validateName` as well.

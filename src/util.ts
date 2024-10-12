@@ -66,7 +66,7 @@ export async function retry(operation: () => Promise<boolean>, retryInterval: nu
 }
 
 // Run a promise with a guaranteed timeout to complete.
-export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): Promise<T | null> {
+export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): Promise<Nullable<T>> {
 
   const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout));
 

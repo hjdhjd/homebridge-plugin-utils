@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.10.1 (2024-10-12)
+  * Housekeeping.
+
 ## 1.10.0 (2024-10-12)
   * New feature: `Nullable` as a template utility type.
   * Housekeeping.

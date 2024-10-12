@@ -3,7 +3,7 @@
  * service.ts: Useful Homebridge service support functions.
  */
 import { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { validateName } from "./util.js";
+import { Nullable, validateName } from "./util.js";
 
 /**
  * Utility method that either creates a new service on an accessory, if needed, or returns an existing one. It optionally executes a callback to initialize a new
@@ -22,7 +22,7 @@ import { validateName } from "./util.js";
  * @category Accessory
  */
 export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceType: WithUUID<typeof Service>, name: string, subtype?: string,
-  onServiceCreate?: (svc: Service) => void): Service | null {
+  onServiceCreate?: (svc: Service) => void): Nullable<Service> {
 
   // Services that do not need the Name characteristic added as an optional characteristic.
   const configuredNameRequiredServices = [ hap.Service.InputSource, hap.Service.Television, hap.Service.WiFiRouter ];

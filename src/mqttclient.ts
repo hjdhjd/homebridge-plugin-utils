@@ -2,7 +2,7 @@
  *
  * mqttclient.ts: MQTT connectivity class for Homebridge plugins.
  */
-import { HomebridgePluginLogging } from "./util.js";
+import { HomebridgePluginLogging, Nullable } from "./util.js";
 import mqtt from "mqtt";
 import util from "node:util";
 
@@ -14,7 +14,7 @@ export class MqttClient {
   private isConnected: boolean;
   private reconnectInterval: number;
   private log: HomebridgePluginLogging;
-  private mqtt: mqtt.MqttClient | null;
+  private mqtt: Nullable<mqtt.MqttClient>;
   private subscriptions: { [index: string]: (cbBuffer: Buffer) => void };
   private topicPrefix: string;
 
@@ -230,7 +230,7 @@ export class MqttClient {
   }
 
   // Expand a topic to a unique, fully formed one.
-  private expandTopic(id: string, topic: string) : string | null {
+  private expandTopic(id: string, topic: string) : Nullable<string> {
 
     // No id, we're done.
     if(!id) {

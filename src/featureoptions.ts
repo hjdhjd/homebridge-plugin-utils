@@ -516,7 +516,7 @@ export class FeatureOptions {
     const convertedValue = convert(option);
 
     // Let's validate to make sure it's really a number.
-    if(isNaN(convertedValue) || (convertedValue < 0)) {
+    if(isNaN(convertedValue)) {
 
       return undefined;
     }

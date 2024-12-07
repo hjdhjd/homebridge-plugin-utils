@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.11.0 (2024-12-07)
+  * Breaking change: `serial` is now `serialNumber` in the feature option webUI configuration to be consistent with the `SerialNumber` characteristic in Homebridge/HomeKit.
+  * Behavior change: value-centric feature options can now be explicitly disabled like binary feature options. `null` will be returned when a value-centric feature option has been disabled.
+  * Behavior change: the feature option webUI now handles value-centric feature options like binary feature options, with the ability to explicitly disable them.
+  * Housekeeping.
+
 ## 1.10.2 (2024-10-14)
   * Housekeeping.
 
@@ -34,18 +40,18 @@ All notable changes to this project will be documented in this file. This projec
   * Housekeeping.
 
 ## 1.6.0 (2024-07-20)
-  * New feature: Add `acquireService` and `validService` functions to allow for convenient service creation, retrieval, naming, and validation.
+  * New feature: added `acquireService` and `validService` functions to allow for convenient service creation, retrieval, naming, and validation.
   * Improvement: additional linting rules.
   * Housekeeping.
 
 ## 1.5.0 (2024-06-14)
-  * New feature: Add `runWithTimeout` function to allow the arbitrary execution of a promise with a guaranteed timeout.
+  * New feature: added `runWithTimeout` function to allow the arbitrary execution of a promise with a guaranteed timeout.
 
 ## 1.4.0 (2024-06-06)
   * Improvement: additional typechecking.
 
 ## 1.3.0 (2024-06-03)
-  * New feature: Added a limit option to the retry utility function.
+  * New feature: added a limit option to the retry utility function.
 
 ## 1.2.0 (2024-06-01)
   * New feature: full two-level configuration is now available via the webUI. You can now more fully configure feature option webUIs like the ones used in [homebridge-unifi-protect](https://github.com/hjdhjd/homebridge-unifi-protect) to simpler ones like the ones used in [homebridge-hunter-hydrawise](https://github.com/hjdhjd/homebridge-hunter-hydrawise) and [homebridge-ratgdo](https://github.com/hjdhjd/homebridge-ratgdo).

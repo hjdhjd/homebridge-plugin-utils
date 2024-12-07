@@ -2,6 +2,8 @@
  *
  * featureoptions.ts: Hierarchical feature option capabilities for use in plugins and applications.
  */
+import { Nullable } from "./util.js";
+
 export interface FeatureOptionEntry {
 
   default: boolean,                // Default feature option state.
@@ -35,7 +37,7 @@ export class FeatureOptions {
   private _options: { [index: string]: FeatureOptionEntry[] };
   public defaultReturnValue: boolean;
   private defaults: { [index: string]: boolean };
-  private valueOptions: { [index: string]: boolean };
+  private valueOptions: { [index: string]: number | string | undefined };
 
   // Create a feature option instance.
   constructor(categories: FeatureCategoryEntry[], options: { [index: string]: FeatureOptionEntry[] }, configuredOptions = []) {
@@ -95,21 +97,8 @@ export class FeatureOptions {
    */
   public defaultValue(option: string): boolean {
 
-    // Value-centric feature options don't have default values.
-    if(this.isValue(option)) {
-
-      return this.defaultReturnValue;
-    }
-
-    const value = this.defaults[option.toLowerCase()];
-
-    // If it's unknown to us, assume it's true.
-    if(value === undefined) {
-
-      return this.defaultReturnValue;
-    }
-
-    return value;
+    // If it's unknown to us, return the default return value.
+    return this.defaults[option.toLowerCase()] ?? this.defaultReturnValue;
   }
 
   /**
@@ -155,9 +144,9 @@ export class FeatureOptions {
    * @param device        - Optional device scope identifier.
    * @param controller    - Optional controller scope identifier.
    *
-   * @returns Returns the value of a value-centric option as a floating point number or `undefined` if it doesn't exist or couldn't be parsed.
+   * @returns Returns the value of a value-centric option as a floating point number, `undefined` if it doesn't exist or couldn't be parsed, and `null` if disabled.
    */
-  public getFloat(option: string, device?: string, controller?: string): number | undefined {
+  public getFloat(option: string, device?: string, controller?: string): Nullable<number | undefined> {
 
     // Parse the number and return the value.
     return this.parseOptionNumeric(this.value(option, device, controller), parseFloat);
@@ -170,9 +159,9 @@ export class FeatureOptions {
    * @param device        - Optional device scope identifier.
    * @param controller    - Optional controller scope identifier.
    *
-   * @returns Returns the value of a value-centric option as an integer or `undefined` if it doesn't exist or couldn't be parsed.
+   * @returns Returns the value of a value-centric option as an integer, `undefined` if it doesn't exist or couldn't be parsed, and `null` if disabled.
    */
-  public getInteger(option: string, device?: string, controller?: string): number | undefined {
+  public getInteger(option: string, device?: string, controller?: string): Nullable<number | undefined> {
 
     // Parse the number and return the value.
     return this.parseOptionNumeric(this.value(option, device, controller), parseInt);
@@ -217,7 +206,12 @@ export class FeatureOptions {
    */
   public isValue(option: string): boolean {
 
-    return this.valueOptions[option?.toLowerCase()] === true;
+    if(!option) {
+
+      return false;
+    }
+
+    return option.toLowerCase() in this.valueOptions;
   }
 
   /**
@@ -255,17 +249,21 @@ export class FeatureOptions {
    * @param device        - Optional device scope identifier.
    * @param controller    - Optional controller scope identifier.
    *
-   * @returns Returns the current value associated with `option` or `undefined` if none.
+   * @returns Returns the current value associated with `option` if the feature option is enabled, `null` if disabled (or not a value-centric feature option), or
+   *          `undefined` if it's not specified.
    */
-  public value(option: string, device?: string, controller?: string): string | undefined {
+  public value(option: string, device?: string, controller?: string): Nullable<string | undefined> {
 
     // If this isn't a value-centric feature option, we're done.
     if(!this.isValue(option)) {
 
-      return undefined;
+      return null;
     }
 
-    const getValue = (checkOption: string, checkId?: string): string | undefined => {
+    // Normalize the option.
+    option = option.toLowerCase();
+
+    const getValue = (checkOption: string, checkId?: string): Nullable<string | undefined> => {
 
       const regex = this.valueRegex(checkOption, checkId);
 
@@ -276,7 +274,8 @@ export class FeatureOptions {
 
         if(regexMatch) {
 
-          return regexMatch[1];
+          // If the option is enabled, return the value. Otherwise, we have nothing.
+          return (regexMatch[1].toLowerCase() === "enable") ? regexMatch[2] : null;
         }
       }
 
@@ -287,6 +286,12 @@ export class FeatureOptions {
     if(device) {
 
       const value = getValue(option, device);
+
+      // The option must been explicitly disabled.
+      if(value === null) {
+
+        return undefined;
+      }
 
       if(value) {
 
@@ -299,6 +304,12 @@ export class FeatureOptions {
 
       const value = getValue(option, controller);
 
+      // The option's been explicitly disabled.
+      if(value === null) {
+
+        return undefined;
+      }
+
       if(value) {
 
         return value;
@@ -306,7 +317,21 @@ export class FeatureOptions {
     }
 
     // Finally, we check for a global-level value.
-    return getValue(option);
+    const value = getValue(option);
+
+    if(value) {
+
+      return value;
+    }
+
+    // The option's been explicitly disabled or is disabled by default.
+    if((value === null) || !this.defaultValue(option)) {
+
+      return null;
+    }
+
+    // Return the enabled value, or the default value if we've got nothing explicitly configured.
+    return value ?? ((this.valueOptions[option] === undefined) ? undefined : this.valueOptions[option]?.toString());
   }
 
   /**
@@ -407,7 +432,10 @@ export class FeatureOptions {
         this.defaults[entry.toLowerCase()] = option.default;
 
         // Track value-centric options.
-        this.valueOptions[entry.toLowerCase()] = "defaultValue" in option;
+        if("defaultValue" in option) {
+
+          this.valueOptions[entry.toLowerCase()] = option.defaultValue;
+        }
 
         // Cross reference the feature option group it belongs to, if any.
         if(option.group !== undefined) {
@@ -473,13 +501,7 @@ export class FeatureOptions {
   // We return true if an option is enabled, false for disabled, undefined otherwise. For value-centric options, we return true if a value exists.
   private isOptionEnabled(option: string, id?: string): boolean | undefined {
 
-    // Deal with value-centric options uniquely.
-    if(this.isValue(option)) {
-
-      return this.exists(option, id);
-    }
-
-    const regex = this.optionRegex(option, id);
+    const regex = this.isValue(option) ? this.valueRegex(option, id) : this.optionRegex(option, id);
 
     // Get the option value, if we have one.
     for(const entry of this.configuredOptions) {
@@ -504,12 +526,12 @@ export class FeatureOptions {
   }
 
   // Utility function to parse and return a numeric configuration parameter.
-  private parseOptionNumeric(option: string | undefined, convert: (value: string) => number): number | undefined {
+  private parseOptionNumeric(option: Nullable<string | undefined>, convert: (value: string) => number): Nullable<number | undefined> {
 
-    // We don't have the option configured -- we're done.
-    if(option === undefined) {
+    // If the option is disabled or we don't have it configured -- we're done.
+    if(!option) {
 
-      return undefined;
+      return (option === null) ? null : undefined;
     }
 
     // Convert it to a number, if needed.
@@ -529,6 +551,6 @@ export class FeatureOptions {
   private valueRegex(option: string, id?: string): RegExp {
 
     // This regular expression is a bit more intricate than you might think it should be due to the need to ensure we capture values at the very end of the option.
-    return new RegExp("^Enable\\." + option.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (!id ? "" : "\\." + id) + "\\.([^\\.]+)$", "gi");
+    return new RegExp("^(Disable|Enable)\\." + option.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (!id ? "" : "\\." + id) + "(?:\\.([^\\.]+))?$", "gi");
   }
 }

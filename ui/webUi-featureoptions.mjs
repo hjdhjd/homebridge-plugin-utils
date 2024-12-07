@@ -312,7 +312,7 @@ export class webUiFeatureOptions {
       }
 
       // The first entry returned by getDevices() must always be the controller.
-      this.#controller = this.#devices[0]?.serial ?? null;
+      this.#controller = this.#devices[0]?.serialNumber ?? null;
     }
 
     // Make the UI visible.
@@ -329,7 +329,7 @@ export class webUiFeatureOptions {
     this.#sidebar.showDevices(controller, this.#devices);
 
     // Display the feature options to the user.
-    this.showDeviceOptions(controller ? this.#devices[0].serial : "Global Options");
+    this.showDeviceOptions(controller ? this.#devices[0].serialNumber : "Global Options");
 
     // All done. Let the user interact with us.
     homebridge.hideSpinner();
@@ -345,7 +345,7 @@ export class webUiFeatureOptions {
       webUiEntry.parentElement.classList.add("bg-info", "text-white") : webUiEntry.parentElement.classList.remove("bg-info", "text-white"));
 
     // Populate the device information info pane.
-    const currentDevice = this.#devices.find(device => device.serial === deviceId);
+    const currentDevice = this.#devices.find(device => device.serialNumber === deviceId);
 
     // Populate the details view. If there's no device specified, the context is considered global and we hide the device details view.
     if(!currentDevice) {
@@ -428,13 +428,13 @@ export class webUiFeatureOptions {
         checkbox.readOnly = false;
         checkbox.id = featureOption;
         checkbox.name = featureOption;
-        checkbox.value = featureOption + (!currentDevice ? "" : ("." + currentDevice.serial));
+        checkbox.value = featureOption + (!currentDevice ? "" : ("." + currentDevice.serialNumber));
 
         let initialValue = undefined;
         let initialScope;
 
         // Determine our initial option scope to show the user what's been set.
-        switch(initialScope = this.#featureOptions.scope(featureOption, currentDevice?.serial, this.#controller)) {
+        switch(initialScope = this.#featureOptions.scope(featureOption, currentDevice?.serialNumber, this.#controller)) {
 
           case "global":
           case "controller":
@@ -442,13 +442,11 @@ export class webUiFeatureOptions {
             // If we're looking at the global scope, show the option value. Otherwise, we show that we're inheriting a value from the scope above.
             if(!currentDevice) {
 
+              checkbox.checked = this.#featureOptions.test(featureOption);
+
               if(this.#featureOptions.isValue(featureOption)) {
 
-                checkbox.checked = this.#featureOptions.exists(featureOption);
                 initialValue = this.#featureOptions.value(checkbox.id);
-              } else {
-
-                checkbox.checked = this.#featureOptions.test(featureOption);
               }
 
               if(checkbox.checked) {
@@ -472,13 +470,11 @@ export class webUiFeatureOptions {
           case "none":
           default:
 
+            checkbox.checked = this.#featureOptions.test(featureOption, currentDevice?.serialNumber);
+
             if(this.#featureOptions.isValue(featureOption)) {
 
-              checkbox.checked = this.#featureOptions.exists(featureOption, currentDevice?.serial);
-              initialValue = this.#featureOptions.value(checkbox.id, currentDevice?.serial);
-            } else {
-
-              checkbox.checked = this.#featureOptions.test(featureOption, currentDevice?.serial);
+              initialValue = this.#featureOptions.value(checkbox.id, currentDevice?.serialNumber);
             }
 
             break;
@@ -515,32 +511,7 @@ export class webUiFeatureOptions {
           inputValue.readOnly = !checkbox.checked;
 
           // Add or remove the setting from our configuration when we've changed our state.
-          inputValue.addEventListener("change", async () => {
-
-            // Find the option in our list and delete it if it exists.
-            const optionRegex = new RegExp("^(?:Enable|Disable)\\." + checkbox.id + (!currentDevice ? "" : ("\\." + currentDevice.serial)) + "\\.[^\\.]+$", "gi");
-            const newOptions = this.#featureOptions.configuredOptions.filter(entry => !optionRegex.test(entry));
-
-            if(checkbox.checked) {
-
-              newOptions.push("Enable." + checkbox.value + "." + inputValue.value);
-            } else if(checkbox.indeterminate) {
-
-              // If we're in an indeterminate state, we need to traverse the tree to get the upstream value we're inheriting.
-              inputValue.value = (currentDevice?.serial !== this.#controller) ?
-                (this.#featureOptions.value(checkbox.id, this.#controller) ?? this.#featureOptions.value(checkbox.id)) :
-                (this.#featureOptions.value(checkbox.id) ?? option.defaultValue);
-            } else {
-
-              inputValue.value = option.defaultValue;
-            }
-
-            // Update our configuration in Homebridge.
-            this.currentConfig[0].options = newOptions;
-            this.#featureOptions.configuredOptions = newOptions;
-            await homebridge.updatePluginConfig(this.currentConfig);
-          });
-
+          inputValue.addEventListener("change", () => checkbox.dispatchEvent(new Event("change")));
           tdInput.appendChild(inputValue);
           trX.appendChild(tdInput);
         }
@@ -553,7 +524,7 @@ export class webUiFeatureOptions {
         labelDescription.classList.add("user-select-none", "my-0", "py-0");
 
         // Highlight options for the user that are different than our defaults.
-        const scopeColor = this.#featureOptions.color(featureOption, currentDevice?.serial, this.#controller);
+        const scopeColor = this.#featureOptions.color(featureOption, currentDevice?.serialNumber, this.#controller);
 
         if(scopeColor) {
 
@@ -564,19 +535,21 @@ export class webUiFeatureOptions {
         checkbox.addEventListener("change", async () => {
 
           // Find the option in our list and delete it if it exists.
-          const optionRegex = new RegExp("^(?:Enable|Disable)\\." + checkbox.id + (!currentDevice ? "" : ("\\." + currentDevice.serial)) + "$", "gi");
+          const optionRegex = new RegExp("^(?:Enable|Disable)\\." + checkbox.id + (!currentDevice ? "" : ("\\." + currentDevice.serialNumber)) +
+            "(?:\\.([^\\.]+))?$", "gi");
+
           const newOptions = this.#featureOptions.configuredOptions.filter(entry => !optionRegex.test(entry));
 
           // Figure out if we've got the option set upstream.
           let upstreamOption = false;
 
           // We explicitly want to check for the scope of the feature option above where we are now, so we can appropriately determine what we should show.
-          switch(this.#featureOptions.scope(checkbox.id, (currentDevice && (currentDevice.serial !== this.#controller)) ? this.#controller : undefined)) {
+          switch(this.#featureOptions.scope(checkbox.id, (currentDevice && (currentDevice.serialNumber !== this.#controller)) ? this.#controller : undefined)) {
 
             case "device":
             case "controller":
 
-              if(currentDevice.serial !== this.#controller) {
+              if(currentDevice.serialNumber !== this.#controller) {
 
                 upstreamOption = true;
               }
@@ -597,14 +570,29 @@ export class webUiFeatureOptions {
               break;
           }
 
-          // For value-centric feature options, if there's an upstream value assigned above us, we don't allow for an unchecked state as it doesn't make sense in this
-          // context.
-          if(checkbox.readOnly && (!this.#featureOptions.isValue(featureOption) || (this.#featureOptions.isValue(featureOption) && inputValue && !upstreamOption))) {
+          // Always do this for value options.
+          if(this.#featureOptions.isValue(featureOption) && inputValue) {
 
-            // We're truly unchecked. We need this because a checkbox can be in both an unchecked and indeterminate simultaneously,
-            // so we use the readOnly property to let us know that we've just cycled from an indeterminate state.
+            upstreamOption = true;
+          }
+
+          // We're currently in an indetermindate state and transitioning to an unchecked state.
+          if(checkbox.readOnly) {
+
+            // The user wants to change the state to unchecked. We need this because a checkbox can be in both an unchecked and indeterminate simultaneously, so we use
+            // the readOnly property to let us know that we've just cycled from an indeterminate state.
             checkbox.checked = checkbox.readOnly = false;
+
+            // If we have a value-centric feature option, we show the default value when we're in an indeterminate state.
+            if(this.#featureOptions.isValue(featureOption) && inputValue) {
+
+              // If we're unchecked, clear out the value and make it read only. We show the system default for reference.
+              inputValue.value = option.defaultValue;
+              inputValue.readOnly = true;
+            }
           } else if(!checkbox.checked) {
+
+            // We're currently in a unchecked state and transitioning to an indeterminate state.
 
             // If we have an upstream option configured, we reveal a third state to show inheritance of that option and allow the user to select it.
             if(upstreamOption) {
@@ -612,15 +600,20 @@ export class webUiFeatureOptions {
               // We want to set the readOnly property as well, since it will survive a user interaction when they click the checkbox to clear out the
               // indeterminate state. This allows us to effectively cycle between three states.
               checkbox.readOnly = checkbox.indeterminate = true;
-            }
 
-            if(this.#featureOptions.isValue(featureOption) && inputValue) {
+              if(this.#featureOptions.isValue(featureOption) && inputValue) {
 
-              inputValue.readOnly = true;
+                // If we're in an indeterminate state, we need to traverse the tree to get the upstream value we're inheriting.
+                inputValue.value = (currentDevice?.serialNumber !== this.#controller) ?
+                  (this.#featureOptions.value(checkbox.id, this.#controller) ?? this.#featureOptions.value(checkbox.id)) :
+                  (this.#featureOptions.value(checkbox.id) ?? option.defaultValue);
+
+                inputValue.readOnly = true;
+              }
             }
           } else if(checkbox.checked) {
 
-            // We've explicitly checked this option.
+            // We're currently in a checked state and transitioning to an unchecked state.
             checkbox.readOnly = checkbox.indeterminate = false;
 
             if(this.#featureOptions.isValue(featureOption) && inputValue) {
@@ -629,36 +622,29 @@ export class webUiFeatureOptions {
             }
           }
 
-          // The setting is different from the default, highlight it for the user, accounting for upstream scope, and add it to our configuration.
-          if(!checkbox.indeterminate && ((checkbox.checked !== option.default) || upstreamOption)) {
+          // The feature option is different from the default - highlight it for the user, accounting for the scope hierarchy, and add it to our configuration. We
+          // provide a visual queue to the user, highlighting to indicate that a non-default option has been set.
+          if(!checkbox.indeterminate && ((checkbox.checked !== option.default) ||
+            (this.#featureOptions.isValue(featureOption) && inputValue && (inputValue.value !== option.defaultValue)) || upstreamOption)) {
 
             labelDescription.classList.add("text-info");
-            newOptions.push((checkbox.checked ? "Enable." : "Disable.") + checkbox.value);
+            newOptions.push((checkbox.checked ? "Enable." : "Disable.") + checkbox.value +
+              (this.#featureOptions.isValue(featureOption) && checkbox.checked ? ("." + inputValue.value) : ""));
           } else {
 
             // We've reset to the defaults, remove our highlighting.
             labelDescription.classList.remove("text-info");
           }
 
-          // Update our Homebridge configuration.
-          if(this.#featureOptions.isValue(featureOption) && inputValue) {
-
-            // Inform our value-centric feature option to update Homebridge.
-            const changeEvent = new Event("change");
-
-            inputValue.dispatchEvent(changeEvent);
-          } else {
-
-            // Update our configuration in Homebridge.
-            this.currentConfig[0].options = newOptions;
-            this.#featureOptions.configuredOptions = newOptions;
-            await homebridge.updatePluginConfig(this.currentConfig);
-          }
+          // Update our configuration in Homebridge.
+          this.currentConfig[0].options = newOptions;
+          this.#featureOptions.configuredOptions = newOptions;
+          await homebridge.updatePluginConfig(this.currentConfig);
 
           // If we've reset to defaults, make sure our color coding for scope is reflected.
           if((checkbox.checked === option.default) || checkbox.indeterminate) {
 
-            const scopeColor = this.#featureOptions.color(featureOption, currentDevice?.serial, this.#controller);
+            const scopeColor = this.#featureOptions.color(featureOption, currentDevice?.serialNumber, this.#controller);
 
             if(scopeColor) {
 
@@ -669,7 +655,7 @@ export class webUiFeatureOptions {
           // Adjust visibility of other feature options that depend on us.
           if(this.#featureOptions.groups[checkbox.id]) {
 
-            const entryVisibility = this.#featureOptions.test(featureOption, currentDevice?.serial) ? "" : "none";
+            const entryVisibility = this.#featureOptions.test(featureOption, currentDevice?.serialNumber) ? "" : "none";
 
             // Lookup each feature option setting and set the visibility accordingly.
             for(const entry of this.#featureOptions.groups[checkbox.id]) {
@@ -692,7 +678,7 @@ export class webUiFeatureOptions {
         trX.appendChild(tdLabel);
 
         // Adjust the visibility of the feature option, if it's logically grouped.
-        if((option.group !== undefined) && !this.#featureOptions.test(category.name + (option.group.length ? ("." + option.group) : ""), currentDevice?.serial)) {
+        if((option.group !== undefined) && !this.#featureOptions.test(category.name + (option.group.length ? ("." + option.group) : ""), currentDevice?.serialNumber)) {
 
           trX.style.display = "none";
         } else {
@@ -738,7 +724,7 @@ export class webUiFeatureOptions {
 
     // Display our device details.
     deviceFirmware.innerHTML = device.firmwareVersion;
-    deviceSerial.innerHTML = device.serial;
+    deviceSerial.innerHTML = device.serialNumber;
   }
 
   // Default method for enumerating the device list in the sidebar.
@@ -785,12 +771,12 @@ export class webUiFeatureOptions {
 
       const label = document.createElement("label");
 
-      label.name = device.serial;
+      label.name = device.serialNumber;
       label.appendChild(document.createTextNode(device.name ?? "Unknown"));
       label.style.cursor = "pointer";
       label.classList.add("mx-2", "my-0", "p-0", "w-100");
 
-      label.addEventListener("click", () => this.showDeviceOptions(device.serial));
+      label.addEventListener("click", () => this.showDeviceOptions(device.serialNumber));
 
       // Add the device label to our cell.
       tdDevice.appendChild(label);
@@ -814,10 +800,14 @@ export class webUiFeatureOptions {
     // Filter out only the components we're interested in.
     devices = devices.map(device => ({
 
-      firmwareVersion: (device.services.find(service => service.constructorName ===
+      firmwareRevision: (device.services.find(service => service.constructorName ===
         "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "FirmwareRevision")?.value ?? ""),
+      manufacturer: (device.services.find(service => service.constructorName ===
+        "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "Manufacturer")?.value ?? ""),
+      model: (device.services.find(service => service.constructorName ===
+        "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "Model")?.value ?? ""),
       name: device.displayName,
-      serial: (device.services.find(service => service.constructorName ===
+      serialNumber: (device.services.find(service => service.constructorName ===
         "AccessoryInformation")?.characteristics.find(characteristic => characteristic.constructorName === "SerialNumber")?.value ?? "")
     }));
 

@@ -555,6 +555,6 @@ export class FeatureOptions {
 
     // This regular expression is a bit more intricate than you might think it should be due to the need to ensure we capture values at the very end of the option when
     // the option is enabled, and that we ignore the values at the end when the option is disabled in order to correctly traverse the hierarchy.
-    return new RegExp("^(Disable|Enable)\\." + option + (!id ? "" : "\\." + id) + "(?:(?<=^Enable\\." + option + (!id ? "" : "\\." + id) + ")\\.([^\\.]+))?$", "gi");
+    return new RegExp("^(Disable|Enable)\\." + option + (!id ? "" : "\\." + id) + "(?:(?<=^Enable\\." + option + (!id ? "" : "\\." + id) + ")\\.([^\\.]*))?$", "gi");
   }
 }

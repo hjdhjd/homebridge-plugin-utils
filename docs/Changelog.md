@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.11.2 (2024-12-08)
+  * Minor fixes and enhancements.
+  * Housekeeping.
+
 ## 1.11.1 (2024-12-07)
   * Minor fixes and enhancements.
   * Housekeeping.

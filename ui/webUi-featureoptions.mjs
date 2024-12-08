@@ -536,7 +536,7 @@ export class webUiFeatureOptions {
 
           // Find the option in our list and delete it if it exists.
           const optionRegex = new RegExp("^(?:Enable|Disable)\\." + checkbox.id + (!currentDevice ? "" : ("\\." + currentDevice.serialNumber)) +
-            "(?:\\.([^\\.]+))?$", "gi");
+            "(?:\\.([^\\.]*))?$", "gi");
 
           const newOptions = this.#featureOptions.configuredOptions.filter(entry => !optionRegex.test(entry));
 

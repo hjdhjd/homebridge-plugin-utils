@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.11.1 (2024-12-07)
+  * Minor fixes and enhancements.
+  * Housekeeping.
+
 ## 1.11.0 (2024-12-07)
   * Breaking change: `serial` is now `serialNumber` in the feature option webUI configuration to be consistent with the `SerialNumber` characteristic in Homebridge/HomeKit.
   * Behavior change: value-centric feature options can now be explicitly disabled like binary feature options. `null` will be returned when a value-centric feature option has been disabled.

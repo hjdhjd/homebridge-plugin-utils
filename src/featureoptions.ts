@@ -550,7 +550,11 @@ export class FeatureOptions {
   // Regular expression test for value-centric feature options.
   private valueRegex(option: string, id?: string): RegExp {
 
-    // This regular expression is a bit more intricate than you might think it should be due to the need to ensure we capture values at the very end of the option.
-    return new RegExp("^(Disable|Enable)\\." + option.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (!id ? "" : "\\." + id) + "(?:\\.([^\\.]+))?$", "gi");
+    // Escape out our option to ensure we have no inadvertent issues in matching the regular expression.
+    option = option.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    // This regular expression is a bit more intricate than you might think it should be due to the need to ensure we capture values at the very end of the option when
+    // the option is enabled, and that we ignore the values at the end when the option is disabled in order to correctly traverse the hierarchy.
+    return new RegExp("^(Disable|Enable)\\." + option + (!id ? "" : "\\." + id) + "(?:(?<=^Enable\\." + option + (!id ? "" : "\\." + id) + ")\\.([^\\.]+))?$", "gi");
   }
 }

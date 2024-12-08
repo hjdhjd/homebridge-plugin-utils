@@ -508,7 +508,7 @@ export class webUiFeatureOptions {
           inputValue.type = "text";
           inputValue.value = initialValue ?? option.defaultValue;
           inputValue.size = 5;
-          inputValue.readOnly = !checkbox.checked;
+          inputValue.readOnly = checkbox.readOnly;
 
           // Add or remove the setting from our configuration when we've changed our state.
           inputValue.addEventListener("change", () => checkbox.dispatchEvent(new Event("change")));
@@ -570,12 +570,6 @@ export class webUiFeatureOptions {
               break;
           }
 
-          // Always do this for value options.
-          if(this.#featureOptions.isValue(featureOption) && inputValue) {
-
-            upstreamOption = true;
-          }
-
           // We're currently in an indetermindate state and transitioning to an unchecked state.
           if(checkbox.readOnly) {
 
@@ -584,7 +578,7 @@ export class webUiFeatureOptions {
             checkbox.checked = checkbox.readOnly = false;
 
             // If we have a value-centric feature option, we show the default value when we're in an indeterminate state.
-            if(this.#featureOptions.isValue(featureOption) && inputValue) {
+            if(this.#featureOptions.isValue(featureOption)) {
 
               // If we're unchecked, clear out the value and make it read only. We show the system default for reference.
               inputValue.value = option.defaultValue;
@@ -592,7 +586,7 @@ export class webUiFeatureOptions {
             }
           } else if(!checkbox.checked) {
 
-            // We're currently in a unchecked state and transitioning to an indeterminate state.
+            // We're currently in a checked state and transitioning to an unchecked or an indeterminate state.
 
             // If we have an upstream option configured, we reveal a third state to show inheritance of that option and allow the user to select it.
             if(upstreamOption) {
@@ -600,23 +594,38 @@ export class webUiFeatureOptions {
               // We want to set the readOnly property as well, since it will survive a user interaction when they click the checkbox to clear out the
               // indeterminate state. This allows us to effectively cycle between three states.
               checkbox.readOnly = checkbox.indeterminate = true;
+            }
 
-              if(this.#featureOptions.isValue(featureOption) && inputValue) {
+            // If we're in an indeterminate state, we need to traverse the tree to get the upstream value we're inheriting.
+            if(this.#featureOptions.isValue(featureOption)) {
 
-                // If we're in an indeterminate state, we need to traverse the tree to get the upstream value we're inheriting.
-                inputValue.value = (currentDevice?.serialNumber !== this.#controller) ?
-                  (this.#featureOptions.value(checkbox.id, this.#controller) ?? this.#featureOptions.value(checkbox.id)) :
-                  (this.#featureOptions.value(checkbox.id) ?? option.defaultValue);
+              let newInputValue;
 
-                inputValue.readOnly = true;
+              // If our scope is global, let's fallback on the default value.
+              // eslint-disable-next-line eqeqeq
+              if((currentDevice?.serialNumber == null) && (this.#controller == null)) {
+
+                newInputValue = option.defaultValue;
+              } else if(currentDevice?.serialNumber !== this.#controller) {
+
+                // We're at the device level - get the controller level value if it exists and fallback to the global value otherwise.
+                newInputValue = this.#featureOptions.value(checkbox.id, this.#controller) ?? this.#featureOptions.value(checkbox.id);
+              } else {
+
+                // We're at the controller level - get the global value.
+                newInputValue = this.#featureOptions.value(checkbox.id);
               }
+
+              // Our fallback if there's no value defined within the scope hierarchy is the default value.
+              inputValue.value = newInputValue ?? option.defaultValue;
+              inputValue.readOnly = true;
             }
           } else if(checkbox.checked) {
 
-            // We're currently in a checked state and transitioning to an unchecked state.
+            // We're currently in an unchecked state and transitioning to a checked state.
             checkbox.readOnly = checkbox.indeterminate = false;
 
-            if(this.#featureOptions.isValue(featureOption) && inputValue) {
+            if(this.#featureOptions.isValue(featureOption)) {
 
               inputValue.readOnly = false;
             }
@@ -625,7 +634,7 @@ export class webUiFeatureOptions {
           // The feature option is different from the default - highlight it for the user, accounting for the scope hierarchy, and add it to our configuration. We
           // provide a visual queue to the user, highlighting to indicate that a non-default option has been set.
           if(!checkbox.indeterminate && ((checkbox.checked !== option.default) ||
-            (this.#featureOptions.isValue(featureOption) && inputValue && (inputValue.value !== option.defaultValue)) || upstreamOption)) {
+            (this.#featureOptions.isValue(featureOption) && (inputValue.value.toString() !== option.defaultValue.toString())) || upstreamOption)) {
 
             labelDescription.classList.add("text-info");
             newOptions.push((checkbox.checked ? "Enable." : "Disable.") + checkbox.value +

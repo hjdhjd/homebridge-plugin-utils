@@ -44,10 +44,21 @@ export interface HomebridgePluginLogging {
   warn: (message: string, ...parameters: unknown[]) => void
 }
 
-// Retry an operation until we're successful.
+/**
+ * A utility method that retries an operation at a specific interval for up to an absolute total number of retries.
+ * @param operation       - The operation callback to try until successful.
+ * @param retryInterval   - Interval to retry, in milliseconds.
+ * @param totalRetries    - Optionally, specify the total number of retries.
+ *
+ * @returns Returns `true` when the operation is successful, `false` otherwise or if the number of total retries has been exceeded.
+ *
+ * @remarks `operation` must be an asynchronous function that returns `true` when successful, and `false` otherwise.
+ *
+ * @category Utilities
+ */
 export async function retry(operation: () => Promise<boolean>, retryInterval: number, totalRetries?: number): Promise<boolean> {
 
-  if((totalRetries !== undefined) && (totalRetries < 0)) {
+  if((totalRetries !== undefined) && (totalRetries <= 0)) {
 
     return false;
   }
@@ -58,7 +69,7 @@ export async function retry(operation: () => Promise<boolean>, retryInterval: nu
     // If the operation wasn't successful, let's sleep for the requested interval and try again.
     await sleep(retryInterval);
 
-    return retry(operation, retryInterval, (totalRetries === undefined) ? undefined : totalRetries--);
+    return retry(operation, retryInterval, (totalRetries === undefined) ? undefined : --totalRetries);
   }
 
   // We were successful - we're done.

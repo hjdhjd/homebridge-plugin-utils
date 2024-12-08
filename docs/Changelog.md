@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.11.3 (2024-12-08)
+  * Fix: minor regression in `retry`.
+  * Housekeeping and documentation updates.
+
 ## 1.11.2 (2024-12-08)
   * Minor fixes and enhancements.
   * Housekeeping.

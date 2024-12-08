@@ -50,7 +50,7 @@ export interface HomebridgePluginLogging {
  * @param retryInterval   - Interval to retry, in milliseconds.
  * @param totalRetries    - Optionally, specify the total number of retries.
  *
- * @returns Returns `true` when the operation is successful, `false` otherwise or if the number of total retries has been exceeded.
+ * @returns Returns `true` when the operation is successful, `false` otherwise or if the total number of retries has been exceeded.
  *
  * @remarks `operation` must be an asynchronous function that returns `true` when successful, and `false` otherwise.
  *

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.12.0 (2024-12-21)
+  * Improvement: remove support for anything below Node 20 and optimize for Node 20 and above.
+  * Housekeeping.
+
 ## 1.11.3 (2024-12-08)
   * Fix: minor regression in `retry`.
   * Housekeeping and documentation updates.

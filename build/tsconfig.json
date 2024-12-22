@@ -13,14 +13,14 @@
     "lib": [
 
       "DOM",
-      "ES2022"
+      "ES2023"
     ],
 
     "module": "ES2022",
     "moduleResolution":"node",
     "sourceMap": true,
     "strict": true,
-    "target": "ES2022"
+    "target": "ES2023"
   }
 }
 /* When creating your own tsconfig.json, use the following as a starting point to inherit these defaults:

@@ -142,11 +142,8 @@ export class webUi {
     document.getElementById("menuFeatureOptions").addEventListener("click", () => this.featureOptions.show());
     document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
 
-    // Get the list of devices the plugin knows about.
-    const devices = await homebridge.getCachedAccessories();
-
     // If we've got devices detected, we launch our feature option UI. Otherwise, we launch our first run UI.
-    if(this.featureOptions.currentConfig.length && devices?.length && !(await this.#processHandler(this.#firstRun.isRequired))) {
+    if(this.featureOptions.currentConfig.length && !(await this.#processHandler(this.#firstRun.isRequired))) {
 
       document.getElementById("menuWrapper").style.display = "inline-flex";
       this.featureOptions.show();

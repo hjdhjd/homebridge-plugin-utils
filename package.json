@@ -1,6 +1,6 @@
 {
   "name": "homebridge-plugin-utils",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "displayName": "Homebridge Plugin Utilities",
   "description": "Opinionated utilities to provide common capabilities and create rich configuration webUI experiences for Homebridge plugins.",
   "author": {
@@ -45,7 +45,7 @@
     "homebridge": "1.8.4",
     "shx": "0.3.4",
     "typescript": "5.7.2",
-    "typescript-eslint": "^8.18.1"
+    "typescript-eslint": "^8.18.2"
   },
   "dependencies": {
     "mqtt": "5.10.3"

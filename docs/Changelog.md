@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.13.0 (2024-12-21)
+  * Behavior change: don't show the first run screen if there are no devices, but the user has configured everything they needed to.
+  * Housekeeping.
+
 ## 1.12.0 (2024-12-21)
   * Improvement: remove support for anything below Node 20 and optimize for Node 20 and above.
   * Housekeeping.

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
-## 1.13.0 (2024-12-21)
+## 1.13.0 (2024-12-23)
   * Behavior change: don't show the first run screen if there are no devices, but the user has configured everything they needed to.
   * Housekeeping.
 

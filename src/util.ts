@@ -1,4 +1,4 @@
-/* Copyright(C) 2017-2024, HJD (https://github.com/hjdhjd). All rights reserved.
+/* Copyright(C) 2017-2025, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * util.ts: Useful utility functions when writing TypeScript.
  */
@@ -88,6 +88,19 @@ export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): P
 export async function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
 
   return new Promise(resolve => setTimeout(resolve, sleepTimer));
+}
+
+/**
+ * A utility method that camel case's a string.
+ * @param string       - The string to camel case.
+ *
+ * @returns Returns the camel cased string.
+ *
+ * @category Utilities
+ */
+export function toCamelCase(input: string): string {
+
+  return input.replace(/(^\w|\s+\w)/g, match => match.toUpperCase());
 }
 
 // Validate a name according to HomeKit naming conventions.

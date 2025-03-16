@@ -150,14 +150,17 @@ export class webUiFeatureOptions {
     this.#configTable.innerHTML = "";
     this.webUiDeviceList = [];
 
-    // Create our hover style for our sidebar.
-    const sidebarHoverStyle = document.createElement("style");
+    // Create our override styles for things like hover for our sidebar and workarounds for Homebridge UI quirks.
+    const overrideStyles = document.createElement("style");
+
+    // We want to override the default colors that Homebridge UI might apply for table cells.
+    overrideStyles.innerHTML = "td { color: unset !important }";
 
     // We emulate the styles that Bootstrap uses when hovering over a table, accounting for both light and dark modes.
-    sidebarHoverStyle.innerHTML = "@media (prefers-color-scheme: dark) { .hbup-hover td:hover { background-color: #212121; color: #FFA000 } }" +
+    overrideStyles.innerHTML += "@media (prefers-color-scheme: dark) { .hbup-hover td:hover { background-color: #212121; color: #FFA000 !important } }" +
       "@media (prefers-color-scheme: light) { .hbup-hover td:hover { background-color: #ECECEC; } }";
 
-    document.head.appendChild(sidebarHoverStyle);
+    document.head.appendChild(overrideStyles);
 
     // Add our hover styles to the controllers and devices tables.
     controllersTable.classList.add("hbup-hover");

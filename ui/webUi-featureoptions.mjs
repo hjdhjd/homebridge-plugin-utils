@@ -182,6 +182,7 @@ export class webUiFeatureOptions {
     }
 
     // Initialize our informational header.
+    document.getElementById("headerInfo").style.fontWeight = "bold";
     document.getElementById("headerInfo").innerHTML = "Feature options are applied in prioritized order, from global to device-specific options:" +
       "<br><i class=\"text-warning\">Global options</i> (lowest priority) &rarr; " +
       (this.#hasControllers ? "<i class=\"text-success\">Controller options</i> &rarr; " : "") +

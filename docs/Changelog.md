@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.15.0 (2024-03-16)
+  * New feature: `formatBps` to format bitrates to bps, kbps, and Mbps.
+  * Housekeeping.
+
 ## 1.14.0 (2025-01-05)
   * New feature: `toCamelCase` to camel case a string.
   * Housekeeping.

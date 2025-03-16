@@ -45,6 +45,35 @@ export interface HomebridgePluginLogging {
 }
 
 /**
+ * A utility method that formats a bitrate value into a human-readable form as kbps or Mbps.
+ *
+ * @param value           - The bitrate value to convert.
+ *
+ * @returns Returns the value as a human-readable string.
+ */
+export function formatBps(value: number): string {
+
+  // Return the bitrate as-is.
+  if(value < 1000) {
+
+    return value.toString() + " bps";
+  }
+
+  // Return the bitrate in kilobits.
+  if(value < 1000000) {
+
+    const kbps = value / 1000;
+
+    return ((kbps % 1) === 0 ? kbps.toFixed(0) : kbps.toFixed(1)) + " kbps";
+  }
+
+  // Return the bitrate in megabits.
+  const mbps = value / 1000000;
+
+  return ((mbps % 1) === 0 ? mbps.toFixed(0) : mbps.toFixed(1)) + " Mbps";
+}
+
+/**
  * A utility method that retries an operation at a specific interval for up to an absolute total number of retries.
  * @param operation       - The operation callback to try until successful.
  * @param retryInterval   - Interval to retry, in milliseconds.

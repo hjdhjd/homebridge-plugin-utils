@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
-## 1.15.0 (2024-03-16)
+## 1.15.0 (2025-03-16)
   * New feature: `formatBps` to format bitrates to bps, kbps, and Mbps.
   * Housekeeping.
 

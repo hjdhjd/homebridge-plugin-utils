@@ -382,7 +382,7 @@ export class webUiFeatureOptions {
       th.classList.add("p-0");
       th.style.fontWeight = "bold";
       th.colSpan = 3;
-      tbody.classList.add("table-bordered");
+      tbody.classList.add("border");
 
       // Add the feature option category description.
       th.appendChild(document.createTextNode(category.description + (!currentDevice ? " (Global)" :

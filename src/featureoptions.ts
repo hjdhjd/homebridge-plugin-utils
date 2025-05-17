@@ -287,10 +287,10 @@ export class FeatureOptions {
 
       const value = getValue(option, device);
 
-      // The option must been explicitly disabled.
+      // The option's been explicitly disabled.
       if(value === null) {
 
-        return undefined;
+        return null;
       }
 
       if(value) {
@@ -307,7 +307,7 @@ export class FeatureOptions {
       // The option's been explicitly disabled.
       if(value === null) {
 
-        return undefined;
+        return null;
       }
 
       if(value) {

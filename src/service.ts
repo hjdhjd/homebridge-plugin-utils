@@ -2,7 +2,7 @@
  *
  * service.ts: Useful Homebridge service support functions.
  */
-import { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
+import type { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
 import { Nullable, validateName } from "./util.js";
 
 /**

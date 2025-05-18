@@ -18,12 +18,15 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 
 - **Configuration webUI.** This a rich, custom webUI for enumerating all the devices a plugin knows about, and configuring feature options.
 
+- **FFmpeg process utilities.** A rich set of classes that abstract away the complexity of FFmpeg and have builtin capabilities to enable livestreaming, HomeKit Secure Video (HKSV) event recording, and more. Includes hardware acceleration support among it's many features.
+
 - **MQTT client.** Building in MQTT client capabilities is made easier through a set of utilities that allow you to easily publish and subscribe to events.
 
 - **And more...**
 
 ## Documentation
-* Coming in the future.
+
+Documentation and examples for using this library to simplify and enhance Homebridge plugin development, especially camera-related plugins, is [available here](https://github.com/hjdhjd/homebridge-plugin-utils/blob/main/docs/README.md). Additionally, if you'd like to see this library being used n a well-documented, real-world example, please take a good look at my [homebridge-unifi-protect](https://github.com/hjdhjd/homebridge-unifi-protect) project. It relies heavily on this library for much of the functionality it provides.
 
 ## Plugin Development Dashboard
 This is mostly of interest to the true developer nerds amongst us.

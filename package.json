@@ -1,6 +1,6 @@
 {
   "name": "homebridge-plugin-utils",
-  "version": "1.15.3",
+  "version": "1.16.0",
   "displayName": "Homebridge Plugin Utilities",
   "description": "Opinionated utilities to provide common capabilities and create rich configuration webUI experiences for Homebridge plugins.",
   "author": {
@@ -31,23 +31,27 @@
   ],
   "scripts": {
     "build": "npm run clean && tsc && shx cp dist/featureoptions.js{,.map} dist/ui",
+    "build-docs": "shx rm -f ./docs/[^CO]*.md ./docs/ffmpeg/*.md && npx typedoc",
     "build-ui": "shx mkdir -p dist/ui && shx cp ui/**.mjs dist/ui",
     "clean": "shx rm -rf dist && npm run build-ui",
-    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"-1\"} eslint.config.mjs build/**.mjs src/**.ts \"ui/**/*.@(js|mjs)\"",
+    "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"-1\"} eslint.config.mjs build/**.mjs src \"ui/**/*.@(js|mjs)\"",
     "postpublish": "npm run clean",
     "prepublishOnly": "npm run lint && npm run build"
   },
   "main": "dist/index.js",
   "devDependencies": {
     "@stylistic/eslint-plugin": "4.2.0",
-    "@types/node": "22.13.10",
-    "eslint": "^9.22.0",
-    "homebridge": "1.8.4",
-    "shx": "0.3.4",
-    "typescript": "5.8.2",
-    "typescript-eslint": "^8.26.1"
+    "@types/node": "22.15.18",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9.27.0",
+    "homebridge": "1.9.0",
+    "shx": "0.4.0",
+    "typedoc": "0.28.4",
+    "typedoc-plugin-markdown": "4.6.3",
+    "typescript": "5.8.3",
+    "typescript-eslint": "^8.32.1"
   },
   "dependencies": {
-    "mqtt": "5.10.4"
+    "mqtt": "5.13.0"
   }
 }

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.16.0 (2025-05-18)
+  * New feature: FFmpeg process utilities, including well-tested capabilities that provide livestreaming, HomeKit Secure Video (HKSV) event recording, and more. These capabilities were ported over and enhanced from my existing [Homebridge UniFi Protect](https://github.com/hjdhjd/homebridge-unifi-protect) plugin.
+  * Improvement: Significant documentation updates.
+  * Fix: address a minor issue in value-centric feature option detection.
+  * Housekeeping.
+
 ## 1.15.3 (2025-03-16)
   * Housekeeping.
 

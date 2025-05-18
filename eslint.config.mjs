@@ -13,7 +13,7 @@ export default ts.config(
 
   {
 
-    files: [ "src/**.ts" ],
+    files: [ "src/**.ts", "src/ffmpeg/**.ts" ],
     rules: {
 
       ...hbPluginUtils.rules.ts
@@ -31,7 +31,7 @@ export default ts.config(
 
   {
 
-    files: [ "build/**.mjs", "src/**.ts", "ui/**/*.@(js|mjs)", "eslint.config.mjs" ],
+    files: [ "build/**.mjs", "src/**.ts", "src/ffmpeg/**.ts", "ui/**/*.@(js|mjs)", "eslint.config.mjs" ],
 
     ignores: [ "dist" ],
 

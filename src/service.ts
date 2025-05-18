@@ -2,12 +2,19 @@
  *
  * service.ts: Useful Homebridge service support functions.
  */
+
+/**
+ * Homebridge service helper utilities.
+ *
+ * @module
+ */
 import type { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { Nullable, validateName } from "./util.js";
+import { type Nullable, validateName } from "./util.js";
 
 /**
  * Utility method that either creates a new service on an accessory, if needed, or returns an existing one. It optionally executes a callback to initialize a new
  * instance of a service, if needed. Additionally, the various name characteristics of the service will be set to the specified name, optionally adding them as needed.
+ *
  * @param hap             - HAP instance associated with the Homebridge plugin.
  * @param accessory       - Homebridge accessory to check.
  * @param serviceType     - Service type that is being instantiated or retrieved.
@@ -99,6 +106,7 @@ export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceTy
 
 /**
  * Validate whether a service should exist, removing it if needed.
+ *
  * @param accessory       - Homebridge accessory to check.
  * @param serviceType     - Service type that is being instantiated or retrieved.
  * @param validate        - Function to be used to test whether a service should exist or not.

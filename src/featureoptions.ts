@@ -2,8 +2,23 @@
  *
  * featureoptions.ts: Hierarchical feature option capabilities for use in plugins and applications.
  */
-import { Nullable } from "./util.js";
 
+/**
+ * A hierarchical feature option system for plugins and applications.
+ *
+ * @module
+ */
+import type { Nullable } from "./util.js";
+
+/**
+ * Entry describing a feature option.
+ *
+ * @property default         - Default enabled/disabled state for this feature option.
+ * @property defaultValue    - Optional. Default value for value-based feature options.
+ * @property description     - Description of the feature option for display or documentation.
+ * @property group           - Optional. Grouping/category for the feature option.
+ * @property name            - Name of the feature option (used in option strings).
+ */
 export interface FeatureOptionEntry {
 
   default: boolean,                // Default feature option state.
@@ -13,33 +28,102 @@ export interface FeatureOptionEntry {
   name: string                     // Name of the feature option.
 }
 
+/**
+ * Entry describing a feature option category.
+ *
+ * @property description     - Description of the category.
+ * @property name            - Name of the category.
+ */
 export interface FeatureCategoryEntry {
 
   description: string,
   name: string
 }
 
-// Define the scope hierarchy for HBUP options.
-type OptionScope =  "controller" | "device" | "global" | "none";
+/**
+ * Describes all possible scope hierarchy locations for a feature option.
+ */
+export type OptionScope =  "controller" | "device" | "global" | "none";
 
-// Option information JSON definition.
+/**
+ * JSON definition describing a configured feature option and its current value and scope.
+ *
+ * @property scope           - The scope in which the option is configured.
+ * @property value           - The value associated with the option at this scope.
+ */
 interface OptionInfoEntry {
 
   scope: OptionScope,
   value: boolean
 }
 
+/**
+ * FeatureOptions provides a hierarchical feature option system for plugins and applications.
+ *
+ * Supports global, controller, and device-level configuration, value-centric feature options, grouping, and category management.
+ *
+ * @example
+ *
+ * ```ts
+ * // Define categories and options.
+ * const categories = [
+ *
+ *   { name: "motion", description: "Motion Options" },
+ *   { name: "audio", description: "Audio Options" }
+ * ];
+ *
+ * const options = {
+ *
+ *   motion: [
+ *     { name: "detect", default: true, description: "Enable motion detection." }
+ *   ],
+ *
+ *   audio: [
+ *     { name: "volume", default: false, defaultValue: 50, description: "Audio volume." }
+ *   ]
+ * };
+ *
+ * // Instantiate FeatureOptions.
+ * const featureOpts = new FeatureOptions(categories, options, ["Enable.motion.detect"]);
+ *
+ * // Check if a feature is enabled.
+ * const motionEnabled = featureOpts.test("motion.detect");
+ *
+ * // Get a value-centric feature option.
+ * const volume = featureOpts.value("audio.volume");
+ * ```
+ *
+ * @see FeatureOptionEntry
+ * @see FeatureCategoryEntry
+ * @see OptionScope
+ */
 export class FeatureOptions {
+
+  /**
+   * Default return value for unknown options (defaults to false).
+   */
+  public defaultReturnValue: boolean;
 
   private _categories: FeatureCategoryEntry[];
   private _configuredOptions: string[];
   private _groups: { [index: string]: string[] };
   private _options: { [index: string]: FeatureOptionEntry[] };
-  public defaultReturnValue: boolean;
   private defaults: { [index: string]: boolean };
   private valueOptions: { [index: string]: number | string | undefined };
 
-  // Create a feature option instance.
+  /**
+   * Create a new FeatureOptions instance.
+   *
+   * @param categories        - Array of feature option categories.
+   * @param options           - Dictionary mapping category names to arrays of feature options.
+   * @param configuredOptions - Optional. Array of currently configured option strings.
+   *
+   * @example
+   *
+   * ```ts
+   * const featureOpts = new FeatureOptions(categories, options, ["Enable.motion.detect"]);
+   * ```
+   */
   constructor(categories: FeatureCategoryEntry[], options: { [index: string]: FeatureOptionEntry[] }, configuredOptions = []) {
 
     // Initialize our defaults.
@@ -347,7 +431,7 @@ export class FeatureOptions {
   /**
    * Set the list of available feature option categories.
    *
-   * @param options       - Array of available feature options.
+   * @param category      - Array of available categories.
    */
   public set categories(category: FeatureCategoryEntry[]) {
 

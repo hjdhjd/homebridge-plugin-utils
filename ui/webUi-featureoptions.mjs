@@ -157,14 +157,14 @@ export class webUiFeatureOptions {
     overrideStyles.innerHTML = "td { color: unset !important }";
 
     // We emulate the styles that Bootstrap uses when hovering over a table, accounting for both light and dark modes.
-    overrideStyles.innerHTML += "@media (prefers-color-scheme: dark) { .hbup-hover td:hover { background-color: #212121; color: #FFA000 !important } }" +
-      "@media (prefers-color-scheme: light) { .hbup-hover td:hover { background-color: #ECECEC; } }";
+    overrideStyles.innerHTML += "@media (prefers-color-scheme: dark) { .hbpu-hover td:hover { background-color: #212121; color: #FFA000 !important } }" +
+      "@media (prefers-color-scheme: light) { .hbpu-hover td:hover { background-color: #ECECEC; } }";
 
     document.head.appendChild(overrideStyles);
 
     // Add our hover styles to the controllers and devices tables.
-    controllersTable.classList.add("hbup-hover");
-    this.devicesTable.classList.add("hbup-hover");
+    controllersTable.classList.add("hbpu-hover");
+    this.devicesTable.classList.add("hbpu-hover");
 
     // Hide the UI until we're ready.
     document.getElementById("sidebar").style.display = "none";

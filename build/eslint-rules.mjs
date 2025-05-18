@@ -137,6 +137,7 @@ const tsRules = {
   ...tsEslint.configs.strictTypeChecked,
   ...tsEslint.configs.stylisticTypeChecked,
   "@typescript-eslint/await-thenable": "warn",
+  "@typescript-eslint/consistent-type-imports": "warn",
   "@typescript-eslint/explicit-function-return-type": "warn",
   "@typescript-eslint/explicit-module-boundary-types": "warn",
   "@typescript-eslint/no-explicit-any": "warn",

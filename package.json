@@ -1,6 +1,6 @@
 {
   "name": "homebridge-plugin-utils",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "displayName": "Homebridge Plugin Utilities",
   "description": "Opinionated utilities to provide common capabilities and create rich configuration webUI experiences for Homebridge plugins.",
   "author": {
@@ -40,8 +40,8 @@
   },
   "main": "dist/index.js",
   "devDependencies": {
-    "@stylistic/eslint-plugin": "4.2.0",
-    "@types/node": "22.15.18",
+    "@stylistic/eslint-plugin": "4.4.0",
+    "@types/node": "22.15.21",
     "@types/ws": "^8.18.1",
     "eslint": "^9.27.0",
     "homebridge": "1.9.0",

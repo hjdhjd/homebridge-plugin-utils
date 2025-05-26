@@ -53,20 +53,24 @@ new FfmpegLivestreamProcess(
    recordingConfig, 
    url, 
    fps, 
-   isAudioActive): FfmpegLivestreamProcess;
+   processAudio, 
+   codec, 
+   isVerbose): FfmpegLivestreamProcess;
 ```
 
 Constructs a new FFmpeg livestream process.
 
 ###### Parameters
 
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | FFmpeg configuration options. |
-| `recordingConfig` | `CameraRecordingConfiguration` | HomeKit recording configuration for the session. |
-| `url` | `string` | Source RTSP or livestream URL. |
-| `fps` | `number` | Video frames per second. |
-| `isAudioActive` | `boolean` | If `true`, enables audio stream processing. |
+| Parameter | Type | Default value | Description |
+| ------ | ------ | ------ | ------ |
+| `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | `undefined` | FFmpeg configuration options. |
+| `recordingConfig` | `CameraRecordingConfiguration` | `undefined` | HomeKit recording configuration for the session. |
+| `url` | `string` | `undefined` | Source RTSP or livestream URL. |
+| `fps` | `number` | `undefined` | Video frames per second. |
+| `processAudio` | `boolean` | `true` | If `true`, enables audio stream processing. Defaults to `true`. |
+| `codec` | `string` | `"h264"` | Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`. |
+| `isVerbose` | `boolean` | `false` | If `true`, enables more verbose logging for debugging purposes. Defaults to `false`. |
 
 ###### Returns
 
@@ -333,23 +337,27 @@ new FfmpegRecordingProcess(
    options, 
    recordingConfig, 
    fps, 
-   isAudioActive, 
+   processAudio, 
    probesize, 
-   timeshift): FfmpegRecordingProcess;
+   timeshift, 
+   codec, 
+   isVerbose): FfmpegRecordingProcess;
 ```
 
 Constructs a new FFmpeg recording process for HKSV events.
 
 ###### Parameters
 
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | FFmpeg configuration options. |
-| `recordingConfig` | `CameraRecordingConfiguration` | HomeKit recording configuration for the session. |
-| `fps` | `number` | Video frames per second. |
-| `isAudioActive` | `boolean` | If `true`, enables audio stream processing. |
-| `probesize` | `number` | Stream analysis size, in bytes. |
-| `timeshift` | `number` | Timeshift offset for event-based recording, in milliseconds. |
+| Parameter | Type | Default value | Description |
+| ------ | ------ | ------ | ------ |
+| `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | `undefined` | FFmpeg configuration options. |
+| `recordingConfig` | `CameraRecordingConfiguration` | `undefined` | HomeKit recording configuration for the session. |
+| `fps` | `number` | `undefined` | Video frames per second. |
+| `processAudio` | `boolean` | `undefined` | If `true`, enables audio stream processing. |
+| `probesize` | `number` | `undefined` | Stream analysis size, in bytes. |
+| `timeshift` | `number` | `undefined` | Timeshift offset for event-based recording, in milliseconds. |
+| `codec` | `string` | `"h264"` | Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`. |
+| `isVerbose` | `boolean` | `false` | If `true`, enables more verbose logging for debugging purposes. Defaults to `false`. |
 
 ###### Returns
 

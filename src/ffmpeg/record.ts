@@ -32,6 +32,7 @@ import { once } from "node:events";
 /**
  * Options for configuring an fMP4 recording or livestream session.
  *
+ * @property codec      - The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`.
  * @property fps        - The video frames per second for the session.
  * @property livestream - Indicates if this is a livestream session (`true`) or a recording (`false`).
  * @property probesize  - Number of bytes to analyze for stream information.
@@ -40,6 +41,7 @@ import { once } from "node:events";
  */
 interface Fmp4OptionsConfig {
 
+  codec: string;
   fps: number;
   livestream: boolean;
   probesize: number;
@@ -93,7 +95,8 @@ class FfmpegFmp4Process extends FfmpegProcess {
    * @param ffmpegOptions     - FFmpeg configuration options.
    * @param recordingConfig   - HomeKit recording configuration for the session.
    * @param isAudioActive     - If `true`, enables audio stream processing.
-   * @param fmp4Options       - Partial configuration for the fMP4 session (fps, url, etc.).
+   * @param fmp4Options       - Configuration for the fMP4 session (fps, type, url, etc.).
+   * @param isVerbose         - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
    *
    * @example
    *
@@ -101,7 +104,8 @@ class FfmpegFmp4Process extends FfmpegProcess {
    * const process = new FfmpegFmp4Process(ffmpegOptions, recordingConfig, true, { fps: 30 });
    * ```
    */
-  constructor(ffmpegOptions: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, isAudioActive: boolean, fmp4Options: Partial<Fmp4OptionsConfig> = {}) {
+  constructor(ffmpegOptions: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, isAudioActive: boolean, fmp4Options: Partial<Fmp4OptionsConfig> = {},
+    isVerbose = false) {
 
     // Initialize our parent.
     super(ffmpegOptions);
@@ -117,6 +121,7 @@ class FfmpegFmp4Process extends FfmpegProcess {
     // Initialize our state.
     this.isLivestream = fmp4Options.livestream ?? false;
     this.isTimedOut = false;
+    fmp4Options.codec ??= "h264";
     fmp4Options.fps ??= 30;
     fmp4Options.url ??= "";
 
@@ -138,8 +143,9 @@ class FfmpegFmp4Process extends FfmpegProcess {
 
       "-hide_banner",
       "-nostats",
-      "-fflags", "+discardcorrupt+genpts",
-      "-err_detect", "ignore_err"
+      "-fflags", "+discardcorrupt",
+      "-err_detect", "ignore_err",
+      ...this.options.videoDecoder(fmp4Options.codec)
     ];
 
     if(this.isLivestream) {
@@ -187,12 +193,13 @@ class FfmpegFmp4Process extends FfmpegProcess {
       this.commandLineArgs.push("-frag_duration", "1000000");
     }
 
-    // -movflags flags               In the generated fMP4 stream: start a new fragment at each keyframe, write a blank MOOV box, and avoid writing absolute offsets.
+    // -movflags flags               In the generated fMP4 stream: set the default-base-is-moof flag in the header, write an initial empty MOOV box, start a new fragment
+    //                               at each keyframe, skip creating a segment index (SIDX) box in fragments, and skip writing the final MOOV trailer since it's unneeded.
     // -reset_timestamps             Reset timestamps at the beginning of each segment.
     // -metadata                     Set the metadata to the name of the camera to distinguish between FFmpeg sessions.
     this.commandLineArgs.push(
 
-      "-movflags", "frag_keyframe+empty_moov+default_base_moof+skip_sidx+skip_trailer",
+      "-movflags", "default_base_moof+empty_moov+frag_keyframe+skip_sidx+skip_trailer",
       "-reset_timestamps", "1",
       "-metadata", "comment=" + this.options.name() + " " + (this.isLivestream ? "Livestream Buffer" : "HKSV Event")
     );
@@ -214,10 +221,14 @@ class FfmpegFmp4Process extends FfmpegProcess {
     //
     // -f mp4  Tell ffmpeg that it should create an MP4-encoded output stream.
     // pipe:1  Output the stream to standard output.
-    this.commandLineArgs.push("-f", "mp4", "pipe:1");
+    this.commandLineArgs.push(
+
+      "-f", "mp4",
+      "-avioflags", "direct",
+      "pipe:1");
 
     // Additional logging, but only if we're debugging.
-    if(this.options.codecSupport.verbose || this.isVerbose) {
+    if(isVerbose || this.isVerbose) {
 
       this.commandLineArgs.unshift("-loglevel", "level+verbose");
     }
@@ -598,13 +609,16 @@ export class FfmpegRecordingProcess extends FfmpegFmp4Process {
    * @param options          - FFmpeg configuration options.
    * @param recordingConfig  - HomeKit recording configuration for the session.
    * @param fps              - Video frames per second.
-   * @param isAudioActive    - If `true`, enables audio stream processing.
+   * @param processAudio     - If `true`, enables audio stream processing.
    * @param probesize        - Stream analysis size, in bytes.
    * @param timeshift        - Timeshift offset for event-based recording, in milliseconds.
+   * @param codec            - Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`.
+   * @param isVerbose        - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
    */
-  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fps: number, isAudioActive: boolean, probesize: number, timeshift: number) {
+  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fps: number, processAudio: boolean, probesize: number, timeshift: number,
+    codec = "h264", isVerbose = false) {
 
-    super(options, recordingConfig, isAudioActive, { fps: fps, probesize: probesize, timeshift: timeshift });
+    super(options, recordingConfig, processAudio, { codec: codec, fps: fps, probesize: probesize, timeshift: timeshift }, isVerbose);
   }
 }
 
@@ -633,11 +647,13 @@ export class FfmpegLivestreamProcess extends FfmpegFmp4Process {
    * @param recordingConfig  - HomeKit recording configuration for the session.
    * @param url              - Source RTSP or livestream URL.
    * @param fps              - Video frames per second.
-   * @param isAudioActive    - If `true`, enables audio stream processing.
+   * @param processAudio     - If `true`, enables audio stream processing. Defaults to `true`.
+   * @param codec            - Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`.
+   * @param isVerbose        - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
    */
-  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, url: string, fps: number, isAudioActive: boolean) {
+  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, url: string, fps: number, processAudio = true, codec = "h264", isVerbose = false) {
 
-    super(options, recordingConfig, isAudioActive, { fps: fps, livestream: true, url: url });
+    super(options, recordingConfig, processAudio, { codec: codec, fps: fps, livestream: true, url: url }, isVerbose);
   }
 
   /**

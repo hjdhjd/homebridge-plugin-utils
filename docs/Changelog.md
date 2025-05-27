@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.18.0 (2025-05-27)
+  * Improvement: Added additional semantics to validService.
+
 ## 1.17.0 (2025-05-26)
   * Improvement: Added options to selectively enable verbosity on specific FFmpeg recording or livestream instances.
   * Improvement: Evolved semantics for FFmpeg recording to specify what the input codec is to better support hardware acceleration scenarios.

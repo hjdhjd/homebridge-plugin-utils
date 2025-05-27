@@ -22,29 +22,49 @@ function acquireService(
 onServiceCreate?): Nullable<Service>;
 ```
 
-Utility method that either creates a new service on an accessory, if needed, or returns an existing one. It optionally executes a callback to initialize a new
-instance of a service, if needed. Additionally, the various name characteristics of the service will be set to the specified name, optionally adding them as needed.
+Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
+service instance. Additionally, the various name characteristics of the service are set to the specified name, and optionally added if necessary.
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `hap` | `__module` | HAP instance associated with the Homebridge plugin. |
-| `accessory` | `PlatformAccessory` | Homebridge accessory to check. |
-| `serviceType` | `WithUUID`\<*typeof* `Service`\> | Service type that is being instantiated or retrieved. |
+| `accessory` | `PlatformAccessory` | The Homebridge accessory to check or modify. |
+| `serviceType` | `WithUUID`\<*typeof* `Service`\> | The type of service to instantiate or retrieve. |
 | `name` | `string` | Name to be displayed to the end user for this service. |
-| `subtype?` | `string` | Service subtype, if needed. |
-| `onServiceCreate?` | (`svc`) => `void` | Callback to be used when a new service is created. It is not called when an existing service is found. |
+| `subtype?` | `string` | Optional service subtype to uniquely identify the service. |
+| `onServiceCreate?` | (`svc`) => `void` | Optional callback invoked only when a new service is created, receiving the new service as its argument. |
 
 #### Returns
 
 [`Nullable`](util.md#nullable)\<`Service`\>
 
-Returns the created or retrieved service, `null` otherwise.
+Returns the created or retrieved service, or `null` if service creation failed.
 
 #### Remarks
 
-`onServiceCreate` is called with the newly created service as an argument to allow the caller to optionally configure it.
+This method ensures that the service's display name and available name characteristics are updated to the specified name. If `onServiceCreate` is provided,
+it will only be called for newly created services, not for existing ones.
+
+The `ConfiguredName` and `Name` characteristics are conditionally added or updated based on the type of service, in accordance with HomeKit requirements.
+
+#### Example
+
+```typescript
+// Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created.
+const lightbulbService = acquireService(hap, accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc: Service): void => {
+
+  // Called only if the service is newly created.
+  svc.setCharacteristic(hap.Characteristic.On, false);
+});
+
+if(lightbulbService) {
+
+  // Service is now available, with display name set and optional characteristics managed.
+  lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
+}
+```
 
 ***
 
@@ -58,23 +78,40 @@ function validService(
    subtype?): boolean;
 ```
 
-Validate whether a service should exist, removing it if needed.
+Validates whether a specific service should exist on the given accessory, removing the service if it fails validation.
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `accessory` | `PlatformAccessory` | Homebridge accessory to check. |
-| `serviceType` | `WithUUID`\<*typeof* `Service`\> | Service type that is being instantiated or retrieved. |
-| `validate` | (`hasService`) => `boolean` | Function to be used to test whether a service should exist or not. |
-| `subtype?` | `string` | Service subtype, if needed. |
+| `accessory` | `PlatformAccessory` | The Homebridge accessory to inspect and potentially modify. |
+| `serviceType` | `WithUUID`\<*typeof* `Service`\> | The type of Homebridge service being checked or instantiated. |
+| `validate` | `boolean` \| (`hasService`) => `boolean` | A boolean or a function that determines if the service should exist. If a function is provided, it receives a boolean indicating whether the service currently exists, and should return `true` to keep the service, or `false` to remove it. |
+| `subtype?` | `string` | Optional service subtype to uniquely identify the service. |
 
 #### Returns
 
 `boolean`
 
-Returns `true` if the service is valid, will remove the service and return `false` otherwise.
+`true` if the service is valid (and kept), or `false` if it was removed.
 
 #### Remarks
 
-`validate` is called with an argument of `true` if the service currently exists on the accessory and `false` otherwise.
+The `validate` parameter can be either:
+  - a boolean (where `true` means keep the service, `false` means remove it).
+  - a function (which is called with `hasService: boolean` and returns whether to keep the service).
+
+If the service should not exist according to `validate`, and it is currently present, this function will remove it from the accessory.
+
+#### Example
+
+```typescript
+// Remove a service if it exists
+validService(accessory, Service.Switch, false);
+
+// Only keep a service if a configuration flag is true
+validService(accessory, Service.Switch, config.enableSwitch);
+
+// Keep a service if it currently exists, or add it if a certain condition is met
+validService(accessory, Service.Switch, (hasService) => hasService || config.enableSwitch);
+```

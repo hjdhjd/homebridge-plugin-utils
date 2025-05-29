@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file. This projec
 
 ## 1.19.0 (2025-05-29)
   * Improvement: Added additional semantics to `videoEncoder` to address QSV-specific use cases.
+  * Housekeeping.
 
 ## 1.18.0 (2025-05-27)
   * Improvement: Added additional semantics to `validService`.

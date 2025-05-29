@@ -134,22 +134,19 @@ class FfmpegFmp4Process extends FfmpegProcess {
     // -nostats                      Suppress printing progress reports while encoding in FFmpeg.
     // -fflags flags                 Set the format flags to generate a presentation timestamp if it's missing and discard any corrupt packets rather than exit.
     // -err_detect ignore_err        Ignore decoding errors and continue rather than exit.
-    // -probesize number             How many bytes should be analyzed for stream information. Use the size of the timeshift buffer or our configured defaults.
-    // -r fps                        Set the input frame rate for the video stream.
-    // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
-    // -i pipe:0                     Use standard input to get video data.
-    // -ss                           Fast forward to where HKSV is expecting us to be for a recording event.
     this.commandLineArgs = [
 
       "-hide_banner",
       "-nostats",
       "-fflags", "+discardcorrupt",
-      "-err_detect", "ignore_err",
-      ...this.options.videoDecoder(fmp4Options.codec)
+      "-err_detect", "ignore_err"
     ];
 
     if(this.isLivestream) {
 
+      // -avioflags direct           Tell FFmpeg to minimize buffering to reduce latency for more realtime processing.
+      // -rtsp_transport tcp         Tell the RTSP stream handler that we're looking for a TCP connection.
+      // -i rtspEntry.url            RTSPS URL to get our input stream from.
       this.commandLineArgs.push(
 
         "-avioflags", "direct",
@@ -158,6 +155,11 @@ class FfmpegFmp4Process extends FfmpegProcess {
       );
     } else {
 
+      // -probesize number             How many bytes should be analyzed for stream information. Use the size of the timeshift buffer or our configured defaults.
+      // -r fps                        Set the input frame rate for the video stream.
+      // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
+      // -i pipe:0                     Use standard input to get video data.
+      // -ss                           Fast forward to where HKSV is expecting us to be for a recording event.
       this.commandLineArgs.push(
 
         "-probesize", (fmp4Options.probesize ?? 5000000).toString(),
@@ -183,6 +185,7 @@ class FfmpegFmp4Process extends FfmpegProcess {
         inputFps: fmp4Options.fps,
         level: recordingConfig.videoCodec.parameters.level,
         profile: recordingConfig.videoCodec.parameters.profile,
+        useHardwareDecoder: false,
         width: recordingConfig.videoCodec.resolution[0]
       }))
     );
@@ -190,6 +193,7 @@ class FfmpegFmp4Process extends FfmpegProcess {
     // If we're livestreaming, emit fragments at one-second intervals.
     if(this.isLivestream) {
 
+      // -frag_duration number       Length of each fMP4 fragment, in microseconds.
       this.commandLineArgs.push("-frag_duration", "1000000");
     }
 
@@ -219,8 +223,9 @@ class FfmpegFmp4Process extends FfmpegProcess {
 
     // Configure our video parameters for outputting our final stream:
     //
-    // -f mp4  Tell ffmpeg that it should create an MP4-encoded output stream.
-    // pipe:1  Output the stream to standard output.
+    // -f mp4                        Tell ffmpeg that it should create an MP4-encoded output stream.
+    // -avioflags direct             Tell FFmpeg to minimize buffering to reduce latency for more realtime processing.
+    // pipe:1                        Output the stream to standard output.
     this.commandLineArgs.push(
 
       "-f", "mp4",

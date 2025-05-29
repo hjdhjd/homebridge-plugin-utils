@@ -256,6 +256,7 @@ const encoderOptions: EncoderOptions = {
   inputFps: 30,
   level: H264Level.LEVEL4_0,
   profile: H264Profile.HIGH,
+  useHardwareDecoder: true,
   useSmartQuality: true,
   width: 1920
 };
@@ -281,6 +282,7 @@ const args = ffmpegOpts.streamEncoder(encoderOptions);
 | <a id="inputfps"></a> `inputFps` | `number` | Input (source) frames per second. |
 | <a id="level"></a> `level` | `H264Level` | H.264 profile level for output. |
 | <a id="profile"></a> `profile` | `H264Profile` | H.264 profile for output. |
+| <a id="usehardwaredecoder"></a> `useHardwareDecoder?` | `boolean` | Optional. If `true`, encoder options will account for hardware decoding (primarily for Intel QSV scenarios). Defaults to `true`. |
 | <a id="usesmartquality"></a> `useSmartQuality?` | `boolean` | Optional. If `true`, enables smart quality and variable bitrate optimizations. Defaults to `true`. |
 | <a id="width"></a> `width` | `number` | Output video width, in pixels. |
 

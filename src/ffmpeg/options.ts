@@ -73,15 +73,16 @@ export interface FfmpegOptionsConfig {
  *
  * These options control output bitrate, framerate, resolution, H.264 profile and level, input framerate, and smart quality optimizations.
  *
- * @property bitrate         - Target video bitrate, in kilobits per second.
- * @property fps             - Target output frames per second.
- * @property height          - Output video height, in pixels.
- * @property idrInterval     - Interval (in seconds) between keyframes (IDR frames).
- * @property inputFps        - Input (source) frames per second.
- * @property level           - H.264 profile level for output.
- * @property profile         - H.264 profile for output.
- * @property useSmartQuality - Optional. If `true`, enables smart quality and variable bitrate optimizations. Defaults to `true`.
- * @property width           - Output video width, in pixels.
+ * @property bitrate             - Target video bitrate, in kilobits per second.
+ * @property fps                 - Target output frames per second.
+ * @property height              - Output video height, in pixels.
+ * @property idrInterval         - Interval (in seconds) between keyframes (IDR frames).
+ * @property inputFps            - Input (source) frames per second.
+ * @property level               - H.264 profile level for output.
+ * @property profile             - H.264 profile for output.
+ * @property useHardwareDecoder  - Optional. If `true`, encoder options will account for hardware decoding (primarily for Intel QSV scenarios). Defaults to `true`.
+ * @property useSmartQuality     - Optional. If `true`, enables smart quality and variable bitrate optimizations. Defaults to `true`.
+ * @property width               - Output video width, in pixels.
  *
  * @example
  *
@@ -95,6 +96,7 @@ export interface FfmpegOptionsConfig {
  *   inputFps: 30,
  *   level: H264Level.LEVEL4_0,
  *   profile: H264Profile.HIGH,
+ *   useHardwareDecoder: true,
  *   useSmartQuality: true,
  *   width: 1920
  * };
@@ -119,6 +121,7 @@ export interface EncoderOptions {
   level: H264Level,
   profile: H264Profile,
   useSmartQuality?: boolean,
+  useHardwareDecoder?: boolean,
   width: number
 }
 
@@ -760,11 +763,8 @@ export class FfmpegOptions {
    */
   public streamEncoder(options: EncoderOptions): string[] {
 
-    // Default smart quality to true.
-    if(options.useSmartQuality === undefined) {
-
-      options.useSmartQuality = true;
-    }
+    // Default hardware decoding and smart quality to true unless specified.
+    options = Object.assign({}, { useHardwareDecoder: true, useSmartQuality: true }, options);
 
     // In case we don't have a defined pixel format.
     if(!this.hwPixelFormat.length) {
@@ -938,10 +938,10 @@ export class FfmpegOptions {
 
         // We execute the following GPU-accelerated operations using the Quick Sync Video post-processing filter:
         //
+        // hwupload                      If we aren't hardware decoding, we need to upload decoded frames to QSV to process them.
         // format=same                   Set the output pixel format to the same as the input, since it's already in the GPU.
         // w=...:h...                    Scale the video to the size that's being requested while respecting aspect ratios.
-        videoFilters.push("vpp_qsv=" + [
-
+        videoFilters.push((options.useHardwareDecoder ? "" : "hwupload,") + "vpp_qsv=" + [
           "format=same",
           "w=min(iw\\, (iw / ih) * " + options.height.toString() + ")",
           "h=min(ih\\, " + options.height.toString() + ")"

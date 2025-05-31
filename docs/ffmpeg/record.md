@@ -51,10 +51,7 @@ FfmpegFmp4Process
 new FfmpegLivestreamProcess(
    options, 
    recordingConfig, 
-   url, 
-   fps, 
-   processAudio, 
-   codec, 
+   livestreamOptions, 
    isVerbose): FfmpegLivestreamProcess;
 ```
 
@@ -66,10 +63,7 @@ Constructs a new FFmpeg livestream process.
 | ------ | ------ | ------ | ------ |
 | `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | `undefined` | FFmpeg configuration options. |
 | `recordingConfig` | `CameraRecordingConfiguration` | `undefined` | HomeKit recording configuration for the session. |
-| `url` | `string` | `undefined` | Source RTSP or livestream URL. |
-| `fps` | `number` | `undefined` | Video frames per second. |
-| `processAudio` | `boolean` | `true` | If `true`, enables audio stream processing. Defaults to `true`. |
-| `codec` | `string` | `"h264"` | Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`. |
+| `livestreamOptions` | [`PartialWithId`](../util.md#partialwithid)\<[`Fmp4LivestreamOptions`](#fmp4livestreamoptions), `"url"`\> | `undefined` | livestream segmenting options. |
 | `isVerbose` | `boolean` | `false` | If `true`, enables more verbose logging for debugging purposes. Defaults to `false`. |
 
 ###### Returns
@@ -336,11 +330,7 @@ FfmpegFmp4Process
 new FfmpegRecordingProcess(
    options, 
    recordingConfig, 
-   fps, 
-   processAudio, 
-   probesize, 
-   timeshift, 
-   codec, 
+   fmp4Options, 
    isVerbose): FfmpegRecordingProcess;
 ```
 
@@ -352,11 +342,7 @@ Constructs a new FFmpeg recording process for HKSV events.
 | ------ | ------ | ------ | ------ |
 | `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | `undefined` | FFmpeg configuration options. |
 | `recordingConfig` | `CameraRecordingConfiguration` | `undefined` | HomeKit recording configuration for the session. |
-| `fps` | `number` | `undefined` | Video frames per second. |
-| `processAudio` | `boolean` | `undefined` | If `true`, enables audio stream processing. |
-| `probesize` | `number` | `undefined` | Stream analysis size, in bytes. |
-| `timeshift` | `number` | `undefined` | Timeshift offset for event-based recording, in milliseconds. |
-| `codec` | `string` | `"h264"` | Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`. |
+| `fmp4Options` | `Partial`\<[`Fmp4RecordingOptions`](#fmp4recordingoptions)\> | `{}` | fMP4 recording options. |
 | `isVerbose` | `boolean` | `false` | If `true`, enables more verbose logging for debugging purposes. Defaults to `false`. |
 
 ###### Returns
@@ -567,3 +553,47 @@ process.stop();
 ```ts
 FfmpegFmp4Process.stop
 ```
+
+## Other
+
+### Fmp4LivestreamOptions
+
+Options for configuring an fMP4 recording or livestream session.
+
+#### Extends
+
+- `Fmp4CommonOptions`
+
+#### Properties
+
+| Property | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ |
+| <a id="audiostream"></a> `audioStream` | `number` | - | `Fmp4CommonOptions.audioStream` |
+| <a id="codec"></a> `codec` | `string` | - | `Fmp4CommonOptions.codec` |
+| <a id="enableaudio"></a> `enableAudio` | `boolean` | - | `Fmp4CommonOptions.enableAudio` |
+| <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | - | `Fmp4CommonOptions.hardwareTranscoding` |
+| <a id="url"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
+| <a id="videostream"></a> `videoStream` | `number` | - | `Fmp4CommonOptions.videoStream` |
+
+***
+
+### Fmp4RecordingOptions
+
+Options for configuring an fMP4 recording or livestream session.
+
+#### Extends
+
+- `Fmp4CommonOptions`
+
+#### Properties
+
+| Property | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ |
+| <a id="audiostream-1"></a> `audioStream` | `number` | - | `Fmp4CommonOptions.audioStream` |
+| <a id="codec-1"></a> `codec` | `string` | - | `Fmp4CommonOptions.codec` |
+| <a id="enableaudio-1"></a> `enableAudio` | `boolean` | - | `Fmp4CommonOptions.enableAudio` |
+| <a id="fps"></a> `fps` | `number` | The video frames per second for the session. | - |
+| <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | - | `Fmp4CommonOptions.hardwareTranscoding` |
+| <a id="probesize"></a> `probesize` | `number` | Number of bytes to analyze for stream information. | - |
+| <a id="timeshift"></a> `timeshift` | `number` | Timeshift offset for event-based recording (in milliseconds). | - |
+| <a id="videostream-1"></a> `videoStream` | `number` | - | `Fmp4CommonOptions.videoStream` |

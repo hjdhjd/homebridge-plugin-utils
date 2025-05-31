@@ -40,12 +40,14 @@ const encoderOptions: EncoderOptions = {
 
   bitrate: 3000,
   fps: 30,
+  hardwareDecoding: true,
+  hardwareTranscoding: true,
   height: 1080,
   idrInterval: 2,
   inputFps: 30,
   level: H264Level.LEVEL4_0,
   profile: H264Profile.HIGH,
-  useSmartQuality: true,
+  smartQuality: true,
   width: 1920
 };
 const args = ffmpegOpts.streamEncoder(encoderOptions);
@@ -74,7 +76,7 @@ Creates an instance of Homebridge FFmpeg encoding and decoding options.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig) | FFmpeg options configuration. |
+| `options` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | FFmpeg options configuration. |
 
 ###### Returns
 
@@ -91,10 +93,10 @@ const ffmpegOpts = new FfmpegOptions(optionsConfig);
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
 | <a id="codecsupport"></a> `codecSupport` | `public` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | FFmpeg codec and hardware capabilities for the current host. |
+| <a id="config"></a> `config` | `readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | The configuration options used to initialize this instance. |
 | <a id="debug"></a> `debug` | `readonly` | `boolean` | Indicates if debug logging is enabled. |
 | <a id="log"></a> `log` | `readonly` | \| [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) \| `Logging` | Logging interface for output and errors. |
 | <a id="name"></a> `name` | `readonly` | () => `string` | Function returning the name for this options instance to be used for logging. |
-| <a id="options"></a> `options` | `readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig) | The original options used to initialize this instance. |
 
 #### Accessors
 
@@ -228,7 +230,7 @@ Returns the video decoder arguments to use for decoding video.
 
 `string`[]
 
-Array of FFmpeg command-line arguments for video decoding.
+Array of FFmpeg command-line arguments for video decoding or an empty array if the codec isn't supported.
 
 ###### Example
 
@@ -251,13 +253,14 @@ const encoderOptions: EncoderOptions = {
 
   bitrate: 3000,
   fps: 30,
+  hardwareDecoding: true,
+  hardwareTranscoding: true,
   height: 1080,
   idrInterval: 2,
   inputFps: 30,
   level: H264Level.LEVEL4_0,
   profile: H264Profile.HIGH,
-  useHardwareDecoder: true,
-  useSmartQuality: true,
+  smartQuality: true,
   width: 1920
 };
 
@@ -277,13 +280,14 @@ const args = ffmpegOpts.streamEncoder(encoderOptions);
 | ------ | ------ | ------ |
 | <a id="bitrate"></a> `bitrate` | `number` | Target video bitrate, in kilobits per second. |
 | <a id="fps"></a> `fps` | `number` | Target output frames per second. |
+| <a id="hardwaredecoding"></a> `hardwareDecoding?` | `boolean` | Optional. If `true`, encoder options will account for hardware decoding (primarily for Intel QSV scenarios). Defaults to `true`. |
+| <a id="hardwaretranscoding"></a> `hardwareTranscoding?` | `boolean` | - |
 | <a id="height"></a> `height` | `number` | Output video height, in pixels. |
 | <a id="idrinterval"></a> `idrInterval` | `number` | Interval (in seconds) between keyframes (IDR frames). |
 | <a id="inputfps"></a> `inputFps` | `number` | Input (source) frames per second. |
 | <a id="level"></a> `level` | `H264Level` | H.264 profile level for output. |
 | <a id="profile"></a> `profile` | `H264Profile` | H.264 profile for output. |
-| <a id="usehardwaredecoder"></a> `useHardwareDecoder?` | `boolean` | Optional. If `true`, encoder options will account for hardware decoding (primarily for Intel QSV scenarios). Defaults to `true`. |
-| <a id="usesmartquality"></a> `useSmartQuality?` | `boolean` | Optional. If `true`, enables smart quality and variable bitrate optimizations. Defaults to `true`. |
+| <a id="smartquality"></a> `smartQuality?` | `boolean` | Optional and applicable only when not using hardware acceleration. If `true`, enables smart quality and variable bitrate optimizations. Defaults to `true`. |
 | <a id="width"></a> `width` | `number` | Output video width, in pixels. |
 
 ***
@@ -322,7 +326,7 @@ FfmpegOptions
 | `crop.x` | `number` | - |
 | `crop.y` | `number` | - |
 | <a id="debug-1"></a> `debug` | `boolean` | Enable debug logging. |
-| <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. |
-| <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video encoding if available. |
+| <a id="hardwaredecoding-1"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. |
+| <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video encoding if available. |
 | <a id="log-1"></a> `log` | \| [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) \| `Logging` | Logging interface for output and errors. |
 | <a id="name-1"></a> `name` | () => `string` | Function returning the name or label for this options set. |

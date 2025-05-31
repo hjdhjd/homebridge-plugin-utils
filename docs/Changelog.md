@@ -2,21 +2,27 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.20.0 (2025-05-31)
+  * Improvement: evolving FFmpeg-related semantics for better future-proofing and growth. Now includes the ability to specify which audio and video stream to use when
+  * recording or segmenting into a livestream.
+  * Fix: address audio sync issues when recording HKSV events.
+  * Housekeeping.
+
 ## 1.19.0 (2025-05-29)
-  * Improvement: Added additional semantics to `videoEncoder` to address QSV-specific use cases.
+  * Improvement: added additional semantics to `videoEncoder` to address QSV-specific use cases.
   * Housekeeping.
 
 ## 1.18.0 (2025-05-27)
-  * Improvement: Added additional semantics to `validService`.
+  * Improvement: added additional semantics to `validService`.
 
 ## 1.17.0 (2025-05-26)
-  * Improvement: Added options to selectively enable verbosity on specific FFmpeg recording or livestream instances.
-  * Improvement: Evolved semantics for FFmpeg recording to specify what the input codec is to better support hardware acceleration scenarios.
+  * Improvement: added options to selectively enable verbosity on specific FFmpeg recording or livestream instances.
+  * Improvement: evolved semantics for FFmpeg recording to specify what the input codec is to better support hardware acceleration scenarios.
   * Housekeeping.
 
 ## 1.16.0 (2025-05-18)
   * New feature: FFmpeg process utilities, including well-tested capabilities that provide livestreaming, HomeKit Secure Video (HKSV) event recording, and more. These capabilities were ported over and enhanced from my existing [Homebridge UniFi Protect](https://github.com/hjdhjd/homebridge-unifi-protect) plugin.
-  * Improvement: Significant documentation updates.
+  * Improvement: significant documentation updates.
   * Fix: address a minor issue in value-centric feature option detection.
   * Housekeeping.
 

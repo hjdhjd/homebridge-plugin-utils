@@ -141,6 +141,45 @@ id = "device-001";
 
 ***
 
+### PartialWithId\<T, K\>
+
+```ts
+type PartialWithId<T, K> = Partial<T> & Pick<T, K>;
+```
+
+Makes all properties in `T` optional except for `id`, which remains required.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` | The base interface or type. |
+| `K` *extends* keyof `T` | - |
+
+#### Example
+
+```ts
+interface Device {
+
+  id: string;
+  name: string;
+  mac: string;
+}
+
+type UserUpdate = PartialWithId<User>;
+
+// Valid: Only 'id' is required, others are optional.
+const update: DeviceUpdate = { id: "123" };
+
+// Valid: Extra properties can be provided.
+const another: DeviceUpdate = { id: "456", name: "SomeDevice" };
+
+// Error: 'id' is missing.
+const error: DeviceUpdate = { name: "SomeOtherDevice" }; // TypeScript error
+```
+
+***
+
 ### retry()
 
 ```ts

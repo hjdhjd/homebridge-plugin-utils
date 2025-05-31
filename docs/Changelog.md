@@ -3,8 +3,7 @@
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
 ## 1.20.0 (2025-05-31)
-  * Improvement: evolving FFmpeg-related semantics for better future-proofing and growth. Now includes the ability to specify which audio and video stream to use when
-  * recording or segmenting into a livestream.
+  * Improvement: evolving FFmpeg-related semantics for better future-proofing and growth. Now includes the ability to specify which audio and video stream to use when recording or segmenting into a livestream.
   * Fix: address audio sync issues when recording HKSV events.
   * Housekeeping.
 

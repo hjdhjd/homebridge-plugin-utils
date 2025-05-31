@@ -1,7 +1,6 @@
 /* Copyright(C) 2017-2025, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ffmpeg/record.ts: Provide FFmpeg process control to support livestreaming and HomeKit Secure Video.
- *
  */
 
 /**
@@ -21,9 +20,9 @@
  *
  * @module
  */
+import { AudioRecordingCodecType, AudioRecordingSamplerate, type CameraRecordingConfiguration } from "homebridge";
 import { HKSV_IDR_INTERVAL, HKSV_TIMEOUT } from "./settings.js";
-import { type Nullable, runWithTimeout } from "../util.js";
-import type { CameraRecordingConfiguration } from "homebridge";
+import { type Nullable, type PartialWithId, runWithTimeout } from "../util.js";
 import type { FfmpegOptions } from "./options.js";
 import { FfmpegProcess } from "./process.js";
 import events from "node:events";
@@ -32,22 +31,55 @@ import { once } from "node:events";
 /**
  * Options for configuring an fMP4 recording or livestream session.
  *
- * @property codec      - The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`.
- * @property fps        - The video frames per second for the session.
- * @property livestream - Indicates if this is a livestream session (`true`) or a recording (`false`).
- * @property probesize  - Number of bytes to analyze for stream information.
- * @property timeshift  - Timeshift offset for event-based recording (in milliseconds).
- * @property url        - Source URL for livestreaming (RTSP).
+ * @property audioStream          - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
+ * @property codec                - The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`.
+ * @property enableAudio          - Indicates whether to enable audio or not.
+ * @property hardwareTranscoding  - Indicates whether or not to use hardware accelerated transcoding, if available. Defaults to what was specified in ffmpegOptions.
+ * @property videoStream          - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
  */
-interface Fmp4OptionsConfig {
+interface Fmp4CommonOptions {
 
+  audioStream: number;
   codec: string;
+  enableAudio: boolean;
+  hardwareTranscoding: boolean;
+  videoStream: number;
+}
+
+/**
+ * Options for configuring an fMP4 recording or livestream session.
+ *
+ * @property fps          - The video frames per second for the session.
+ * @property probesize    - Number of bytes to analyze for stream information.
+ * @property timeshift    - Timeshift offset for event-based recording (in milliseconds).
+ */
+export interface Fmp4RecordingOptions extends Fmp4CommonOptions {
+
   fps: number;
-  livestream: boolean;
   probesize: number;
   timeshift: number;
+}
+
+/**
+ * Options for configuring an fMP4 recording or livestream session.
+ *
+ * @property url          - Source URL for livestream (RTSP) remuxing to fMP4.
+ */
+export interface Fmp4LivestreamOptions extends Fmp4CommonOptions {
+
   url: string;
 }
+
+// Utility to map audio sample rates to strings. We also use satisfies here to ensure we account for any future changes that would require updating this mapping.
+const translateAudioSampleRate = {
+
+  [ AudioRecordingSamplerate.KHZ_8 ]:    "8",
+  [ AudioRecordingSamplerate.KHZ_16 ]:   "16",
+  [ AudioRecordingSamplerate.KHZ_24 ]:   "24",
+  [ AudioRecordingSamplerate.KHZ_32 ]:   "32",
+  [ AudioRecordingSamplerate.KHZ_44_1 ]: "44.1",
+  [ AudioRecordingSamplerate.KHZ_48 ]:   "48"
+} as const satisfies Record<AudioRecordingSamplerate, string>;
 
 /**
  * FFmpeg process controller for HomeKit Secure Video (HKSV) and fMP4 livestreaming and recording.
@@ -104,7 +136,7 @@ class FfmpegFmp4Process extends FfmpegProcess {
    * const process = new FfmpegFmp4Process(ffmpegOptions, recordingConfig, true, { fps: 30 });
    * ```
    */
-  constructor(ffmpegOptions: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, isAudioActive: boolean, fmp4Options: Partial<Fmp4OptionsConfig> = {},
+  constructor(ffmpegOptions: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fmp4Options: Partial<Fmp4LivestreamOptions & Fmp4RecordingOptions> = {},
     isVerbose = false) {
 
     // Initialize our parent.
@@ -119,11 +151,14 @@ class FfmpegFmp4Process extends FfmpegProcess {
     this.recordingBuffer = [];
 
     // Initialize our state.
-    this.isLivestream = fmp4Options.livestream ?? false;
+    this.isLivestream = !!fmp4Options.url;
     this.isTimedOut = false;
+    fmp4Options.audioStream ??= 0;
     fmp4Options.codec ??= "h264";
+    fmp4Options.enableAudio ??= true;
     fmp4Options.fps ??= 30;
-    fmp4Options.url ??= "";
+    fmp4Options.hardwareTranscoding ??= this.options.config.hardwareTranscoding;
+    fmp4Options.videoStream ??= 0;
 
     // Save our recording configuration.
     this.recordingConfig = recordingConfig;
@@ -132,21 +167,24 @@ class FfmpegFmp4Process extends FfmpegProcess {
     //
     // -hide_banner                  Suppress printing the startup banner in FFmpeg.
     // -nostats                      Suppress printing progress reports while encoding in FFmpeg.
-    // -fflags flags                 Set the format flags to generate a presentation timestamp if it's missing and discard any corrupt packets rather than exit.
+    // -fflags flags                 Set the format flags to discard any corrupt packets rather than exit, generate a presentation timestamp if it's missing, and ignore
+    //                               the decoding timestamp.
     // -err_detect ignore_err        Ignore decoding errors and continue rather than exit.
+    // -max_delay 500000             Set an upper limit on how much time FFmpeg can take in demuxing packets, in microseconds.
     this.commandLineArgs = [
 
       "-hide_banner",
       "-nostats",
-      "-fflags", "+discardcorrupt",
-      "-err_detect", "ignore_err"
+      "-fflags", "+discardcorrupt+genpts+igndts",
+      "-err_detect", "ignore_err",
+      "-max_delay", "500000"
     ];
 
-    if(this.isLivestream) {
+    if(this.isLivestream && fmp4Options.url) {
 
       // -avioflags direct           Tell FFmpeg to minimize buffering to reduce latency for more realtime processing.
       // -rtsp_transport tcp         Tell the RTSP stream handler that we're looking for a TCP connection.
-      // -i rtspEntry.url            RTSPS URL to get our input stream from.
+      // -i url            RTSPS URL to get our input stream from.
       this.commandLineArgs.push(
 
         "-avioflags", "direct",
@@ -155,7 +193,7 @@ class FfmpegFmp4Process extends FfmpegProcess {
       );
     } else {
 
-      // -probesize number             How many bytes should be analyzed for stream information. Use the size of the timeshift buffer or our configured defaults.
+      // -probesize number             How many bytes should be analyzed for stream information.
       // -r fps                        Set the input frame rate for the video stream.
       // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
       // -i pipe:0                     Use standard input to get video data.
@@ -172,20 +210,21 @@ class FfmpegFmp4Process extends FfmpegProcess {
 
     // Configure our recording options for the video stream:
     //
-    // -map 0:v:0                    Selects the first available video track from the stream.
+    // -map 0:v:X                    Selects the video track from the input.
     this.commandLineArgs.push(
 
-      "-map", "0:v:0",
-      ...(this.isLivestream ? [ "-vcodec", "copy" ] : this.options.recordEncoder({
+      "-map", "0:v:" + fmp4Options.videoStream.toString(),
+      ...(this.isLivestream ? [ "-codec:v", "copy" ] : this.options.recordEncoder({
 
         bitrate: recordingConfig.videoCodec.parameters.bitRate,
         fps: recordingConfig.videoCodec.resolution[2],
+        hardwareDecoding: false,
+        hardwareTranscoding: fmp4Options.hardwareTranscoding,
         height: recordingConfig.videoCodec.resolution[1],
         idrInterval: HKSV_IDR_INTERVAL,
         inputFps: fmp4Options.fps,
         level: recordingConfig.videoCodec.parameters.level,
         profile: recordingConfig.videoCodec.parameters.profile,
-        useHardwareDecoder: false,
         width: recordingConfig.videoCodec.resolution[0]
       }))
     );
@@ -208,16 +247,26 @@ class FfmpegFmp4Process extends FfmpegProcess {
       "-metadata", "comment=" + this.options.name() + " " + (this.isLivestream ? "Livestream Buffer" : "HKSV Event")
     );
 
-    if(isAudioActive) {
+    if(fmp4Options.enableAudio) {
 
       // Configure the audio portion of the command line. Options we use are:
       //
-      // -map 0:a:0?                 Selects the first available audio track from the stream, if it exists.
-      // -acodec copy                Copy the stream without reencoding it.
+      // -map 0:a:X?                 Selects the audio stream from the input, if it exists.
+      // -codec:a                    Encode using the codecs available to us on given platforms.
+      // -profile:a                  Specify either low-complexity AAC or enhanced low-delay AAC for HKSV events.
+      // -ar samplerate              Sample rate to use for this audio. This is specified by HKSV.
+      // -b:a bitrate                Bitrate to use for this audio stream. This is specified by HKSV.
+      // -bufsize size               This is the decoder buffer size, which drives the variability / quality of the output bitrate.
+      // -ac number                  Set the number of audio channels.
       this.commandLineArgs.push(
 
-        "-map", "0:a:0?",
-        "-acodec", "copy"
+        "-map", "0:a:" + fmp4Options.audioStream.toString() + "?",
+        ...this.options.audioEncoder,
+        "-profile:a", (recordingConfig.audioCodec.type === AudioRecordingCodecType.AAC_LC) ? "22" : "38",
+        "-ar", translateAudioSampleRate[recordingConfig.audioCodec.samplerate as AudioRecordingSamplerate] + "k",
+        "-b:a", recordingConfig.audioCodec.bitrate.toString() + "k",
+        "-bufsize", (2 * recordingConfig.audioCodec.bitrate).toString() + "k",
+        "-ac", (recordingConfig.audioCodec.audioChannels ?? 1).toString()
       );
     }
 
@@ -613,17 +662,12 @@ export class FfmpegRecordingProcess extends FfmpegFmp4Process {
    *
    * @param options          - FFmpeg configuration options.
    * @param recordingConfig  - HomeKit recording configuration for the session.
-   * @param fps              - Video frames per second.
-   * @param processAudio     - If `true`, enables audio stream processing.
-   * @param probesize        - Stream analysis size, in bytes.
-   * @param timeshift        - Timeshift offset for event-based recording, in milliseconds.
-   * @param codec            - Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`.
+   * @param fmp4Options      - fMP4 recording options.
    * @param isVerbose        - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
    */
-  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fps: number, processAudio: boolean, probesize: number, timeshift: number,
-    codec = "h264", isVerbose = false) {
+  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fmp4Options: Partial<Fmp4RecordingOptions> = {}, isVerbose = false) {
 
-    super(options, recordingConfig, processAudio, { codec: codec, fps: fps, probesize: probesize, timeshift: timeshift }, isVerbose);
+    super(options, recordingConfig, fmp4Options, isVerbose);
   }
 }
 
@@ -648,17 +692,14 @@ export class FfmpegLivestreamProcess extends FfmpegFmp4Process {
   /**
    * Constructs a new FFmpeg livestream process.
    *
-   * @param options          - FFmpeg configuration options.
-   * @param recordingConfig  - HomeKit recording configuration for the session.
-   * @param url              - Source RTSP or livestream URL.
-   * @param fps              - Video frames per second.
-   * @param processAudio     - If `true`, enables audio stream processing. Defaults to `true`.
-   * @param codec            - Codec for the video stream input. Valid values are: `h264` and `hevc`. Defaults to `h264`.
-   * @param isVerbose        - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
+   * @param options            - FFmpeg configuration options.
+   * @param recordingConfig    - HomeKit recording configuration for the session.
+   * @param livestreamOptions  - livestream segmenting options.
+   * @param isVerbose          - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
    */
-  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, url: string, fps: number, processAudio = true, codec = "h264", isVerbose = false) {
+  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, livestreamOptions: PartialWithId<Fmp4LivestreamOptions, "url">, isVerbose = false) {
 
-    super(options, recordingConfig, processAudio, { codec: codec, fps: fps, livestream: true, url: url }, isVerbose);
+    super(options, recordingConfig, livestreamOptions, isVerbose);
   }
 
   /**

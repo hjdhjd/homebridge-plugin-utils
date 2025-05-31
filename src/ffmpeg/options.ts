@@ -75,13 +75,14 @@ export interface FfmpegOptionsConfig {
  *
  * @property bitrate             - Target video bitrate, in kilobits per second.
  * @property fps                 - Target output frames per second.
+ * @property hardwareDecoding    - Optional. If `true`, encoder options will account for hardware decoding (primarily for Intel QSV scenarios). Defaults to `true`.
  * @property height              - Output video height, in pixels.
  * @property idrInterval         - Interval (in seconds) between keyframes (IDR frames).
  * @property inputFps            - Input (source) frames per second.
  * @property level               - H.264 profile level for output.
  * @property profile             - H.264 profile for output.
- * @property useHardwareDecoder  - Optional. If `true`, encoder options will account for hardware decoding (primarily for Intel QSV scenarios). Defaults to `true`.
- * @property useSmartQuality     - Optional. If `true`, enables smart quality and variable bitrate optimizations. Defaults to `true`.
+ * @property smartQuality        - Optional and applicable only when not using hardware acceleration. If `true`, enables smart quality and variable bitrate optimizations.
+ *                                 Defaults to `true`.
  * @property width               - Output video width, in pixels.
  *
  * @example
@@ -91,13 +92,14 @@ export interface FfmpegOptionsConfig {
  *
  *   bitrate: 3000,
  *   fps: 30,
+ *   hardwareDecoding: true,
+ *   hardwareTranscoding: true,
  *   height: 1080,
  *   idrInterval: 2,
  *   inputFps: 30,
  *   level: H264Level.LEVEL4_0,
  *   profile: H264Profile.HIGH,
- *   useHardwareDecoder: true,
- *   useSmartQuality: true,
+ *   smartQuality: true,
  *   width: 1920
  * };
  *
@@ -115,13 +117,14 @@ export interface EncoderOptions {
 
   bitrate: number,
   fps: number,
+  hardwareDecoding?: boolean,
+  hardwareTranscoding?: boolean,
   height: number,
   idrInterval: number,
   inputFps: number,
   level: H264Level,
   profile: H264Profile,
-  useSmartQuality?: boolean,
-  useHardwareDecoder?: boolean,
+  smartQuality?: boolean,
   width: number
 }
 
@@ -140,12 +143,14 @@ export interface EncoderOptions {
  *
  *   bitrate: 3000,
  *   fps: 30,
+ *   hardwareDecoding: true,
+ *   hardwareTranscoding: true,
  *   height: 1080,
  *   idrInterval: 2,
  *   inputFps: 30,
  *   level: H264Level.LEVEL4_0,
  *   profile: H264Profile.HIGH,
- *   useSmartQuality: true,
+ *   smartQuality: true,
  *   width: 1920
  * };
  * const args = ffmpegOpts.streamEncoder(encoderOptions);
@@ -169,6 +174,11 @@ export class FfmpegOptions {
   public codecSupport: FfmpegCodecs;
 
   /**
+   * The configuration options used to initialize this instance.
+   */
+  public readonly config: FfmpegOptionsConfig;
+
+  /**
    * Indicates if debug logging is enabled.
    */
   public readonly debug: boolean;
@@ -182,11 +192,6 @@ export class FfmpegOptions {
    * Function returning the name for this options instance to be used for logging.
    */
   public readonly name: () => string;
-
-  /**
-   * The original options used to initialize this instance.
-   */
-  public readonly options: FfmpegOptionsConfig;
 
   private readonly hwPixelFormat: string[];
 
@@ -204,12 +209,12 @@ export class FfmpegOptions {
   constructor(options: FfmpegOptionsConfig) {
 
     this.codecSupport = options.codecSupport;
+    this.config = options;
     this.debug = options.debug ?? false;
 
     this.hwPixelFormat = [];
     this.log = options.log;
     this.name = options.name;
-    this.options = options;
 
     // Configure our hardware acceleration support.
     this.configureHwAccel();
@@ -248,12 +253,12 @@ export class FfmpegOptions {
 
       const categories = [];
 
-      if(this.options.hardwareDecoding) {
+      if(this.config.hardwareDecoding) {
 
         categories.push("decoding");
       }
 
-      if(this.options.hardwareTranscoding) {
+      if(this.config.hardwareTranscoding) {
 
         categories.push("transcoding");
       }
@@ -262,18 +267,18 @@ export class FfmpegOptions {
     };
 
     // Hardware-accelerated decoding is enabled by default, where supported. Let's select the decoder options accordingly where supported.
-    if(this.options.hardwareDecoding) {
+    if(this.config.hardwareDecoding) {
 
       // Utility function to check that we have a specific decoder codec available to us.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const validateDecoder = (codec: string, pixelFormat: string[]): boolean => {
 
-        if(!this.options.codecSupport.hasDecoder("h264", codec)) {
+        if(!this.config.codecSupport.hasDecoder("h264", codec)) {
 
           this.log.error("Unable to enable hardware-accelerated decoding. Your video processor does not have support for the " + codec + " decoder. " +
             "Using software decoding instead.");
 
-          this.options.hardwareDecoding = false;
+          this.config.hardwareDecoding = false;
 
           return false;
         }
@@ -286,12 +291,12 @@ export class FfmpegOptions {
       // Utility function to check that we have a specific decoder codec available to us.
       const validateHwAccel = (accel: string, pixelFormat: string[]): boolean => {
 
-        if(!this.options.codecSupport.hasHwAccel(accel)) {
+        if(!this.config.codecSupport.hasHwAccel(accel)) {
 
           this.log.error("Unable to enable hardware-accelerated decoding. Your video processor does not have support for the " + accel + " hardware accelerator. " +
             "Using software decoding instead.");
 
-          this.options.hardwareDecoding = false;
+          this.config.hardwareDecoding = false;
 
           return false;
         }
@@ -314,13 +319,13 @@ export class FfmpegOptions {
         case "raspbian":
 
           // If it's less than the minimum hardware GPU memory we need on an Raspberry Pi, we revert back to our default decoder.
-          if(this.options.codecSupport.gpuMem < RPI_GPU_MINIMUM) {
+          if(this.config.codecSupport.gpuMem < RPI_GPU_MINIMUM) {
 
             this.log.info("Disabling hardware-accelerated %s. Adjust the GPU memory configuration on your Raspberry Pi to at least %s MB to enable it.",
               accelCategories(), RPI_GPU_MINIMUM);
 
-            this.options.hardwareDecoding = false;
-            this.options.hardwareTranscoding = false;
+            this.config.hardwareDecoding = false;
+            this.config.hardwareTranscoding = false;
 
             return false;
           }
@@ -328,31 +333,31 @@ export class FfmpegOptions {
           // Verify that we have the hardware decoder available to us. Unfortunately, at the moment, it seems that hardware decoding is flaky, at best, on Raspberry Pi.
           // validateDecoder("h264_mmal", [ "mmal", "yuv420p" ]);
           // validateDecoder("h264_v4l2m2ml", [ "yuv420p" ]);
-          this.options.hardwareDecoding = false;
+          this.config.hardwareDecoding = false;
 
           break;
 
         default:
 
           // Back to software decoding unless we're on a known system that always supports hardware decoding.
-          this.options.hardwareDecoding = false;
+          this.config.hardwareDecoding = false;
 
           break;
       }
     }
 
     // If we've enabled hardware-accelerated transcoding, let's select the encoder options accordingly where supported.
-    if(this.options.hardwareTranscoding) {
+    if(this.config.hardwareTranscoding) {
 
       // Utility function to check that we have a specific encoder codec available to us.
       const validateEncoder = (codec: string): boolean => {
 
-        if(!this.options.codecSupport.hasEncoder("h264", codec)) {
+        if(!this.config.codecSupport.hasEncoder("h264", codec)) {
 
           this.log.error("Unable to enable hardware-accelerated transcoding. Your video processor does not have support for the " + codec + " encoder. " +
             "Using software transcoding instead.");
 
-          this.options.hardwareTranscoding = false;
+          this.config.hardwareTranscoding = false;
 
           return false;
         }
@@ -369,7 +374,7 @@ export class FfmpegOptions {
           validateEncoder("h264_videotoolbox");
 
           // Validate that we have access to the AudioToolbox AAC encoder.
-          if(!this.options.codecSupport.hasEncoder("aac", "aac_at")) {
+          if(!this.config.codecSupport.hasEncoder("aac", "aac_at")) {
 
             this.log.error("Your video processor does not have support for the native macOS AAC encoder, aac_at. Will attempt to use libfdk_aac instead.");
           }
@@ -395,18 +400,18 @@ export class FfmpegOptions {
         default:
 
           // Let's see if we have Intel QuickSync hardware decoding available to us.
-          if(this.options.codecSupport.hasHwAccel("qsv") &&
-            this.options.codecSupport.hasDecoder("h264", "h264_qsv") && this.options.codecSupport.hasEncoder("h264", "h264_qsv") &&
-            this.options.codecSupport.hasDecoder("hevc", "hevc_qsv") && this.options.codecSupport.hasEncoder("hevc", "hevc_qsv")) {
+          if(this.config.codecSupport.hasHwAccel("qsv") &&
+            this.config.codecSupport.hasDecoder("h264", "h264_qsv") && this.config.codecSupport.hasEncoder("h264", "h264_qsv") &&
+            this.config.codecSupport.hasDecoder("hevc", "hevc_qsv") && this.config.codecSupport.hasEncoder("hevc", "hevc_qsv")) {
 
-            this.options.hardwareDecoding = true;
+            this.config.hardwareDecoding = true;
             this.hwPixelFormat.push("qsv", "yuv420p");
             logMessage = "Intel Quick Sync Video";
           } else {
 
             // Back to software encoding.
-            this.options.hardwareDecoding = false;
-            this.options.hardwareTranscoding = false;
+            this.config.hardwareDecoding = false;
+            this.config.hardwareTranscoding = false;
           }
 
           break;
@@ -414,12 +419,12 @@ export class FfmpegOptions {
     }
 
     // Inform the user.
-    if(this.options.hardwareDecoding || this.options.hardwareTranscoding) {
+    if(this.config.hardwareDecoding || this.config.hardwareTranscoding) {
 
       this.log.info("Hardware-accelerated " + accelCategories() + " enabled" + (logMessage.length ? ": " + logMessage : "") + ".");
     }
 
-    return this.options.hardwareTranscoding;
+    return this.config.hardwareTranscoding;
   }
 
   /**
@@ -437,22 +442,22 @@ export class FfmpegOptions {
 
       const audioOptions = [];
 
-      if(this.options.codecSupport.hasEncoder("aac", "libfdk_aac")) {
+      if(this.config.codecSupport.hasEncoder("aac", "libfdk_aac")) {
 
         // Default to libfdk_aac since FFmpeg doesn't natively support AAC-ELD. We use the following options by default:
         //
-        // -acodec libfdk_aac            Use the libfdk_aac encoder.
+        // -codec:a libfdk_aac           Use the libfdk_aac encoder.
         // -afterburner 1                Increases audio quality at the expense of needing a little bit more computational power in libfdk_aac.
         // -eld_v2 1                     Use the enhanced low delay v2 standard for better audio characteristics.
         audioOptions.push(
 
-          "-acodec", "libfdk_aac",
+          "-codec:a", "libfdk_aac",
           "-afterburner", "1",
           "-eld_v2", "1"
         );
 
         // If we're using Jellyfin's FFmpeg, it's libfdk_aac is broken and crashes when using spectral band replication.
-        if(!/-Jellyfin$/i.test(this.options.codecSupport.ffmpegVersion)) {
+        if(!/-Jellyfin$/.test(this.config.codecSupport.ffmpegVersion)) {
 
           // -eld_sbr 1                  Use spectral band replication to further enhance audio.
           audioOptions.push("-eld_sbr", "1");
@@ -468,7 +473,7 @@ export class FfmpegOptions {
       case "macOS.Intel":
 
         // If we don't have audiotoolbox available, let's default back to libfdk_aac.
-        if(!this.options.codecSupport.hasEncoder("aac", "aac_at")) {
+        if(!this.config.codecSupport.hasEncoder("aac", "aac_at")) {
 
           encoderOptions = defaultAudioEncoderOptions();
 
@@ -477,11 +482,11 @@ export class FfmpegOptions {
 
         // aac_at is the macOS audio encoder API. We use the following options:
         //
-        // -acodec aac_at                Use the aac_at encoder on macOS.
+        // -codec:a aac_at               Use the aac_at encoder on macOS.
         // -aac_at_mode cvbr             Use the constrained variable bitrate setting to allow the encoder to optimize audio within the requested bitrates.
         encoderOptions = [
 
-          "-acodec", "aac_at",
+          "-codec:a", "aac_at",
           "-aac_at_mode", "cvbr"
         ];
 
@@ -511,7 +516,7 @@ export class FfmpegOptions {
    * Returns the video decoder arguments to use for decoding video.
    *
    * @param codec            - Optional. Codec to decode ("h264" or "hevc").
-   * @returns Array of FFmpeg command-line arguments for video decoding.
+   * @returns Array of FFmpeg command-line arguments for video decoding or an empty array if the codec isn't supported.
    *
    * @example
    *
@@ -521,9 +526,14 @@ export class FfmpegOptions {
    */
   public videoDecoder(codec = "h264"): string[] {
 
-    codec = codec.toLowerCase();
 
-    switch(codec) {
+    switch(codec.toLowerCase()) {
+
+      case "h264":
+
+        codec = "h264";
+
+        break;
 
       case "h265":
       case "hevc":
@@ -534,16 +544,22 @@ export class FfmpegOptions {
 
       default:
 
-        codec = "h264";
-
-        break;
+        // If it's unknown to us, we bail out.
+        return [];
     }
+
+    // Intel QSV decoder to codec mapping.
+    const QSV_DECODER: { [index: string]: string } = {
+
+      "h264": "h264_qsv",
+      "hevc": "hevc_qsv"
+    };
 
     // Default to no special decoder options for inbound streams.
     let decoderOptions: string[] = [];
 
     // If we've enabled hardware-accelerated transcoding, let's select decoder options accordingly where supported.
-    if(this.options.hardwareDecoding) {
+    if(this.config.hardwareDecoding) {
 
       switch(this.codecSupport.hostSystem) {
 
@@ -552,7 +568,7 @@ export class FfmpegOptions {
 
           // h264_videotoolbox is the macOS hardware decoder and encoder API. We use the following options for decoding video:
           //
-          // -hwaccel videotoolbox       Select Video Toolbox for hardware-accelerated H.264 decoding.
+          // -hwaccel videotoolbox           Select Video Toolbox for hardware-accelerated H.264 decoding.
           decoderOptions = [
 
             "-hwaccel", "videotoolbox"
@@ -564,10 +580,10 @@ export class FfmpegOptions {
 
           // h264_mmal is the preferred Raspberry Pi hardware decoder codec. We use the following options for decoding video:
           //
-          // -c:v h264_mmal              Select the Multimedia Abstraction Layer codec for hardware-accelerated H.264 processing.
+          // -codec:v h264_mmal              Select the Multimedia Abstraction Layer codec for hardware-accelerated H.264 processing.
           decoderOptions = [
 
-            // "-c:v", "h264_mmal"
+            // "-codec:v", "h264_mmal"
           ];
 
           break;
@@ -576,13 +592,13 @@ export class FfmpegOptions {
 
           // h264_qsv is the Intel Quick Sync Video hardware encoder and decoder.
           //
-          // -hwaccel qsv                Select Quick Sync Video to enable hardware-accelerated H.264 decoding.
-          // -c:v h264_qsv or hevc_qsv   Select the Quick Sync Video codec for hardware-accelerated H.264 or HEVC processing.
+          // -hwaccel qsv                    Select Quick Sync Video to enable hardware-accelerated H.264 decoding.
+          // -codec:v h264_qsv or hevc_qsv   Select the Quick Sync Video codec for hardware-accelerated H.264 or HEVC processing.
           decoderOptions = [
 
             "-hwaccel", "qsv",
             "-hwaccel_output_format", "qsv",
-            "-c:v", (codec === "hevc") ? "hevc_qsv" : "h264_qsv"
+            "-codec:v", QSV_DECODER[codec]
           ];
 
           break;
@@ -600,7 +616,7 @@ export class FfmpegOptions {
   public get cropFilter(): string {
 
     // If we haven't enabled cropping, tell the crop filter to do nothing.
-    if(!this.options.crop) {
+    if(!this.config.crop) {
 
       return "crop=w=iw*100:h=ih*100:x=iw*0:y=ih*0";
     }
@@ -608,10 +624,10 @@ export class FfmpegOptions {
     // Generate our crop filter based on what the user has configured.
     return "crop=" + [
 
-      "w=iw*" + this.options.crop.width.toString(),
-      "h=ih*" + this.options.crop.height.toString(),
-      "x=iw*" + this.options.crop.x.toString(),
-      "y=ih*" + this.options.crop.y.toString()
+      "w=iw*" + this.config.crop.width.toString(),
+      "h=ih*" + this.config.crop.height.toString(),
+      "x=iw*" + this.config.crop.x.toString(),
+      "y=ih*" + this.config.crop.y.toString()
     ].join(":");
   }
 
@@ -637,7 +653,7 @@ export class FfmpegOptions {
    *   inputFps: 30,
    *   level: H264Level.LEVEL3_1,
    *   profile: H264Profile.MAIN,
-   *   useSmartQuality: true,
+   *   smartQuality: true,
    *   width: 1280
    * };
    *
@@ -651,7 +667,7 @@ export class FfmpegOptions {
     const videoFilters = [];
 
     // Default smart quality to true unless specified.
-    options = Object.assign({}, { useSmartQuality: true }, options);
+    options = Object.assign({}, { smartQuality: true }, options);
 
     // Set our FFmpeg video filter options:
     //
@@ -671,7 +687,7 @@ export class FfmpegOptions {
 
     // Default to the tried-and-true libx264. We use the following options by default:
     //
-    // -c:v libx264                      Use the excellent libx264 H.264 encoder.
+    // -codec:v libx264                  Use the excellent libx264 H.264 encoder.
     // -preset veryfast                  Use the veryfast encoding preset in libx264, which provides a good balance of encoding speed and quality.
     // -profile:v                        Use the H.264 profile that HomeKit is requesting when encoding.
     // -level:v                          Use the H.264 profile level that HomeKit is requesting when encoding.
@@ -686,7 +702,7 @@ export class FfmpegOptions {
     //                                   allow encoders some variation in order to maximize quality while honoring bandwidth constraints.
     const encoderOptions = [
 
-      "-c:v", "libx264",
+      "-codec:v", "libx264",
       "-preset", "veryfast",
       "-profile:v", this.getH264Profile(options.profile),
       "-level:v", this.getH264Level(options.level),
@@ -695,13 +711,13 @@ export class FfmpegOptions {
       "-filter:v", videoFilters.join(", "),
       "-g:v", (options.fps * options.idrInterval).toString(),
       "-bufsize", (2 * options.bitrate).toString() + "k",
-      "-maxrate", (options.bitrate + (options.useSmartQuality ? HOMEKIT_STREAMING_HEADROOM : 0)).toString() + "k"
+      "-maxrate", (options.bitrate + (options.smartQuality ? HOMEKIT_STREAMING_HEADROOM : 0)).toString() + "k"
     ];
 
     // Using libx264's constant rate factor mode produces generally better results across the board. We use a capped CRF approach, allowing libx264 to
     // make intelligent choices about how to adjust bitrate to achieve a certain quality level depending on the complexity of the scene being encoded, but
     // constraining it to a maximum bitrate to stay within the bandwidth constraints HomeKit is requesting.
-    if(options.useSmartQuality) {
+    if(options.smartQuality) {
 
       // -crf 20                         Use a constant rate factor of 20, to allow libx264 the ability to vary bitrates to achieve the visual quality we
       //                                 want, constrained by our maximum bitrate.
@@ -728,7 +744,7 @@ export class FfmpegOptions {
   public recordEncoder(options: EncoderOptions): string[] {
 
     // We always disable smart quality when recording due to HomeKit's strict requirements here.
-    options.useSmartQuality = false;
+    options.smartQuality = false;
 
     // Generaly, we default to using the same encoding options we use to transcode livestreams, unless we have platform-specific quirks we need to address,
     // such as where we can have hardware-accelerated transcoded livestreaming, but not hardware-accelerated HKSV event recording. The other noteworthy
@@ -764,7 +780,7 @@ export class FfmpegOptions {
   public streamEncoder(options: EncoderOptions): string[] {
 
     // Default hardware decoding and smart quality to true unless specified.
-    options = Object.assign({}, { useHardwareDecoder: true, useSmartQuality: true }, options);
+    options = Object.assign({}, { hardwareDecoding: true, hardwareTranscoding: this.config.hardwareTranscoding, smartQuality: true }, options);
 
     // In case we don't have a defined pixel format.
     if(!this.hwPixelFormat.length) {
@@ -773,7 +789,7 @@ export class FfmpegOptions {
     }
 
     // If we aren't hardware-accelerated, we default to libx264.
-    if(!this.options.hardwareTranscoding) {
+    if(!this.config.hardwareTranscoding || !options.hardwareTranscoding) {
 
       return this.defaultVideoEncoderOptions(options);
     }
@@ -782,7 +798,7 @@ export class FfmpegOptions {
     //
     // We begin by adjusting the maximum bitrate tolerance used with -bufsize. This provides an upper bound on bitrate, with a little bit extra to allow encoders some
     // variation in order to maximize quality while honoring bandwidth constraints.
-    const adjustedMaxBitrate = options.bitrate + (options.useSmartQuality ? HOMEKIT_STREAMING_HEADROOM : 0);
+    const adjustedMaxBitrate = options.bitrate + (options.smartQuality ? HOMEKIT_STREAMING_HEADROOM : 0);
 
     // Check the input and output frame rates to see if we need to change it.
     const useFpsFilter = options.fps !== options.inputFps;
@@ -801,7 +817,7 @@ export class FfmpegOptions {
     videoFilters.push("scale=-2:min(ih\\," + options.height.toString() + ")");
 
     // Crop the stream, if the user has requested it.
-    if(this.options.crop) {
+    if(this.config.crop) {
 
       videoFilters.push(this.cropFilter);
     }
@@ -819,7 +835,7 @@ export class FfmpegOptions {
 
         // h264_videotoolbox is the macOS hardware encoder API. We use the following options on Apple Silicon:
         //
-        // -c:v                          Specify the macOS hardware encoder, h264_videotoolbox.
+        // -codec:v                      Specify the macOS hardware encoder, h264_videotoolbox.
         // -allow_sw 1                   Allow the use of the software encoder if the hardware encoder is occupied or unavailable.
         //                               This allows us to scale when we get multiple streaming requests simultaneously and consume all the available encode engines.
         // -realtime 1                   We prefer speed over quality - if the encoder has to make a choice, sacrifice one for the other.
@@ -837,7 +853,7 @@ export class FfmpegOptions {
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         encoderOptions.push(
 
-          "-c:v", "h264_videotoolbox",
+          "-codec:v", "h264_videotoolbox",
           "-allow_sw", "1",
           "-realtime", "1",
           "-coder", "cabac",
@@ -851,7 +867,7 @@ export class FfmpegOptions {
           "-maxrate", adjustedMaxBitrate.toString() + "k"
         );
 
-        if(options.useSmartQuality) {
+        if(options.smartQuality) {
 
           // -q:v 90                     Use a fixed quality scale of 90, to allow videotoolbox the ability to vary bitrates to achieve the visual quality we want,
           //                             constrained by our maximum bitrate. This is an Apple Silicon-specific feature.
@@ -868,7 +884,7 @@ export class FfmpegOptions {
 
         // h264_videotoolbox is the macOS hardware encoder API. We use the following options on Intel-based Macs:
         //
-        // -c:v                          Specify the macOS hardware encoder, h264_videotoolbox.
+        // -codec:v                      Specify the macOS hardware encoder, h264_videotoolbox.
         // -allow_sw 1                   Allow the use of the software encoder if the hardware encoder is occupied or unavailable.
         //                               This allows us to scale when we get multiple streaming requests simultaneously that can consume all the available encode engines.
         // -realtime 1                   We prefer speed over quality - if the encoder has to make a choice, sacrifice one for the other.
@@ -888,7 +904,7 @@ export class FfmpegOptions {
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         return [
 
-          "-c:v", "h264_videotoolbox",
+          "-codec:v", "h264_videotoolbox",
           "-allow_sw", "1",
           "-realtime", "1",
           "-coder", "cabac",
@@ -907,7 +923,7 @@ export class FfmpegOptions {
 
         // h264_v4l2m2m is the preferred interface to the Raspberry Pi hardware encoder API. We use the following options:
         //
-        // -c:v                          Specify the Raspberry Pi hardware encoder, h264_v4l2m2m.
+        // -codec:v                      Specify the Raspberry Pi hardware encoder, h264_v4l2m2m.
         // -noautoscale                  Don't attempt to scale the video stream automatically.
         // -filter:v                     Set the pixel format, adjust the frame rate if needed, and scale the video to the size we want while respecting aspect ratios and
         //                               ensuring our final dimensions are a power of two.
@@ -919,7 +935,7 @@ export class FfmpegOptions {
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         return [
 
-          "-c:v", "h264_v4l2m2m",
+          "-codec:v", "h264_v4l2m2m",
           "-profile:v", this.getH264Profile(options.profile, true),
           "-bf", "0",
           "-noautoscale",
@@ -941,7 +957,7 @@ export class FfmpegOptions {
         // hwupload                      If we aren't hardware decoding, we need to upload decoded frames to QSV to process them.
         // format=same                   Set the output pixel format to the same as the input, since it's already in the GPU.
         // w=...:h...                    Scale the video to the size that's being requested while respecting aspect ratios.
-        videoFilters.push((options.useHardwareDecoder ? "" : "hwupload,") + "vpp_qsv=" + [
+        videoFilters.push((options.hardwareDecoding ? "" : "hwupload,") + "vpp_qsv=" + [
           "format=same",
           "w=min(iw\\, (iw / ih) * " + options.height.toString() + ")",
           "h=min(ih\\, " + options.height.toString() + ")"
@@ -956,7 +972,7 @@ export class FfmpegOptions {
 
         // h264_qsv is the Intel Quick Sync Video hardware encoder API. We use the following options:
         //
-        // -c:v                          Specify the Intel Quick Sync Video hardware encoder, h264_qsv.
+        // -codec:v                      Specify the Intel Quick Sync Video hardware encoder, h264_qsv.
         // -profile:v                    Use the H.264 profile that HomeKit is requesting when encoding.
         // -level:v 0                    We override what HomeKit requests for the H.264 profile level when we're using hardware-accelerated transcoding because
         //                               the hardware encoder will determine which levels to use. Setting it to 0 allows the encoder to decide for itself.
@@ -972,7 +988,7 @@ export class FfmpegOptions {
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         encoderOptions.push(
 
-          "-c:v", "h264_qsv",
+          "-codec:v", "h264_qsv",
           "-profile:v", this.getH264Profile(options.profile),
           "-level:v", "0",
           "-bf", "0",
@@ -985,7 +1001,7 @@ export class FfmpegOptions {
           "-maxrate", adjustedMaxBitrate.toString() + "k"
         );
 
-        if(options.useSmartQuality) {
+        if(options.smartQuality) {
 
           // -global_quality 20          Use a global quality setting of 20, to allow QSV the ability to vary bitrates to achieve the visual quality we want,
           //                             constrained by our maximum bitrate. This leverages a QSV-specific feature known as intelligent constant quality.
@@ -1007,7 +1023,7 @@ export class FfmpegOptions {
    */
   public get hostSystemMaxPixels(): number {
 
-    if(this.options.hardwareTranscoding) {
+    if(this.config.hardwareTranscoding) {
 
       switch(this.codecSupport.hostSystem) {
 

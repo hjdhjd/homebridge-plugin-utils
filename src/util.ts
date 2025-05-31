@@ -92,6 +92,37 @@ export type DeepReadonly<T> = {
 export type Nullable<T> = T | null;
 
 /**
+ * Makes all properties in `T` optional except for `id`, which remains required.
+ *
+ * @template T - The base interface or type.
+ *
+ * @example
+ *
+ * ```ts
+ * interface Device {
+ *
+ *   id: string;
+ *   name: string;
+ *   mac: string;
+ * }
+ *
+ * type UserUpdate = PartialWithId<User>;
+ *
+ * // Valid: Only 'id' is required, others are optional.
+ * const update: DeviceUpdate = { id: "123" };
+ *
+ * // Valid: Extra properties can be provided.
+ * const another: DeviceUpdate = { id: "456", name: "SomeDevice" };
+ *
+ * // Error: 'id' is missing.
+ * const error: DeviceUpdate = { name: "SomeOtherDevice" }; // TypeScript error
+ * ```
+ *
+ * @category Utilities
+ */
+export type PartialWithId<T, K extends keyof T> = Partial<T> & Pick<T, K>;
+
+/**
  * Logging interface for Homebridge plugins.
  *
  * This interface defines the standard logging methods (`debug`, `info`, `warn`, `error`) that plugins should use to output log messages at different severity levels. It

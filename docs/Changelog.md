@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.21.0 (2025-06-01)
+  * Improvement: evolved `audioEncoder` semantics to support multiple encoding types (AAC_LC and AAC_ELD).
+  * Improvement: added additional semantics to `FfmpegRecordingProcess` and `FfmpegLivestreamProcess`.
+  * Housekeeping.
+
 ## 1.20.0 (2025-05-31)
   * Improvement: evolving FFmpeg-related semantics for better future-proofing and growth. Now includes the ability to specify which audio and video stream to use when recording or segmenting into a livestream.
   * Fix: address audio sync issues when recording HKSV events.

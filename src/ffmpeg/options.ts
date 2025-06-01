@@ -22,7 +22,7 @@
  *
  * @module
  */
-import { H264Level, H264Profile, type Logging } from "homebridge";
+import { AudioRecordingCodecType, H264Level, H264Profile, type Logging } from "homebridge";
 import { HOMEKIT_STREAMING_HEADROOM, RPI_GPU_MINIMUM } from "./settings.js";
 import type { FfmpegCodecs } from "./codecs.js";
 import type { HomebridgePluginLogging } from "../util.js";
@@ -430,9 +430,16 @@ export class FfmpegOptions {
   /**
    * Returns the audio encoder arguments to use when transcoding.
    *
+   * @param codec            - Optional. Codec to encode (`AudioRecordingCodecType.AAC_ELD` (default) or `AudioRecordingCodecType.AAC_LC`).
    * @returns Array of FFmpeg command-line arguments for audio encoding.
+   *
+   * @example
+   *
+   * ```ts
+   * const args = ffmpegOpts.audioEncoder();
+   * ```
    */
-  public get audioEncoder(): string[] {
+  public audioEncoder(codec = AudioRecordingCodecType.AAC_ELD): string[] {
 
     // If we don't have libfdk_aac available to us, we're essentially dead in the water.
     let encoderOptions: string[] = [];
@@ -452,15 +459,30 @@ export class FfmpegOptions {
         audioOptions.push(
 
           "-codec:a", "libfdk_aac",
-          "-afterburner", "1",
-          "-eld_v2", "1"
+          "-afterburner", "1"
         );
 
-        // If we're using Jellyfin's FFmpeg, it's libfdk_aac is broken and crashes when using spectral band replication.
-        if(!/-Jellyfin$/.test(this.config.codecSupport.ffmpegVersion)) {
+        switch(codec) {
 
-          // -eld_sbr 1                  Use spectral band replication to further enhance audio.
-          audioOptions.push("-eld_sbr", "1");
+          case AudioRecordingCodecType.AAC_ELD:
+
+            audioOptions.push("-eld_v2", "1");
+
+            // If we're using Jellyfin's FFmpeg, it's libfdk_aac is broken and crashes when using spectral band replication.
+            if(!/-Jellyfin$/.test(this.config.codecSupport.ffmpegVersion)) {
+
+              // -eld_sbr 1                  Use spectral band replication to further enhance audio.
+              audioOptions.push("-eld_sbr", "1");
+            }
+
+            break;
+
+          case AudioRecordingCodecType.AAC_LC:
+          default:
+
+            audioOptions.push("-vbr", "4");
+
+            break;
         }
       }
 
@@ -486,9 +508,25 @@ export class FfmpegOptions {
         // -aac_at_mode cvbr             Use the constrained variable bitrate setting to allow the encoder to optimize audio within the requested bitrates.
         encoderOptions = [
 
-          "-codec:a", "aac_at",
-          "-aac_at_mode", "cvbr"
+          "-codec:a", "aac_at"
         ];
+
+        switch(codec) {
+
+          case AudioRecordingCodecType.AAC_ELD:
+
+            encoderOptions.push("-aac_at_mode", "cvbr");
+
+            break;
+
+          case AudioRecordingCodecType.AAC_LC:
+          default:
+
+            encoderOptions.push("-aac_at_mode", "vbr");
+            encoderOptions.push("-q:a", "2");
+
+            break;
+        }
 
         break;
 
@@ -515,7 +553,7 @@ export class FfmpegOptions {
   /**
    * Returns the video decoder arguments to use for decoding video.
    *
-   * @param codec            - Optional. Codec to decode ("h264" or "hevc").
+   * @param codec            - Optional. Codec to decode (`"h264"` (default) or `"hevc"`).
    * @returns Array of FFmpeg command-line arguments for video decoding or an empty array if the codec isn't supported.
    *
    * @example

@@ -116,22 +116,6 @@ Returns the audio decoder to use when decoding.
 
 The FFmpeg audio decoder string.
 
-##### audioEncoder
-
-###### Get Signature
-
-```ts
-get audioEncoder(): string[];
-```
-
-Returns the audio encoder arguments to use when transcoding.
-
-###### Returns
-
-`string`[]
-
-Array of FFmpeg command-line arguments for audio encoding.
-
 ##### cropFilter
 
 ###### Get Signature
@@ -165,6 +149,32 @@ Returns the maximum pixel count supported by a specific hardware encoder on the 
 Maximum supported pixel count.
 
 #### Methods
+
+##### audioEncoder()
+
+```ts
+audioEncoder(codec): string[];
+```
+
+Returns the audio encoder arguments to use when transcoding.
+
+###### Parameters
+
+| Parameter | Type | Default value | Description |
+| ------ | ------ | ------ | ------ |
+| `codec` | `AudioRecordingCodecType` | `AudioRecordingCodecType.AAC_ELD` | Optional. Codec to encode (`AudioRecordingCodecType.AAC_ELD` (default) or `AudioRecordingCodecType.AAC_LC`). |
+
+###### Returns
+
+`string`[]
+
+Array of FFmpeg command-line arguments for audio encoding.
+
+###### Example
+
+```ts
+const args = ffmpegOpts.audioEncoder();
+```
 
 ##### recordEncoder()
 
@@ -224,7 +234,7 @@ Returns the video decoder arguments to use for decoding video.
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `codec` | `string` | `"h264"` | Optional. Codec to decode ("h264" or "hevc"). |
+| `codec` | `string` | `"h264"` | Optional. Codec to decode (`"h264"` (default) or `"hevc"`). |
 
 ###### Returns
 

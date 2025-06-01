@@ -37,11 +37,11 @@ const initSegment = await process.getInitSegment();
 
 #### See
 
-FfmpegFmp4Process
+FfmpegFMp4Process
 
 #### Extends
 
-- `FfmpegFmp4Process`
+- `FfmpegFMp4Process`
 
 #### Constructors
 
@@ -63,7 +63,7 @@ Constructs a new FFmpeg livestream process.
 | ------ | ------ | ------ | ------ |
 | `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | `undefined` | FFmpeg configuration options. |
 | `recordingConfig` | `CameraRecordingConfiguration` | `undefined` | HomeKit recording configuration for the session. |
-| `livestreamOptions` | [`PartialWithId`](../util.md#partialwithid)\<[`Fmp4LivestreamOptions`](#fmp4livestreamoptions), `"url"`\> | `undefined` | livestream segmenting options. |
+| `livestreamOptions` | [`PartialWithId`](../util.md#partialwithid)\<[`FMp4LivestreamOptions`](#fmp4livestreamoptions), `"url"`\> | `undefined` | livestream segmenting options. |
 | `isVerbose` | `boolean` | `false` | If `true`, enables more verbose logging for debugging purposes. Defaults to `false`. |
 
 ###### Returns
@@ -73,18 +73,18 @@ Constructs a new FFmpeg livestream process.
 ###### Overrides
 
 ```ts
-FfmpegFmp4Process.constructor
+FfmpegFMp4Process.constructor
 ```
 
 #### Properties
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFmp4Process.hasError` |
-| <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFmp4Process.isEnded` |
-| <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFmp4Process.isStarted` |
-| <a id="istimedout"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFmp4Process.isTimedOut` |
-| <a id="segmentlength"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFmp4Process.segmentLength` |
+| <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFMp4Process.hasError` |
+| <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
+| <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
+| <a id="istimedout"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFMp4Process.isTimedOut` |
+| <a id="segmentlength"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFMp4Process.segmentLength` |
 
 #### Accessors
 
@@ -117,7 +117,7 @@ The initialization segment Buffer, or `null` if not yet generated.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.initSegment
+FfmpegFMp4Process.initSegment
 ```
 
 ##### stderr
@@ -139,7 +139,7 @@ The standard error stream, or `null` if not available.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stderr
+FfmpegFMp4Process.stderr
 ```
 
 ##### stdin
@@ -161,7 +161,7 @@ The standard input stream, or `null` if not available.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stdin
+FfmpegFMp4Process.stdin
 ```
 
 ##### stdout
@@ -183,7 +183,7 @@ The standard output stream, or `null` if not available.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stdout
+FfmpegFMp4Process.stdout
 ```
 
 #### Methods
@@ -211,7 +211,7 @@ const initSegment = await process.getInitSegment();
 ###### Overrides
 
 ```ts
-FfmpegFmp4Process.getInitSegment
+FfmpegFMp4Process.getInitSegment
 ```
 
 ##### segmentGenerator()
@@ -244,7 +244,7 @@ for await(const segment of process.segmentGenerator()) {
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.segmentGenerator
+FfmpegFMp4Process.segmentGenerator
 ```
 
 ##### start()
@@ -268,7 +268,7 @@ process.start();
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.start
+FfmpegFMp4Process.start
 ```
 
 ##### stop()
@@ -298,7 +298,7 @@ process.stop();
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stop
+FfmpegFMp4Process.stop
 ```
 
 ***
@@ -316,11 +316,11 @@ process.start();
 
 #### See
 
-FfmpegFmp4Process
+FfmpegFMp4Process
 
 #### Extends
 
-- `FfmpegFmp4Process`
+- `FfmpegFMp4Process`
 
 #### Constructors
 
@@ -330,7 +330,7 @@ FfmpegFmp4Process
 new FfmpegRecordingProcess(
    options, 
    recordingConfig, 
-   fmp4Options, 
+   fMp4Options, 
    isVerbose): FfmpegRecordingProcess;
 ```
 
@@ -342,7 +342,7 @@ Constructs a new FFmpeg recording process for HKSV events.
 | ------ | ------ | ------ | ------ |
 | `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | `undefined` | FFmpeg configuration options. |
 | `recordingConfig` | `CameraRecordingConfiguration` | `undefined` | HomeKit recording configuration for the session. |
-| `fmp4Options` | `Partial`\<[`Fmp4RecordingOptions`](#fmp4recordingoptions)\> | `{}` | fMP4 recording options. |
+| `fMp4Options` | `Partial`\<[`FMp4RecordingOptions`](#fmp4recordingoptions)\> | `{}` | fMP4 recording options. |
 | `isVerbose` | `boolean` | `false` | If `true`, enables more verbose logging for debugging purposes. Defaults to `false`. |
 
 ###### Returns
@@ -352,18 +352,18 @@ Constructs a new FFmpeg recording process for HKSV events.
 ###### Overrides
 
 ```ts
-FfmpegFmp4Process.constructor
+FfmpegFMp4Process.constructor
 ```
 
 #### Properties
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="haserror-1"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFmp4Process.hasError` |
-| <a id="isended-1"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFmp4Process.isEnded` |
-| <a id="isstarted-1"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFmp4Process.isStarted` |
-| <a id="istimedout-1"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFmp4Process.isTimedOut` |
-| <a id="segmentlength-1"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFmp4Process.segmentLength` |
+| <a id="haserror-1"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFMp4Process.hasError` |
+| <a id="isended-1"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
+| <a id="isstarted-1"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
+| <a id="istimedout-1"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFMp4Process.isTimedOut` |
+| <a id="segmentlength-1"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFMp4Process.segmentLength` |
 
 #### Accessors
 
@@ -396,7 +396,7 @@ The initialization segment Buffer, or `null` if not yet generated.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.initSegment
+FfmpegFMp4Process.initSegment
 ```
 
 ##### stderr
@@ -418,7 +418,7 @@ The standard error stream, or `null` if not available.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stderr
+FfmpegFMp4Process.stderr
 ```
 
 ##### stdin
@@ -440,7 +440,7 @@ The standard input stream, or `null` if not available.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stdin
+FfmpegFMp4Process.stdin
 ```
 
 ##### stdout
@@ -462,7 +462,7 @@ The standard output stream, or `null` if not available.
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stdout
+FfmpegFMp4Process.stdout
 ```
 
 #### Methods
@@ -497,7 +497,7 @@ for await(const segment of process.segmentGenerator()) {
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.segmentGenerator
+FfmpegFMp4Process.segmentGenerator
 ```
 
 ##### start()
@@ -521,7 +521,7 @@ process.start();
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.start
+FfmpegFMp4Process.start
 ```
 
 ##### stop()
@@ -551,49 +551,71 @@ process.stop();
 ###### Inherited from
 
 ```ts
-FfmpegFmp4Process.stop
+FfmpegFMp4Process.stop
 ```
 
 ## Other
 
-### Fmp4LivestreamOptions
+### FMp4BaseOptions
 
-Options for configuring an fMP4 recording or livestream session.
+Base options for configuring an fMP4 recording or livestream session. These options aren't used directly but are inherited and used by it's descendents.
 
-#### Extends
+#### Extended by
 
-- `Fmp4CommonOptions`
+- [`FMp4RecordingOptions`](#fmp4recordingoptions)
+- [`FMp4LivestreamOptions`](#fmp4livestreamoptions)
 
 #### Properties
 
-| Property | Type | Description | Inherited from |
-| ------ | ------ | ------ | ------ |
-| <a id="audiostream"></a> `audioStream` | `number` | - | `Fmp4CommonOptions.audioStream` |
-| <a id="codec"></a> `codec` | `string` | - | `Fmp4CommonOptions.codec` |
-| <a id="enableaudio"></a> `enableAudio` | `boolean` | - | `Fmp4CommonOptions.enableAudio` |
-| <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | - | `Fmp4CommonOptions.hardwareTranscoding` |
-| <a id="url"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
-| <a id="videostream"></a> `videoStream` | `number` | - | `Fmp4CommonOptions.videoStream` |
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="audiostream"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). |
+| <a id="codec"></a> `codec` | `string` | The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`. |
+| <a id="enableaudio"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. |
+| <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. |
+| <a id="videostream"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). |
 
 ***
 
-### Fmp4RecordingOptions
+### FMp4LivestreamOptions
 
 Options for configuring an fMP4 recording or livestream session.
 
 #### Extends
 
-- `Fmp4CommonOptions`
+- [`FMp4BaseOptions`](#fmp4baseoptions)
 
 #### Properties
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
-| <a id="audiostream-1"></a> `audioStream` | `number` | - | `Fmp4CommonOptions.audioStream` |
-| <a id="codec-1"></a> `codec` | `string` | - | `Fmp4CommonOptions.codec` |
-| <a id="enableaudio-1"></a> `enableAudio` | `boolean` | - | `Fmp4CommonOptions.enableAudio` |
+| <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
+| <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
+| <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
+| <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
+| <a id="url"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
+| <a id="videostream-1"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
+
+***
+
+### FMp4RecordingOptions
+
+Options for configuring an fMP4 recording or livestream session.
+
+#### Extends
+
+- [`FMp4BaseOptions`](#fmp4baseoptions)
+
+#### Properties
+
+| Property | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ |
+| <a id="audiostream-2"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
+| <a id="codec-2"></a> `codec` | `string` | The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
+| <a id="enableaudio-2"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="fps"></a> `fps` | `number` | The video frames per second for the session. | - |
-| <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | - | `Fmp4CommonOptions.hardwareTranscoding` |
+| <a id="hardwaretranscoding-2"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
 | <a id="probesize"></a> `probesize` | `number` | Number of bytes to analyze for stream information. | - |
 | <a id="timeshift"></a> `timeshift` | `number` | Timeshift offset for event-based recording (in milliseconds). | - |
-| <a id="videostream-1"></a> `videoStream` | `number` | - | `Fmp4CommonOptions.videoStream` |
+| <a id="transcodeaudio"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. | - |
+| <a id="videostream-2"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |

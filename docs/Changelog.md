@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.21.1 (2025-06-02)
+  * Improvement: adjust `audioEncoder` semantics when we use `aac_at` to use `cbr` rather than `cvbr` for better HomeKit compatibility especially in very low bitrate scenarios.
+  * Housekeeping.
+
 ## 1.21.0 (2025-06-01)
   * Improvement: evolved `audioEncoder` semantics to support multiple encoding types (AAC_LC and AAC_ELD).
   * Improvement: added additional semantics to `FfmpegRecordingProcess` and `FfmpegLivestreamProcess`.

@@ -515,7 +515,7 @@ export class FfmpegOptions {
 
           case AudioRecordingCodecType.AAC_ELD:
 
-            encoderOptions.push("-aac_at_mode", "cvbr");
+            encoderOptions.push("-aac_at_mode", "cbr");
 
             break;
 

@@ -179,7 +179,8 @@ class FfmpegFMp4Process extends FfmpegProcess {
     // -hide_banner                  Suppress printing the startup banner in FFmpeg.
     // -nostats                      Suppress printing progress reports while encoding in FFmpeg.
     // -fflags flags                 Set the format flags to discard any corrupt packets rather than exit, generate a presentation timestamp if it's missing, and ignore
-    //                               the decoding timestamp.
+    //                               the decoding timestamp. Adjusting timestamps is a necessity if we want to ensure we keep audio and video in sync, especially when
+    //                               using hardware acceleration.
     // -err_detect ignore_err        Ignore decoding errors and continue rather than exit.
     // -max_delay 500000             Set an upper limit on how much time FFmpeg can take in demuxing packets, in microseconds.
     this.commandLineArgs = [

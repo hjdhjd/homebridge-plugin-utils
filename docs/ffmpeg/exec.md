@@ -94,6 +94,7 @@ const exec = new FfmpegExec(options, ["-i", "input.mp4", "-f", "null", "-"]);
 | <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | [`FfmpegProcess`](process.md#ffmpegprocess).[`hasError`](process.md#ffmpegprocess#haserror) |
 | <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isEnded`](process.md#ffmpegprocess#isended) |
 | <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isStarted`](process.md#ffmpegprocess#isstarted) |
+| <a id="process"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | [`FfmpegProcess`](process.md#ffmpegprocess).[`process`](process.md#ffmpegprocess#process) |
 
 #### Accessors
 
@@ -193,6 +194,39 @@ if(result) {
   console.log("FFmpeg output:", result.stdout.toString());
 }
 ```
+
+##### start()
+
+```ts
+start(
+   commandLineArgs?, 
+   callback?, 
+   errorHandler?): void;
+```
+
+Starts the FFmpeg process with the provided command line and callback.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `commandLineArgs?` | `string`[] | Optional. Arguments for FFmpeg command line. |
+| `callback?` | `StreamRequestCallback` | Optional. Callback invoked when streaming is ready. |
+| `errorHandler?` | (`errorMessage`) => `void` \| `Promise`\<`void`\> | Optional. Function called if FFmpeg fails to start or terminates with error. |
+
+###### Returns
+
+`void`
+
+###### Example
+
+```ts
+process.start(["-i", "input.mp4", "-f", "null", "-"]);
+```
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`start`](process.md#ffmpegprocess#start)
 
 ##### stop()
 

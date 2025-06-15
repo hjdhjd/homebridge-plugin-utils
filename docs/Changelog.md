@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.22.0 (2025-06-14)
+  * Improvement: added AV1 support for decoding in FFmpeg.
+  * Improvement: exposed the `start` method and the underlying `ChildProcess` in `FfmpegProcess` for use by consumers.
+  * Housekeeping.
+
 ## 1.21.1 (2025-06-02)
   * Improvement: adjust `audioEncoder` semantics when we use `aac_at` to use `cbr` rather than `cvbr` for better HomeKit compatibility especially in very low bitrate scenarios.
   * Housekeeping.

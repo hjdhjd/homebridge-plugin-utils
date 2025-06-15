@@ -234,7 +234,7 @@ Returns the video decoder arguments to use for decoding video.
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `codec` | `string` | `"h264"` | Optional. Codec to decode (`"h264"` (default) or `"hevc"`). |
+| `codec` | `string` | `"h264"` | Optional. Codec to decode (`"av1"`, `"h264"` (default), or `"hevc"`). |
 
 ###### Returns
 

@@ -84,6 +84,7 @@ FfmpegFMp4Process.constructor
 | <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
 | <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
 | <a id="istimedout"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFMp4Process.isTimedOut` |
+| <a id="process"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | `FfmpegFMp4Process.process` |
 | <a id="segmentlength"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFMp4Process.segmentLength` |
 
 #### Accessors
@@ -363,6 +364,7 @@ FfmpegFMp4Process.constructor
 | <a id="isended-1"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
 | <a id="isstarted-1"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
 | <a id="istimedout-1"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFMp4Process.isTimedOut` |
+| <a id="process-1"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | `FfmpegFMp4Process.process` |
 | <a id="segmentlength-1"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFMp4Process.segmentLength` |
 
 #### Accessors
@@ -570,7 +572,7 @@ Base options for configuring an fMP4 recording or livestream session. These opti
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="audiostream"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). |
-| <a id="codec"></a> `codec` | `string` | The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`. |
+| <a id="codec"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. |
 | <a id="enableaudio"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. |
 | <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. |
 | <a id="videostream"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). |
@@ -590,7 +592,7 @@ Options for configuring an fMP4 recording or livestream session.
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
 | <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
-| <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
+| <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
 | <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
 | <a id="url"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
@@ -611,7 +613,7 @@ Options for configuring an fMP4 recording or livestream session.
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
 | <a id="audiostream-2"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
-| <a id="codec-2"></a> `codec` | `string` | The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
+| <a id="codec-2"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
 | <a id="enableaudio-2"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="fps"></a> `fps` | `number` | The video frames per second for the session. | - |
 | <a id="hardwaretranscoding-2"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |

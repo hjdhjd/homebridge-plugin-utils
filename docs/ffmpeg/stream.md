@@ -86,7 +86,7 @@ failures.
 | `sessionId` | `string` | The HomeKit session identifier for this stream. |
 | `ffmpegOptions` | [`FfmpegOptions`](options.md#ffmpegoptions) | The FFmpeg configuration options. |
 | `commandLineArgs` | `string`[] | FFmpeg command-line arguments. |
-| `returnPort?` | \{ `addressVersion`: `string`; `port`: `number`; \} | Optional. UDP port info for the return stream (used except for two-way audio). |
+| `returnPort?` | \{ `addressVersion`: `string`; `port`: `number`; \} | Optional. UDP port info for talkback support (used for two-way audio in HomeKit for cameras that support it). |
 | `returnPort.addressVersion?` | `string` | - |
 | `returnPort.port?` | `number` | - |
 | `callback?` | `StreamRequestCallback` | Optional. Callback invoked when the stream is ready or errors occur. |
@@ -112,6 +112,7 @@ const process = new FfmpegStreamingProcess(delegate, sessionId, ffmpegOptions, c
 | <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | [`FfmpegProcess`](process.md#ffmpegprocess).[`hasError`](process.md#ffmpegprocess#haserror) |
 | <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isEnded`](process.md#ffmpegprocess#isended) |
 | <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isStarted`](process.md#ffmpegprocess#isstarted) |
+| <a id="process"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | [`FfmpegProcess`](process.md#ffmpegprocess).[`process`](process.md#ffmpegprocess#process) |
 
 #### Accessors
 
@@ -203,6 +204,39 @@ The standard output stream, or `null` if not available.
 [`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#ffmpegprocess#stdout)
 
 #### Methods
+
+##### start()
+
+```ts
+start(
+   commandLineArgs?, 
+   callback?, 
+   errorHandler?): void;
+```
+
+Starts the FFmpeg process with the provided command line and callback.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `commandLineArgs?` | `string`[] | Optional. Arguments for FFmpeg command line. |
+| `callback?` | `StreamRequestCallback` | Optional. Callback invoked when streaming is ready. |
+| `errorHandler?` | (`errorMessage`) => `void` \| `Promise`\<`void`\> | Optional. Function called if FFmpeg fails to start or terminates with error. |
+
+###### Returns
+
+`void`
+
+###### Example
+
+```ts
+process.start(["-i", "input.mp4", "-f", "null", "-"]);
+```
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`start`](process.md#ffmpegprocess#start)
 
 ##### stop()
 

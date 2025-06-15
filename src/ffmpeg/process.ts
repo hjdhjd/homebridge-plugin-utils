@@ -108,7 +108,7 @@ export class FfmpegProcess extends EventEmitter {
   /**
    * The underlying Node.js ChildProcess instance for the FFmpeg process.
    */
-  protected process: Nullable<ChildProcessWithoutNullStreams>;
+  public process: Nullable<ChildProcessWithoutNullStreams>;
 
   /**
    * Accumulated log lines from standard error for error reporting and debugging.
@@ -215,7 +215,7 @@ export class FfmpegProcess extends EventEmitter {
    * process.start(["-i", "input.mp4", "-f", "null", "-"]);
    * ```
    */
-  protected start(commandLineArgs?: string[], callback?: StreamRequestCallback, errorHandler?: (errorMessage: string) => Promise<void> | void): void {
+  public start(commandLineArgs?: string[], callback?: StreamRequestCallback, errorHandler?: (errorMessage: string) => Promise<void> | void): void {
 
     // Prepared our FFmpeg process.
     if(!this.prepareProcess(commandLineArgs, callback)) {

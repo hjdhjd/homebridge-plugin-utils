@@ -107,7 +107,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
    * @param sessionId        - The HomeKit session identifier for this stream.
    * @param ffmpegOptions    - The FFmpeg configuration options.
    * @param commandLineArgs  - FFmpeg command-line arguments.
-   * @param returnPort       - Optional. UDP port info for the return stream (used except for two-way audio).
+   * @param returnPort       - Optional. UDP port info for talkback support (used for two-way audio in HomeKit for cameras that support it).
    * @param callback         - Optional. Callback invoked when the stream is ready or errors occur.
    *
    * @example

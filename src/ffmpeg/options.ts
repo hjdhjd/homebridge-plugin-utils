@@ -402,7 +402,7 @@ export class FfmpegOptions {
           // Let's see if we have Intel QuickSync hardware decoding available to us.
           if(this.config.codecSupport.hasHwAccel("qsv") &&
             this.config.codecSupport.hasDecoder("h264", "h264_qsv") && this.config.codecSupport.hasEncoder("h264", "h264_qsv") &&
-            this.config.codecSupport.hasDecoder("hevc", "hevc_qsv") && this.config.codecSupport.hasEncoder("hevc", "hevc_qsv")) {
+            this.config.codecSupport.hasDecoder("hevc", "hevc_qsv")) {
 
             this.config.hardwareDecoding = true;
             this.hwPixelFormat.push("qsv", "yuv420p");
@@ -553,7 +553,7 @@ export class FfmpegOptions {
   /**
    * Returns the video decoder arguments to use for decoding video.
    *
-   * @param codec            - Optional. Codec to decode (`"h264"` (default) or `"hevc"`).
+   * @param codec            - Optional. Codec to decode (`"av1"`, `"h264"` (default), or `"hevc"`).
    * @returns Array of FFmpeg command-line arguments for video decoding or an empty array if the codec isn't supported.
    *
    * @example
@@ -566,6 +566,12 @@ export class FfmpegOptions {
 
 
     switch(codec.toLowerCase()) {
+
+      case "av1":
+
+        codec = "av1";
+
+        break;
 
       case "h264":
 
@@ -589,6 +595,7 @@ export class FfmpegOptions {
     // Intel QSV decoder to codec mapping.
     const QSV_DECODER: { [index: string]: string } = {
 
+      "av1": "av1_qsv",
       "h264": "h264_qsv",
       "hevc": "hevc_qsv"
     };
@@ -631,7 +638,7 @@ export class FfmpegOptions {
           // h264_qsv is the Intel Quick Sync Video hardware encoder and decoder.
           //
           // -hwaccel qsv                    Select Quick Sync Video to enable hardware-accelerated H.264 decoding.
-          // -codec:v h264_qsv or hevc_qsv   Select the Quick Sync Video codec for hardware-accelerated H.264 or HEVC processing.
+          // -codec:v X_qsv                  Select the Quick Sync Video codec for hardware-accelerated AV1, H.264, or HEVC processing.
           decoderOptions = [
 
             "-hwaccel", "qsv",

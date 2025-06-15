@@ -32,7 +32,7 @@ import { once } from "node:events";
  * Base options for configuring an fMP4 recording or livestream session. These options aren't used directly but are inherited and used by it's descendents.
  *
  * @property audioStream          - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
- * @property codec                - The codec for the input video stream. Valid values are `h264` and `hevc`. Defaults to `h264`.
+ * @property codec                - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`.
  * @property enableAudio          - Indicates whether to enable audio or not.
  * @property hardwareTranscoding  - Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`.
  * @property videoStream          - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
@@ -128,7 +128,6 @@ class FfmpegFMp4Process extends FfmpegProcess {
   private isLoggingErrors: boolean;
   public isTimedOut: boolean;
   private recordingBuffer: { data: Buffer, header: Buffer, length: number, type: string }[];
-  private recordingConfig: CameraRecordingConfiguration;
   public segmentLength?: number;
 
   /**
@@ -170,9 +169,6 @@ class FfmpegFMp4Process extends FfmpegProcess {
     fMp4Options.hardwareTranscoding ??= this.options.config.hardwareTranscoding;
     fMp4Options.transcodeAudio ??= true;
     fMp4Options.videoStream ??= 0;
-
-    // Save our recording configuration.
-    this.recordingConfig = recordingConfig;
 
     // Configure our video parameters for our input:
     //
@@ -352,23 +348,23 @@ class FfmpegFMp4Process extends FfmpegProcess {
         if(!header.length) {
 
           // Grab the header. The first four bytes represents the length of the entire box. Second four bytes represent the box type.
-          header = buffer.slice(0, 8);
+          header = buffer.subarray(0, 8);
 
           // Now we retrieve the length of the box.
           dataLength = header.readUInt32BE(0);
 
           // Get the type of the box. This is always a string and has a funky history to it that makes for an interesting read!
-          type = header.slice(4).toString();
+          type = header.subarray(4).toString();
 
           // Finally, we get the data portion of the box.
-          data = buffer.slice(8, dataLength);
+          data = buffer.subarray(8, dataLength);
 
           // Mark our data offset so we account for the length of the data header and subtract it from the overall length to capture just the data portion.
           dataLength -= offset = 8;
         } else {
 
           // Grab the data from our buffer.
-          data = buffer.slice(0, dataLength);
+          data = buffer.subarray(0, dataLength);
           offset = 0;
         }
 
@@ -423,7 +419,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
         }
 
         // If there's anything left in the buffer, move us to the new box and let's keep iterating.
-        buffer = buffer.slice(offset + dataLength);
+        buffer = buffer.subarray(offset + dataLength);
         dataLength = 0;
       }
     });

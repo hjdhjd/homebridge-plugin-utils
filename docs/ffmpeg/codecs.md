@@ -135,6 +135,22 @@ We are only trying to detect host capabilities to the extent they impact which F
 
 `string`
 
+##### intelGeneration
+
+###### Get Signature
+
+```ts
+get intelGeneration(): number;
+```
+
+Returns the Intel CPU generation, if we're on Linux and have an Intel processor.
+
+###### Returns
+
+`number`
+
+Returns the CPU generation or 0 if it can't be detected or an invalid platform.
+
 #### Methods
 
 ##### hasDecoder()

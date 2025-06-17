@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.23.0 (2025-06-17)
+  * Improvement: added `intelGeneration` for better CPU detection of Intel CPU capabilities, particularly as it relates to AV1.
+  * Improvement: AV1 decoding will be disabled if an Intel CPU below the 11th generation, since they don't have AV1 decoding available.
+  * Housekeeping.
+
 ## 1.22.0 (2025-06-14)
   * Improvement: added AV1 support for decoding in FFmpeg.
   * Improvement: exposed the `start` method and the underlying `ChildProcess` in `FfmpegProcess` for use by consumers.

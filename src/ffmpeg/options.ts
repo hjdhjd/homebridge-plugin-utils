@@ -593,7 +593,7 @@ export class FfmpegOptions {
     }
 
     // Intel QSV decoder to codec mapping.
-    const QSV_DECODER: { [index: string]: string } = {
+    const qsvDecoder: { [index: string]: string } = {
 
       "av1": "av1_qsv",
       "h264": "h264_qsv",
@@ -638,12 +638,13 @@ export class FfmpegOptions {
           // h264_qsv is the Intel Quick Sync Video hardware encoder and decoder.
           //
           // -hwaccel qsv                    Select Quick Sync Video to enable hardware-accelerated H.264 decoding.
-          // -codec:v X_qsv                  Select the Quick Sync Video codec for hardware-accelerated AV1, H.264, or HEVC processing.
-          decoderOptions = [
+          // -codec:v X_qsv                  Select the Quick Sync Video codec for hardware-accelerated AV1, H.264, or HEVC processing. AV1 decoding isn't available
+          //                                 before 11th generation Intel CPUs.
+          decoderOptions = ((codec === "av1") && (this.codecSupport.intelGeneration < 11)) ? [] : [
 
             "-hwaccel", "qsv",
             "-hwaccel_output_format", "qsv",
-            "-codec:v", QSV_DECODER[codec]
+            "-codec:v", qsvDecoder[codec]
           ];
 
           break;

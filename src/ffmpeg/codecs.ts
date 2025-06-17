@@ -96,6 +96,7 @@ export class FfmpegCodecs {
   private _ffmpegVersion: string;
   private _gpuMem: number;
   private _hostSystem: string;
+  private _intelGeneration: number;
   private readonly log: HomebridgePluginLogging | Logging;
   private readonly ffmpegCodecs: { [index: string]: { decoders: string[], encoders: string[] } };
   private readonly ffmpegHwAccels: { [index: string]: boolean };
@@ -115,6 +116,7 @@ export class FfmpegCodecs {
     this._gpuMem = 0;
     this._ffmpegVersion = "";
     this._hostSystem = "";
+    this._intelGeneration = 0;
     this.ffmpegExec = options.ffmpegExec ?? "ffmpeg";
     this.ffmpegCodecs = {};
     this.ffmpegHwAccels = {};
@@ -279,6 +281,16 @@ export class FfmpegCodecs {
     return this._hostSystem;
   }
 
+  /**
+   * Returns the Intel CPU generation, if we're on Linux and have an Intel processor.
+   *
+   * @returns Returns the CPU generation or 0 if it can't be detected or an invalid platform.
+   */
+  public get intelGeneration(): number {
+
+    return this._intelGeneration;
+  }
+
   // Probe our video processor's version.
   private async probeFfmpegVersion(): Promise<boolean> {
 
@@ -423,6 +435,37 @@ export class FfmpegCodecs {
         } catch(error) {
 
           // We aren't especially concerned with errors here, given we're just trying to ascertain the system information through hints.
+        }
+
+        // Identify what generation of Intel CPU we have if we're on Intel.
+        if(cpus()[0].model.includes("Intel")) {
+
+          // Extract the CPU model.
+          const cpuModel = cpus()[0].model.match(/Intel.*Core.*i\d+-(\d{3,5})/i);
+
+          this._intelGeneration = 0;
+
+          if(cpuModel && cpuModel[1]) {
+
+            // Grab the individual SKU as both a number and string.
+            const skuStr = cpuModel[1];
+            const skuNum = Number(skuStr);
+
+            // Now deduce the CPU generation.
+            if(skuNum < 1000) {
+
+              // First generation CPUs are three digit SKUs.
+              this._intelGeneration = 1;
+            } else if(skuStr.length > 4) {
+
+              // For five-digit SKUs, the generation are the leading digits before the last three.
+              this._intelGeneration = Number(skuStr.slice(0, skuStr.length - 3));
+            } else {
+
+              // Finally, for four-digit SKUs, the generation is the first digit.
+              this._intelGeneration = Number(skuStr.charAt(0));
+            }
+          }
         }
 
         break;

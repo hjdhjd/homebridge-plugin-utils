@@ -317,7 +317,7 @@ export async function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
 /**
  * Camel case a string.
  *
- * @param input           - The string to camel case.
+ * @param input - The string to camel case.
  *
  * @returns Returns the camel cased string.
  *
@@ -335,28 +335,66 @@ export function toCamelCase(input: string): string {
 }
 
 /**
- * Validate an accessory name according to HomeKit naming conventions.
+ * Sanitize an accessory name according to HomeKit naming conventions.
  *
- * @param name            - The name to validate.
+ * @param name - The name to validate.
  *
- * @returns Returns the HomeKit-validated version of the name, replacing invalid characters with a space and squashing multiple spaces.
+ * @returns Returns the HomeKit-sanitized version of the name, replacing invalid characters with a space and squashing multiple spaces.
  *
- * @remarks This validates names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names):
+ * @remarks This sanitizes names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names)
+ * and HAP specification documentation:
  *
- * - Use only alphanumeric, space, and apostrophe characters.
- * - Start and end with an alphabetic or numeric character.
- * - Don’t include emojis.
+ * - Starts and ends with a letter or number. Exception: may end with a period.
+ * - May have the following special characters: -"',.#&.
+ * - Must not include emojis.
  *
  * @example
  * ```ts
- * validateName("Test.Switch")
+ * sanitizeName("Test|Switch")
  * ```ts
  *
- * Returns: `Test Switch`, replacing the period (an invalid character in HomeKit's naming ruleset) with a space.
+ * Returns: `Test Switch`, replacing the pipe (an invalid character in HomeKit's naming ruleset) with a space.
  *
  * @category Utilities
  */
-export function validateName(name: string): string {
+export function sanitizeName(name: string): string {
 
-  return name.replace(/[^\p{L}\p{N} ']+/gu, " ").replace(/\s+/g, " ").trim();
+  // Here are the steps we're taking to sanitize names for HomeKit:
+  //
+  //   - Replace any disallowed char (including emojis) with a space.
+  //   - Collapse multiple spaces to one.
+  //   - Trim spaces at the beginning and end of the string.
+  //   - Strip any leading non-letter/number.
+  //   - Collapse two or more trailing periods into one.
+  //   - Remove any other trailing char that's not letter/number/period.
+  return name.replace(/[^\p{L}\p{N}\-"'.,#&\s]/gu, " ").replace(/\s+/g, " ").trim().replace(/^[^\p{L}\p{N}]+/u, "").replace(/\.{2,}$/g, ".").
+    replace(/[^\p{L}\p{N}.]$/u, "");
+}
+
+/**
+ * Validate an accessory name according to HomeKit naming conventions.
+ *
+ * @param name - The name to validate.
+ *
+ * @returns Returns `true` if the name passes HomeKit's naming rules, `false` otherwise.
+ *
+ * @remarks This validates names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names)
+ * and HAP specification documentation:
+ *
+ * - Starts and ends with a letter or number. Exception: may end with a period.
+ * - May have the following special characters: -"',.#&.
+ * - Must not include emojis.
+ *
+ * @example
+ * ```ts
+ * validateName("Test|Switch")
+ * ```ts
+ *
+ * Returns: `false`.
+ *
+ * @category Utilities
+ */
+export function validateName(name: string): boolean {
+
+  return /^(?!.*\p{Extended_Pictographic})(?=^[\p{L}\p{N}].*[\p{L}\p{N}.]$)[\p{L}\p{N}\-"'.,#&]+$/u.test(name);
 }

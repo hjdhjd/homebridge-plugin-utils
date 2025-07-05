@@ -8,14 +8,13 @@
  *
  * @module
  */
-import type { HAP, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { type Nullable, validateName } from "./util.js";
+import type { Characteristic, PlatformAccessory, Service, WithUUID } from "homebridge";
+import { type Nullable, sanitizeName } from "./util.js";
 
 /**
  * Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
  * service instance. Additionally, the various name characteristics of the service are set to the specified name, and optionally added if necessary.
  *
- * @param hap             - HAP instance associated with the Homebridge plugin.
  * @param accessory       - The Homebridge accessory to check or modify.
  * @param serviceType     - The type of service to instantiate or retrieve.
  * @param name            - Name to be displayed to the end user for this service.
@@ -33,7 +32,7 @@ import { type Nullable, validateName } from "./util.js";
  * @example
  * ```typescript
  * // Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created.
- * const lightbulbService = acquireService(hap, accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc: Service): void => {
+ * const lightbulbService = acquireService(accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc: Service): void => {
  *
  *   // Called only if the service is newly created.
  *   svc.setCharacteristic(hap.Characteristic.On, false);
@@ -46,32 +45,15 @@ import { type Nullable, validateName } from "./util.js";
  * }
  * ```
  *
+ * @see setServiceName — updates the newly created (or existing) service’s name-related characteristics.
+ * @see validService — validate or prune services after acquisition.
  * @category Accessory
  */
-export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceType: WithUUID<typeof Service>, name: string, subtype?: string,
+export function acquireService(accessory: PlatformAccessory, serviceType: WithUUID<typeof Service>, name: string, subtype?: string,
   onServiceCreate?: (svc: Service) => void): Nullable<Service> {
 
-  // Services that do not need the Name characteristic added as an optional characteristic.
-  const configuredNameRequiredServices = [ hap.Service.InputSource, hap.Service.Television, hap.Service.WiFiRouter ];
-
-  // Services that need the ConfiguredName characteristic added and maintained.
-  const configuredNameServices = [ hap.Service.AccessoryInformation, hap.Service.ContactSensor, hap.Service.Lightbulb, hap.Service.MotionSensor,
-    hap.Service.OccupancySensor, hap.Service.SmartSpeaker, hap.Service.Switch, hap.Service.Valve ];
-
-  // Services that do not need the Name characteristic added as an optional characteristic.
-  const nameRequiredServices = [ hap.Service.AccessoryInformation, hap.Service.Assistant, hap.Service.InputSource ];
-
-  // Services that need the Name characteristic maintained.
-  const nameServices = [ hap.Service.AirPurifier, hap.Service.AirQualitySensor, hap.Service.Battery, hap.Service.CarbonDioxideSensor,
-    hap.Service.CarbonMonoxideSensor, hap.Service.ContactSensor, hap.Service.Door, hap.Service.Doorbell, hap.Service.Fan, hap.Service.Fanv2, hap.Service.Faucet,
-    hap.Service.FilterMaintenance, hap.Service.GarageDoorOpener, hap.Service.HeaterCooler, hap.Service.HumidifierDehumidifier, hap.Service.HumiditySensor,
-    hap.Service.IrrigationSystem, hap.Service.LeakSensor, hap.Service.Lightbulb, hap.Service.LightSensor, hap.Service.LockMechanism, hap.Service.MotionSensor,
-    hap.Service.OccupancySensor, hap.Service.Outlet, hap.Service.SecuritySystem, hap.Service.Slats, hap.Service.SmartSpeaker, hap.Service.SmokeSensor,
-    hap.Service.StatefulProgrammableSwitch, hap.Service.StatelessProgrammableSwitch, hap.Service.Switch, hap.Service.TargetControl, hap.Service.Television,
-    hap.Service.TemperatureSensor, hap.Service.Thermostat, hap.Service.Valve, hap.Service.Window, hap.Service.WindowCovering ];
-
   // Ensure we have HomeKit approved naming.
-  name = validateName(name);
+  name = sanitizeName(name);
 
   // Find the service, if it exists.
   let service = subtype ? accessory.getServiceById(serviceType, subtype) : accessory.getService(serviceType);
@@ -86,18 +68,20 @@ export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceTy
       return null;
     }
 
-    // Add the Configured Name characteristic if we don't already have it and it's available to us.
-    if(!configuredNameRequiredServices.includes(serviceType) && configuredNameServices.includes(serviceType) &&
-      !service.optionalCharacteristics.some(x => (x.UUID === hap.Characteristic.ConfiguredName.UUID))) {
+    // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
+    const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
 
-      service.addOptionalCharacteristic(hap.Characteristic.ConfiguredName);
+    // Add the Configured Name characteristic if we don't already have it and it's available to us.
+    if(!serviceRequiresConfiguredName(service) && serviceHasConfiguredName(service) &&
+      !service.optionalCharacteristics.some(x => (x.UUID === characteristic.ConfiguredName.UUID))) {
+
+      service.addOptionalCharacteristic(characteristic.ConfiguredName);
     }
 
     // Add the Name characteristic if we don't already have it and it's available to us.
-    if(!nameRequiredServices.includes(serviceType) && nameServices.includes(serviceType) &&
-      !service.optionalCharacteristics.some(x => (x.UUID === hap.Characteristic.Name.UUID))) {
+    if(!serviceRequiresName(service) && serviceHasName(service) && !service.optionalCharacteristics.some(x => (x.UUID === characteristic.Name.UUID))) {
 
-      service.addOptionalCharacteristic(hap.Characteristic.Name);
+      service.addOptionalCharacteristic(characteristic.Name);
     }
 
     accessory.addService(service);
@@ -109,17 +93,7 @@ export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceTy
   }
 
   // Update our name.
-  service.displayName = name;
-
-  if(configuredNameServices.includes(serviceType)) {
-
-    service.updateCharacteristic(hap.Characteristic.ConfiguredName, name);
-  }
-
-  if(nameServices.includes(serviceType)) {
-
-    service.updateCharacteristic(hap.Characteristic.Name, name);
-  }
+  setServiceName(service, name);
 
   return service;
 }
@@ -154,6 +128,7 @@ export function acquireService(hap: HAP, accessory: PlatformAccessory, serviceTy
  * validService(accessory, Service.Switch, (hasService) => hasService || config.enableSwitch);
  * ```
  *
+ * @see acquireService — to add or retrieve services.
  * @category Accessory
  */
 export function validService(accessory: PlatformAccessory, serviceType: WithUUID<typeof Service>, validate: boolean | ((hasService: boolean) => boolean),
@@ -175,4 +150,137 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
 
   // We have a valid service.
   return true;
+}
+
+/**
+ * Determines whether the specified service type requires the ConfiguredName characteristic.
+ *
+ * @param service - The service instance to check.
+ * @returns `true` if the service type requires the ConfiguredName characteristic.
+ *
+ * @internal
+ */
+function serviceRequiresConfiguredName(service: Service): boolean {
+
+  // Grab the constructor from the instance of our service so we can generate the list of valid services.
+  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+
+  // Services that already require the ConfiguredName characteristic.
+  return [ ctor.InputSource.UUID, ctor.Television.UUID, ctor.WiFiRouter.UUID ].includes(service.UUID);
+}
+
+/**
+ * Determines whether the specified service type supports the ConfiguredName characteristic.
+ *
+ * @param service - The service instance to check.
+ * @returns `true` if the service type needs the ConfiguredName characteristic maintained.
+ *
+ * @internal
+ */
+function serviceHasConfiguredName(service: Service): boolean {
+
+  // Grab the constructor from the instance of our service so we can generate the list of valid services.
+  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+
+  // Services that need the ConfiguredName characteristic maintained.
+  return serviceRequiresConfiguredName(service) || [ ctor.AccessoryInformation.UUID, ctor.ContactSensor.UUID, ctor.Lightbulb.UUID, ctor.MotionSensor.UUID,
+    ctor.OccupancySensor.UUID, ctor.SmartSpeaker.UUID, ctor.Switch.UUID, ctor.Valve.UUID ].includes(service.UUID);
+}
+
+/**
+ * Determines whether the specified service type requires the Name characteristic.
+ *
+ * @param service - The service instance to check.
+ * @returns `true` if the service type requires the Name characteristic.
+ *
+ * @internal
+ */
+function serviceRequiresName(service: Service): boolean {
+
+  // Grab the constructor from the instance of our service so we can generate the list of valid services.
+  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+
+  // Services that already require the Name characteristic.
+  return [ ctor.AccessoryInformation.UUID, ctor.Assistant.UUID, ctor.InputSource.UUID ].includes(service.UUID);
+}
+
+/**
+ * Determines whether the specified service type supports the Name characteristic.
+ *
+ * @param service - The service instance to check.
+ * @returns `true` if the service type needs the Name characteristic maintained.
+ *
+ * @internal
+ */
+function serviceHasName(service: Service): boolean {
+
+  // Grab the constructor from the instance of our service so we can generate the list of valid services.
+  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+
+  // Services that need the Name characteristic maintained.
+  return serviceRequiresName(service) || [ ctor.AirPurifier.UUID, ctor.AirQualitySensor.UUID, ctor.Battery.UUID, ctor.CarbonDioxideSensor, ctor.CarbonMonoxideSensor.UUID,
+    ctor.ContactSensor.UUID, ctor.Door.UUID, ctor.Doorbell.UUID, ctor.Fan.UUID, ctor.Fanv2.UUID, ctor.Faucet, ctor.FilterMaintenance.UUID, ctor.GarageDoorOpener.UUID,
+    ctor.HeaterCooler.UUID, ctor.HumidifierDehumidifier.UUID, ctor.HumiditySensor, ctor.IrrigationSystem.UUID, ctor.LeakSensor.UUID, ctor.Lightbulb.UUID,
+    ctor.LightSensor.UUID, ctor.LockMechanism.UUID, ctor.MotionSensor, ctor.OccupancySensor.UUID, ctor.Outlet.UUID, ctor.SecuritySystem.UUID, ctor.Slats.UUID,
+    ctor.SmartSpeaker.UUID, ctor.SmokeSensor, ctor.StatefulProgrammableSwitch.UUID, ctor.StatelessProgrammableSwitch.UUID, ctor.Switch.UUID, ctor.TargetControl.UUID,
+    ctor.Television, ctor.TemperatureSensor.UUID, ctor.Thermostat.UUID, ctor.Valve.UUID, ctor.Window.UUID, ctor.WindowCovering.UUID ].includes(service.UUID);
+}
+
+/**
+ * Retrieves the primary name of a service, preferring the ConfiguredName characteristic over the Name characteristic.
+ *
+ * @param service - The service from which to retrieve the name.
+ * @returns The configured or display name of the service, or `undefined` if neither is set.
+ *
+ * @see setServiceName — to update the current name n a service.
+ * @category Accessory
+ */
+export function getServiceName(service?: Service): string | undefined {
+
+  // No service, we're done.
+  if(!service) {
+
+    return undefined;
+  }
+
+  // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
+  const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
+
+  return service.getCharacteristic(characteristic.ConfiguredName).value as string ?? service.getCharacteristic(characteristic.Name).value as string ?? undefined;
+}
+
+/**
+ * Updates the displayName and applicable name characteristics of a service to the specified value.
+ *
+ * @param service - The service to update.
+ * @param name    - The new name to apply to the service.
+ *
+ * @remarks
+ * This function ensures the name is validated, updates the service's `displayName`, and sets the `ConfiguredName` and `Name`
+ * characteristics when supported by the service type.
+ *
+ * @see acquireService — to add or retrieve services.
+ * @see getServiceName — to retrieve the current name set on a service.
+ * @category Accessory
+ */
+export function setServiceName(service: Service, name: string): void {
+
+  // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
+  const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
+
+  // Ensure we have HomeKit approved naming.
+  name = sanitizeName(name);
+
+  // Update our name.
+  service.displayName = name;
+
+  if(serviceHasConfiguredName(service)) {
+
+    service.updateCharacteristic(characteristic.ConfiguredName, name);
+  }
+
+  if(serviceHasName(service)) {
+
+    service.updateCharacteristic(characteristic.Name, name);
+  }
 }

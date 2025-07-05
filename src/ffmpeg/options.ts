@@ -73,6 +73,37 @@ export interface FfmpegOptionsConfig {
  *
  * These options control output bitrate, framerate, resolution, H.264 profile and level, input framerate, and smart quality optimizations.
  *
+ * @property codec               - Optional. Audio codec to encode (`AudioRecordingCodecType.AAC_ELD` or `AudioRecordingCodecType.AAC_LC`). Defaults to
+ *                                 `AudioRecordingCodecType.AAC_ELD`.
+ *
+ * @example
+ *
+ * ```ts
+ * const encoderOptions: AudioEncoderOptions = {
+ *
+ *   codec: AudioRecordingCodecType.AAC_ELD
+ * };
+ *
+ * // Use with FfmpegOptions for transcoding.
+ * const ffmpegOpts = new FfmpegOptions(optionsConfig);
+ * const args = ffmpegOpts.audioEncoder(encoderOptions);
+ * ```
+ *
+ * @see FfmpegOptions
+ *
+ * @category FFmpeg
+ */
+
+export interface AudioEncoderOptions {
+
+  codec?: AudioRecordingCodecType
+}
+
+/**
+ * Options used for configuring video encoding in FFmpeg operations.
+ *
+ * These options control output bitrate, framerate, resolution, H.264 profile and level, input framerate, and smart quality optimizations.
+ *
  * @property bitrate             - Target video bitrate, in kilobits per second.
  * @property fps                 - Target output frames per second.
  * @property hardwareDecoding    - Optional. If `true`, encoder options will account for hardware decoding (primarily for Intel QSV scenarios). Defaults to `true`.
@@ -88,7 +119,7 @@ export interface FfmpegOptionsConfig {
  * @example
  *
  * ```ts
- * const encoderOptions: EncoderOptions = {
+ * const encoderOptions: VideoEncoderOptions = {
  *
  *   bitrate: 3000,
  *   fps: 30,
@@ -113,7 +144,7 @@ export interface FfmpegOptionsConfig {
  *
  * @category FFmpeg
  */
-export interface EncoderOptions {
+export interface VideoEncoderOptions {
 
   bitrate: number,
   fps: number,
@@ -139,7 +170,7 @@ export interface EncoderOptions {
  * const ffmpegOpts = new FfmpegOptions(optionsConfig);
  *
  * // Generate video encoder arguments for streaming.
- * const encoderOptions: EncoderOptions = {
+ * const encoderOptions: VideoEncoderOptions = {
  *
  *   bitrate: 3000,
  *   fps: 30,
@@ -159,7 +190,8 @@ export interface EncoderOptions {
  * const crop = ffmpegOpts.cropFilter;
  * ```
  *
- * @see EncoderOptions
+ * @see AudioEncoderOptions
+ * @see VideoEncoderOptions
  * @see FfmpegCodecs
  * @see {@link https://ffmpeg.org/ffmpeg.html | FFmpeg Documentation}
  *
@@ -430,7 +462,7 @@ export class FfmpegOptions {
   /**
    * Returns the audio encoder arguments to use when transcoding.
    *
-   * @param codec            - Optional. Codec to encode (`AudioRecordingCodecType.AAC_ELD` (default) or `AudioRecordingCodecType.AAC_LC`).
+   * @param options  - Optional. The encoder options to use for generating FFmpeg arguments.
    * @returns Array of FFmpeg command-line arguments for audio encoding.
    *
    * @example
@@ -439,7 +471,10 @@ export class FfmpegOptions {
    * const args = ffmpegOpts.audioEncoder();
    * ```
    */
-  public audioEncoder(codec = AudioRecordingCodecType.AAC_ELD): string[] {
+  public audioEncoder(options: AudioEncoderOptions = {}): string[] {
+
+    // Default our codec to AAC_ELD unless specified.
+    options = Object.assign({}, { codec: AudioRecordingCodecType.AAC_ELD }, options);
 
     // If we don't have libfdk_aac available to us, we're essentially dead in the water.
     let encoderOptions: string[] = [];
@@ -462,7 +497,7 @@ export class FfmpegOptions {
           "-afterburner", "1"
         );
 
-        switch(codec) {
+        switch(options.codec) {
 
           case AudioRecordingCodecType.AAC_ELD:
 
@@ -511,7 +546,7 @@ export class FfmpegOptions {
           "-codec:a", "aac_at"
         ];
 
-        switch(codec) {
+        switch(options.codec) {
 
           case AudioRecordingCodecType.AAC_ELD:
 
@@ -690,7 +725,7 @@ export class FfmpegOptions {
    * @example
    *
    * ```ts
-   * const encoderOptions: EncoderOptions = {
+   * const encoderOptions: VideoEncoderOptions = {
    *
    *   bitrate: 2000,
    *   fps: 30,
@@ -706,29 +741,35 @@ export class FfmpegOptions {
    * const args = ffmpegOpts['defaultVideoEncoderOptions'](encoderOptions);
    * ```
    *
-   * @see EncoderOptions
+   * @see VideoEncoderOptions
    */
-  private defaultVideoEncoderOptions(options: EncoderOptions): string[] {
+  private defaultVideoEncoderOptions(options: VideoEncoderOptions): string[] {
 
     const videoFilters = [];
 
-    // Default smart quality to true unless specified.
-    options = Object.assign({}, { smartQuality: true }, options);
+    // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. We only need to apply this filter if our input and output
+    //                                   frame rates aren't already identical.
+    const fpsFilter = [ "fps=fps=" + options.fps.toString() ];
 
-    // Set our FFmpeg video filter options:
+    // Set our FFmpeg pixel-level filters:
     //
-    // format=                           Set the pixel formats we want to target for output.
-    videoFilters.push("format=" + [ ...new Set([ ...this.hwPixelFormat, "yuvj420p" ]) ].join("|"));
-
     // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
     //                                   a power of two.
-    videoFilters.push("scale=-2:min(ih\\," + options.height.toString() + ")");
+    // format=                           Set the pixel formats we want to target for output.
+    const pixelFilters = [
 
-    // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. This has better performance characteristics rather than using
-    //                                   "-r". We only need to apply this filter if our input and output frame rates aren't already identical.
-    if(options.fps !== options.inputFps) {
+      "scale=-2:min(ih\\," + options.height.toString() + ")",
+      "format=" + [ ...new Set([ ...this.hwPixelFormat, "yuvj420p" ]) ].join("|")
+    ];
 
-      videoFilters.push("fps=fps=" + options.fps.toString());
+    // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If we're
+    // increasing our framerate, we want to do pixel operations on the minimal set of source frames that we need, since we're just going to duplicate them.
+    if(options.fps < options.inputFps) {
+
+      videoFilters.push(...fpsFilter, ...pixelFilters);
+    } else {
+
+      videoFilters.push(...pixelFilters, ...(options.fps > options.inputFps ? fpsFilter : []));
     }
 
     // Default to the tried-and-true libx264. We use the following options by default:
@@ -787,7 +828,7 @@ export class FfmpegOptions {
    * @param options          - Encoder options to use.
    * @returns Array of FFmpeg command-line arguments for video encoding.
    */
-  public recordEncoder(options: EncoderOptions): string[] {
+  public recordEncoder(options: VideoEncoderOptions): string[] {
 
     // We always disable smart quality when recording due to HomeKit's strict requirements here.
     options.smartQuality = false;
@@ -823,7 +864,7 @@ export class FfmpegOptions {
    * const args = ffmpegOpts.streamEncoder(encoderOptions);
    * ```
    */
-  public streamEncoder(options: EncoderOptions): string[] {
+  public streamEncoder(options: VideoEncoderOptions): string[] {
 
     // Default hardware decoding and smart quality to true unless specified.
     options = Object.assign({}, { hardwareDecoding: true, hardwareTranscoding: this.config.hardwareTranscoding, smartQuality: true }, options);
@@ -846,33 +887,36 @@ export class FfmpegOptions {
     // variation in order to maximize quality while honoring bandwidth constraints.
     const adjustedMaxBitrate = options.bitrate + (options.smartQuality ? HOMEKIT_STREAMING_HEADROOM : 0);
 
-    // Check the input and output frame rates to see if we need to change it.
-    const useFpsFilter = options.fps !== options.inputFps;
-
     // Initialize our options.
     const encoderOptions = [];
+
     let videoFilters = [];
 
-    // Set our FFmpeg video filter options:
-    //
-    // format=                           Set the pixel formats we want to target for output.
-    videoFilters.push("format=" + this.hwPixelFormat.join("|"));
+    // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. We only need to apply this filter if our input and output
+    //                                   frame rates aren't already identical.
+    const fpsFilter = [ "fps=fps=" + options.fps.toString() ];
 
+    // Set our FFmpeg pixel-level filters:
+    //
+    // crop                              Crop filter options, if requested.
     // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
     //                                   a power of two.
-    videoFilters.push("scale=-2:min(ih\\," + options.height.toString() + ")");
+    // format=                           Set the pixel formats we want to target for output.
+    let pixelFilters = [
 
-    // Crop the stream, if the user has requested it.
-    if(this.config.crop) {
+      ...(this.config.crop ? this.cropFilter : []),
+      "scale=-2:min(ih\\," + options.height.toString() + ")",
+      "format=" + this.hwPixelFormat.join("|")
+    ];
 
-      videoFilters.push(this.cropFilter);
-    }
+    // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If we're
+    // increasing our framerate, we want to do pixel operations on the minimal set of source frames that we need, since we're just going to duplicate them.
+    if(options.fps < options.inputFps) {
 
-    // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. This has better performance characteristics rather than using
-    //                                   "-r". We only need to apply this filter if our input and output frame rates aren't already identical.
-    if(useFpsFilter) {
+      videoFilters = [ ...fpsFilter, ...pixelFilters ];
+    } else {
 
-      videoFilters.push("fps=fps=" + options.fps.toString());
+      videoFilters = [ ...pixelFilters, ...(options.fps > options.inputFps ? fpsFilter : []) ];
     }
 
     switch(this.codecSupport.hostSystem) {
@@ -1000,20 +1044,29 @@ export class FfmpegOptions {
 
         // We execute the following GPU-accelerated operations using the Quick Sync Video post-processing filter:
         //
+        // crop                          Crop filter options, if requested.
         // hwupload                      If we aren't hardware decoding, we need to upload decoded frames to QSV to process them.
         // format=same                   Set the output pixel format to the same as the input, since it's already in the GPU.
         // w=...:h...                    Scale the video to the size that's being requested while respecting aspect ratios.
-        videoFilters.push((options.hardwareDecoding ? "" : "hwupload,") + "vpp_qsv=" + [
-          "format=same",
-          "w=min(iw\\, (iw / ih) * " + options.height.toString() + ")",
-          "h=min(ih\\, " + options.height.toString() + ")"
-        ].join(":"));
+        pixelFilters = [
 
-        // fps=fps=                      Use the fps filter to provide the frame rate requested by HomeKit. This has better performance characteristics rather than using
-        //                               "-r". We only need to apply this filter if our input and output frame rates aren't already identical.
-        if(useFpsFilter) {
+          ...(this.config.crop ? this.cropFilter : []),
+          (options.hardwareDecoding ? "" : "hwupload,") + "vpp_qsv=" + [
 
-          videoFilters.push("fps=fps=" + options.fps.toString());
+            "format=same",
+            "w=min(iw\\, (iw / ih) * " + options.height.toString() + ")",
+            "h=min(ih\\, " + options.height.toString() + ")"
+          ].join(":")
+        ];
+
+        // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If
+        // we're increasing our framerate, we want to do pixel operations on the minimal set of source frames that we need, since we're just going to duplicate them.
+        if(options.fps < options.inputFps) {
+
+          videoFilters.push(...fpsFilter, ...pixelFilters);
+        } else {
+
+          videoFilters.push(...pixelFilters, ...(options.fps > options.inputFps ? fpsFilter : []));
         }
 
         // h264_qsv is the Intel Quick Sync Video hardware encoder API. We use the following options:

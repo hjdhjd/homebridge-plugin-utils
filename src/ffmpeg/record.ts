@@ -50,14 +50,12 @@ export interface FMp4BaseOptions {
  * Options for configuring an fMP4 recording or livestream session.
  *
  * @property fps             - The video frames per second for the session.
- * @property probesize       - Number of bytes to analyze for stream information.
  * @property timeshift       - Timeshift offset for event-based recording (in milliseconds).
  * @property transcodeAudio  - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
  */
 export interface FMp4RecordingOptions extends FMp4BaseOptions {
 
   fps: number;
-  probesize: number;
   timeshift: number;
   transcodeAudio: boolean;
 }
@@ -201,15 +199,19 @@ class FfmpegFMp4Process extends FfmpegProcess {
       );
     } else {
 
-      // -probesize number             How many bytes should be analyzed for stream information.
+      // -flags low_delay              Tell FFmpeg to optimize for low delay / realtime decoding.
       // -r fps                        Set the input frame rate for the video stream.
+      // -analyzeduration number       The amount of time, in microseconds, should be spent analyzing the stream for parameters.
+      // -probesize number             How many bytes should be analyzed for stream information.
       // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
       // -i pipe:0                     Use standard input to get video data.
       // -ss                           Fast forward to where HKSV is expecting us to be for a recording event.
       this.commandLineArgs.push(
 
-        "-probesize", (fMp4Options.probesize ?? 5000000).toString(),
+        "-flags", "low_delay",
         "-r", fMp4Options.fps.toString(),
+        "-analyzeduration", "0",
+        "-probesize", "32",
         "-f", "mp4",
         "-i", "pipe:0",
         "-ss", (fMp4Options.timeshift ?? 0).toString() + "ms"
@@ -272,7 +274,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
         // -ac number                  Set the number of audio channels.
         this.commandLineArgs.push(
 
-          ...this.options.audioEncoder(recordingConfig.audioCodec.type),
+          ...this.options.audioEncoder({ codec: recordingConfig.audioCodec.type }),
           "-profile:a", translateAudioRecordingCodecType[recordingConfig.audioCodec.type],
           "-ar", translateAudioSampleRate[recordingConfig.audioCodec.samplerate as AudioRecordingSamplerate] + "k",
           "-ac", (recordingConfig.audioCodec.audioChannels ?? 1).toString()

@@ -269,6 +269,45 @@ console.log(result2); // null
 
 ***
 
+### sanitizeName()
+
+```ts
+function sanitizeName(name): string;
+```
+
+Sanitize an accessory name according to HomeKit naming conventions.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `name` | `string` | The name to validate. |
+
+#### Returns
+
+`string`
+
+Returns the HomeKit-sanitized version of the name, replacing invalid characters with a space and squashing multiple spaces.
+
+#### Remarks
+
+This sanitizes names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names)
+and HAP specification documentation:
+
+- Starts and ends with a letter or number. Exception: may end with a period.
+- May have the following special characters: -"',.#&.
+- Must not include emojis.
+
+#### Example
+
+```ts
+sanitizeName("Test|Switch")
+```ts
+
+Returns: `Test Switch`, replacing the pipe (an invalid character in HomeKit's naming ruleset) with a space.
+
+***
+
 ### sleep()
 
 ```ts
@@ -332,7 +371,7 @@ Returns: `This Is A Test`, capitalizing the first letter of each word.
 ### validateName()
 
 ```ts
-function validateName(name): string;
+function validateName(name): boolean;
 ```
 
 Validate an accessory name according to HomeKit naming conventions.
@@ -345,25 +384,26 @@ Validate an accessory name according to HomeKit naming conventions.
 
 #### Returns
 
-`string`
+`boolean`
 
-Returns the HomeKit-validated version of the name, replacing invalid characters with a space and squashing multiple spaces.
+Returns `true` if the name passes HomeKit's naming rules, `false` otherwise.
 
 #### Remarks
 
-This validates names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names):
+This validates names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names)
+and HAP specification documentation:
 
-- Use only alphanumeric, space, and apostrophe characters.
-- Start and end with an alphabetic or numeric character.
-- Don’t include emojis.
+- Starts and ends with a letter or number. Exception: may end with a period.
+- May have the following special characters: -"',.#&.
+- Must not include emojis.
 
 #### Example
 
 ```ts
-validateName("Test.Switch")
+validateName("Test|Switch")
 ```ts
 
-Returns: `Test Switch`, replacing the period (an invalid character in HomeKit's naming ruleset) with a space.
+Returns: `false`.
 
 ## Other
 

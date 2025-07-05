@@ -14,7 +14,6 @@ Homebridge service helper utilities.
 
 ```ts
 function acquireService(
-   hap, 
    accessory, 
    serviceType, 
    name, 
@@ -29,7 +28,6 @@ service instance. Additionally, the various name characteristics of the service 
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `hap` | `__module` | HAP instance associated with the Homebridge plugin. |
 | `accessory` | `PlatformAccessory` | The Homebridge accessory to check or modify. |
 | `serviceType` | `WithUUID`\<*typeof* `Service`\> | The type of service to instantiate or retrieve. |
 | `name` | `string` | Name to be displayed to the end user for this service. |
@@ -53,7 +51,7 @@ The `ConfiguredName` and `Name` characteristics are conditionally added or updat
 
 ```typescript
 // Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created.
-const lightbulbService = acquireService(hap, accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc: Service): void => {
+const lightbulbService = acquireService(accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc: Service): void => {
 
   // Called only if the service is newly created.
   svc.setCharacteristic(hap.Characteristic.On, false);
@@ -65,6 +63,68 @@ if(lightbulbService) {
   lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
 }
 ```
+
+#### See
+
+ - setServiceName — updates the newly created (or existing) service’s name-related characteristics.
+ - validService — validate or prune services after acquisition.
+
+***
+
+### getServiceName()
+
+```ts
+function getServiceName(service?): undefined | string;
+```
+
+Retrieves the primary name of a service, preferring the ConfiguredName characteristic over the Name characteristic.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `service?` | `Service` | The service from which to retrieve the name. |
+
+#### Returns
+
+`undefined` \| `string`
+
+The configured or display name of the service, or `undefined` if neither is set.
+
+#### See
+
+setServiceName — to update the current name n a service.
+
+***
+
+### setServiceName()
+
+```ts
+function setServiceName(service, name): void;
+```
+
+Updates the displayName and applicable name characteristics of a service to the specified value.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `service` | `Service` | The service to update. |
+| `name` | `string` | The new name to apply to the service. |
+
+#### Returns
+
+`void`
+
+#### Remarks
+
+This function ensures the name is validated, updates the service's `displayName`, and sets the `ConfiguredName` and `Name`
+characteristics when supported by the service type.
+
+#### See
+
+ - acquireService — to add or retrieve services.
+ - getServiceName — to retrieve the current name set on a service.
 
 ***
 
@@ -115,3 +175,7 @@ validService(accessory, Service.Switch, config.enableSwitch);
 // Keep a service if it currently exists, or add it if a certain condition is met
 validService(accessory, Service.Switch, (hasService) => hasService || config.enableSwitch);
 ```
+
+#### See
+
+acquireService — to add or retrieve services.

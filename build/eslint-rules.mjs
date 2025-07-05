@@ -207,7 +207,7 @@ const commonRules = {
     { "blankLine": "never", "next": "directive", "prev": "directive" }
   ],
   "@stylistic/semi": ["warn", "always"],
-  "@stylistic/space-before-function-paren": ["warn", { "anonymous": "never", "asyncArrow": "always", "named": "never" }],
+  "@stylistic/space-before-function-paren": ["warn", { "anonymous": "never", "asyncArrow": "always", "catch": "never", "named": "never" }],
   "@stylistic/space-in-parens": "warn",
   "@stylistic/space-infix-ops": "warn",
   "@stylistic/space-unary-ops": "warn",

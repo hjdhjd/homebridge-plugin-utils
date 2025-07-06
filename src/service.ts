@@ -84,6 +84,9 @@ export function acquireService(accessory: PlatformAccessory, serviceType: WithUU
       service.addOptionalCharacteristic(characteristic.Name);
     }
 
+    // Set our name.
+    setServiceName(service, name);
+
     accessory.addService(service);
 
     if(onServiceCreate) {
@@ -91,9 +94,6 @@ export function acquireService(accessory: PlatformAccessory, serviceType: WithUU
       onServiceCreate(service);
     }
   }
-
-  // Update our name.
-  setServiceName(service, name);
 
   return service;
 }

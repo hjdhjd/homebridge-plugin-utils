@@ -2,8 +2,12 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.25.0 (2025-07-06)
+  * Behavior change: `acquireService` will no longer attempt to rename a service if it's already been created. To get or set a service's user-visible name, use `getServiceName` and `setServiceName`.
+
 ## 1.24.0 (2025-07-05)
   * Behavior change: `validateName` is now `sanitizeName`.
+  * New feature: `getServiceName` and `setServiceName` will get or set a service's user-visible name.
   * Improvement: A new `validateName` function that returns whether or not a name meets HomeKit naming rules.
   * Improvement: `acquireService` no longer requires a HAP context object. It will derive it from the service instead.
   * Improvement: added matching semantics to `audioEncoder` to mirror `videoEncoder` and better future-proof it. `EncoderOptions` are now `VideoEncoderOptions` as well.

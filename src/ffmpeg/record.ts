@@ -50,12 +50,14 @@ export interface FMp4BaseOptions {
  * Options for configuring an fMP4 recording or livestream session.
  *
  * @property fps             - The video frames per second for the session.
+ * @property probesize       - Number of bytes to analyze for stream information.
  * @property timeshift       - Timeshift offset for event-based recording (in milliseconds).
  * @property transcodeAudio  - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
  */
 export interface FMp4RecordingOptions extends FMp4BaseOptions {
 
   fps: number;
+  probesize: number;
   timeshift: number;
   transcodeAudio: boolean;
 }
@@ -201,7 +203,6 @@ class FfmpegFMp4Process extends FfmpegProcess {
 
       // -flags low_delay              Tell FFmpeg to optimize for low delay / realtime decoding.
       // -r fps                        Set the input frame rate for the video stream.
-      // -analyzeduration number       The amount of time, in microseconds, should be spent analyzing the stream for parameters.
       // -probesize number             How many bytes should be analyzed for stream information.
       // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
       // -i pipe:0                     Use standard input to get video data.
@@ -210,8 +211,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
 
         "-flags", "low_delay",
         "-r", fMp4Options.fps.toString(),
-        "-analyzeduration", "0",
-        "-probesize", "32",
+        "-probesize", (fMp4Options.probesize ?? 5000000).toString(),
         "-f", "mp4",
         "-i", "pipe:0",
         "-ss", (fMp4Options.timeshift ?? 0).toString() + "ms"

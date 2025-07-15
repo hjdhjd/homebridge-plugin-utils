@@ -292,7 +292,7 @@ export class FfmpegOptions {
 
       if(this.config.hardwareTranscoding) {
 
-        categories.push("transcoding");
+        categories.push("⚙️ transcoding");
       }
 
       return categories.join(" and ");
@@ -453,7 +453,7 @@ export class FfmpegOptions {
     // Inform the user.
     if(this.config.hardwareDecoding || this.config.hardwareTranscoding) {
 
-      this.log.info("Hardware-accelerated " + accelCategories() + " enabled" + (logMessage.length ? ": " + logMessage : "") + ".");
+      this.log.info("⚡ Hardware-accelerated " + accelCategories() + " enabled" + (logMessage.length ? ": " + logMessage : "") + ".");
     }
 
     return this.config.hardwareTranscoding;

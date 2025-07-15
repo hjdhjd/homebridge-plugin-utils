@@ -6,7 +6,7 @@
 /**
  * Homebridge FFmpeg transcoding, decoding, and encoding options, selecting codecs, pixel formats, and hardware acceleration for the host system.
  *
- * This module defines interfaces and classes for specifying, adapting, and generating FFmpeg command-line arguments tailored to the host system’s capabilities. It
+ * This module defines interfaces and classes for specifying, adapting, and generating FFmpeg command-line arguments tailored to the host system's capabilities. It
  * automates the selection of codecs, pixel formats, hardware encoders/decoders, and streaming profiles for maximum compatibility and performance.
  *
  * Key features:
@@ -292,7 +292,7 @@ export class FfmpegOptions {
 
       if(this.config.hardwareTranscoding) {
 
-        categories.push("⚙️ transcoding");
+        categories.push("\u26ED\uFE0E transcoding");
       }
 
       return categories.join(" and ");
@@ -453,7 +453,7 @@ export class FfmpegOptions {
     // Inform the user.
     if(this.config.hardwareDecoding || this.config.hardwareTranscoding) {
 
-      this.log.info("⚡ Hardware-accelerated " + accelCategories() + " enabled" + (logMessage.length ? ": " + logMessage : "") + ".");
+      this.log.info("\u26A1\uFE0F Hardware-accelerated " + accelCategories() + " enabled" + (logMessage.length ? ": " + logMessage : "") + ".");
     }
 
     return this.config.hardwareTranscoding;
@@ -1145,7 +1145,7 @@ export class FfmpegOptions {
   /**
    * Converts a HomeKit H.264 level enum value to the corresponding FFmpeg string or numeric representation.
    *
-   * This helper is used to translate between HomeKit’s `H264Level` enum and the string or numeric format expected by FFmpeg’s `-level:v` argument.
+   * This helper is used to translate between HomeKit's `H264Level` enum and the string or numeric format expected by FFmpeg's `-level:v` argument.
    *
    * @param level        - The H.264 level to translate.
    * @param numeric      - Optional. If `true`, returns the numeric representation (e.g., "31"). If `false` or omitted, returns the standard string format (e.g., "3.1").
@@ -1187,7 +1187,7 @@ export class FfmpegOptions {
   /**
    * Converts a HomeKit H.264 profile enum value to the corresponding FFmpeg string or numeric representation.
    *
-   * This helper is used to translate between HomeKit’s `H264Profile` enum and the string or numeric format expected by FFmpeg’s `-profile:v` argument.
+   * This helper is used to translate between HomeKit's `H264Profile` enum and the string or numeric format expected by FFmpeg's `-profile:v` argument.
    *
    * @param profile - The H.264 profile to translate.
    * @param numeric - Optional. If `true`, returns the numeric representation (e.g., "100"). If `false` or omitted, returns the standard string format (e.g., "high").

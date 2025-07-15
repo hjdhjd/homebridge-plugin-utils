@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.26.0 (2025-07-15)
+  * Fix: address a regression in `validateName`.
+  * Improvement: minor improvements to FFmpeg processing.
+  * Housekeeping.
+
 ## 1.25.0 (2025-07-06)
   * Behavior change: `acquireService` will no longer attempt to rename a service if it's already been created. To get or set a service's user-visible name, use `getServiceName` and `setServiceName`.
 

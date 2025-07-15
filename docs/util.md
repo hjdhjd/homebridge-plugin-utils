@@ -394,6 +394,7 @@ This validates names using [HomeKit's naming rulesets](https://developer.apple.c
 and HAP specification documentation:
 
 - Starts and ends with a letter or number. Exception: may end with a period.
+- May not have multiple spaces adjacent to each other, nor begin nor end with a space.
 - May have the following special characters: -"',.#&.
 - Must not include emojis.
 

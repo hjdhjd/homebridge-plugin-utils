@@ -382,6 +382,7 @@ export function sanitizeName(name: string): string {
  * and HAP specification documentation:
  *
  * - Starts and ends with a letter or number. Exception: may end with a period.
+ * - May not have multiple spaces adjacent to each other, nor begin nor end with a space.
  * - May have the following special characters: -"',.#&.
  * - Must not include emojis.
  *
@@ -396,5 +397,5 @@ export function sanitizeName(name: string): string {
  */
 export function validateName(name: string): boolean {
 
-  return /^(?!.*\p{Extended_Pictographic})(?=^[\p{L}\p{N}].*[\p{L}\p{N}.]$)[\p{L}\p{N}\-"'.,#&]+$/u.test(name);
+  return /^(?!.*\p{Extended_Pictographic})(?!.* {2})(?=^[\p{L}\p{N}].*[\p{L}\p{N}.]$)[\p{L}\p{N}\-"'.,#& ]+$/u.test(name);
 }

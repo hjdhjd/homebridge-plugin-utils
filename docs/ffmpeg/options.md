@@ -8,7 +8,7 @@
 
 Homebridge FFmpeg transcoding, decoding, and encoding options, selecting codecs, pixel formats, and hardware acceleration for the host system.
 
-This module defines interfaces and classes for specifying, adapting, and generating FFmpeg command-line arguments tailored to the host system’s capabilities. It
+This module defines interfaces and classes for specifying, adapting, and generating FFmpeg command-line arguments tailored to the host system's capabilities. It
 automates the selection of codecs, pixel formats, hardware encoders/decoders, and streaming profiles for maximum compatibility and performance.
 
 Key features:

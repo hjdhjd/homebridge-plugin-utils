@@ -71,7 +71,7 @@ Create a new FeatureOptions instance.
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `categories` | [`FeatureCategoryEntry`](#featurecategoryentry)[] | `undefined` | Array of feature option categories. |
-| `options` | \{ [`index`: `string`]: [`FeatureOptionEntry`](#featureoptionentry)[]; \} | `undefined` | Dictionary mapping category names to arrays of feature options. |
+| `options` | \{ \[`index`: `string`\]: [`FeatureOptionEntry`](#featureoptionentry)[]; \} | `undefined` | Dictionary mapping category names to arrays of feature options. |
 | `configuredOptions` | `never`[] | `[]` | Optional. Array of currently configured option strings. |
 
 ###### Returns
@@ -216,7 +216,7 @@ Set the list of available feature options.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | \{ [`index`: `string`]: [`FeatureOptionEntry`](#featureoptionentry)[]; \} | Array of available feature options. |
+| `options` | \{ \[`index`: `string`\]: [`FeatureOptionEntry`](#featureoptionentry)[]; \} | Array of available feature options. |
 
 ###### Returns
 

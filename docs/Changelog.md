@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.26.1 (2025-07-26)
+  * Housekeeping.
+
 ## 1.26.0 (2025-07-15)
   * Fix: address a regression in `validateName`.
   * Improvement: minor improvements to FFmpeg processing.

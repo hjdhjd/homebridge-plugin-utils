@@ -233,7 +233,7 @@ export class FfmpegCodecs {
   }
 
   /**
-   * Checks whether a given hardware acceleration method is available and validated on the host.
+   * Checks whether a given hardware acceleration method is available and validated on the host, as provided by the output of `ffmpeg -hwaccels`.
    *
    * @param accel - The hardware acceleration method name, e.g., "videotoolbox".
    *

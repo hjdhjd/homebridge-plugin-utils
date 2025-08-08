@@ -2,9 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
-## 1.27.0 (2025-08-07)
+## 1.27.0 (2025-08-08)
   * Breaking change: feature option webUI has been completely rewritten and enhanced to support Homebridge Config UI's theming, a more responsive UI, search, and other fun goodies.
-  * Improvement: Value-centric feature options can specify their size so they render in a more user-friendly manner.
+  * Improvement: value-centric feature options can specify their size so they render in a more user-friendly manner.
+  * Improvement: additional linting rules.
   * Housekeeping.
 
 ## 1.26.1 (2025-07-26)

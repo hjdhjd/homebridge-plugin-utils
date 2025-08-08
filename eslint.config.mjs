@@ -33,7 +33,7 @@ export default ts.config(
 
     files: [ "build/**.mjs", "src/**.ts", "src/ffmpeg/**.ts", "ui/**/*.@(js|mjs)", "eslint.config.mjs" ],
 
-    ignores: [ "dist" ],
+    ignores: ["dist"],
 
     languageOptions: {
 
@@ -72,7 +72,7 @@ export default ts.config(
 
   {
 
-    files: [ "ui/webUi.mjs", "ui/webUi-featureoptions.mjs" ],
+    files: [ "ui/1.mjs", "ui/webUi.mjs", "ui/webUi-featureoptions.mjs" ],
 
     languageOptions: {
 

@@ -17,6 +17,7 @@ import type { Nullable } from "./util.js";
  * @property defaultValue    - Optional. Default value for value-based feature options.
  * @property description     - Description of the feature option for display or documentation.
  * @property group           - Optional. Grouping/category for the feature option.
+ * @property inputSize       - Optional. Width of the input field for a value-based feature option. Defaults to 5 characters.
  * @property name            - Name of the feature option (used in option strings).
  */
 export interface FeatureOptionEntry {
@@ -25,6 +26,7 @@ export interface FeatureOptionEntry {
   defaultValue?: number | string,  // Default value for value-based feature options.
   description: string,             // Description of the feature option.
   group?: string,                  // Feature option grouping for related options.
+  inputSize?: number,              // Width of the input field for a value-based feature option.
   name: string                     // Name of the feature option.
 }
 

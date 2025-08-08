@@ -526,6 +526,7 @@ Entry describing a feature option.
 | <a id="defaultvalue-2"></a> `defaultValue?` | `string` \| `number` | Optional. Default value for value-based feature options. |
 | <a id="description-1"></a> `description` | `string` | Description of the feature option for display or documentation. |
 | <a id="group"></a> `group?` | `string` | Optional. Grouping/category for the feature option. |
+| <a id="inputsize"></a> `inputSize?` | `number` | Optional. Width of the input field for a value-based feature option. Defaults to 5 characters. |
 | <a id="name-1"></a> `name` | `string` | Name of the feature option (used in option strings). |
 
 ## Type Aliases

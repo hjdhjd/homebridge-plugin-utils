@@ -319,7 +319,7 @@ export class RtpPortAllocator {
   private async _reserve(ipFamily: ("ipv4" | "ipv6") = "ipv4", portCount: (1 | 2) = 1, attempts = 0): Promise<number> {
 
     // Sanity check and make sure we're not requesting any more than two ports at a time, or if we've exceeded our attempt limit.
-    if(![1, 2].includes(portCount) || (attempts > 10)) {
+    if(![ 1, 2 ].includes(portCount) || (attempts > 10)) {
 
       return -1;
     }

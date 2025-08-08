@@ -319,8 +319,8 @@ class FfmpegFMp4Process extends FfmpegProcess {
     super.configureProcess();
 
     // Initialize our variables that we need to process incoming FFmpeg packets.
-    let header = Buffer.alloc(0);
-    let bufferRemaining = Buffer.alloc(0);
+    let header: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let bufferRemaining: Buffer<ArrayBufferLike> = Buffer.alloc(0);
     let dataLength = 0;
     let type = "";
 
@@ -330,7 +330,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
       // If we have anything left from the last buffer we processed, prepend it to this buffer.
       if(bufferRemaining.length > 0) {
 
-        buffer = Buffer.concat([bufferRemaining, buffer]);
+        buffer = Buffer.concat([ bufferRemaining, buffer ]);
         bufferRemaining = Buffer.alloc(0);
       }
 
@@ -391,7 +391,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
               this.emit("initsegment");
             } else {
 
-              this._initSegment = Buffer.concat([this._initSegment, header, data]);
+              this._initSegment = Buffer.concat([ this._initSegment, header, data ]);
             }
           }
 

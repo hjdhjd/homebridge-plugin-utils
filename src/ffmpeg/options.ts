@@ -344,7 +344,7 @@ export class FfmpegOptions {
         case "macOS.Intel":
 
           // Verify that we have hardware-accelerated decoding available to us.
-          validateHwAccel("videotoolbox", ["videotoolbox_vld", "nv12", "yuv420p"]);
+          validateHwAccel("videotoolbox", [ "videotoolbox_vld", "nv12", "yuv420p" ]);
 
           break;
 
@@ -749,7 +749,7 @@ export class FfmpegOptions {
 
     // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. We only need to apply this filter if our input and output
     //                                   frame rates aren't already identical.
-    const fpsFilter = [ "fps=fps=" + options.fps.toString() ];
+    const fpsFilter = ["fps=fps=" + options.fps.toString()];
 
     // Set our FFmpeg pixel-level filters:
     //
@@ -759,7 +759,7 @@ export class FfmpegOptions {
     const pixelFilters = [
 
       "scale=-2:min(ih\\," + options.height.toString() + ")",
-      "format=" + [ ...new Set([ ...this.hwPixelFormat, "yuvj420p" ]) ].join("|")
+      "format=" + [...new Set([ ...this.hwPixelFormat, "yuvj420p" ])].join("|")
     ];
 
     // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If we're
@@ -894,7 +894,7 @@ export class FfmpegOptions {
 
     // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. We only need to apply this filter if our input and output
     //                                   frame rates aren't already identical.
-    const fpsFilter = [ "fps=fps=" + options.fps.toString() ];
+    const fpsFilter = ["fps=fps=" + options.fps.toString()];
 
     // Set our FFmpeg pixel-level filters:
     //

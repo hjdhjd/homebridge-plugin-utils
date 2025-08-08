@@ -50,7 +50,7 @@ const ruleBlankAfterOpenBrace = {
 
         for(const element of node.body) {
 
-          if(!["MethodDefinition", "PropertyDefinition"].includes(element.type) || element.value?.type !== "ObjectExpression") {
+          if(![ "MethodDefinition", "PropertyDefinition" ].includes(element.type) || element.value?.type !== "ObjectExpression") {
 
             continue;
           }
@@ -141,10 +141,10 @@ const tsRules = {
   "@typescript-eslint/explicit-function-return-type": "warn",
   "@typescript-eslint/explicit-module-boundary-types": "warn",
   "@typescript-eslint/no-explicit-any": "warn",
-  "@typescript-eslint/no-floating-promises": ["warn", { "ignoreIIFE": true }],
+  "@typescript-eslint/no-floating-promises": [ "warn", { "ignoreIIFE": true } ],
   "@typescript-eslint/no-non-null-assertion": "warn",
   "@typescript-eslint/no-unused-expressions": "warn",
-  "@typescript-eslint/no-unused-vars": ["warn", { "caughtErrors": "none" }],
+  "@typescript-eslint/no-unused-vars": [ "warn", { "caughtErrors": "none" } ],
   "@typescript-eslint/promise-function-async": "warn",
   "require-await": "off",
   // eslint-disable-next-line sort-keys
@@ -168,34 +168,35 @@ const commonRules = {
 
   ...tsEslint.configs.eslintRecommended,
   "@hjdhjd/blank-line-after-open-brace": "warn",
+  "@stylistic/array-bracket-spacing": [ "warn", "always", { "arraysInArrays": true, "objectsInArrays": true,  "singleValue": false } ],
   "@stylistic/block-spacing": "warn",
-  "@stylistic/brace-style": ["warn", "1tbs", { "allowSingleLine": true }],
+  "@stylistic/brace-style": [ "warn", "1tbs", { "allowSingleLine": true } ],
   "@stylistic/comma-dangle": "warn",
-  "@stylistic/eol-last": ["warn", "always"],
+  "@stylistic/eol-last": [ "warn", "always" ],
   "@stylistic/generator-star-spacing": "warn",
   "@stylistic/implicit-arrow-linebreak": "warn",
-  "@stylistic/indent": ["warn", 2, { "SwitchCase": 1 }],
-  "@stylistic/keyword-spacing": ["warn",
-    { "overrides": { "catch": { "after": false }, "for": { "after": false }, "if": { "after": false }, "switch": { "after": false}, "while": { "after": false } } }],
-  "@stylistic/linebreak-style": ["warn", "unix"],
-  "@stylistic/lines-between-class-members": ["warn", "always", { "exceptAfterSingleLine": true }],
-  "@stylistic/max-len": ["warn", 170],
+  "@stylistic/indent": [ "warn", 2, { "SwitchCase": 1 } ],
+  "@stylistic/keyword-spacing": [ "warn",
+    { "overrides": { "catch": { "after": false }, "for": { "after": false }, "if": { "after": false }, "switch": { "after": false}, "while": { "after": false } } } ],
+  "@stylistic/linebreak-style": [ "warn", "unix" ],
+  "@stylistic/lines-between-class-members": [ "warn", "always", { "exceptAfterSingleLine": true } ],
+  "@stylistic/max-len": [ "warn", 170 ],
   "@stylistic/no-tabs": "warn",
   "@stylistic/no-trailing-spaces": "warn",
-  "@stylistic/operator-linebreak": ["warn", "after", { "overrides": { ":": "after", "?": "after" } }],
-  "@stylistic/padding-line-between-statements": ["warn",
+  "@stylistic/operator-linebreak": [ "warn", "after", { "overrides": { ":": "after", "?": "after" } } ],
+  "@stylistic/padding-line-between-statements": [ "warn",
 
     // Require a blank line before every statement type in next.
-    { "blankLine": "always", "next": ["break", "case", "class", "continue", "default", "export", "for", "function", "if", "import", "return"], "prev": "*" },
+    { "blankLine": "always", "next": [ "break", "case", "class", "continue", "default", "export", "for", "function", "if", "import", "return" ], "prev": "*" },
 
     // Require blank lines after every statement type in prev.
-    { "blankLine": "always", "next": "*", "prev": ["const", "directive", "let", "var"] },
+    { "blankLine": "always", "next": "*", "prev": [ "const", "directive", "let", "var" ] },
 
     // Multiple sequential case declarations may be grouped together.
-    { "blankLine": "any", "next": ["case", "default"], "prev": ["case", "default"] },
+    { "blankLine": "any", "next": [ "case", "default" ], "prev": [ "case", "default" ] },
 
     // Multiple sequential variable declarations may be grouped together.
-    { "blankLine": "any", "next": ["const", "let", "var"], "prev": ["const", "let", "var"] },
+    { "blankLine": "any", "next": [ "const", "let", "var" ], "prev": [ "const", "let", "var" ] },
 
     // Multiple sequential export declarations may be grouped together.
     { "blankLine": "any", "next": "export", "prev": "export" },
@@ -206,29 +207,30 @@ const commonRules = {
     // Multiple sequential directive prologues must be grouped together.
     { "blankLine": "never", "next": "directive", "prev": "directive" }
   ],
-  "@stylistic/semi": ["warn", "always"],
-  "@stylistic/space-before-function-paren": ["warn", { "anonymous": "never", "asyncArrow": "always", "catch": "never", "named": "never" }],
+  "@stylistic/semi": [ "warn", "always" ],
+  "@stylistic/space-before-function-paren": [ "warn", { "anonymous": "never", "asyncArrow": "always", "catch": "never", "named": "never" } ],
   "@stylistic/space-in-parens": "warn",
   "@stylistic/space-infix-ops": "warn",
   "@stylistic/space-unary-ops": "warn",
   "@typescript-eslint/no-this-alias": "warn",
   "camelcase": "warn",
-  "curly": ["warn", "all"],
+  "curly": [ "warn", "all" ],
   "dot-notation": "warn",
   "eqeqeq": "warn",
   "no-await-in-loop": "warn",
   "no-console": "warn",
-  "no-restricted-syntax": ["warn", "TemplateLiteral"],
+  "no-restricted-syntax": [ "warn", "TemplateLiteral" ],
   "prefer-arrow-callback": "warn",
   "prefer-const": "warn",
-  "quotes": ["warn", "double", { "allowTemplateLiterals": false, "avoidEscape": false }],
+  "quotes": [ "warn", "double", { "allowTemplateLiterals": false, "avoidEscape": false } ],
   "sort-imports": "warn",
   "sort-keys": "warn",
   "sort-vars": "warn"
 };
 
 // Globals that tend to exist in Homebridge plugins with a webUI.
-const globalsUi = Object.fromEntries(["console", "document", "fetch", "homebridge"].map(key => [key, "readonly"]));
+const globalsUi = Object.fromEntries([ "clearTimeout", "console", "container", "document", "fetch", "getComputedStyle", "homebridge", "setTimeout", "window" ]
+  .map(key => [ key, "readonly" ]));
 
 export default {
 

@@ -57,7 +57,7 @@ export class webUi {
     }
   }
 
-  // Show the first run user experience if we don't have valid login credentials.
+  // Show the first run user experience if needed.
   async #showFirstRun() {
 
     const buttonFirstRun = document.getElementById("firstRun");
@@ -67,6 +67,9 @@ export class webUi {
 
       return;
     }
+
+    // We disable saving any settings until we configure the plugin.
+    homebridge.disableSaveButton();
 
     // First run user experience.
     buttonFirstRun.addEventListener("click", async () => {
@@ -80,10 +83,13 @@ export class webUi {
         return;
       }
 
-      // Create our UI.
+      // Create our UI and allow users to save the configuration.
       document.getElementById("pageFirstRun").style.display = "none";
       document.getElementById("menuWrapper").style.display = "inline-flex";
-      this.featureOptions.show();
+
+      await this.featureOptions.show();
+
+      homebridge.enableSaveButton();
 
       // All done. Let the user interact with us, although in practice, we shouldn't get here.
       // homebridge.hideSpinner();
@@ -97,6 +103,7 @@ export class webUi {
 
     // Show the beachball while we setup.
     homebridge.showSpinner();
+    this.featureOptions.hide();
 
     // Highlight the tab in our UI.
     this.#toggleClasses("menuHome", "btn-elegant", "btn-primary");
@@ -118,6 +125,7 @@ export class webUi {
     // Show the beachball while we setup.
     homebridge.showSpinner();
     homebridge.hideSchemaForm();
+    this.featureOptions.hide();
 
     // Highlight the tab in our UI.
     this.#toggleClasses("menuHome", "btn-primary", "btn-elegant");
@@ -139,14 +147,14 @@ export class webUi {
 
     // Add our event listeners to animate the UI.
     document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
-    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.featureOptions.show());
+    document.getElementById("menuFeatureOptions").addEventListener("click", async () => await this.featureOptions.show());
     document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
 
     // If we've got devices detected, we launch our feature option UI. Otherwise, we launch our first run UI.
     if(this.featureOptions.currentConfig.length && !(await this.#processHandler(this.#firstRun.isRequired))) {
 
       document.getElementById("menuWrapper").style.display = "inline-flex";
-      this.featureOptions.show();
+      await this.featureOptions.show();
 
       return;
     }

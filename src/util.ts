@@ -290,7 +290,7 @@ export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): P
 
   const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout));
 
-  return Promise.race([promise, timeoutPromise]);
+  return Promise.race([ promise, timeoutPromise ]);
 }
 
 /**

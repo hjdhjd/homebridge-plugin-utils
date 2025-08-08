@@ -221,7 +221,7 @@ if(codecs.hasEncoder("h264", "h264_videotoolbox")) {
 hasHwAccel(accel): boolean;
 ```
 
-Checks whether a given hardware acceleration method is available and validated on the host.
+Checks whether a given hardware acceleration method is available and validated on the host, as provided by the output of `ffmpeg -hwaccels`.
 
 ###### Parameters
 

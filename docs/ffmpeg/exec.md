@@ -85,16 +85,16 @@ const exec = new FfmpegExec(options, ["-i", "input.mp4", "-f", "null", "-"]);
 
 ###### Overrides
 
-[`FfmpegProcess`](process.md#ffmpegprocess).[`constructor`](process.md#ffmpegprocess#constructor)
+[`FfmpegProcess`](process.md#ffmpegprocess).[`constructor`](process.md#constructor)
 
 #### Properties
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | [`FfmpegProcess`](process.md#ffmpegprocess).[`hasError`](process.md#ffmpegprocess#haserror) |
-| <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isEnded`](process.md#ffmpegprocess#isended) |
-| <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isStarted`](process.md#ffmpegprocess#isstarted) |
-| <a id="process"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | [`FfmpegProcess`](process.md#ffmpegprocess).[`process`](process.md#ffmpegprocess#process) |
+| <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | [`FfmpegProcess`](process.md#ffmpegprocess).[`hasError`](process.md#haserror) |
+| <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isEnded`](process.md#isended) |
+| <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isStarted`](process.md#isstarted) |
+| <a id="process"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | [`FfmpegProcess`](process.md#ffmpegprocess).[`process`](process.md#process) |
 
 #### Accessors
 
@@ -116,7 +116,7 @@ The standard error stream, or `null` if not available.
 
 ###### Inherited from
 
-[`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#ffmpegprocess#stderr)
+[`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#stderr)
 
 ##### stdin
 
@@ -136,7 +136,7 @@ The standard input stream, or `null` if not available.
 
 ###### Inherited from
 
-[`FfmpegProcess`](process.md#ffmpegprocess).[`stdin`](process.md#ffmpegprocess#stdin)
+[`FfmpegProcess`](process.md#ffmpegprocess).[`stdin`](process.md#stdin)
 
 ##### stdout
 
@@ -156,7 +156,7 @@ The standard output stream, or `null` if not available.
 
 ###### Inherited from
 
-[`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#ffmpegprocess#stdout)
+[`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#stdout)
 
 #### Methods
 
@@ -226,7 +226,7 @@ process.start(["-i", "input.mp4", "-f", "null", "-"]);
 
 ###### Inherited from
 
-[`FfmpegProcess`](process.md#ffmpegprocess).[`start`](process.md#ffmpegprocess#start)
+[`FfmpegProcess`](process.md#ffmpegprocess).[`start`](process.md#start)
 
 ##### stop()
 
@@ -248,7 +248,7 @@ process.stop();
 
 ###### Inherited from
 
-[`FfmpegProcess`](process.md#ffmpegprocess).[`stop`](process.md#ffmpegprocess#stop)
+[`FfmpegProcess`](process.md#ffmpegprocess).[`stop`](process.md#stop)
 
 ***
 

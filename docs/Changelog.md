@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.27.1 (2025-08-09)
+  * Fix: ensure we honor Homebridge Config UI X's lighting theme overrides.
+  * Housekeeping.
+
 ## 1.27.0 (2025-08-08)
   * Breaking change: feature option webUI has been completely rewritten and enhanced to support Homebridge Config UI's theming, a more responsive UI, search, and other fun goodies.
   * Improvement: value-centric feature options can specify their size so they render in a more user-friendly manner.

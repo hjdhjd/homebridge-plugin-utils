@@ -809,6 +809,9 @@ export class webUiFeatureOptions {
     // Ensure the DOM is ready before we render our UI. We wait for Bootstrap styles to be applied before proceeding.
     await this.#waitForBootstrap();
 
+    // Initialize theme sync before injecting styles so CSS variables are defined and current.
+    await this.#setupThemeAutoUpdate();
+
     // Add our custom styles for hover effects, dark mode support, and modern layouts. These enhance the visual experience and ensure consistency with the
     // Homebridge UI theme.
     this.#injectCustomStyles();
@@ -1059,198 +1062,6 @@ export class webUiFeatureOptions {
 
       controllersContainer.appendChild(link);
     }
-  }
-
-  /**
-   * Inject custom styles for hover effects, dark mode support, and modern layouts.
-   *
-   * These styles enhance the visual experience and ensure our UI integrates well with both light and dark modes. We use media queries to automatically adapt
-   * to the user's system preferences. The styles include support for flexbox layouts, responsive design, and theme-aware coloring.
-   *
-   * @private
-   */
-  #injectCustomStyles() {
-
-    // Ensure we do not inject duplicate styles when re-entering this view. We make this idempotent for stability across navigations.
-    if(document.getElementById("feature-options-styles")) {
-
-      return;
-    }
-
-    // Extract our theme color from .btn-primary to ensure consistency with the Homebridge theme.
-    const probeBtn = document.createElement("button");
-
-    probeBtn.className = "btn btn-primary";
-    probeBtn.style.display = "none";
-    document.body.appendChild(probeBtn);
-
-    this.#themeColor.background = getComputedStyle(probeBtn).backgroundColor;
-    this.#themeColor.text = getComputedStyle(probeBtn).color;
-
-    document.body.removeChild(probeBtn);
-
-    // Quick utility to help us convert RGB values to RGBA for use in CSS.
-    const rgba = (rgb, alpha) => {
-
-      const match = rgb.match(/\d+/g);
-
-      if(!match || (match.length < 3)) {
-
-        return rgb;
-      }
-
-      return "rgba(" + match[0] + ", " + match[1] + ", " + match[2] + ", " + alpha + ")";
-    };
-
-    const styles = [
-
-      /* eslint-disable @stylistic/max-len */
-      // Remove margin collapse and enable clean layout flow.
-      "html, body { margin: 0; padding: 0; }",
-
-      // Compensate for misbehavior in Homebridge Config UI X when switching to or from dark mode.
-      "body { background-color: #fff !important; }",
-
-      // Page root uses a column layout with full width.
-      "#pageFeatureOptions { display: flex !important; flex-direction: column; width: 100%; }",
-
-      // Sidebar + content layout is horizontal (row).
-      ".feature-main-content { display: flex !important; flex-direction: row !important; width: 100%; }",
-
-      // Sidebar layout and appearance.
-      "#sidebar { display: block; width: 200px; min-width: 200px; max-width: 200px; background-color: var(--bs-gray-100); position: relative; }",
-
-      // Remove internal scrolling from sidebar content.
-      "#sidebar .sidebar-content { padding: 0rem; overflow: unset; }",
-
-      // Sidebar containers.
-      "#controllersContainer { padding: 0; margin-bottom: 0; }",
-      "#devicesContainer { padding: 0; margin-top: 0; padding-top: 0 !important; }",
-
-      // Feature content (right-hand pane).
-      ".feature-content { display: flex !important; flex-direction: column !important; flex: 1 1 auto; min-width: 0; }",
-      ".category-border { border: 1px solid " + this.#themeColor.background + " !important; box-shadow: 0 0 0 1px " + rgba(this.#themeColor.background, 0.1) + "; }",
-
-      // Ensure the table itself uses separate borders when we have rounded tbody elements. This is necessary for border-radius to work properly.
-      "table[data-category] { border-collapse: separate !important; border-spacing: 0; }",
-
-      // How we define row visibility for feature options. We need this complexity because we hide or make visible rows depending on what the user has chosen to expose.
-      //
-      // "table[data-category] tbody tr.fo-visible,"
-      // "table[data-category] tbody tr:not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none']){}",
-
-      // Create the outer border of the table on the left and right sides.
-      "table[data-category] tbody tr:not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none']) td:first-child{",
-      "  border-left:1px solid " + this.#themeColor.background + ";",
-      "}",
-      "table[data-category] tbody tr:not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none']) td:last-child{",
-      "  border-right:1px solid " + this.#themeColor.background + ";",
-      "}",
-
-      // Provide the top border on the first visible row.
-      "table[data-category] tbody tr:nth-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td{",
-      "  border-top:1px solid " + this.#themeColor.background + ";",
-      "}",
-
-      // Provide the bottom border on the last visible row.
-      "table[data-category] tbody tr:nth-last-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td{",
-      "  border-bottom:1px solid " + this.#themeColor.background + ";",
-      "}",
-
-      // Create rounded corners at the top and bottom rows.
-      "table[data-category] tbody tr:nth-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:first-child{",
-      "  border-top-left-radius:.5rem;",
-      "}",
-      "table[data-category] tbody tr:nth-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:last-child{",
-      "  border-top-right-radius:.5rem;",
-      "}",
-      "table[data-category] tbody tr:nth-last-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:first-child{",
-      "  border-bottom-left-radius:.5rem;",
-      "}",
-      "table[data-category] tbody tr:nth-last-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:last-child{",
-      "  border-bottom-right-radius:.5rem;",
-      "}",
-
-      // Main options area - remove scroll behavior, just layout styling.
-      ".options-content { padding: 1rem; margin: 0; }",
-
-      // Info header styling.
-      "#headerInfo { flex-shrink: 0; padding: 0.5rem !important; margin-bottom: 0.5rem !important; }",
-
-      // Device stats grid layout.
-      ".device-stats-grid { display: flex; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem; padding: 0 0.75rem; flex-wrap: nowrap; overflow: hidden; }",
-      ".device-stats-grid .stat-item:first-child { flex: 0 0 25% }",
-      ".device-stats-grid .stat-item:not(:first-child) { flex-grow: 1; min-width: 0; }",
-
-      ".stat-item { display: flex; flex-direction: column; gap: 0.125rem; }",
-      ".stat-label { font-weight: 600; color: var(--bs-gray-600); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
-      ".stat-value { font-size: 0.875rem; color: var(--bs-body-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
-
-      // Responsive hiding for our device stats grid.
-      "@media (max-width: 700px) { .device-stats-grid .stat-item:nth-last-of-type(1) { display: none !important; } }",
-      "@media (max-width: 500px) { .device-stats-grid .stat-item:nth-last-of-type(2) { display: none !important; } }",
-      "@media (max-width: 300px) { .device-stats-grid .stat-item:nth-last-of-type(3) { display: none !important; } }",
-
-      // Responsive hiding for feature option status information.
-      "@media (max-width: 400px) { #statusInfo { display: none !important; } }",
-
-      // Navigation styles.
-      ".nav-link { border-radius: 0.375rem; transition: all 0.2s; position: relative; padding: 0.25rem 0.75rem !important; line-height: 1.2; font-size: 0.8125rem; }",
-      ".nav-link:hover { background-color: " + rgba(this.#themeColor.background, 0.1) + "; color: " + this.#themeColor.background + " !important; }",
-      ".nav-link.active { background-color: " + this.#themeColor.background + "; color: " + this.#themeColor.text + " !important; }",
-      ".nav-header { border-bottom: 1px solid rgba(0, 0, 0, 0.1); margin-bottom: 0.125rem; padding: 0.25rem 0.75rem !important; font-size: 0.75rem !important; line-height: 1.2; }",
-      "#devicesContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: 0.5rem !important; }",
-      "#controllersContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: 0.5rem !important; }",
-
-      // Search bar.
-      ".search-toolbar { border-radius: 0.5rem; padding: 0 0 0.5rem 0; }",
-      ".search-input-wrapper { min-width: 0; }",
-      ".filter-pills { display: flex; gap: 0.5rem; flex-wrap: wrap; }",
-
-      // Grouped option visual indicator.
-      ".grouped-option { background-color: " + rgba(this.#themeColor.background, 0.08) + "; }",
-      ".grouped-option td:nth-child(2) label { padding-left: 20px; position: relative; }",
-      ".grouped-option td:nth-child(2) label::before { content: \"\\21B3\"; position: absolute; left: 4px; color: #666; }",
-
-      // Dark mode refinements.
-      "@media (prefers-color-scheme: dark) {",
-
-      // Compensate for misbehavior in Homebridge Config UI X when switching to or from dark mode.
-      "  body { background-color: #242424 !important; }",
-      "  #sidebar { background-color: #1A1A1A !important; }",
-      "  .nav-header { border-bottom-color: rgba(255, 255, 255, 0.1); }",
-      "  .text-body { color: #999 !important; }",
-      "  .text-muted { color: #999 !important; }",
-      "  .device-stats-grid { background-color: #1A1A1A; border-color: #444; }",
-      "  .stat-label { color: #999; }",
-      "  .stat-value { color: #999; }",
-      "  #search .form-control { background-color: #1A1A1A; border-color: #444; color: #F8F9FA; }",
-      "  #search .form-control:focus { background-color: #1A1A1A; border-color: #666; color: #F8F9FA; box-shadow: 0 0 0 0.2rem rgba(255, 160, 0, 0.25); }",
-      "  #search .form-control::placeholder { color: #999; }",
-      "  #statusInfo .text-muted { color: #B8B8B8 !important; }",
-      "}",
-
-      // Table hover styling.
-      ".table-hover tbody tr { transition: background-color 0.15s; }",
-      ".table-hover tbody tr:hover { background-color: rgba(0, 0, 0, 0.03); }",
-      "@media (prefers-color-scheme: dark) { .table-hover tbody tr:hover { background-color: rgba(255, 255, 255, 0.20); } }",
-
-      // Utility styles.
-      ".btn-xs { font-size: 0.75rem !important; padding: 0.125rem 0.5rem !important; line-height: 1.5; touch-action: manipulation; }",
-      ".cursor-pointer { cursor: pointer; }",
-      ".user-select-none { user-select: none; -webkit-user-select: none; }",
-
-      // Use CSS for the category header hover emphasis to avoid JS event handlers for simple hover effects.
-      "table[data-category] thead th[role='button']:hover { color: " + this.#themeColor.background + " !important; }",
-
-      // Respect reduced motion settings for accessibility.
-      "@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }"
-      /* eslint-enable @stylistic/max-len */
-    ];
-
-    const styleElement = this.#createElement("style", { id: "feature-options-styles" }, [styles.join("\n")]);
-
-    document.head.appendChild(styleElement);
   }
 
   /**
@@ -3109,10 +2920,11 @@ export class webUiFeatureOptions {
 
           row.style.display = this.#rowMatchesFilter(row, filterType) ? "" : "none";
         }
-      } else {
 
-        row.style.display = this.#rowMatchesFilter(row, filterType) ? "" : "none";
+        continue;
       }
+
+      row.style.display = this.#rowMatchesFilter(row, filterType) ? "" : "none";
     }
 
     // Update counts and visibility. We need to update various UI elements to reflect the filtered view.
@@ -3145,11 +2957,13 @@ export class webUiFeatureOptions {
     switch(filterType) {
 
       case "modified":
+
         // Modified options have the text-info class to indicate they differ from defaults.
         return row.querySelector("label")?.classList.contains("text-info") ?? false;
 
       case "all":
       default:
+
         return true;
     }
   }
@@ -3401,6 +3215,282 @@ export class webUiFeatureOptions {
         }
       }
     }
+  }
+
+  /**
+   * Inject custom styles for hover effects, dark mode support, and modern layouts.
+   *
+   * These styles enhance the visual experience and ensure our UI integrates well with both light and dark modes. We use media queries to automatically adapt
+   * to the user's system preferences. The styles include support for flexbox layouts, responsive design, and theme-aware coloring.
+   *
+   * @private
+   */
+  #injectCustomStyles() {
+
+    // Ensure we do not inject duplicate styles when re-entering this view. We make this idempotent for stability across navigations.
+    if(document.getElementById("feature-options-styles")) {
+
+      return;
+    }
+
+    const styles = [
+
+      /* eslint-disable @stylistic/max-len */
+      // Define CSS variables used throughout our webUI. We update these when the theme changes so the UI can respond according to the visual environment.
+      ":root {",
+      "  --plugin-primary-bg: " + this.#themeColor.background + ";",
+      "  --plugin-primary-fg: " + this.#themeColor.text + ";",
+      "  --plugin-primary-hover: rgba(0,0,0,0.05); /* placeholder, JS will override with a color-specific value */",
+      "  --plugin-primary-subtle: rgba(0,0,0,0.03); /* placeholder, JS will override with a color-specific value */",
+      "  --plugin-body-bg-light: #ffffff;",
+      "  --plugin-body-bg-dark: #242424;",
+      "  --plugin-sidebar-bg-light: var(--bs-gray-100);",
+      "  --plugin-sidebar-bg-dark: #1A1A1A;",
+      "}",
+
+      // We start with a base layout reset - remove margin collapse and enable clean layout flow.
+      "html, body { margin: 0; padding: 0; }",
+
+      // Theme-scoped body and sidebar backgrounds. We scope to app-driven theme first.
+      ":root[data-plugin-theme='light'] body { background-color: var(--plugin-body-bg-light) !important; }",
+      ":root[data-plugin-theme='dark'] body { background-color: var(--plugin-body-bg-dark) !important; }",
+      ":root[data-plugin-theme='light'] #sidebar { background-color: var(--plugin-sidebar-bg-light) !important; }",
+      ":root[data-plugin-theme='dark'] #sidebar { background-color: var(--plugin-sidebar-bg-dark) !important; }",
+
+      // Page root uses a column layout with full width.
+      "#pageFeatureOptions { display: flex !important; flex-direction: column; width: 100%; }",
+
+      // Sidebar + content layout is horizontal (row).
+      ".feature-main-content { display: flex !important; flex-direction: row !important; width: 100%; }",
+
+      // Sidebar layout and appearance.
+      "#sidebar { display: block; width: 200px; min-width: 200px; max-width: 200px; position: relative; }",
+
+      // Remove internal scrolling from sidebar content.
+      "#sidebar .sidebar-content { padding: 0rem; overflow: unset; }",
+
+      // Sidebar containers.
+      "#controllersContainer { padding: 0; margin-bottom: 0; }",
+      "#devicesContainer { padding: 0; margin-top: 0; padding-top: 0 !important; }",
+
+      // Feature content (right-hand pane).
+      ".feature-content { display: flex !important; flex-direction: column !important; flex: 1 1 auto; min-width: 0; }",
+      // ".category-border { border: 1px solid " + this.#themeColor.background + " !important; box-shadow: 0 0 0 1px " + rgba(this.#themeColor.background, 0.1) + "; }",
+      ".category-border { border: 1px solid var(--plugin-primary-bg) !important; box-shadow: 0 0 0 1px var(--plugin-primary-hover); }",
+
+      // Ensure the table itself uses separate borders when we have rounded tbody elements. This is necessary for border-radius to work properly.
+      "table[data-category] { border-collapse: separate !important; border-spacing: 0; }",
+
+      // How we define row visibility for feature options. We need this complexity because we hide or make visible rows depending on what the user has chosen to expose.
+      //
+      // "table[data-category] tbody tr.fo-visible,"
+      // "table[data-category] tbody tr:not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none']){}",
+
+      // Create the outer border of the table on the left and right sides.
+      "table[data-category] tbody tr:not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none']) td:first-child{",
+      "  border-left:1px solid var(--plugin-primary-bg);",
+      "}",
+      "table[data-category] tbody tr:not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none']) td:last-child{",
+      "  border-right:1px solid var(--plugin-primary-bg);",
+      "}",
+
+      // Provide the top border on the first visible row.
+      "table[data-category] tbody tr:nth-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td{",
+      "  border-top:1px solid var(--plugin-primary-bg);",
+      "}",
+
+      // Provide the bottom border on the last visible row.
+      "table[data-category] tbody tr:nth-last-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td{",
+      "  border-bottom:1px solid var(--plugin-primary-bg);",
+      "}",
+
+      // Create rounded corners at the top and bottom rows.
+      "table[data-category] tbody tr:nth-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:first-child{",
+      "  border-top-left-radius:.5rem;",
+      "}",
+      "table[data-category] tbody tr:nth-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:last-child{",
+      "  border-top-right-radius:.5rem;",
+      "}",
+      "table[data-category] tbody tr:nth-last-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:first-child{",
+      "  border-bottom-left-radius:.5rem;",
+      "}",
+      "table[data-category] tbody tr:nth-last-child(1 of :not([hidden]):not(.d-none):not(.is-hidden):not([style*='display: none'])) td:last-child{",
+      "  border-bottom-right-radius:.5rem;",
+      "}",
+
+      // Main options area - remove scroll behavior, just layout styling.
+      ".options-content { padding: 1rem; margin: 0; }",
+
+      // Info header styling.
+      "#headerInfo { flex-shrink: 0; padding: 0.5rem !important; margin-bottom: 0.5rem !important; }",
+
+      // Device stats grid layout.
+      ".device-stats-grid { display: flex; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem; padding: 0 0.75rem; flex-wrap: nowrap; overflow: hidden; }",
+      ".device-stats-grid .stat-item:first-child { flex: 0 0 25% }",
+      ".device-stats-grid .stat-item:not(:first-child) { flex-grow: 1; min-width: 0; }",
+
+      ".stat-item { display: flex; flex-direction: column; gap: 0.125rem; }",
+      ".stat-label { font-weight: 600; color: var(--bs-gray-600); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+      ".stat-value { font-size: 0.875rem; color: var(--bs-body-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+
+      // Responsive hiding for our device stats grid.
+      "@media (max-width: 700px) { .device-stats-grid .stat-item:nth-last-of-type(1) { display: none !important; } }",
+      "@media (max-width: 500px) { .device-stats-grid .stat-item:nth-last-of-type(2) { display: none !important; } }",
+      "@media (max-width: 300px) { .device-stats-grid .stat-item:nth-last-of-type(3) { display: none !important; } }",
+
+      // Responsive hiding for feature option status information.
+      "@media (max-width: 400px) { #statusInfo { display: none !important; } }",
+
+      // Navigation styles.
+      ".nav-link { border-radius: 0.375rem; transition: all 0.2s; position: relative; padding: 0.25rem 0.75rem !important; line-height: 1.2; font-size: 0.8125rem; }",
+      ".nav-link:hover { background-color: var(--plugin-primary-hover); color: var(--plugin-primary-bg) !important; }",
+      ".nav-link.active { background-color: var(--plugin-primary-bg); color: var(--plugin-primary-fg) !important; }",
+      ".nav-header { border-bottom: 1px solid rgba(0, 0, 0, 0.1); margin-bottom: 0.125rem; padding: 0.25rem 0.75rem !important; font-size: 0.75rem !important; line-height: 1.2; }",
+      "#devicesContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: 0.5rem !important; }",
+      "#controllersContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: 0.5rem !important; }",
+
+      // Search bar.
+      ".search-toolbar { border-radius: 0.5rem; padding: 0 0 0.5rem 0; }",
+      ".search-input-wrapper { min-width: 0; }",
+      ".filter-pills { display: flex; gap: 0.5rem; flex-wrap: wrap; }",
+
+      // Grouped option visual indicator.
+      ".grouped-option { background-color: var(--plugin-primary-subtle); }",
+      ".grouped-option td:nth-child(2) label { padding-left: 20px; position: relative; }",
+      ".grouped-option td:nth-child(2) label::before { content: \"\\21B3\"; position: absolute; left: 4px; color: #666; }",
+
+      // Dark-mode refinements.
+      ":root[data-plugin-theme='dark'] .nav-header { border-bottom-color: rgba(255, 255, 255, 0.1); }",
+      ":root[data-plugin-theme='dark'] .text-body { color: #999 !important; }",
+      ":root[data-plugin-theme='dark'] .text-muted { color: #999 !important; }",
+      ":root[data-plugin-theme='dark'] .device-stats-grid { background-color: #1A1A1A; border-color: #444; }",
+      ":root[data-plugin-theme='dark'] .stat-label { color: #999; }",
+      ":root[data-plugin-theme='dark'] .stat-value { color: #999; }",
+      ":root[data-plugin-theme='dark'] #search .form-control { background-color: #1A1A1A; border-color: #444; color: #F8F9FA; }",
+      ":root[data-plugin-theme='dark'] #search .form-control:focus { background-color: #1A1A1A; border-color: #666; color: #F8F9FA; box-shadow: 0 0 0 0.2rem rgba(255, 160, 0, 0.25); }",
+      ":root[data-plugin-theme='dark'] #search .form-control::placeholder { color: #999; }",
+      ":root[data-plugin-theme='dark'] #statusInfo .text-muted { color: #B8B8B8 !important; }",
+
+      // Table hover styling.
+      ".table-hover tbody tr { transition: background-color 0.15s; }",
+      ":root[data-plugin-theme='light'] .table-hover tbody tr:hover { background-color: rgba(0, 0, 0, 0.03); }",
+      ":root[data-plugin-theme='dark'] .table-hover tbody tr:hover { background-color: rgba(255, 255, 255, 0.20); }",
+
+
+      // Utility styles.
+      ".btn-xs { font-size: 0.75rem !important; padding: 0.125rem 0.5rem !important; line-height: 1.5; touch-action: manipulation; }",
+      ".cursor-pointer { cursor: pointer; }",
+      ".user-select-none { user-select: none; -webkit-user-select: none; }",
+
+      // Use CSS for the category header hover emphasis to avoid JS event handlers for simple hover effects.
+      "table[data-category] thead th[role='button']:hover { color: var(--plugin-primary-bg) !important; }",
+
+      // Respect reduced motion settings for accessibility.
+      "@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }"
+      /* eslint-enable @stylistic/max-len */
+    ];
+
+    const styleElement = this.#createElement("style", { id: "feature-options-styles" }, [styles.join("\n")]);
+
+    document.head.appendChild(styleElement);
+  }
+
+  /**
+   * Set up automatic theme detection and live updates.
+   *
+   * We rely on Config UI X to tell us what the preferred color scheme is. Once we have it, we recompute our color variables derived from .btn-primary whenever the theme
+   * changes before mirroring all that to :root[data-plugin-theme="light|dark"] so our injected CSS is instantly reflected in our webUI.
+   *
+   * @private
+   */
+  async #setupThemeAutoUpdate() {
+
+    // Apply the current theme lighting mode and compute color variables.
+    this.#setPluginTheme(await homebridge.userCurrentLightingMode());
+
+    // Finally, we listen for system and browser changes to the current dark mode setting.
+    this.#addEventListener(window.matchMedia("(prefers-color-scheme: dark)"), "change", async () => this.#setPluginTheme(await homebridge.userCurrentLightingMode()));
+  }
+
+  /**
+   * Apply the current theme to :root and recompute JS-derived CSS variables.
+   *
+   * @param {"light"|"dark"} mode
+   * @private
+   */
+  #setPluginTheme(mode) {
+
+    // Sanity check.
+    if(![ "dark", "light" ].includes(mode)) {
+
+      return;
+    }
+
+    // See if we're already set appropriately. If so, we're done.
+    const current = document.documentElement.getAttribute("data-plugin-theme");
+
+    if(current === mode) {
+
+      return;
+    }
+
+    // Update our theme.
+    document.documentElement.setAttribute("data-plugin-theme", mode);
+
+    this.#computeThemeColors();
+    this.#updateCssVariablesFromTheme();
+  }
+
+  /**
+   * Compute current primary background and foreground from Bootstrap's .btn-primary.
+   *
+   * This gives us a theme-correct color pair regardless of the configured palette in Config UI X.
+   *
+   * @private
+   */
+  #computeThemeColors() {
+
+    const probeBtn = document.createElement("button");
+
+    probeBtn.className = "btn btn-primary";
+    probeBtn.style.display = "none";
+    document.body.appendChild(probeBtn);
+
+    this.#themeColor.background = getComputedStyle(probeBtn).backgroundColor;
+    this.#themeColor.text = getComputedStyle(probeBtn).color;
+
+    document.body.removeChild(probeBtn);
+  }
+
+  /**
+   * Update CSS custom properties used by our injected styles so they immediately reflect the current theme.
+   *
+   * @private
+   */
+  #updateCssVariablesFromTheme() {
+
+    const rootStyle = document.documentElement.style;
+
+    const rgba = (rgb, alpha) => {
+
+      const match = rgb.match(/\d+/g);
+
+      if(!match || (match.length < 3)) {
+
+        return rgb;
+      }
+
+      return "rgba(" + match[0] + ", " + match[1] + ", " + match[2] + ", " + alpha + ")";
+    };
+
+
+    // These variables are consumed by our injected CSS.
+    rootStyle.setProperty("--plugin-primary-bg", this.#themeColor.background);
+    rootStyle.setProperty("--plugin-primary-fg", this.#themeColor.text);
+
+    // Derivatives used for hover/subtle surfaces.
+    rootStyle.setProperty("--plugin-primary-hover", rgba(this.#themeColor.background, 0.10));
+    rootStyle.setProperty("--plugin-primary-subtle", rgba(this.#themeColor.background, 0.08));
   }
 
   /**

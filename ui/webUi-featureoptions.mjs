@@ -972,11 +972,14 @@ export class webUiFeatureOptions {
 
     const headerInfo = document.getElementById("headerInfo");
 
-    headerInfo.style.fontWeight = "bold";
-    headerInfo.innerHTML = "Feature options are applied in prioritized order, from global to device-specific options:" +
-      "<br><i class=\"text-warning\">Global options</i> (lowest priority) &rarr; " +
-      (this.#getControllers ? "<i class=\"text-success\">Controller options</i> &rarr; " : "") +
-      "<i class=\"text-info\">Device options</i> (highest priority)";
+    if(headerInfo) {
+
+      headerInfo.style.fontWeight = "bold";
+      headerInfo.innerHTML = "Feature options are applied in prioritized order, from global to device-specific options:" +
+        "<br><i class=\"text-warning\">Global options</i> (lowest priority) &rarr; " +
+        (this.#getControllers ? "<i class=\"text-success\">Controller options</i> &rarr; " : "") +
+        "<i class=\"text-info\">Device options</i> (highest priority)";
+    }
   }
 
   /**
@@ -1376,7 +1379,7 @@ export class webUiFeatureOptions {
       return;
     }
 
-    this.#deviceStatsContainer.style.display = device ? "" : "none";
+    this.#deviceStatsContainer.style.display = "";
     this.#infoPanel(device);
   }
 
@@ -2740,6 +2743,11 @@ export class webUiFeatureOptions {
    * @private
    */
   #showDeviceInfoPanel(device) {
+
+    if(!this.#deviceStatsContainer) {
+
+      return;
+    }
 
     if(!device) {
 

@@ -150,6 +150,7 @@ const tsRules = {
   // eslint-disable-next-line sort-keys
   "@typescript-eslint/require-await": "warn",
   "no-dupe-class-members": "off",
+  "no-redeclare": "off",
   "no-undef": "off",
   "no-unused-expressions": "off",
   "no-unused-vars": "off"

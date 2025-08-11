@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.27.2 (2025-08-11)
+  * Improvement: additional linting rules.
+  * Housekeeping.
+
 ## 1.27.1 (2025-08-09)
   * Fix: ensure we honor Homebridge Config UI X's lighting theme overrides.
   * Housekeeping.

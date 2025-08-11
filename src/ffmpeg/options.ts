@@ -929,7 +929,6 @@ export class FfmpegOptions {
         // -allow_sw 1                   Allow the use of the software encoder if the hardware encoder is occupied or unavailable.
         //                               This allows us to scale when we get multiple streaming requests simultaneously and consume all the available encode engines.
         // -realtime 1                   We prefer speed over quality - if the encoder has to make a choice, sacrifice one for the other.
-        // -coder cabac                  Use the cabac encoder for better video quality with the encoding profiles we use for HomeKit.
         // -profile:v                    Use the H.264 profile that HomeKit is requesting when encoding.
         // -level:v 0                    We override what HomeKit requests for the H.264 profile level on macOS when we're using hardware-accelerated transcoding because
         //                               the hardware encoder is particular about how to use levels. Setting it to 0 allows the encoder to decide for itself.
@@ -946,7 +945,6 @@ export class FfmpegOptions {
           "-codec:v", "h264_videotoolbox",
           "-allow_sw", "1",
           "-realtime", "1",
-          "-coder", "cabac",
           "-profile:v", this.getH264Profile(options.profile),
           "-level:v", "0",
           "-bf", "0",

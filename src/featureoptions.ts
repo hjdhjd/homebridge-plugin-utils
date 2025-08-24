@@ -137,9 +137,9 @@ export class FeatureOptions {
     this.defaults = {};
     this.valueOptions = {};
 
-    this.categories = categories ?? [];
+    this.categories = categories;
     this.configuredOptions = configuredOptions;
-    this.options = options ?? {};
+    this.options = options;
   }
 
   /**
@@ -262,10 +262,7 @@ export class FeatureOptions {
    */
   public isScopeDevice(option: string, device: string): boolean {
 
-    const value = this.exists(option, device);
-
-    // Return the value if it's set, or the default value for this option.
-    return (value !== undefined) ? value : this.defaultValue(option);
+    return this.exists(option, device);
   }
 
   /**
@@ -277,10 +274,7 @@ export class FeatureOptions {
    */
   public isScopeGlobal(option: string): boolean {
 
-    const value = this.exists(option);
-
-    // Return the value if it's set, or the default value for this option.
-    return (value !== undefined) ? value : this.defaultValue(option);
+    return this.exists(option);
   }
 
   /**
@@ -457,6 +451,7 @@ export class FeatureOptions {
    */
   public set configuredOptions(options: string[]) {
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     this._configuredOptions = options ?? [];
   }
 
@@ -487,6 +482,7 @@ export class FeatureOptions {
    */
   public set options(options: { [index: string]: FeatureOptionEntry[] }) {
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     this._options = options ?? {};
 
     // Regenerate our defaults.
@@ -503,6 +499,7 @@ export class FeatureOptions {
     for(const category of this.categories) {
 
       // If the category doesn't exist, let's skip it.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
       if(!this.options[category.name]) {
 
         continue;

@@ -119,7 +119,7 @@ export class RtpDemuxer extends EventEmitter {
       }
     });
 
-    this.log?.debug("Creating an RtpDemuxer instance - inbound port: %s, RTCP port: %s, RTP port: %s.", this.inputPort, rtcpPort, rtpPort);
+    this.log.debug("Creating an RtpDemuxer instance - inbound port: %s, RTCP port: %s, RTP port: %s.", this.inputPort, rtcpPort, rtpPort);
 
     // Take the socket live.
     this.socket.bind(this.inputPort);
@@ -346,10 +346,7 @@ export class RtpPortAllocator {
       }
 
       // We've seen the first port we may be looking for, let's save it.
-      if(!firstPort) {
-
-        firstPort = assignedPort;
-      }
+      firstPort ||= assignedPort;
     }
 
     // Return the first port we've found.

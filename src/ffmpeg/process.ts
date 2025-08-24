@@ -161,14 +161,6 @@ export class FfmpegProcess extends EventEmitter {
       this.commandLineArgs = commandLineArgs;
     }
 
-    // No command line arguments - we're done.
-    if(!this.commandLineArgs) {
-
-      this.log.error("No FFmpeg command line specified.");
-
-      return false;
-    }
-
     // Save the callback, if we have one.
     if(callback) {
 
@@ -251,7 +243,7 @@ export class FfmpegProcess extends EventEmitter {
     });
 
     // Handle errors on stdin.
-    this.process?.stdin?.on("error", errorListener = (error: Error): void => {
+    this.process?.stdin.on("error", errorListener = (error: Error): void => {
 
       if(!error.message.includes("EPIPE")) {
 
@@ -261,7 +253,7 @@ export class FfmpegProcess extends EventEmitter {
     });
 
     // Handle logging output that gets sent to stderr.
-    this.process?.stderr?.on("data", dataListener = (data: Buffer): void => {
+    this.process?.stderr.on("data", dataListener = (data: Buffer): void => {
 
       // Inform us when we start receiving data back from FFmpeg. We do this here because it's the only
       // truly reliable place we can check on FFmpeg. stdin and stdout may not be used at all, depending
@@ -310,7 +302,7 @@ export class FfmpegProcess extends EventEmitter {
     });
 
     // Handle our process termination.
-    this.process?.once("exit", (exitCode: number, signal: NodeJS.Signals) => {
+    this.process?.once("exit", (exitCode: Nullable<number>, signal: Nullable<NodeJS.Signals>) => {
 
       // Clear out our canary.
       if(this.ffmpegTimeout) {
@@ -355,8 +347,8 @@ export class FfmpegProcess extends EventEmitter {
       }
 
       // Cleanup after ourselves.
-      this.process?.stdin?.off("error", errorListener);
-      this.process?.stderr?.off("data", dataListener);
+      this.process?.stdin.off("error", errorListener);
+      this.process?.stderr.off("data", dataListener);
       this.process = null;
       this.stderrLog = [];
     });
@@ -405,7 +397,7 @@ export class FfmpegProcess extends EventEmitter {
    * @param exitCode         - The exit code from FFmpeg.
    * @param signal           - The signal, if any, used to terminate the process.
    */
-  protected logFfmpegError(exitCode: number, signal: NodeJS.Signals): void {
+  protected logFfmpegError(exitCode: Nullable<number>, signal: Nullable<NodeJS.Signals>): void {
 
     // Something else has occurred. Inform the user, and stop everything.
     this.log.error("FFmpeg process ended unexpectedly with %s%s%s.", (exitCode !== null) ? "an exit code of " + exitCode.toString() : "",

@@ -556,12 +556,10 @@ export class webUiFeatureOptions {
 
         const searchInput = event.target;
 
-        if(!searchInput._searchTimeout) {
+        if(searchInput._searchTimeout) {
 
-          searchInput._searchTimeout = null;
+          clearTimeout(searchInput._searchTimeout);
         }
-
-        clearTimeout(searchInput._searchTimeout);
 
         searchInput._searchTimeout = setTimeout(() => {
 

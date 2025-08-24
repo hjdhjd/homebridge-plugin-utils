@@ -282,6 +282,6 @@ Options for configuring FFmpeg probing.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="ffmpegexec-1"></a> `ffmpegExec` | `string` | The path or command used to execute FFmpeg. |
+| <a id="ffmpegexec-1"></a> `ffmpegExec?` | `string` | Optional. The path or command used to execute FFmpeg. Defaults to "ffmpeg". |
 | <a id="log"></a> `log` | \| [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) \| `Logging` | Logging interface for output and errors. |
-| <a id="verbose-1"></a> `verbose` | `boolean` | Enables or disables verbose logging output. |
+| <a id="verbose-1"></a> `verbose?` | `boolean` | Optional. Enables or disables verbose logging output. Defaults to `false`. |

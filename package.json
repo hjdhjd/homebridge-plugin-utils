@@ -1,6 +1,6 @@
 {
   "name": "homebridge-plugin-utils",
-  "version": "1.27.2",
+  "version": "1.28.0",
   "displayName": "Homebridge Plugin Utilities",
   "description": "Opinionated utilities to provide common capabilities and create rich configuration webUI experiences for Homebridge plugins.",
   "author": {
@@ -41,14 +41,14 @@
   "main": "dist/index.js",
   "devDependencies": {
     "@stylistic/eslint-plugin": "5.2.3",
-    "@types/node": "24.2.1",
-    "eslint": "9.33.0",
+    "@types/node": "24.3.0",
+    "eslint": "9.34.0",
     "homebridge": "1.11.0",
     "shx": "0.4.0",
     "typedoc": "0.28.10",
-    "typedoc-plugin-markdown": "4.8.0",
+    "typedoc-plugin-markdown": "4.8.1",
     "typescript": "5.9.2",
-    "typescript-eslint": "8.39.1"
+    "typescript-eslint": "8.40.0"
   },
   "dependencies": {
     "mqtt": "5.14.0"

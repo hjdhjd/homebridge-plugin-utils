@@ -429,7 +429,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
     // Make sure we cleanup our listeners when we're done.
     this.process?.once("exit", () => {
 
-      this.process?.stdout?.off("data", dataListener);
+      this.process?.stdout.off("data", dataListener);
     });
   }
 

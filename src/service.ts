@@ -63,11 +63,6 @@ export function acquireService(accessory: PlatformAccessory, serviceType: WithUU
 
     service = new serviceType(name, subtype as string);
 
-    if(!service) {
-
-      return null;
-    }
-
     // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
     const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
 
@@ -246,7 +241,7 @@ export function getServiceName(service?: Service): string | undefined {
   // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
   const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
 
-  return service.getCharacteristic(characteristic.ConfiguredName).value as string ?? service.getCharacteristic(characteristic.Name).value as string ?? undefined;
+  return (service.getCharacteristic(characteristic.ConfiguredName).value ?? service.getCharacteristic(characteristic.Name).value ?? undefined) as string | undefined;
 }
 
 /**

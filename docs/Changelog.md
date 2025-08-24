@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.28.0 (2025-08-24)
+  * Improvement: additional linting rules.
+  * Improvement: refinement to FFmpeg-related functions.
+  * Housekeeping.
+
 ## 1.27.2 (2025-08-11)
   * Improvement: additional linting rules.
   * Housekeeping.

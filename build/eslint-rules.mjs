@@ -143,8 +143,10 @@ const tsRules = {
   "@typescript-eslint/no-explicit-any": "warn",
   "@typescript-eslint/no-floating-promises": [ "warn", { "ignoreIIFE": true } ],
   "@typescript-eslint/no-non-null-assertion": "warn",
+  "@typescript-eslint/no-unnecessary-condition": "warn",
   "@typescript-eslint/no-unused-expressions": "warn",
   "@typescript-eslint/no-unused-vars": [ "warn", { "caughtErrors": "none" } ],
+  "@typescript-eslint/prefer-nullish-coalescing": "warn",
   "@typescript-eslint/promise-function-async": "warn",
   "require-await": "off",
   // eslint-disable-next-line sort-keys
@@ -218,6 +220,7 @@ const commonRules = {
   "curly": [ "warn", "all" ],
   "dot-notation": "warn",
   "eqeqeq": "warn",
+  "logical-assignment-operators": [ "warn", "always", { "enforceForIfStatements": true } ],
   "no-await-in-loop": "warn",
   "no-console": "warn",
   "no-restricted-syntax": [ "warn", "TemplateLiteral" ],

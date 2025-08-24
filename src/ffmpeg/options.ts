@@ -32,7 +32,7 @@ import type { HomebridgePluginLogging } from "../util.js";
  *
  * @property codecSupport         - FFmpeg codec capabilities and hardware support.
  * @property crop                 - Optional. Cropping rectangle for output video.
- * @property debug                - Enable debug logging.
+ * @property debug                - Optional. Enable debug logging.
  * @property hardwareDecoding     - Enable hardware-accelerated video decoding if available.
  * @property hardwareTranscoding  - Enable hardware-accelerated video encoding if available.
  * @property log                  - Logging interface for output and errors.
@@ -61,7 +61,7 @@ export interface FfmpegOptionsConfig {
 
   codecSupport: FfmpegCodecs;
   crop?: { height: number, width: number, x: number, y: number };
-  debug: boolean;
+  debug?: boolean;
   hardwareDecoding: boolean;
   hardwareTranscoding: boolean;
   log: HomebridgePluginLogging | Logging;

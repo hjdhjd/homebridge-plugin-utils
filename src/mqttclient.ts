@@ -54,7 +54,7 @@ export class MqttClient {
   private reconnectInterval: number;
   private log: HomebridgePluginLogging;
   private mqtt: Nullable<MqttJsClient>;
-  private subscriptions: { [index: string]: (cbBuffer: Buffer) => void };
+  private subscriptions: { [index: string]: ((cbBuffer: Buffer) => void) | undefined };
   private topicPrefix: string;
 
   /**

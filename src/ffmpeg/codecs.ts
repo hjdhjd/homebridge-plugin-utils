@@ -39,9 +39,9 @@ import util from "node:util";
 export interface FOptions {
 
   /**
-   * The path or command used to execute FFmpeg.
+   * Optional. The path or command used to execute FFmpeg. Defaults to "ffmpeg".
    */
-  ffmpegExec: string;
+  ffmpegExec?: string;
 
   /**
    * Logging interface for output and errors.
@@ -49,9 +49,9 @@ export interface FOptions {
   log: HomebridgePluginLogging | Logging;
 
   /**
-   * Enables or disables verbose logging output.
+   * Optional. Enables or disables verbose logging output. Defaults to `false`.
    */
-  verbose: boolean;
+  verbose?: boolean;
 }
 
 /**
@@ -121,7 +121,7 @@ export class FfmpegCodecs {
     this.ffmpegCodecs = {};
     this.ffmpegHwAccels = {};
     this.log = options.log;
-    this.verbose ??= options.verbose ?? false;
+    this.verbose = options.verbose ?? false;
 
     // Detect our host system type.
     this.probeHwOs();
@@ -202,6 +202,7 @@ export class FfmpegCodecs {
     codec = codec.toLowerCase();
     decoder = decoder.toLowerCase();
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     return this.ffmpegCodecs[codec]?.decoders.some(x => x === decoder);
   }
 
@@ -229,6 +230,7 @@ export class FfmpegCodecs {
     codec = codec.toLowerCase();
     encoder = encoder.toLowerCase();
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     return this.ffmpegCodecs[codec]?.encoders.some(x => x === encoder);
   }
 
@@ -391,11 +393,8 @@ export class FfmpegCodecs {
         // If we found decoders, add them to our list of supported decoders for this format.
         if(encodersMatch) {
 
-          if(!this.ffmpegCodecs[encodersMatch[1]]) {
-
-            this.ffmpegCodecs[encodersMatch[1]] = { decoders: [], encoders: [] };
-          }
-
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+          this.ffmpegCodecs[encodersMatch[1]] ||= { decoders: [], encoders: [] };
           this.ffmpegCodecs[encodersMatch[1]].encoders = encodersMatch[2].split(" ").map(x => x.toLowerCase());
         }
       }

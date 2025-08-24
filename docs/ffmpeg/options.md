@@ -315,7 +315,7 @@ FfmpegOptions
 | `crop.width` | `number` | - |
 | `crop.x` | `number` | - |
 | `crop.y` | `number` | - |
-| <a id="debug-1"></a> `debug` | `boolean` | Enable debug logging. |
+| <a id="debug-1"></a> `debug?` | `boolean` | Optional. Enable debug logging. |
 | <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. |
 | <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video encoding if available. |
 | <a id="log-1"></a> `log` | \| [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) \| `Logging` | Logging interface for output and errors. |

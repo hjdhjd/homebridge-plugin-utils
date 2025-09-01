@@ -85,6 +85,22 @@ Creates an instance of `FfmpegCodecs`.
 
 #### Accessors
 
+##### cpuGeneration
+
+###### Get Signature
+
+```ts
+get cpuGeneration(): number;
+```
+
+Returns the CPU generation if we're on Linux and have an Intel processor or on macOS and have an Apple Silicon processor.
+
+###### Returns
+
+`number`
+
+Returns the CPU generation or 0 if it can't be detected or an invalid platform.
+
 ##### ffmpegVersion
 
 ###### Get Signature
@@ -134,22 +150,6 @@ We are only trying to detect host capabilities to the extent they impact which F
 ###### Returns
 
 `string`
-
-##### intelGeneration
-
-###### Get Signature
-
-```ts
-get intelGeneration(): number;
-```
-
-Returns the Intel CPU generation, if we're on Linux and have an Intel processor.
-
-###### Returns
-
-`number`
-
-Returns the CPU generation or 0 if it can't be detected or an invalid platform.
 
 #### Methods
 

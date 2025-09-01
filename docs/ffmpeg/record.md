@@ -574,6 +574,7 @@ Base options for configuring an fMP4 recording or livestream session. These opti
 | <a id="audiostream"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). |
 | <a id="codec"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. |
 | <a id="enableaudio"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. |
+| <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. |
 | <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. |
 | <a id="videostream"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). |
 
@@ -594,6 +595,7 @@ Options for configuring an fMP4 recording or livestream session.
 | <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
 | <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
+| <a id="hardwaredecoding-1"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareDecoding`](#hardwaredecoding) |
 | <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
 | <a id="url"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
 | <a id="videostream-1"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
@@ -612,12 +614,15 @@ Options for configuring an fMP4 recording or livestream session.
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
+| <a id="audiofilters"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. | - |
 | <a id="audiostream-2"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-2"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
 | <a id="enableaudio-2"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="fps"></a> `fps` | `number` | The video frames per second for the session. | - |
+| <a id="hardwaredecoding-2"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareDecoding`](#hardwaredecoding) |
 | <a id="hardwaretranscoding-2"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
 | <a id="probesize"></a> `probesize` | `number` | Number of bytes to analyze for stream information. | - |
 | <a id="timeshift"></a> `timeshift` | `number` | Timeshift offset for event-based recording (in milliseconds). | - |
 | <a id="transcodeaudio"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. | - |
+| <a id="videofilters"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. | - |
 | <a id="videostream-2"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |

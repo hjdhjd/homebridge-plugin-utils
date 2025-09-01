@@ -951,7 +951,6 @@ export class FfmpegOptions {
     //
     // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
     //                                   a power of two.
-    // format=                           Set the pixel formats we want to target for output.
     pixelFilters.push(
 
       "scale=-2:min(ih\\, " + options.height.toString() + "):in_range=auto:out_range=auto"

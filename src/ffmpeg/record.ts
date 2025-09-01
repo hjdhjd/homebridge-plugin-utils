@@ -133,7 +133,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
   private isLivestream: boolean;
   private isLoggingErrors: boolean;
   public isTimedOut: boolean;
-  private recordingBuffer: { data: Buffer, header: Buffer, length: number, type: string }[];
+  private recordingBuffer: { data: Buffer; header: Buffer; length: number; type: string }[];
   public segmentLength?: number;
 
   /**
@@ -260,7 +260,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
 
     // -movflags flags               In the generated fMP4 stream: set the default-base-is-moof flag in the header, write an initial empty MOOV box, start a new fragment
     //                               at each keyframe, skip creating a segment index (SIDX) box in fragments, and skip writing the final MOOV trailer since it's unneeded.
-    // -flush_packets 1              Ensure we send each packet immediately after each packet.
+    // -flush_packets 1              Ensure we flush our write buffer after each muxed packet.
     // -reset_timestamps             Reset timestamps at the beginning of each segment.
     // -metadata                     Set the metadata to the name of the camera to distinguish between FFmpeg sessions.
     this.commandLineArgs.push(

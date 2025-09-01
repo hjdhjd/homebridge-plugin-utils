@@ -117,7 +117,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
    * ```
    */
   constructor(delegate: HomebridgeStreamingDelegate, sessionId: string, ffmpegOptions: FfmpegOptions, commandLineArgs: string[],
-    returnPort?: { addressVersion: string, port: number }, callback?: StreamRequestCallback) {
+    returnPort?: { addressVersion: string; port: number }, callback?: StreamRequestCallback) {
 
     // Initialize our parent.
     super(ffmpegOptions);
@@ -166,7 +166,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
    *
    * @param portInfo - Object containing the address version ("ipv4" or "ipv6") and port number.
    */
-  private createSocket(portInfo: { addressVersion: string, port: number }): void {
+  private createSocket(portInfo: { addressVersion: string; port: number }): void {
 
     let errorListener: (error: Error) => void;
     let messageListener: () => void;

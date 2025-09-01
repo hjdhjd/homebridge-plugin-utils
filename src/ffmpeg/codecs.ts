@@ -98,7 +98,7 @@ export class FfmpegCodecs {
   private _hostSystem?: string;
   private _cpuGeneration?: number;
   private readonly log: HomebridgePluginLogging | Logging;
-  private readonly ffmpegCodecs: { [index: string]: { decoders: string[], encoders: string[] } };
+  private readonly ffmpegCodecs: { [index: string]: { decoders: string[]; encoders: string[] } };
   private readonly ffmpegHwAccels: { [index: string]: boolean };
 
   /**

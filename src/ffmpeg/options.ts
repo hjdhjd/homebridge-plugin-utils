@@ -60,7 +60,7 @@ import type { HomebridgePluginLogging } from "../util.js";
 export interface FfmpegOptionsConfig {
 
   codecSupport: FfmpegCodecs;
-  crop?: { height: number, width: number, x: number, y: number };
+  crop?: { height: number; width: number; x: number; y: number };
   debug?: boolean;
   hardwareDecoding: boolean;
   hardwareTranscoding: boolean;

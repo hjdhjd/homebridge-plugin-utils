@@ -136,8 +136,7 @@ const tsRules = {
 
   ...tsEslint.configs.strictTypeChecked,
   ...tsEslint.configs.stylisticTypeChecked,
-  "@stylistic/member-delimiter-style": [ "warn",
-    { "multiline": { "delimiter": "semi", "requireLast": true }, "singleline": { "delimiter": "comma", "requireLast": false }} ],
+  "@stylistic/member-delimiter-style": "warn",
   "@typescript-eslint/await-thenable": "warn",
   "@typescript-eslint/consistent-type-imports": "warn",
   "@typescript-eslint/explicit-function-return-type": "warn",

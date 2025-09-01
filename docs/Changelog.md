@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.29.1 (2025-09-01)
+  * Housekeeping.
+
 ## 1.29.0 (2025-09-01)
   * Improvement: additional linting rules.
   * Improvement: CPU generation detection now encompasses Apple Silicon as well Intel CPUs. `intelGeneration` has now become `cpuGeneration` as a result, but the semantics are identical.

@@ -24,10 +24,10 @@
  * @module
  */
 import { EOL, cpus } from "node:os";
+import { type ExecFileException, execFile } from "node:child_process";
 import { env, platform } from "node:process";
 import type { HomebridgePluginLogging } from "../util.js";
 import type { Logging } from "homebridge";
-import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import util from "node:util";
 
@@ -93,10 +93,10 @@ export class FfmpegCodecs {
    */
   public readonly ffmpegExec: string;
 
-  private _ffmpegVersion: string;
-  private _gpuMem: number;
-  private _hostSystem: string;
-  private _intelGeneration: number;
+  private _ffmpegVersion?: string;
+  private _gpuMem?: number;
+  private _hostSystem?: string;
+  private _cpuGeneration?: number;
   private readonly log: HomebridgePluginLogging | Logging;
   private readonly ffmpegCodecs: { [index: string]: { decoders: string[], encoders: string[] } };
   private readonly ffmpegHwAccels: { [index: string]: boolean };
@@ -113,10 +113,6 @@ export class FfmpegCodecs {
    */
   constructor(options: FOptions) {
 
-    this._gpuMem = 0;
-    this._ffmpegVersion = "";
-    this._hostSystem = "";
-    this._intelGeneration = 0;
     this.ffmpegExec = options.ffmpegExec ?? "ffmpeg";
     this.ffmpegCodecs = {};
     this.ffmpegHwAccels = {};
@@ -262,7 +258,7 @@ export class FfmpegCodecs {
    */
   public get gpuMem(): number {
 
-    return this._gpuMem;
+    return this._gpuMem ?? 0;
   }
 
   /**
@@ -270,7 +266,7 @@ export class FfmpegCodecs {
    */
   public get ffmpegVersion(): string {
 
-    return this._ffmpegVersion;
+    return this._ffmpegVersion ?? "";
   }
 
   /**
@@ -280,17 +276,17 @@ export class FfmpegCodecs {
    */
   public get hostSystem(): string {
 
-    return this._hostSystem;
+    return this._hostSystem ?? "generic";
   }
 
   /**
-   * Returns the Intel CPU generation, if we're on Linux and have an Intel processor.
+   * Returns the CPU generation if we're on Linux and have an Intel processor or on macOS and have an Apple Silicon processor.
    *
    * @returns Returns the CPU generation or 0 if it can't be detected or an invalid platform.
    */
-  public get intelGeneration(): number {
+  public get cpuGeneration(): number {
 
-    return this._intelGeneration;
+    return this._cpuGeneration ?? 0;
   }
 
   // Probe our video processor's version.
@@ -404,9 +400,6 @@ export class FfmpegCodecs {
   // Identify what hardware and operating system environment we're actually running on.
   private probeHwOs(): void {
 
-    // Start off with a generic identifier.
-    this._hostSystem = "generic";
-
     // Take a look at the platform we're on for an initial hint of what we are.
     switch(platform) {
 
@@ -414,6 +407,20 @@ export class FfmpegCodecs {
       case "darwin":
 
         this._hostSystem = "macOS." + (cpus()[0].model.includes("Apple") ? "Apple" : "Intel");
+
+        // Identify what generation of Apple Silicon we have.
+        if(cpus()[0].model.includes("Apple")) {
+
+          // Extract the CPU model.
+          const cpuModel = cpus()[0].model.match(/Apple M(\d+) .*/i);
+
+          this._cpuGeneration = 0;
+
+          if(cpuModel && cpuModel[1]) {
+
+            this._cpuGeneration = Number(cpuModel[1]);
+          }
+        }
 
         break;
 
@@ -442,7 +449,7 @@ export class FfmpegCodecs {
           // Extract the CPU model.
           const cpuModel = cpus()[0].model.match(/Intel.*Core.*i\d+-(\d{3,5})/i);
 
-          this._intelGeneration = 0;
+          this._cpuGeneration = 0;
 
           if(cpuModel && cpuModel[1]) {
 
@@ -454,15 +461,15 @@ export class FfmpegCodecs {
             if(skuNum < 1000) {
 
               // First generation CPUs are three digit SKUs.
-              this._intelGeneration = 1;
+              this._cpuGeneration = 1;
             } else if(skuStr.length > 4) {
 
               // For five-digit SKUs, the generation are the leading digits before the last three.
-              this._intelGeneration = Number(skuStr.slice(0, skuStr.length - 3));
+              this._cpuGeneration = Number(skuStr.slice(0, skuStr.length - 3));
             } else {
 
               // Finally, for four-digit SKUs, the generation is the first digit.
-              this._intelGeneration = Number(skuStr.charAt(0));
+              this._cpuGeneration = Number(skuStr.charAt(0));
             }
           }
         }
@@ -487,18 +494,8 @@ export class FfmpegCodecs {
       // Let's see what we've got.
       const gpuMatch = gpuRegex.exec(stdout);
 
-      // We matched what we're looking for.
-      if(gpuMatch) {
-
-        // Parse the result and retrieve our allocated GPU memory.
-        this._gpuMem = parseInt(gpuMatch[1]);
-
-        // Something went wrong.
-        if(isNaN(this._gpuMem)) {
-
-          this._gpuMem = 0;
-        }
-      }
+      // Parse the result and retrieve our allocated GPU memory.
+      this._gpuMem = Number.parseInt(gpuMatch?.[1] ?? "", 10) || 0;
     });
   }
 
@@ -518,33 +515,17 @@ export class FfmpegCodecs {
       return true;
     } catch(error) {
 
-      // It's really a SystemError, but Node hides that type from us for esoteric reasons.
-      if(error instanceof Error) {
+      const execError = error as ExecFileException;
 
-        interface SystemError {
+      if(execError.code === "ENOENT") {
 
-          cmd: string,
-          code: string,
-          errno: number,
-          path: string,
-          spawnargs: string[],
-          stderr: string,
-          stdout: string,
-          syscall: string
-        }
+        this.log.error("Unable to find '%s' in path: '%s'.", command, env.PATH);
+      } else if(quietRunErrors) {
 
-        const execError = error as unknown as SystemError;
+        return false;
+      } else {
 
-        if(execError.code === "ENOENT") {
-
-          this.log.error("Unable to find '%s' in path: '%s'.", command, env.PATH);
-        } else if(quietRunErrors) {
-
-          return false;
-        } else {
-
-          this.log.error("Error running %s: %s", command, error.message);
-        }
+        this.log.error("Error running %s: %s", command, execError.message);
       }
 
       this.log.error("Unable to probe the capabilities of your Homebridge host without access to '%s'. Ensure that it is available in your path and correctly working.",

@@ -34,6 +34,7 @@ import { once } from "node:events";
  * @property audioStream          - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
  * @property codec                - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`.
  * @property enableAudio          - Indicates whether to enable audio or not.
+ * @property hardwareDecoding     - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`.
  * @property hardwareTranscoding  - Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`.
  * @property videoStream          - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
  */
@@ -42,6 +43,7 @@ export interface FMp4BaseOptions {
   audioStream: number;
   codec: string;
   enableAudio: boolean;
+  hardwareDecoding: boolean;
   hardwareTranscoding: boolean;
   videoStream: number;
 }
@@ -49,17 +51,21 @@ export interface FMp4BaseOptions {
 /**
  * Options for configuring an fMP4 recording or livestream session.
  *
+ * @property audioFilters    - Audio filters for FFmpeg to process. These are passed as an array of filters.
  * @property fps             - The video frames per second for the session.
  * @property probesize       - Number of bytes to analyze for stream information.
  * @property timeshift       - Timeshift offset for event-based recording (in milliseconds).
  * @property transcodeAudio  - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
+ * @property videoFilters    - Video filters for FFmpeg to process. These are passed as an array of filters.
  */
 export interface FMp4RecordingOptions extends FMp4BaseOptions {
 
+  audioFilters: string[];
   fps: number;
   probesize: number;
   timeshift: number;
   transcodeAudio: boolean;
+  videoFilters: string[];
 }
 
 /**
@@ -163,28 +169,30 @@ class FfmpegFMp4Process extends FfmpegProcess {
     this.isLivestream = !!fMp4Options.url;
     this.isTimedOut = false;
     fMp4Options.audioStream ??= 0;
+    fMp4Options.audioFilters ??= [];
     fMp4Options.codec ??= "h264";
     fMp4Options.enableAudio ??= true;
     fMp4Options.fps ??= 30;
+    fMp4Options.hardwareDecoding ??= this.options.codecSupport.ffmpegVersion.startsWith("8.") ? this.options.config.hardwareDecoding : false;
     fMp4Options.hardwareTranscoding ??= this.options.config.hardwareTranscoding;
     fMp4Options.transcodeAudio ??= true;
+    fMp4Options.videoFilters ??= [];
     fMp4Options.videoStream ??= 0;
 
     // Configure our video parameters for our input:
     //
     // -hide_banner                  Suppress printing the startup banner in FFmpeg.
     // -nostats                      Suppress printing progress reports while encoding in FFmpeg.
-    // -fflags flags                 Set the format flags to discard any corrupt packets rather than exit, generate a presentation timestamp if it's missing, and ignore
-    //                               the decoding timestamp. Adjusting timestamps is a necessity if we want to ensure we keep audio and video in sync, especially when
-    //                               using hardware acceleration.
+    // -fflags flags                 Set the format flags to discard any corrupt packets rather than exit.
     // -err_detect ignore_err        Ignore decoding errors and continue rather than exit.
     // -max_delay 500000             Set an upper limit on how much time FFmpeg can take in demuxing packets, in microseconds.
     this.commandLineArgs = [
 
       "-hide_banner",
       "-nostats",
-      "-fflags", "+discardcorrupt+genpts+igndts",
+      "-fflags", "+discardcorrupt",
       "-err_detect", "ignore_err",
+      ...this.options.videoDecoder(fMp4Options.codec),
       "-max_delay", "500000"
     ];
 
@@ -202,7 +210,6 @@ class FfmpegFMp4Process extends FfmpegProcess {
     } else {
 
       // -flags low_delay              Tell FFmpeg to optimize for low delay / realtime decoding.
-      // -r fps                        Set the input frame rate for the video stream.
       // -probesize number             How many bytes should be analyzed for stream information.
       // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
       // -i pipe:0                     Use standard input to get video data.
@@ -210,7 +217,6 @@ class FfmpegFMp4Process extends FfmpegProcess {
       this.commandLineArgs.push(
 
         "-flags", "low_delay",
-        "-r", fMp4Options.fps.toString(),
         "-probesize", (fMp4Options.probesize ?? 5000000).toString(),
         "-f", "mp4",
         "-i", "pipe:0",
@@ -228,7 +234,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
 
         bitrate: recordingConfig.videoCodec.parameters.bitRate,
         fps: recordingConfig.videoCodec.resolution[2],
-        hardwareDecoding: false,
+        hardwareDecoding: fMp4Options.hardwareDecoding,
         hardwareTranscoding: fMp4Options.hardwareTranscoding,
         height: recordingConfig.videoCodec.resolution[1],
         idrInterval: HKSV_IDR_INTERVAL,
@@ -238,6 +244,12 @@ class FfmpegFMp4Process extends FfmpegProcess {
         width: recordingConfig.videoCodec.resolution[0]
       }))
     );
+
+    // Configure our video filters, if we have them.
+    if(fMp4Options.videoFilters.length) {
+
+      this.commandLineArgs.push("-filter:v", fMp4Options.videoFilters.join(", "));
+    }
 
     // If we're livestreaming, emit fragments at one-second intervals.
     if(this.isLivestream) {
@@ -253,6 +265,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
     this.commandLineArgs.push(
 
       "-movflags", "default_base_moof+empty_moov+frag_keyframe+skip_sidx+skip_trailer",
+      "-flush_packets", "1",
       "-reset_timestamps", "1",
       "-metadata", "comment=" + this.options.name() + " " + (this.isLivestream ? "Livestream Buffer" : "HKSV Event")
     );
@@ -263,6 +276,15 @@ class FfmpegFMp4Process extends FfmpegProcess {
       //
       // -map 0:a:X?                 Selects the audio stream from the input, if it exists.
       this.commandLineArgs.push("-map", "0:a:" + fMp4Options.audioStream.toString() + "?");
+
+      // Configure our audio filters, if we have them.
+      if(fMp4Options.audioFilters.length) {
+
+        this.commandLineArgs.push("-filter:a", fMp4Options.audioFilters.join(", "));
+
+        // Audio filters require transcoding. If the user's decided to filter, we enforce this requirement even if they wanted to copy the audio stream.
+        fMp4Options.transcodeAudio = true;
+      }
 
       if(fMp4Options.transcodeAudio) {
 
@@ -291,12 +313,10 @@ class FfmpegFMp4Process extends FfmpegProcess {
     // Configure our video parameters for outputting our final stream:
     //
     // -f mp4                        Tell ffmpeg that it should create an MP4-encoded output stream.
-    // -avioflags direct             Tell FFmpeg to minimize buffering to reduce latency for more realtime processing.
     // pipe:1                        Output the stream to standard output.
     this.commandLineArgs.push(
 
       "-f", "mp4",
-      "-avioflags", "direct",
       "pipe:1");
 
     // Additional logging, but only if we're debugging.

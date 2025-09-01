@@ -93,10 +93,9 @@ export interface FfmpegOptionsConfig {
  *
  * @category FFmpeg
  */
-
 export interface AudioEncoderOptions {
 
-  codec?: AudioRecordingCodecType
+  codec?: AudioRecordingCodecType;
 }
 
 /**
@@ -146,17 +145,17 @@ export interface AudioEncoderOptions {
  */
 export interface VideoEncoderOptions {
 
-  bitrate: number,
-  fps: number,
-  hardwareDecoding?: boolean,
-  hardwareTranscoding?: boolean,
-  height: number,
-  idrInterval: number,
-  inputFps: number,
-  level: H264Level,
-  profile: H264Profile,
-  smartQuality?: boolean,
-  width: number
+  bitrate: number;
+  fps: number;
+  hardwareDecoding?: boolean;
+  hardwareTranscoding?: boolean;
+  height: number;
+  idrInterval: number;
+  inputFps: number;
+  level: H264Level;
+  profile: H264Profile;
+  smartQuality?: boolean;
+  width: number;
 }
 
 /**
@@ -225,8 +224,6 @@ export class FfmpegOptions {
    */
   public readonly name: () => string;
 
-  private readonly hwPixelFormat: string[];
-
   /**
    * Creates an instance of Homebridge FFmpeg encoding and decoding options.
    *
@@ -244,7 +241,6 @@ export class FfmpegOptions {
     this.config = options;
     this.debug = options.debug ?? false;
 
-    this.hwPixelFormat = [];
     this.log = options.log;
     this.name = options.name;
 
@@ -315,13 +311,11 @@ export class FfmpegOptions {
           return false;
         }
 
-        this.hwPixelFormat.push(...pixelFormat);
-
         return true;
       };
 
       // Utility function to check that we have a specific decoder codec available to us.
-      const validateHwAccel = (accel: string, pixelFormat: string[]): boolean => {
+      const validateHwAccel = (accel: string): boolean => {
 
         if(!this.config.codecSupport.hasHwAccel(accel)) {
 
@@ -333,8 +327,6 @@ export class FfmpegOptions {
           return false;
         }
 
-        this.hwPixelFormat.push(...pixelFormat);
-
         return true;
       };
 
@@ -344,7 +336,7 @@ export class FfmpegOptions {
         case "macOS.Intel":
 
           // Verify that we have hardware-accelerated decoding available to us.
-          validateHwAccel("videotoolbox", [ "videotoolbox_vld", "nv12", "yuv420p" ]);
+          validateHwAccel("videotoolbox");
 
           break;
 
@@ -421,12 +413,6 @@ export class FfmpegOptions {
           logMessage = "Raspberry Pi hardware acceleration will be used for livestreaming. " +
             "HomeKit Secure Video recordings are not supported by the hardware encoder and will use software transcoding instead";
 
-          // Ensure we have the pixel format the Raspberry Pi GPU is expecting available to us, if it isn't already.
-          if(!this.hwPixelFormat.includes("yuv420p")) {
-
-            this.hwPixelFormat.push("yuv420p");
-          }
-
           break;
 
         default:
@@ -437,7 +423,6 @@ export class FfmpegOptions {
             this.config.codecSupport.hasDecoder("hevc", "hevc_qsv")) {
 
             this.config.hardwareDecoding = true;
-            this.hwPixelFormat.push("qsv", "yuv420p");
             logMessage = "Intel Quick Sync Video";
           } else {
 
@@ -457,6 +442,146 @@ export class FfmpegOptions {
     }
 
     return this.config.hardwareTranscoding;
+  }
+
+  /**
+   * Determines the required hardware transfer filters based on the decoding and encoding configuration.
+   *
+   * This method manages the transition between software and hardware processing contexts. When video data needs to move between the CPU and GPU for processing, we
+   * provide the appropriate FFmpeg filters to handle that transfer efficiently.
+   *
+   * @param options - Video encoder options including hardware decoding and transcoding state.
+   * @returns Array of filter strings for hardware upload or download operations.
+   */
+  private getHardwareTransferFilters(options: VideoEncoderOptions): string[] {
+
+    const filters: string[] = [];
+
+    // We need to handle four possible state transitions between decoding and encoding.
+    //
+    // 1. Software decode -> Software encode: No transfer needed, stay in software.
+    // 2. Software decode -> Hardware encode: Need hwupload to move data to GPU.
+    // 3. Hardware decode -> Software encode: Need hwdownload to move data to CPU.
+    // 4. Hardware decode -> Hardware encode: No transfer needed, stay in hardware.
+    const needsUpload = !options.hardwareDecoding && options.hardwareTranscoding;
+    const needsDownload = options.hardwareDecoding && !options.hardwareTranscoding;
+
+    if(needsUpload) {
+
+      // We need to download frames from the GPU to system memory for software encoding.
+      switch(this.codecSupport.hostSystem) {
+
+        case "macOS.Apple":
+        case "macOS.Intel":
+
+          // FFmpeg 8.x on macOS requires explicit upload when moving from VideoToolbox to software.
+          // We need to upload frames from system memory to the GPU for hardware encoding.
+          if(this.config.codecSupport.ffmpegVersion.startsWith("8.")) {
+
+            filters.push("hwupload");
+          }
+
+          break;
+
+        case "raspbian":
+
+          // We don't need to download anything on Raspbian.
+          break;
+
+        default:
+
+          // We need to upload frames from system memory to the GPU for hardware encoding.
+          filters.push("hwupload");
+
+          break;
+      }
+
+      return filters;
+    }
+
+    if(needsDownload) {
+
+      // We need to download frames from the GPU to system memory for software encoding.
+      switch(this.codecSupport.hostSystem) {
+
+        case "macOS.Apple":
+        case "macOS.Intel":
+
+          // FFmpeg 8.x on macOS requires explicit download and format conversion when moving from VideoToolbox to software.
+          if(this.config.codecSupport.ffmpegVersion.startsWith("8.")) {
+
+            filters.push("hwdownload", "format=nv12");
+          }
+
+          break;
+
+        case "raspbian":
+
+          // We don't need to download anything on Raspbian.
+          break;
+
+        default:
+
+          // Other platforms typically just need a simple download operation.
+          filters.push("hwdownload");
+
+          break;
+      }
+
+      return filters;
+    }
+
+    return filters;
+  }
+
+  /**
+   * Gets hardware device initialization options for encoders that need them.
+   *
+   * When we're using hardware encoding without hardware decoding, we need to initialize the hardware device context explicitly. This method provides the
+   * platform-specific initialization arguments required by FFmpeg.
+   *
+   * @param options - Video encoder options.
+   * @returns Array of FFmpeg arguments for hardware device initialization.
+   */
+  private getHardwareDeviceInit(options: VideoEncoderOptions): string[] {
+
+    // Only initialize hardware device if we're encoding with hardware but not decoding with it. When decoding with hardware, the device context is already initialized
+    // by the decoder.
+    if(!options.hardwareDecoding && options.hardwareTranscoding) {
+
+      switch(this.codecSupport.hostSystem) {
+
+        case "macOS.Apple":
+        case "macOS.Intel":
+
+          // Unfortunately, versions of FFmpeg prior to 8.0 don't properly support VideoToolbox use cases like this.
+          if(!this.config.codecSupport.ffmpegVersion.startsWith("8.")) {
+
+            break;
+          }
+
+          // Initialize VideoToolbox hardware context and assign it a name for use in filter chains.
+          //
+          // -init_hw_device               Initialize our hardware accelerator and assign it a name to be used in the FFmpeg command line.
+          // -filter_hw_device             Specify the hardware accelerator to be used with our video filter pipeline.
+          return [ "-init_hw_device", "videotoolbox=hw", "-filter_hw_device", "hw" ];
+
+        case "raspbian":
+
+          // We don't need to initialize anything on Raspbian.
+          break;
+
+        default:
+
+          // Initialize Intel Quick Sync Video hardware context.
+          //
+          // -init_hw_device               Initialize our hardware accelerator and assign it a name to be used in the FFmpeg command line.
+          // -filter_hw_device             Specify the hardware accelerator to be used with our video filter pipeline.
+          return [ "-init_hw_device", "qsv=hw", "-filter_hw_device", "hw" ];
+      }
+    }
+
+    return [];
   }
 
   /**
@@ -490,7 +615,6 @@ export class FfmpegOptions {
         //
         // -codec:a libfdk_aac           Use the libfdk_aac encoder.
         // -afterburner 1                Increases audio quality at the expense of needing a little bit more computational power in libfdk_aac.
-        // -eld_v2 1                     Use the enhanced low delay v2 standard for better audio characteristics.
         audioOptions.push(
 
           "-codec:a", "libfdk_aac",
@@ -500,15 +624,6 @@ export class FfmpegOptions {
         switch(options.codec) {
 
           case AudioRecordingCodecType.AAC_ELD:
-
-            audioOptions.push("-eld_v2", "1");
-
-            // If we're using Jellyfin's FFmpeg, it's libfdk_aac is broken and crashes when using spectral band replication.
-            if(!/-Jellyfin$/.test(this.config.codecSupport.ffmpegVersion)) {
-
-              // -eld_sbr 1                  Use spectral band replication to further enhance audio.
-              audioOptions.push("-eld_sbr", "1");
-            }
 
             break;
 
@@ -599,7 +714,6 @@ export class FfmpegOptions {
    */
   public videoDecoder(codec = "h264"): string[] {
 
-
     switch(codec.toLowerCase()) {
 
       case "av1":
@@ -651,7 +765,8 @@ export class FfmpegOptions {
           // -hwaccel videotoolbox           Select Video Toolbox for hardware-accelerated H.264 decoding.
           decoderOptions = [
 
-            "-hwaccel", "videotoolbox"
+            "-hwaccel", "videotoolbox",
+            ...(this.config.codecSupport.ffmpegVersion.startsWith("8.") ? [ "-hwaccel_output_format", "videotoolbox_vld" ] : [])
           ];
 
           break;
@@ -675,7 +790,7 @@ export class FfmpegOptions {
           // -hwaccel qsv                    Select Quick Sync Video to enable hardware-accelerated H.264 decoding.
           // -codec:v X_qsv                  Select the Quick Sync Video codec for hardware-accelerated AV1, H.264, or HEVC processing. AV1 decoding isn't available
           //                                 before 11th generation Intel CPUs.
-          decoderOptions = ((codec === "av1") && (this.codecSupport.intelGeneration < 11)) ? [] : [
+          decoderOptions = ((codec === "av1") && (this.codecSupport.cpuGeneration < 11)) ? [] : [
 
             "-hwaccel", "qsv",
             "-hwaccel_output_format", "qsv",
@@ -713,6 +828,81 @@ export class FfmpegOptions {
   }
 
   /**
+   * Generate the appropriate scale filter for the current platform. This method returns platform-specific scale filters to leverage hardware acceleration capabilities
+   * where available.
+   */
+  private getScaleFilter(options: VideoEncoderOptions): string[] {
+
+    // Determine the target dimensions for our scale operation. We maintain aspect ratio while ensuring the output doesn't exceed the requested height.
+    const targetHeight = options.height.toString();
+    const filters: string[] = [];
+
+    // Our default software scaler.
+    const swScale = "scale=-2:min(ih\\, " + targetHeight + ")" + ":in_range=auto:out_range=auto";
+
+    // Add any required hardware transfer filters first. This ensures we're in the correct memory context before scaling.
+    filters.push(...this.getHardwareTransferFilters(options));
+
+    // Set our FFmpeg scale filter based on the platform and available hardware acceleration.
+    //
+    // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
+    //                                   a power of two. For macOS, we use the accelerated version, scale_vt. For Intel QSV, we use vpp_qsv.
+    // format=                           Set the pixel formats we want to target for output, when needed.
+    switch(this.codecSupport.hostSystem) {
+
+      case "macOS.Apple":
+      case "macOS.Intel":
+
+        if(this.config.codecSupport.ffmpegVersion.startsWith("8.") && options.hardwareTranscoding) {
+
+          // On macOS with FFmpeg 8.x, we can use the VideoToolbox scaler (scale_vt) which provides hardware-accelerated scaling. This is significantly more efficient
+          // than software scaling and can handle higher throughput with lower CPU usage. Prior to FFmpeg 8.0, this would break under a variety of scenarios and was
+          // unreliable.
+          filters.push("scale_vt=-2:min(ih\\, " + targetHeight + ")");
+        } else {
+
+          // Fall back to software scaling with explicit pixel format conversion.
+          filters.push(swScale);
+        }
+
+        break;
+
+      case "raspbian":
+
+        // Raspberry Pi uses the standard software scaler. Hardware scaling capabilities vary by model, so we use the reliable software path.
+        filters.push(swScale);
+
+        break;
+
+      default:
+
+        if(options.hardwareTranscoding) {
+
+          // When using Intel Quick Sync Video, we execute GPU-accelerated operations using the vpp_qsv post-processing filter.
+          //
+          // format=same                   Set the output pixel format to the same as the input, since it's already in the GPU.
+          // w=...:h...                    Scale the video to the size that's being requested while respecting aspect ratios.
+          filters.push(
+
+            "vpp_qsv=" + [
+
+              "format=same",
+              "w=min(iw\\, (iw / ih) * " + options.height.toString() + ")",
+              "h=min(ih\\, " + options.height.toString() + ")"
+            ].join(":")
+          );
+        } else {
+
+          filters.push(swScale);
+        }
+
+        break;
+    }
+
+    return filters;
+  }
+
+  /**
    * Generates the default set of FFmpeg video encoder arguments for software transcoding using libx264.
    *
    * This method builds command-line options for the FFmpeg libx264 encoder based on the provided encoder options, including bitrate, H.264 profile and level, pixel
@@ -747,20 +937,25 @@ export class FfmpegOptions {
 
     const videoFilters = [];
 
-    // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. We only need to apply this filter if our input and output
+    // fps=                              Use the fps filter to provide the frame rate requested by HomeKit. We only need to apply this filter if our input and output
     //                                   frame rates aren't already identical.
-    const fpsFilter = ["fps=fps=" + options.fps.toString()];
+    const fpsFilter = ["fps=" + options.fps.toString()];
+
+    // Build our pixel-level filters. We need to handle potential hardware downloads and format conversions.
+    const pixelFilters: string[] = [];
+
+    // Add any required hardware transfer filters. This handles downloading from GPU if we were hardware decoding.
+    pixelFilters.push(...this.getHardwareTransferFilters(options));
 
     // Set our FFmpeg pixel-level filters:
     //
     // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
     //                                   a power of two.
     // format=                           Set the pixel formats we want to target for output.
-    const pixelFilters = [
+    pixelFilters.push(
 
-      "scale=-2:min(ih\\," + options.height.toString() + ")",
-      "format=" + [...new Set([ ...this.hwPixelFormat, "yuvj420p" ])].join("|")
-    ];
+      "scale=-2:min(ih\\, " + options.height.toString() + "):in_range=auto:out_range=auto"
+    );
 
     // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If we're
     // increasing our framerate, we want to do pixel operations on the minimal set of source frames that we need, since we're just going to duplicate them.
@@ -869,14 +1064,19 @@ export class FfmpegOptions {
     // Default hardware decoding and smart quality to true unless specified.
     options = Object.assign({}, { hardwareDecoding: true, hardwareTranscoding: this.config.hardwareTranscoding, smartQuality: true }, options);
 
-    // In case we don't have a defined pixel format.
-    if(!this.hwPixelFormat.length) {
+    // Disable hardware acceleration if we haven't detected it.
+    if(!this.config.hardwareDecoding) {
 
-      this.hwPixelFormat.push("yuvj420p");
+      options.hardwareDecoding = false;
+    }
+
+    if(!this.config.hardwareTranscoding) {
+
+      options.hardwareTranscoding = false;
     }
 
     // If we aren't hardware-accelerated, we default to libx264.
-    if(!this.config.hardwareTranscoding || !options.hardwareTranscoding) {
+    if(!options.hardwareTranscoding) {
 
       return this.defaultVideoEncoderOptions(options);
     }
@@ -887,37 +1087,22 @@ export class FfmpegOptions {
     // variation in order to maximize quality while honoring bandwidth constraints.
     const adjustedMaxBitrate = options.bitrate + (options.smartQuality ? HOMEKIT_STREAMING_HEADROOM : 0);
 
-    // Initialize our options.
-    const encoderOptions = [];
+    // Initialize our options. We'll add hardware device initialization first if needed.
+    const encoderOptions = [...this.getHardwareDeviceInit(options)];
 
-    let videoFilters = [];
+    const videoFilters = [];
 
-    // fps=fps=                          Use the fps filter to provide the frame rate requested by HomeKit. We only need to apply this filter if our input and output
-    //                                   frame rates aren't already identical.
-    const fpsFilter = ["fps=fps=" + options.fps.toString()];
-
-    // Set our FFmpeg pixel-level filters:
+    // Build our pixel filter chain. We conditionally include the crop filter if configured, then apply platform-specific scaling which handles any necessary hardware
+    // transfers internally.
     //
     // crop                              Crop filter options, if requested.
-    // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
-    //                                   a power of two.
-    // format=                           Set the pixel formats we want to target for output.
-    let pixelFilters = [
+    // scale=...                         Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
+    //                                   a power of two. This also handles hardware transfers as needed.
+    videoFilters.push(
 
-      ...(this.config.crop ? this.cropFilter : []),
-      "scale=-2:min(ih\\," + options.height.toString() + ")",
-      "format=" + this.hwPixelFormat.join("|")
-    ];
-
-    // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If we're
-    // increasing our framerate, we want to do pixel operations on the minimal set of source frames that we need, since we're just going to duplicate them.
-    if(options.fps < options.inputFps) {
-
-      videoFilters = [ ...fpsFilter, ...pixelFilters ];
-    } else {
-
-      videoFilters = [ ...pixelFilters, ...(options.fps > options.inputFps ? fpsFilter : []) ];
-    }
+      ...(this.config.crop ? [this.cropFilter] : []),
+      ...this.getScaleFilter(options)
+    );
 
     switch(this.codecSupport.hostSystem) {
 
@@ -940,6 +1125,7 @@ export class FfmpegOptions {
         //                               livestreamng exerience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
+        // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.
         encoderOptions.push(
 
           "-codec:v", "h264_videotoolbox",
@@ -952,7 +1138,8 @@ export class FfmpegOptions {
           "-filter:v", videoFilters.join(", "),
           "-g:v", (options.fps * options.idrInterval).toString(),
           "-bufsize", (2 * options.bitrate).toString() + "k",
-          "-maxrate", adjustedMaxBitrate.toString() + "k"
+          "-maxrate", adjustedMaxBitrate.toString() + "k",
+          ...((options.fps !== options.inputFps) ? [ "-r", options.fps.toString() ] : [])
         );
 
         if(options.smartQuality) {
@@ -976,7 +1163,6 @@ export class FfmpegOptions {
         // -allow_sw 1                   Allow the use of the software encoder if the hardware encoder is occupied or unavailable.
         //                               This allows us to scale when we get multiple streaming requests simultaneously that can consume all the available encode engines.
         // -realtime 1                   We prefer speed over quality - if the encoder has to make a choice, sacrifice one for the other.
-        // -coder cabac                  Use the cabac encoder for better video quality with the encoding profiles we use for HomeKit.
         // -profile:v                    Use the H.264 profile that HomeKit is requesting when encoding.
         // -level:v 0                    We override what HomeKit requests for the H.264 profile level on macOS when we're using hardware-accelerated transcoding because
         //                               the hardware encoder is particular about how to use levels. Setting it to 0 allows the encoder to decide for itself.
@@ -990,12 +1176,12 @@ export class FfmpegOptions {
         //                               livestreaming exerience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
-        return [
+        // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.
+        encoderOptions.push(
 
           "-codec:v", "h264_videotoolbox",
           "-allow_sw", "1",
           "-realtime", "1",
-          "-coder", "cabac",
           "-profile:v", this.getH264Profile(options.profile),
           "-level:v", "0",
           "-bf", "0",
@@ -1004,8 +1190,11 @@ export class FfmpegOptions {
           "-b:v", options.bitrate.toString() + "k",
           "-g:v", (options.fps * options.idrInterval).toString(),
           "-bufsize", (2 * options.bitrate).toString() + "k",
-          "-maxrate", adjustedMaxBitrate.toString() + "k"
-        ];
+          "-maxrate", adjustedMaxBitrate.toString() + "k",
+          ...((options.fps !== options.inputFps) ? [ "-r", options.fps.toString() ] : [])
+        );
+
+        return encoderOptions;
 
       case "raspbian":
 
@@ -1021,7 +1210,8 @@ export class FfmpegOptions {
         //                               livestreamng exerience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
-        return [
+        // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.
+        encoderOptions.push(
 
           "-codec:v", "h264_v4l2m2m",
           "-profile:v", this.getH264Profile(options.profile, true),
@@ -1032,40 +1222,13 @@ export class FfmpegOptions {
           "-b:v", options.bitrate.toString() + "k",
           "-g:v", (options.fps * options.idrInterval).toString(),
           "-bufsize", (2 * options.bitrate).toString() + "k",
-          "-maxrate", adjustedMaxBitrate.toString() + "k"
-        ];
+          "-maxrate", adjustedMaxBitrate.toString() + "k",
+          ...((options.fps !== options.inputFps) ? [ "-r", options.fps.toString() ] : [])
+        );
+
+        return encoderOptions;
 
       default:
-
-        // Clear out any prior video filters.
-        videoFilters = [];
-
-        // We execute the following GPU-accelerated operations using the Quick Sync Video post-processing filter:
-        //
-        // crop                          Crop filter options, if requested.
-        // hwupload                      If we aren't hardware decoding, we need to upload decoded frames to QSV to process them.
-        // format=same                   Set the output pixel format to the same as the input, since it's already in the GPU.
-        // w=...:h...                    Scale the video to the size that's being requested while respecting aspect ratios.
-        pixelFilters = [
-
-          ...(this.config.crop ? this.cropFilter : []),
-          (options.hardwareDecoding ? "" : "hwupload,") + "vpp_qsv=" + [
-
-            "format=same",
-            "w=min(iw\\, (iw / ih) * " + options.height.toString() + ")",
-            "h=min(ih\\, " + options.height.toString() + ")"
-          ].join(":")
-        ];
-
-        // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If
-        // we're increasing our framerate, we want to do pixel operations on the minimal set of source frames that we need, since we're just going to duplicate them.
-        if(options.fps < options.inputFps) {
-
-          videoFilters.push(...fpsFilter, ...pixelFilters);
-        } else {
-
-          videoFilters.push(...pixelFilters, ...(options.fps > options.inputFps ? fpsFilter : []));
-        }
 
         // h264_qsv is the Intel Quick Sync Video hardware encoder API. We use the following options:
         //
@@ -1075,14 +1238,13 @@ export class FfmpegOptions {
         //                               the hardware encoder will determine which levels to use. Setting it to 0 allows the encoder to decide for itself.
         // -bf 0                         Disable B-frames when encoding to increase compatibility against occasionally finicky HomeKit clients.
         // -noautoscale                  Don't attempt to scale the video stream automatically.
-        // -init_hw_device               Initialize our hardware accelerator and assign it a name to be used in the FFmpeg command line.
-        // -filter_hw_device             Specify the hardware accelerator to be used with our video filter pipeline.
         // -filter:v                     Set the pixel format, adjust the frame rate if needed, and scale the video to the size we want while respecting aspect ratios and
         //                               ensuring our final dimensions are a power of two.
         // -g:v                          Set the group of pictures to the number of frames per second * the interval in between keyframes to ensure a solid
         //                               livestreamng exerience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
+        // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.
         encoderOptions.push(
 
           "-codec:v", "h264_qsv",
@@ -1090,12 +1252,11 @@ export class FfmpegOptions {
           "-level:v", "0",
           "-bf", "0",
           "-noautoscale",
-          "-init_hw_device", "qsv=hw",
-          "-filter_hw_device", "hw",
           "-filter:v", videoFilters.join(", "),
           "-g:v", (options.fps * options.idrInterval).toString(),
           "-bufsize", (2 * options.bitrate).toString() + "k",
-          "-maxrate", adjustedMaxBitrate.toString() + "k"
+          "-maxrate", adjustedMaxBitrate.toString() + "k",
+          ...((options.fps !== options.inputFps) ? [ "-r", options.fps.toString() ] : [])
         );
 
         if(options.smartQuality) {

@@ -156,6 +156,9 @@ import { FeatureOptions} from "./featureoptions.js";
  */
 export class webUiFeatureOptions {
 
+  // Map of category UI state indexed by context key (serial number or "global").
+  #categoryStates;
+
   // Table containing the currently displayed feature options.
   #configTable;
 
@@ -241,6 +244,7 @@ export class webUiFeatureOptions {
     } = options;
 
     // Initialize all our properties. We cache DOM elements for performance and maintain state for the current controller and device context.
+    this.#categoryStates = {};
     this.#configTable = document.getElementById("configTable");
     this.#controller = null;
     this.#controllersContainer = document.getElementById("controllersContainer");
@@ -476,19 +480,18 @@ export class webUiFeatureOptions {
 
           const isCollapsed = tbody.style.display === "none";
 
-          tbody.style.display = isCollapsed ? "" : "none";
-
-          const arrow = table.querySelector(".arrow");
-
-          if(arrow) {
-
-            arrow.textContent = isCollapsed ? "\u25BC " : "\u25B6 ";
-          }
-
-          // Update accessibility state to reflect the current expansion state for assistive technologies.
-          headerCell.setAttribute("aria-expanded", isCollapsed ? "true" : "false");
+          // Use the shared method to update the state.
+          this.#setCategoryState(table, !isCollapsed);
 
           document.getElementById("toggleAllCategories")?.updateState?.();
+
+          // Save the state after toggling this category.
+          const currentContext = this.#getCurrentContextKey();
+
+          if(currentContext) {
+
+            this.#saveCategoryStates(currentContext);
+          }
         }
 
         return;
@@ -690,6 +693,35 @@ export class webUiFeatureOptions {
   }
 
   /**
+   * Set the expansion state of a category table.
+   *
+   * @param {HTMLTableElement} table - The category table element.
+   * @param {boolean} isCollapsed - True to collapse, false to expand.
+   * @private
+   */
+  #setCategoryState(table, isCollapsed) {
+
+    const tbody = table.querySelector("tbody");
+    const arrow = table.querySelector(".arrow");
+    const headerCell = table.querySelector("thead th[role='button']");
+
+    if(tbody) {
+
+      tbody.style.display = isCollapsed ? "none" : "";
+    }
+
+    if(arrow) {
+
+      arrow.textContent = isCollapsed ? "\u25B6 " : "\u25BC ";
+    }
+
+    if(headerCell) {
+
+      headerCell.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+    }
+  }
+
+  /**
    * Hide the feature options webUI and clean up all resources.
    *
    * This hides the UI elements and calls cleanup to remove all event listeners and free resources. This method should be called when switching away from the
@@ -724,6 +756,13 @@ export class webUiFeatureOptions {
    */
   #showGlobalOptions() {
 
+    // Save the current UI state before switching contexts.
+    const previousContext = this.#getCurrentContextKey();
+
+    if(previousContext && this.#configTable.querySelector("table[data-category]")) {
+
+      this.#saveCategoryStates(previousContext);
+    }
 
     // Clear the devices container since global options don't have associated devices, but only when we have controllers defined.
     if(this.#getControllers) {
@@ -747,6 +786,14 @@ export class webUiFeatureOptions {
    * @private
    */
   async #showControllerOptions(controllerSerial) {
+
+    // Save the current UI state before switching contexts.
+    const previousContext = this.#getCurrentContextKey();
+
+    if(previousContext && this.#configTable.querySelector("table[data-category]")) {
+
+      this.#saveCategoryStates(previousContext);
+    }
 
     const entry = (await this.#getControllers())?.find(c => c.serialNumber === controllerSerial);
 
@@ -785,6 +832,23 @@ export class webUiFeatureOptions {
 
     // Make sure we have the refreshed configuration. This ensures we're always working with the latest saved settings.
     this.currentConfig = await homebridge.getPluginConfig();
+
+    // Load any persisted UI states from localStorage.
+    try {
+
+      const storageKey = "homebridge-" + (this.currentConfig[0]?.platform ?? "plugin") + "-category-states";
+      const stored = window.localStorage.getItem(storageKey);
+
+      if(stored) {
+
+        this.#categoryStates = JSON.parse(stored);
+      }
+
+      // eslint-disable-next-line no-unused-vars
+    } catch(error) {
+
+      this.#categoryStates = {};
+    }
 
     // Keep our revert snapshot aligned with whatever was *last saved* (not just first render).
     // We compare to the current config and update the snapshot if it differs, so "Revert to Saved" reflects the latest saved state.
@@ -1279,6 +1343,15 @@ export class webUiFeatureOptions {
 
     homebridge.showSpinner();
 
+    // Retrieve our current context before we change the active link.
+    const previousActive = this.#devicesContainer.querySelector(".nav-link.active[data-navigation='device']");
+
+    // Save the current category UI state before switching contexts.
+    if(previousActive && (previousActive.name !== deviceId) && this.#configTable.querySelector("table[data-category]")) {
+
+      this.#saveCategoryStates(previousActive.name);
+    }
+
     // Clean up event listeners from previous option displays. This ensures we don't accumulate listeners as users navigate between devices.
     this.#cleanupOptionEventListeners();
 
@@ -1298,6 +1371,9 @@ export class webUiFeatureOptions {
 
     // Create option tables for each category. Categories group related options together for better organization.
     this.#createOptionTables(currentDevice);
+
+    // Restore saved category UI state context for this device.
+    this.#restoreCategoryStates(deviceId);
 
     // Set up search functionality if available. This includes debounced search and keyboard shortcuts.
     this.#setupSearchFunctionality();
@@ -1807,6 +1883,14 @@ export class webUiFeatureOptions {
     }
 
     toggleBtn.updateState();
+
+    // Save the category UI state after toggling all categories.
+    const currentContext = this.#getCurrentContextKey();
+
+    if(currentContext) {
+
+      this.#saveCategoryStates(currentContext);
+    }
   }
 
   /**
@@ -1853,6 +1937,7 @@ export class webUiFeatureOptions {
     // Create a unique id for the tbody so that the header can reference it for accessibility.
     const tbodyId = "tbody-" + category.name.replace(/\s+/g, "-");
 
+    // We default category tables to collapsed.
     const tbody = this.#createElement("tbody", {
 
       classList: [ "border", "category-border" ],
@@ -1933,6 +2018,7 @@ export class webUiFeatureOptions {
 
     const scopeLabel = !currentDevice ? " (Global)" : (this.#ui.isController(currentDevice) ? " (Controller-specific)" : " (Device-specific)");
 
+    // We default category tables to collapsed.
     const th = this.#createElement("th", {
 
       "aria-controls": tbodyId,
@@ -2200,6 +2286,98 @@ export class webUiFeatureOptions {
     label.classList.add(scopeColor || "text-body");
 
     return label;
+  }
+
+  /**
+   * Save the current category UI state for the given context.
+   *
+   * @param {string} contextKey - The context identifier (device serial or "Global Options").
+   * @private
+   */
+  #saveCategoryStates(contextKey) {
+
+    const states = {};
+    const tables = document.querySelectorAll("#configTable table[data-category]");
+
+    for(const table of tables) {
+
+      const categoryName = table.getAttribute("data-category");
+      const tbody = table.querySelector("tbody");
+
+      if(tbody) {
+
+        // Store true if collapsed (display: none), false if expanded.
+        states[categoryName] = tbody.style.display === "none";
+      }
+    }
+
+    this.#categoryStates[contextKey] = states;
+
+    // Finally, we persist to localStorage to remember user preferences.
+    try {
+
+      const storageKey = "homebridge-" + (this.currentConfig[0]?.platform ?? "plugin") + "-category-states";
+
+      window.localStorage.setItem(storageKey, JSON.stringify(this.#categoryStates));
+
+      // eslint-disable-next-line no-empty, no-unused-vars
+    } catch(error) {
+
+    }
+  }
+
+  /**
+   * Restore saved category UI state for the given context.
+   *
+   * @param {string} contextKey - The context identifier (device serial or "Global Options").
+   * @private
+   */
+  #restoreCategoryStates(contextKey) {
+
+    const savedStates = this.#categoryStates[contextKey];
+
+    if(!savedStates) {
+
+      return;
+    }
+
+    const tables = document.querySelectorAll("#configTable table[data-category]");
+
+    for(const table of tables) {
+
+      const categoryName = table.getAttribute("data-category");
+
+      if(categoryName in savedStates) {
+
+        this.#setCategoryState(table, savedStates[categoryName]);
+      }
+    }
+
+    // Update the toggle button state after restoring.
+    document.getElementById("toggleAllCategories")?.updateState?.();
+  }
+
+  /**
+   * Get the current context key for UI state tracking.
+   *
+   * @returns {string} The context key for the current view.
+   * @private
+   */
+  #getCurrentContextKey() {
+
+    // Check devices first - if there's an active device, that's our context.
+    const activeDevice = this.#devicesContainer.querySelector(".nav-link.active[data-navigation='device']");
+
+    if(activeDevice) {
+
+      return activeDevice.name;
+    }
+
+    // No active device, so check for either the active controller or global context.
+    const activeController = this.#controllersContainer.querySelector(".nav-link.active[data-navigation]");
+
+    // Default to our global options if we don't have a current controller.
+    return (activeController?.name !== "Global Options") ? this.#devices[0].serialNumber : "Global Options";
   }
 
   /**
@@ -3509,6 +3687,7 @@ export class webUiFeatureOptions {
    */
   cleanup() {
 
+    this.#categoryStates = {};
     this.#cleanupEventListeners();
     this.#eventListeners.clear();
 

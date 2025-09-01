@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file. This projec
   * Improvement: CPU generation detection now encompasses Apple Silicon as well Intel CPUs. `intelGeneration` has now become `cpuGeneration` as a result, but the semantics are identical.
   * Improvement: modernized the hardware acceleration pipeline to utilize hardware scaling whenever possible (and working correctly) and prepared for the future including FFmpeg 8.0 support.
   * Improvement: added audio and video filter support to HKSV event recording.
+  * Improvement: the feature option webUI now maintains the context of what category groups you've left expanded and collapsed.
   * Housekeeping.
 
 ## 1.28.0 (2025-08-24)

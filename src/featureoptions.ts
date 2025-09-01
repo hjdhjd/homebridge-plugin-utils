@@ -22,12 +22,12 @@ import type { Nullable } from "./util.js";
  */
 export interface FeatureOptionEntry {
 
-  default: boolean,                // Default feature option state.
-  defaultValue?: number | string,  // Default value for value-based feature options.
-  description: string,             // Description of the feature option.
-  group?: string,                  // Feature option grouping for related options.
-  inputSize?: number,              // Width of the input field for a value-based feature option.
-  name: string                     // Name of the feature option.
+  default: boolean;                // Default feature option state.
+  defaultValue?: number | string;  // Default value for value-based feature options.
+  description: string;             // Description of the feature option.
+  group?: string;                  // Feature option grouping for related options.
+  inputSize?: number;              // Width of the input field for a value-based feature option.
+  name: string;                    // Name of the feature option.
 }
 
 /**
@@ -38,8 +38,8 @@ export interface FeatureOptionEntry {
  */
 export interface FeatureCategoryEntry {
 
-  description: string,
-  name: string
+  description: string;
+  name: string;
 }
 
 /**
@@ -55,8 +55,8 @@ export type OptionScope =  "controller" | "device" | "global" | "none";
  */
 interface OptionInfoEntry {
 
-  scope: OptionScope,
-  value: boolean
+  scope: OptionScope;
+  value: boolean;
 }
 
 /**

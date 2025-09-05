@@ -354,8 +354,7 @@ export class FfmpegOptions {
             return false;
           }
 
-          // Verify that we have the hardware decoder available to us. Unfortunately, at the moment, it seems that hardware decoding is flaky, at best, on Raspberry Pi.
-          // validateDecoder("h264_mmal", [ "mmal", "yuv420p" ]);
+          // Verify that we have the hardware decoder available to us. Unfortunately, as of FFmpeg 7, it seems that hardware decoding is flaky, at best, on Raspberry Pi.
           // validateDecoder("h264_v4l2m2ml", [ "yuv420p" ]);
           this.config.hardwareDecoding = false;
 
@@ -485,7 +484,9 @@ export class FfmpegOptions {
 
         case "raspbian":
 
-          // We don't need to download anything on Raspbian.
+          // The Raspberry Pi hardware encoder prefers being fed the ubiquitous yuv420p.
+          filters.push("format=yuv420p");
+
           break;
 
         default:
@@ -773,12 +774,13 @@ export class FfmpegOptions {
 
         case "raspbian":
 
-          // h264_mmal is the preferred Raspberry Pi hardware decoder codec. We use the following options for decoding video:
+          // h264_v4l2m2m is the preferred Raspberry Pi hardware decoder codec. We use the following options for decoding video:
           //
-          // -codec:v h264_mmal              Select the Multimedia Abstraction Layer codec for hardware-accelerated H.264 processing.
+          // -codec:v h264_v4l2m2m           Select the h264_v4l2m2m codec for hardware-accelerated H.264 processing.
           decoderOptions = [
 
-            // "-codec:v", "h264_mmal"
+            // The decoder is broken in FFmpeg 7, unfortunately.
+            // "-codec:v", "h264_v4l2m2m"
           ];
 
           break;

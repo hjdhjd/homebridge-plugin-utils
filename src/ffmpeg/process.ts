@@ -231,14 +231,21 @@ export class FfmpegProcess extends EventEmitter {
     let errorListener: (error: Error) => void;
 
     // Handle errors emitted during process creation, such as an invalid command line.
-    this.process?.once("error", (error: Error) => {
+    this.process?.once("error", (error: NodeJS.ErrnoException) => {
 
-      this.log.error("FFmpeg failed to start: %s.", error.message);
+      let message = error.message;
+
+      if(error.code === "ENOENT") {
+
+        message = "unable to find '" + error.path + "'";
+      }
+
+      this.log.error("FFmpeg failed to start: %s.", message);
 
       // Execute our error handler, if one is provided.
       if(errorHandler) {
 
-        void errorHandler(error.name + ": " + error.message);
+        void errorHandler(error.name + ": " + message);
       }
     });
 

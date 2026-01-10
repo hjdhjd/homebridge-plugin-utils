@@ -74,7 +74,7 @@ if(lightbulbService) {
 ### getServiceName()
 
 ```ts
-function getServiceName(service?): undefined | string;
+function getServiceName(service?): string | undefined;
 ```
 
 Retrieves the primary name of a service, preferring the ConfiguredName characteristic over the Name characteristic.
@@ -87,7 +87,7 @@ Retrieves the primary name of a service, preferring the ConfiguredName character
 
 #### Returns
 
-`undefined` \| `string`
+`string` \| `undefined`
 
 The configured or display name of the service, or `undefined` if neither is set.
 

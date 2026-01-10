@@ -281,5 +281,5 @@ Extension of the Homebridge CameraStreamingDelegate with additional streaming co
 | ------ | ------ | ------ |
 | <a id="adjustprobesize"></a> `adjustProbeSize?` | () => `void` | Optional. Invoked to adjust probe size after stream startup errors. |
 | <a id="controller"></a> `controller` | `CameraController` | The Homebridge CameraController instance managing the stream. |
-| <a id="ffmpegerrorcheck"></a> `ffmpegErrorCheck?` | (`logEntry`) => `undefined` \| `string` | Optional. Returns a user-friendly error message for specific FFmpeg errors, if detected. |
+| <a id="ffmpegerrorcheck"></a> `ffmpegErrorCheck?` | (`logEntry`) => `string` \| `undefined` | Optional. Returns a user-friendly error message for specific FFmpeg errors, if detected. |
 | <a id="stopstream"></a> `stopStream?` | (`sessionId`) => `void` | Optional. Invoked to force stop a specific stream session by ID. |

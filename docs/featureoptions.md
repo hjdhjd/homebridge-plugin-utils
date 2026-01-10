@@ -318,7 +318,7 @@ Returns a fully formed feature option in the form of `category.option`.
 getFloat(
    option, 
    device?, 
-controller?): Nullable<undefined | number>;
+controller?): Nullable<number | undefined>;
 ```
 
 Parse a floating point feature option value.
@@ -333,7 +333,7 @@ Parse a floating point feature option value.
 
 ###### Returns
 
-[`Nullable`](util.md#nullable)\<`undefined` \| `number`\>
+[`Nullable`](util.md#nullable)\<`number` \| `undefined`\>
 
 Returns the value of a value-centric option as a floating point number, `undefined` if it doesn't exist or couldn't be parsed, and `null` if disabled.
 
@@ -343,7 +343,7 @@ Returns the value of a value-centric option as a floating point number, `undefin
 getInteger(
    option, 
    device?, 
-controller?): Nullable<undefined | number>;
+controller?): Nullable<number | undefined>;
 ```
 
 Parse an integer feature option value.
@@ -358,7 +358,7 @@ Parse an integer feature option value.
 
 ###### Returns
 
-[`Nullable`](util.md#nullable)\<`undefined` \| `number`\>
+[`Nullable`](util.md#nullable)\<`number` \| `undefined`\>
 
 Returns the value of a value-centric option as an integer, `undefined` if it doesn't exist or couldn't be parsed, and `null` if disabled.
 
@@ -479,7 +479,7 @@ Returns true if the option is enabled, and false otherwise.
 value(
    option, 
    device?, 
-controller?): Nullable<undefined | string>;
+controller?): Nullable<string | undefined>;
 ```
 
 Return the value associated with a value-centric feature option, traversing the scope hierarchy.
@@ -494,7 +494,7 @@ Return the value associated with a value-centric feature option, traversing the 
 
 ###### Returns
 
-[`Nullable`](util.md#nullable)\<`undefined` \| `string`\>
+[`Nullable`](util.md#nullable)\<`string` \| `undefined`\>
 
 Returns the current value associated with `option` if the feature option is enabled, `null` if disabled (or not a value-centric feature option), or
          `undefined` if it's not specified.

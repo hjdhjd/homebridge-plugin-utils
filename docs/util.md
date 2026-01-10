@@ -40,7 +40,7 @@ function example(log: HomebridgePluginLogging) {
 
 ***
 
-### DeepPartial\<T\>
+### DeepPartial
 
 ```ts
 type DeepPartial<T> = { [P in keyof T]?: T[P] extends (infer I)[] ? DeepPartial<I>[] : DeepPartial<T[P]> };
@@ -77,7 +77,7 @@ const obj: PartialObj = { nested: {} };
 
 ***
 
-### DeepReadonly\<T\>
+### DeepReadonly
 
 ```ts
 type DeepReadonly<T> = { readonly [P in keyof T]: T[P] extends (infer I)[] ? DeepReadonly<I>[] : DeepReadonly<T[P]> };
@@ -114,7 +114,7 @@ const obj: ReadonlyObj = { id: "a", nested: { value: 1 } };
 
 ***
 
-### Nullable\<T\>
+### Nullable
 
 ```ts
 type Nullable<T> = T | null;
@@ -141,7 +141,7 @@ id = "device-001";
 
 ***
 
-### PartialWithId\<T, K\>
+### PartialWithId
 
 ```ts
 type PartialWithId<T, K> = Partial<T> & Pick<T, K>;

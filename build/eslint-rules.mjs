@@ -1,4 +1,4 @@
-/* Copyright(C) 2017-2025, HJD (https://github.com/hjdhjd). All rights reserved.
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * eslint-rules.mjs: Opinionated default linting rules for Homebridge plugins.
  */
@@ -50,7 +50,7 @@ const ruleBlankAfterOpenBrace = {
 
         for(const element of node.body) {
 
-          if(![ "MethodDefinition", "PropertyDefinition" ].includes(element.type) || element.value?.type !== "ObjectExpression") {
+          if((![ "MethodDefinition", "PropertyDefinition" ].includes(element.type)) || (element.value?.type !== "ObjectExpression")) {
 
             continue;
           }
@@ -117,6 +117,85 @@ const ruleBlankAfterOpenBrace = {
   }
 };
 
+const ruleParenComparisonsInLogical = {
+
+  create(context) {
+
+    const sourceCode = context.getSourceCode();
+
+    // Comparison operators to wrap when used inside && / || compounds.
+    const comparisonOperators = new Set([ "==", "!=", "===", "!==", "<", "<=", ">", ">=", "in", "instanceof" ]);
+    const logicalOperators = new Set([ "&&", "||" ]);
+
+    function isComparison(node) {
+
+      return !!node &&
+        (node.type === "BinaryExpression") &&
+        comparisonOperators.has(node.operator);
+    }
+
+    function isParenthesized(node) {
+
+      // Prefer ESLint's helper when available.
+      if(typeof sourceCode.isParenthesized === "function") {
+
+        return sourceCode.isParenthesized(node);
+      }
+
+      // Fallback token check.
+      const before = sourceCode.getTokenBefore(node);
+      const after = sourceCode.getTokenAfter(node);
+
+      return !!before && !!after && (before.value === "(") && (after.value === ")");
+    }
+
+    function checkOperand(node) {
+
+      if(!isComparison(node) || isParenthesized(node)) {
+
+        return;
+      }
+
+      context.report({
+
+        fix(fixer) {
+
+          return fixer.replaceText(node, "(" + sourceCode.getText(node) + ")");
+        },
+        message: "Wrap comparison operands in parentheses inside compound logical expressions (&&, ||).",
+        node
+      });
+    }
+
+    return {
+
+      LogicalExpression(node) {
+
+        if(!logicalOperators.has(node.operator)) {
+
+          return;
+        }
+
+        // Only wrap direct operands of && / || when they are comparisons.
+        checkOperand(node.left);
+        checkOperand(node.right);
+      }
+    };
+  },
+  meta: {
+
+    docs: {
+
+      category: "Stylistic Issues",
+      description: "require parentheses around comparison operands when used inside compound logical expressions (&&, ||)",
+      recommended: false
+    },
+    fixable: "code",
+    schema: [],
+    type: "layout"
+  }
+};
+
 // ESlint plugins to use.
 const plugins = {
 
@@ -124,7 +203,8 @@ const plugins = {
 
     "rules": {
 
-      "blank-line-after-open-brace": ruleBlankAfterOpenBrace
+      "blank-line-after-open-brace": ruleBlankAfterOpenBrace,
+      "paren-comparisons-in-logical": ruleParenComparisonsInLogical
     }
   },
   "@stylistic": stylistic,
@@ -172,6 +252,7 @@ const commonRules = {
 
   ...tsEslint.configs.eslintRecommended,
   "@hjdhjd/blank-line-after-open-brace": "warn",
+  "@hjdhjd/paren-comparisons-in-logical": "warn",
   "@stylistic/array-bracket-spacing": [ "warn", "always", { "arraysInArrays": true, "objectsInArrays": true,  "singleValue": false } ],
   "@stylistic/block-spacing": "warn",
   "@stylistic/brace-style": [ "warn", "1tbs", { "allowSingleLine": true } ],

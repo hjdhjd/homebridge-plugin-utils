@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.30.0 (2026-01-10)
+  * Improvement: additional linting rules.
+  * Housekeeping.
+
 ## 1.29.5 (2025-12-31)
   * Housekeeping.
 

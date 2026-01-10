@@ -1,4 +1,4 @@
-/* Copyright(C) 2017-2025, HJD (https://github.com/hjdhjd). All rights reserved.
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * mqttclient.ts: MQTT connectivity class for Homebridge plugins.
  */
@@ -330,7 +330,7 @@ export class MqttClient {
       const result = setValue(value, message.toString());
 
       // For callbacks that are promises, we wait until they complete before logging the result.
-      if(result && typeof result.then === "function") {
+      if(result && (typeof result.then === "function")) {
 
         result.then(logResult).catch(error => log.error("MQTT: error seting message received for %s: %s. %s", type, value, error));
 

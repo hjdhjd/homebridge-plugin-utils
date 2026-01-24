@@ -199,7 +199,7 @@ export class FfmpegCodecs {
     decoder = decoder.toLowerCase();
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    return this.ffmpegCodecs[codec]?.decoders.some(x => x === decoder);
+    return this.ffmpegCodecs[codec]?.decoders.some(x => x === decoder) ?? false;
   }
 
   /**
@@ -227,7 +227,7 @@ export class FfmpegCodecs {
     encoder = encoder.toLowerCase();
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    return this.ffmpegCodecs[codec]?.encoders.some(x => x === encoder);
+    return this.ffmpegCodecs[codec]?.encoders.some(x => x === encoder) ?? false;
   }
 
   /**

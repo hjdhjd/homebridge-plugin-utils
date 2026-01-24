@@ -196,6 +196,62 @@ const ruleParenComparisonsInLogical = {
   }
 };
 
+// Enforce no space between `catch` and `(` when a parameter is present. Parameterless catch clauses (e.g., `catch {`) are ignored and handled by space-before-blocks.
+const ruleCatchParenSpacing = {
+
+  create(context) {
+
+    const sourceCode = context.getSourceCode();
+
+    return {
+
+      CatchClause(node) {
+
+        // Only check catch clauses that have a parameter.
+        if(!node.param) {
+
+          return;
+        }
+
+        // Get the `catch` keyword token and the opening parenthesis token.
+        const catchKeyword = sourceCode.getFirstToken(node);
+        const openParen = sourceCode.getTokenAfter(catchKeyword);
+
+        // Check if there is whitespace between `catch` and `(`.
+        if((openParen.value === "(") && (catchKeyword.range[1] < openParen.range[0])) {
+
+          context.report({
+
+            fix(fixer) {
+
+              return fixer.removeRange([ catchKeyword.range[1], openParen.range[0] ]);
+            },
+            loc: {
+
+              end: openParen.loc.start,
+              start: catchKeyword.loc.end
+            },
+            message: "Unexpected space between `catch` and `(`.",
+            node
+          });
+        }
+      }
+    };
+  },
+  meta: {
+
+    docs: {
+
+      category: "Stylistic Issues",
+      description: "disallow space between `catch` and `(` when a parameter is present",
+      recommended: false
+    },
+    fixable: "whitespace",
+    schema: [],
+    type: "layout"
+  }
+};
+
 // ESlint plugins to use.
 const plugins = {
 
@@ -204,6 +260,7 @@ const plugins = {
     "rules": {
 
       "blank-line-after-open-brace": ruleBlankAfterOpenBrace,
+      "catch-paren-spacing": ruleCatchParenSpacing,
       "paren-comparisons-in-logical": ruleParenComparisonsInLogical
     }
   },
@@ -252,6 +309,7 @@ const commonRules = {
 
   ...tsEslint.configs.eslintRecommended,
   "@hjdhjd/blank-line-after-open-brace": "warn",
+  "@hjdhjd/catch-paren-spacing": "warn",
   "@hjdhjd/paren-comparisons-in-logical": "warn",
   "@stylistic/array-bracket-spacing": [ "warn", "always", { "arraysInArrays": true, "objectsInArrays": true,  "singleValue": false } ],
   "@stylistic/block-spacing": "warn",
@@ -262,7 +320,7 @@ const commonRules = {
   "@stylistic/implicit-arrow-linebreak": "warn",
   "@stylistic/indent": [ "warn", 2, { "SwitchCase": 1 } ],
   "@stylistic/keyword-spacing": [ "warn",
-    { "overrides": { "catch": { "after": false }, "for": { "after": false }, "if": { "after": false }, "switch": { "after": false}, "while": { "after": false } } } ],
+    { "overrides": { "for": { "after": false }, "if": { "after": false }, "switch": { "after": false}, "while": { "after": false } } } ],
   "@stylistic/linebreak-style": [ "warn", "unix" ],
   "@stylistic/lines-between-class-members": [ "warn", "always", { "exceptAfterSingleLine": true } ],
   "@stylistic/max-len": [ "warn", 170 ],

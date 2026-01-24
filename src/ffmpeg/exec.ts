@@ -122,8 +122,9 @@ export class FfmpegExec extends FfmpegProcess {
       if(this.process === null) {
 
         this.log.error("Unable to execute command.");
+        resolve(null);
 
-        return null;
+        return;
       }
 
       // Write data to stdin and close

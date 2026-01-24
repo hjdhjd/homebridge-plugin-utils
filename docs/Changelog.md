@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.31.0 (2026-01-24)
+  * Fix: address an issue where certain service types were not correctly identified for Name characteristic support.
+  * Fix: resolve an issue where FFmpeg command execution could hang indefinitely when process creation failed.
+  * Fix: ensure codec detection methods return correct boolean values when a codec is not found.
+  * Improvement: additional linting rules.
+  * Improvement: optimized service UUID lookups with cached Sets for O(1) performance.
+  * Housekeeping.
+
 ## 1.30.0 (2026-01-10)
   * Improvement: additional linting rules.
   * Housekeeping.

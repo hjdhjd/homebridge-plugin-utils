@@ -11,6 +11,63 @@
 import type { Characteristic, PlatformAccessory, Service, WithUUID } from "homebridge";
 import { type Nullable, sanitizeName } from "./util.js";
 
+// Cached Sets for O(1) service UUID lookups. Lazily initialized on first use.
+let requiresConfiguredNameUUIDs: Nullable<Set<string>> = null;
+let hasConfiguredNameUUIDs: Nullable<Set<string>> = null;
+let requiresNameUUIDs: Nullable<Set<string>> = null;
+let hasNameUUIDs: Nullable<Set<string>> = null;
+
+/**
+ * Initializes the cached UUID Sets for service characteristic lookups.
+ *
+ * @param service - Any service instance, used to access the Service constructor and its static UUID properties.
+ *
+ * @internal
+ */
+function initServiceUUIDSets(service: Service): void {
+
+  // Already initialized.
+  if(requiresConfiguredNameUUIDs) {
+
+    return;
+  }
+
+  // Grab the constructor from the instance of our service so we can access the static UUID properties.
+  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+
+  // Services that require the ConfiguredName characteristic.
+  requiresConfiguredNameUUIDs = new Set([
+
+    ctor.InputSource.UUID, ctor.Television.UUID, ctor.WiFiRouter.UUID
+  ]);
+
+  // Services that support the ConfiguredName characteristic (includes required).
+  hasConfiguredNameUUIDs = new Set([
+
+    ctor.AccessoryInformation.UUID, ctor.ContactSensor.UUID, ctor.InputSource.UUID, ctor.Lightbulb.UUID, ctor.MotionSensor.UUID,
+    ctor.OccupancySensor.UUID, ctor.SmartSpeaker.UUID, ctor.Switch.UUID, ctor.Television.UUID, ctor.Valve.UUID, ctor.WiFiRouter.UUID
+  ]);
+
+  // Services that require the Name characteristic.
+  requiresNameUUIDs = new Set([
+
+    ctor.AccessoryInformation.UUID, ctor.Assistant.UUID, ctor.InputSource.UUID
+  ]);
+
+  // Services that support the Name characteristic (includes required).
+  hasNameUUIDs = new Set([
+
+    ctor.AccessoryInformation.UUID, ctor.AirPurifier.UUID, ctor.AirQualitySensor.UUID, ctor.Assistant.UUID, ctor.Battery.UUID,
+    ctor.CarbonDioxideSensor.UUID, ctor.CarbonMonoxideSensor.UUID, ctor.ContactSensor.UUID, ctor.Door.UUID, ctor.Doorbell.UUID,
+    ctor.Fan.UUID, ctor.Fanv2.UUID, ctor.Faucet.UUID, ctor.FilterMaintenance.UUID, ctor.GarageDoorOpener.UUID, ctor.HeaterCooler.UUID,
+    ctor.HumidifierDehumidifier.UUID, ctor.HumiditySensor.UUID, ctor.InputSource.UUID, ctor.IrrigationSystem.UUID, ctor.LeakSensor.UUID,
+    ctor.Lightbulb.UUID, ctor.LightSensor.UUID, ctor.LockMechanism.UUID, ctor.MotionSensor.UUID, ctor.OccupancySensor.UUID, ctor.Outlet.UUID,
+    ctor.SecuritySystem.UUID, ctor.Slats.UUID, ctor.SmartSpeaker.UUID, ctor.SmokeSensor.UUID, ctor.StatefulProgrammableSwitch.UUID,
+    ctor.StatelessProgrammableSwitch.UUID, ctor.Switch.UUID, ctor.TargetControl.UUID, ctor.Television.UUID, ctor.TemperatureSensor.UUID,
+    ctor.Thermostat.UUID, ctor.Valve.UUID, ctor.Window.UUID, ctor.WindowCovering.UUID
+  ]);
+}
+
 /**
  * Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
  * service instance. Additionally, the various name characteristics of the service are set to the specified name, and optionally added if necessary.
@@ -157,11 +214,9 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
  */
 function serviceRequiresConfiguredName(service: Service): boolean {
 
-  // Grab the constructor from the instance of our service so we can generate the list of valid services.
-  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+  initServiceUUIDSets(service);
 
-  // Services that already require the ConfiguredName characteristic.
-  return [ ctor.InputSource.UUID, ctor.Television.UUID, ctor.WiFiRouter.UUID ].includes(service.UUID);
+  return requiresConfiguredNameUUIDs?.has(service.UUID) ?? false;
 }
 
 /**
@@ -174,12 +229,9 @@ function serviceRequiresConfiguredName(service: Service): boolean {
  */
 function serviceHasConfiguredName(service: Service): boolean {
 
-  // Grab the constructor from the instance of our service so we can generate the list of valid services.
-  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+  initServiceUUIDSets(service);
 
-  // Services that need the ConfiguredName characteristic maintained.
-  return serviceRequiresConfiguredName(service) || [ ctor.AccessoryInformation.UUID, ctor.ContactSensor.UUID, ctor.Lightbulb.UUID, ctor.MotionSensor.UUID,
-    ctor.OccupancySensor.UUID, ctor.SmartSpeaker.UUID, ctor.Switch.UUID, ctor.Valve.UUID ].includes(service.UUID);
+  return hasConfiguredNameUUIDs?.has(service.UUID) ?? false;
 }
 
 /**
@@ -192,11 +244,9 @@ function serviceHasConfiguredName(service: Service): boolean {
  */
 function serviceRequiresName(service: Service): boolean {
 
-  // Grab the constructor from the instance of our service so we can generate the list of valid services.
-  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+  initServiceUUIDSets(service);
 
-  // Services that already require the Name characteristic.
-  return [ ctor.AccessoryInformation.UUID, ctor.Assistant.UUID, ctor.InputSource.UUID ].includes(service.UUID);
+  return requiresNameUUIDs?.has(service.UUID) ?? false;
 }
 
 /**
@@ -209,16 +259,9 @@ function serviceRequiresName(service: Service): boolean {
  */
 function serviceHasName(service: Service): boolean {
 
-  // Grab the constructor from the instance of our service so we can generate the list of valid services.
-  const ctor = service.constructor as unknown as Record<string, { UUID: string }>;
+  initServiceUUIDSets(service);
 
-  // Services that need the Name characteristic maintained.
-  return serviceRequiresName(service) || [ ctor.AirPurifier.UUID, ctor.AirQualitySensor.UUID, ctor.Battery.UUID, ctor.CarbonDioxideSensor, ctor.CarbonMonoxideSensor.UUID,
-    ctor.ContactSensor.UUID, ctor.Door.UUID, ctor.Doorbell.UUID, ctor.Fan.UUID, ctor.Fanv2.UUID, ctor.Faucet, ctor.FilterMaintenance.UUID, ctor.GarageDoorOpener.UUID,
-    ctor.HeaterCooler.UUID, ctor.HumidifierDehumidifier.UUID, ctor.HumiditySensor, ctor.IrrigationSystem.UUID, ctor.LeakSensor.UUID, ctor.Lightbulb.UUID,
-    ctor.LightSensor.UUID, ctor.LockMechanism.UUID, ctor.MotionSensor, ctor.OccupancySensor.UUID, ctor.Outlet.UUID, ctor.SecuritySystem.UUID, ctor.Slats.UUID,
-    ctor.SmartSpeaker.UUID, ctor.SmokeSensor, ctor.StatefulProgrammableSwitch.UUID, ctor.StatelessProgrammableSwitch.UUID, ctor.Switch.UUID, ctor.TargetControl.UUID,
-    ctor.Television, ctor.TemperatureSensor.UUID, ctor.Thermostat.UUID, ctor.Valve.UUID, ctor.Window.UUID, ctor.WindowCovering.UUID ].includes(service.UUID);
+  return hasNameUUIDs?.has(service.UUID) ?? false;
 }
 
 /**

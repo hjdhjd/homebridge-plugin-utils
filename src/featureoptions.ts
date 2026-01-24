@@ -411,7 +411,7 @@ export class FeatureOptions {
     }
 
     // Return the enabled value, or the default value if we've got nothing explicitly configured.
-    return value ?? ((this.valueOptions[option] === undefined) ? undefined : this.valueOptions[option]?.toString());
+    return value ?? this.valueOptions[option]?.toString();
   }
 
   /**

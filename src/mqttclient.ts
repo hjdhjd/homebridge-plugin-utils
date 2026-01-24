@@ -320,25 +320,19 @@ export class MqttClient {
   public subscribeSet(id: string, topic: string, type: string, setValue: (value: string, rawValue: string) => Promise<void> | void, log = this.log): void {
 
     // Return the current status of a given sensor.
-    this.subscribe(id, topic + "/set", (message: Buffer) => {
+    this.subscribe(id, topic + "/set", async (message: Buffer) => {
 
       const value = message.toString().toLowerCase();
 
-      const logResult = (): void => log.info("MQTT: set message received for %s: %s.", type, value);
-
       // Set our value and inform the user.
-      const result = setValue(value, message.toString());
+      try {
 
-      // For callbacks that are promises, we wait until they complete before logging the result.
-      if(result && (typeof result.then === "function")) {
+        await setValue(value, message.toString());
+        log.info("MQTT: set message received for %s: %s.", type, value);
+      } catch(error) {
 
-        result.then(logResult).catch(error => log.error("MQTT: error seting message received for %s: %s. %s", type, value, error));
-
-        return;
+        log.error("MQTT: error setting message received for %s: %s. %s", type, value, error);
       }
-
-      // Log the outcome.
-      logResult();
     });
   }
 

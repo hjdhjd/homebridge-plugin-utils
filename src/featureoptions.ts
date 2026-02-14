@@ -108,10 +108,10 @@ export class FeatureOptions {
 
   private _categories: FeatureCategoryEntry[];
   private _configuredOptions: string[];
-  private _groups: { [index: string]: string[] };
-  private _options: { [index: string]: FeatureOptionEntry[] };
-  private defaults: { [index: string]: boolean };
-  private valueOptions: { [index: string]: number | string | undefined };
+  private _groups: Record<string, string[]>;
+  private _options: Record<string, FeatureOptionEntry[]>;
+  private defaults: Record<string, boolean>;
+  private valueOptions: Record<string, number | string | undefined>;
 
   /**
    * Create a new FeatureOptions instance.
@@ -126,7 +126,7 @@ export class FeatureOptions {
    * const featureOpts = new FeatureOptions(categories, options, ["Enable.motion.detect"]);
    * ```
    */
-  constructor(categories: FeatureCategoryEntry[], options: { [index: string]: FeatureOptionEntry[] }, configuredOptions = []) {
+  constructor(categories: FeatureCategoryEntry[], options: Record<string, FeatureOptionEntry[]>, configuredOptions: string[] = []) {
 
     // Initialize our defaults.
     this._categories = [];
@@ -215,12 +215,12 @@ export class FeatureOptions {
     const categoryName = (typeof category === "string") ? category : category.name;
     const optionName = (typeof option === "string") ? option : option.name;
 
-    if(!categoryName || !categoryName.length) {
+    if(!categoryName.length) {
 
       return "";
     }
 
-    return (!optionName || !optionName.length) ? categoryName : categoryName + "." + optionName;
+    return (!optionName.length) ? categoryName : categoryName + "." + optionName;
   }
 
   /**
@@ -460,7 +460,7 @@ export class FeatureOptions {
    *
    * @returns Returns the current list of available feature option groups.
    */
-  public get groups(): { [index: string]: string[] } {
+  public get groups(): Record<string, string[]> {
 
     return this._groups;
   }
@@ -470,7 +470,7 @@ export class FeatureOptions {
    *
    * @returns Returns the current list of available feature options.
    */
-  public get options(): { [index: string]: FeatureOptionEntry[] } {
+  public get options(): Record<string, FeatureOptionEntry[]> {
 
     return this._options;
   }
@@ -480,7 +480,7 @@ export class FeatureOptions {
    *
    * @param options       - Array of available feature options.
    */
-  public set options(options: { [index: string]: FeatureOptionEntry[] }) {
+  public set options(options: Record<string, FeatureOptionEntry[]>) {
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     this._options = options ?? {};

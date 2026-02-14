@@ -118,7 +118,9 @@ export function acquireService(accessory: PlatformAccessory, serviceType: WithUU
   // Add the service to the accessory, if needed.
   if(!service) {
 
-    service = new serviceType(name, subtype as string);
+    // WithUUID<typeof Service> types subtype as required, but the constructor handles undefined at runtime.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    service = new serviceType(name, subtype!);
 
     // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
     const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;

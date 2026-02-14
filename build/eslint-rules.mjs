@@ -2,8 +2,9 @@
  *
  * eslint-rules.mjs: Opinionated default linting rules for Homebridge plugins.
  */
+import eslintJs from "@eslint/js";
 import stylistic from "@stylistic/eslint-plugin";
-import tsEslint from "@typescript-eslint/eslint-plugin";
+import ts from "typescript-eslint";
 
 const ruleBlankAfterOpenBrace = {
 
@@ -11,7 +12,7 @@ const ruleBlankAfterOpenBrace = {
 
     function checkNode(node) {
 
-      const sourceCode = context.getSourceCode();
+      const sourceCode = context.sourceCode;
       const openBrace = sourceCode.getFirstToken(node);
       const nextToken = sourceCode.getTokenAfter(openBrace);
 
@@ -121,7 +122,7 @@ const ruleParenComparisonsInLogical = {
 
   create(context) {
 
-    const sourceCode = context.getSourceCode();
+    const sourceCode = context.sourceCode;
 
     // Comparison operators to wrap when used inside && / || compounds.
     const comparisonOperators = new Set([ "==", "!=", "===", "!==", "<", "<=", ">", ">=", "in", "instanceof" ]);
@@ -201,7 +202,7 @@ const ruleCatchParenSpacing = {
 
   create(context) {
 
-    const sourceCode = context.getSourceCode();
+    const sourceCode = context.sourceCode;
 
     return {
 
@@ -252,6 +253,20 @@ const ruleCatchParenSpacing = {
   }
 };
 
+// Extract rules by name from a typescript-eslint config array. Throws if the named entry is missing so that a typescript-eslint version bump that renames config entries
+// fails loudly rather than silently dropping rules.
+function configRules(configs, name) {
+
+  const entry = configs.find((c) => c.name === name);
+
+  if(!entry) {
+
+    throw new Error("typescript-eslint config entry not found: " + name);
+  }
+
+  return entry.rules;
+}
+
 // ESlint plugins to use.
 const plugins = {
 
@@ -265,14 +280,14 @@ const plugins = {
     }
   },
   "@stylistic": stylistic,
-  "@typescript-eslint": tsEslint
+  "@typescript-eslint": ts.plugin
 };
 
 // TypeScript-specific rules.
 const tsRules = {
 
-  ...tsEslint.configs.strictTypeChecked,
-  ...tsEslint.configs.stylisticTypeChecked,
+  ...configRules(ts.configs.strictTypeChecked, "typescript-eslint/strict-type-checked"),
+  ...configRules(ts.configs.stylisticTypeChecked, "typescript-eslint/stylistic-type-checked"),
   "@stylistic/member-delimiter-style": "warn",
   "@typescript-eslint/await-thenable": "warn",
   "@typescript-eslint/consistent-type-imports": "warn",
@@ -299,7 +314,7 @@ const tsRules = {
 // JavaScript-specific rules.
 const jsRules = {
 
-  ...tsEslint.configs.disableTypeChecked,
+  ...ts.configs.disableTypeChecked.rules,
   "@typescript-eslint/no-floating-promises": "off",
   "require-await": "warn"
 };
@@ -307,7 +322,7 @@ const jsRules = {
 // Rules that exist across both JavaScript and TypeScript files.
 const commonRules = {
 
-  ...tsEslint.configs.eslintRecommended,
+  ...ts.configs.eslintRecommended.rules,
   "@hjdhjd/blank-line-after-open-brace": "warn",
   "@hjdhjd/catch-paren-spacing": "warn",
   "@hjdhjd/paren-comparisons-in-logical": "warn",
@@ -376,17 +391,121 @@ const commonRules = {
 const globalsUi = Object.fromEntries([ "clearTimeout", "console", "container", "document", "fetch", "getComputedStyle", "homebridge", "setTimeout", "window" ]
   .map(key => [ key, "readonly" ]));
 
-export default {
+/* Build a ready-to-use ESLint flat config array. Consumers call this function and export default the result.
+ *
+ * @param {object} options - Configuration options.
+ * @param {string[]} options.ts - Glob patterns for TypeScript files (strict + stylistic type-checked rules).
+ * @param {string[]} options.js - Glob patterns for JavaScript files (disable-type-checked rules).
+ * @param {string[]} options.ui - Glob patterns for browser UI files (adds browser globals).
+ * @param {string[]} options.allowDefaultProject - Globs passed to parserOptions.projectService.allowDefaultProject.
+ * @param {string[]} options.ignores - Global ignore patterns (in addition to the hardcoded "dist" ignore on the common block).
+ * @param {object[]} options.extraConfigs - Additional flat config objects appended to the output.
+ * @returns {object[]} A flat config array suitable for `export default` in eslint.config.mjs. Block ordering is significant — do not reorder.
+ */
+function config({
+  allowDefaultProject = [],
+  extraConfigs = [],
+  ignores = [],
+  js = [],
+  ts: tsFiles = [],
+  ui = []
+} = {}) {
 
-  globals: {
+  const allFiles = [ ...tsFiles, ...js, ...ui ];
+  const configs = [];
 
-    ui: globalsUi
-  },
-  plugins: plugins,
-  rules: {
+  // Global ignores block.
+  if(ignores.length > 0) {
 
-    common: commonRules,
-    js: jsRules,
-    ts: tsRules
+    configs.push({ ignores });
   }
-};
+
+  // Core ESLint recommended rules. This block must precede the TS/JS blocks so that their rule overrides (e.g., no-unused-vars: "off") take priority.
+  if(allFiles.length > 0) {
+
+    configs.push(eslintJs.configs.recommended);
+  }
+
+  // TypeScript-specific rules.
+  if(tsFiles.length > 0) {
+
+    configs.push({
+
+      files: tsFiles,
+      rules: { ...tsRules }
+    });
+  }
+
+  // JavaScript-specific rules.
+  if(js.length > 0) {
+
+    configs.push({
+
+      files: js,
+      rules: { ...jsRules }
+    });
+  }
+
+  // Common rules applied to all linted files.
+  if(allFiles.length > 0) {
+
+    configs.push({
+
+      files: allFiles,
+
+      ignores: ["dist"],
+
+      languageOptions: {
+
+        ecmaVersion: "latest",
+        parser: ts.parser,
+        parserOptions: {
+
+          ecmaVersion: "latest",
+
+          projectService: {
+
+            allowDefaultProject,
+            defaultProject: "./tsconfig.json"
+          }
+        },
+
+        sourceType: "module"
+      },
+
+      linterOptions: {
+
+        reportUnusedDisableDirectives: "error"
+      },
+
+      plugins: { ...plugins },
+
+      rules: { ...commonRules }
+    });
+  }
+
+  // UI globals block.
+  if(ui.length > 0) {
+
+    configs.push({
+
+      files: ui,
+
+      languageOptions: {
+
+        globals: { ...globalsUi }
+      }
+    });
+  }
+
+  // Escape hatch for project-specific config blocks.
+  configs.push(...extraConfigs);
+
+  return configs;
+}
+
+// Default export is the config function.
+export default config;
+
+// Named exports for advanced customization or gradual migration.
+export { commonRules, config, globalsUi, jsRules, plugins, tsRules };

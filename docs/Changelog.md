@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.32.0 (2026-02-14)
+  * New feature: add separate audio input support for fMP4 livestreaming, enabling devices like DoorBird where video and audio are served from different endpoints.
+  * Improvement: modernize ESLint configuration for ESLint 10 readiness.
+  * Housekeeping.
+
 ## 1.31.0 (2026-01-24)
   * Fix: address an issue where certain service types were not correctly identified for Name characteristic support.
   * Fix: resolve an issue where FFmpeg command execution could hang indefinitely when process creation failed.

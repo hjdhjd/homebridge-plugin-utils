@@ -53,7 +53,7 @@ new MqttClient(
    brokerUrl, 
    topicPrefix, 
    log, 
-   reconnectInterval): MqttClient;
+   reconnectInterval?): MqttClient;
 ```
 
 Creates a new MQTT client for connecting to a broker and managing topics with a given prefix.
@@ -133,7 +133,7 @@ The topic is expanded using the prefix and device ID, and the callback will be c
 | ------ | ------ | ------ |
 | `id` | `string` | The device or accessory identifier. |
 | `topic` | `string` | The topic name to subscribe to. |
-| `callback` | (`cbBuffer`) => `void` | Handler function called with the message buffer. |
+| `callback` | (`cbBuffer`) => `void` \| `Promise`\<`void`\> | Handler function called with the message buffer. |
 
 ###### Returns
 
@@ -156,7 +156,7 @@ subscribeGet(
    topic, 
    type, 
    getValue, 
-   log): void;
+   log?): void;
 ```
 
 Subscribes to a '<topic>/get' topic and publishes a value in response to "true" messages.
@@ -192,7 +192,7 @@ subscribeSet(
    topic, 
    type, 
    setValue, 
-   log): void;
+   log?): void;
 ```
 
 Subscribes to a '<topic>/set' topic and calls a setter when a message is received.

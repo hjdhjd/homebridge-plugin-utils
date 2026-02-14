@@ -254,14 +254,6 @@ process.stop();
 
 ### ProcessResult
 
-```ts
-type ProcessResult = {
-  exitCode: Nullable<number>;
-  stderr: Buffer;
-  stdout: Buffer;
-};
-```
-
 Describes the result of executing an FFmpeg process.
 
 #### Properties

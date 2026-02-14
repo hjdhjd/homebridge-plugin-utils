@@ -91,31 +91,16 @@ const ffmpegOpts = new FfmpegOptions(optionsConfig);
 
 #### Properties
 
-| Property | Modifier | Type | Description |
-| ------ | ------ | ------ | ------ |
-| <a id="codecsupport"></a> `codecSupport` | `public` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | FFmpeg codec and hardware capabilities for the current host. |
-| <a id="config"></a> `config` | `readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | The configuration options used to initialize this instance. |
-| <a id="debug"></a> `debug` | `readonly` | `boolean` | Indicates if debug logging is enabled. |
-| <a id="log"></a> `log` | `readonly` | \| [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) \| `Logging` | Logging interface for output and errors. |
-| <a id="name"></a> `name` | `readonly` | () => `string` | Function returning the name for this options instance to be used for logging. |
+| Property | Modifier | Type | Default value | Description |
+| ------ | ------ | ------ | ------ | ------ |
+| <a id="audiodecoder"></a> `audioDecoder` | `readonly` | `string` | `"libfdk_aac"` | Returns the audio decoder to use when decoding. |
+| <a id="codecsupport"></a> `codecSupport` | `public` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | `undefined` | FFmpeg codec and hardware capabilities for the current host. |
+| <a id="config"></a> `config` | `readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | `undefined` | The configuration options used to initialize this instance. |
+| <a id="debug"></a> `debug` | `readonly` | `boolean` | `undefined` | Indicates if debug logging is enabled. |
+| <a id="log"></a> `log` | `readonly` | \| [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) \| `Logging` | `undefined` | Logging interface for output and errors. |
+| <a id="name"></a> `name` | `readonly` | () => `string` | `undefined` | Function returning the name for this options instance to be used for logging. |
 
 #### Accessors
-
-##### audioDecoder
-
-###### Get Signature
-
-```ts
-get audioDecoder(): string;
-```
-
-Returns the audio decoder to use when decoding.
-
-###### Returns
-
-`string`
-
-The FFmpeg audio decoder string.
 
 ##### cropFilter
 
@@ -154,7 +139,7 @@ Maximum supported pixel count.
 ##### audioEncoder()
 
 ```ts
-audioEncoder(options): string[];
+audioEncoder(options?): string[];
 ```
 
 Returns the audio encoder arguments to use when transcoding.
@@ -226,7 +211,7 @@ const args = ffmpegOpts.streamEncoder(encoderOptions);
 ##### videoDecoder()
 
 ```ts
-videoDecoder(codec): string[];
+videoDecoder(codec?): string[];
 ```
 
 Returns the video decoder arguments to use for decoding video.

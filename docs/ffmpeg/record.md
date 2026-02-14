@@ -52,7 +52,7 @@ new FfmpegLivestreamProcess(
    options, 
    recordingConfig, 
    livestreamOptions, 
-   isVerbose): FfmpegLivestreamProcess;
+   isVerbose?): FfmpegLivestreamProcess;
 ```
 
 Constructs a new FFmpeg livestream process.
@@ -275,7 +275,7 @@ FfmpegFMp4Process.start
 ##### stop()
 
 ```ts
-stop(logErrors): void;
+stop(logErrors?): void;
 ```
 
 Stops the FFmpeg process and logs errors if specified.
@@ -331,8 +331,8 @@ FfmpegFMp4Process
 new FfmpegRecordingProcess(
    options, 
    recordingConfig, 
-   fMp4Options, 
-   isVerbose): FfmpegRecordingProcess;
+   fMp4Options?, 
+   isVerbose?): FfmpegRecordingProcess;
 ```
 
 Constructs a new FFmpeg recording process for HKSV events.
@@ -529,7 +529,7 @@ FfmpegFMp4Process.start
 ##### stop()
 
 ```ts
-stop(logErrors): void;
+stop(logErrors?): void;
 ```
 
 Stops the FFmpeg process and logs errors if specified.

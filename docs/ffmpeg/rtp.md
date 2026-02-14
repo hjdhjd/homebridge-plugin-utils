@@ -209,7 +209,7 @@ allocator.cancel(50000);
 ##### reserve()
 
 ```ts
-reserve(ipFamily, portCount): Promise<number>;
+reserve(ipFamily?, portCount?): Promise<number>;
 ```
 
 Reserves one or two consecutive UDP ports for FFmpeg or network use.

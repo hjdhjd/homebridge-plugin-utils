@@ -61,7 +61,7 @@ const volume = featureOpts.value("audio.volume");
 new FeatureOptions(
    categories, 
    options, 
-   configuredOptions): FeatureOptions;
+   configuredOptions?): FeatureOptions;
 ```
 
 Create a new FeatureOptions instance.
@@ -71,8 +71,8 @@ Create a new FeatureOptions instance.
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `categories` | [`FeatureCategoryEntry`](#featurecategoryentry)[] | `undefined` | Array of feature option categories. |
-| `options` | \{ \[`index`: `string`\]: [`FeatureOptionEntry`](#featureoptionentry)[]; \} | `undefined` | Dictionary mapping category names to arrays of feature options. |
-| `configuredOptions` | `never`[] | `[]` | Optional. Array of currently configured option strings. |
+| `options` | `Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)[]\> | `undefined` | Dictionary mapping category names to arrays of feature options. |
+| `configuredOptions` | `string`[] | `[]` | Optional. Array of currently configured option strings. |
 
 ###### Returns
 
@@ -165,20 +165,14 @@ Set the list of currently configured feature options.
 ###### Get Signature
 
 ```ts
-get groups(): {
-[index: string]: string[];
-};
+get groups(): Record<string, string[]>;
 ```
 
 Return the list of available feature option groups.
 
 ###### Returns
 
-```ts
-{
-[index: string]: string[];
-}
-```
+`Record`\<`string`, `string`[]\>
 
 Returns the current list of available feature option groups.
 
@@ -187,20 +181,14 @@ Returns the current list of available feature option groups.
 ###### Get Signature
 
 ```ts
-get options(): {
-[index: string]: FeatureOptionEntry[];
-};
+get options(): Record<string, FeatureOptionEntry[]>;
 ```
 
 Return the list of available feature options.
 
 ###### Returns
 
-```ts
-{
-[index: string]: FeatureOptionEntry[];
-}
-```
+`Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)[]\>
 
 Returns the current list of available feature options.
 
@@ -216,7 +204,7 @@ Set the list of available feature options.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | \{ \[`index`: `string`\]: [`FeatureOptionEntry`](#featureoptionentry)[]; \} | Array of available feature options. |
+| `options` | `Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)[]\> | Array of available feature options. |
 
 ###### Returns
 
@@ -523,7 +511,7 @@ Entry describing a feature option.
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="default"></a> `default` | `boolean` | Default enabled/disabled state for this feature option. |
-| <a id="defaultvalue-2"></a> `defaultValue?` | `string` \| `number` | Optional. Default value for value-based feature options. |
+| <a id="defaultvalue-1"></a> `defaultValue?` | `string` \| `number` | Optional. Default value for value-based feature options. |
 | <a id="description-1"></a> `description` | `string` | Description of the feature option for display or documentation. |
 | <a id="group"></a> `group?` | `string` | Optional. Grouping/category for the feature option. |
 | <a id="inputsize"></a> `inputSize?` | `number` | Optional. Width of the input field for a value-based feature option. Defaults to 5 characters. |

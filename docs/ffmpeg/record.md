@@ -556,6 +556,74 @@ process.stop();
 FfmpegFMp4Process.stop
 ```
 
+***
+
+### FMp4AudioInputConfig
+
+Configuration for a separate audio input source in an fMP4 livestream session. This interface describes the audio source when video and audio come from different
+endpoints, such as cameras like DoorBird that expose audio through a separate HTTP API.
+
+When the audio source is a raw stream (not a self-describing container), specify `format`, `sampleRate`, and optionally `channels` so FFmpeg knows how to interpret
+the input. For self-describing sources like RTSP or container-based HTTP streams, only `url` is required.
+
+#### Example
+
+```ts
+// Raw audio from a DoorBird audio.cgi endpoint.
+const rawAudioInput: FMp4AudioInputConfig = {
+
+  format: "mulaw",
+  sampleRate: 8000,
+  url: "http://doorbird-ip/bha-api/audio.cgi"
+};
+
+// Self-describing RTSP audio stream — only URL is needed.
+const rtspAudioInput: FMp4AudioInputConfig = {
+
+  url: "rtsp://camera-ip/audio"
+};
+```
+
+#### See
+
+FMp4LivestreamOptions
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="channels"></a> `channels?` | `number` | Optional. Number of audio channels. Defaults to `1`. |
+| <a id="format"></a> `format?` | `"alaw"` \| `"mulaw"` \| `"s16le"` | Optional. Raw audio format for the input stream. When set, FFmpeg is told to expect this format rather than probing the stream. Valid values are `alaw` (G.711 A-law), `mulaw` (G.711 mu-law), and `s16le` (16-bit signed little-endian PCM). Omit for self-describing sources. |
+| <a id="samplerate"></a> `sampleRate?` | `number` | Optional. Audio sample rate in Hz (e.g., `8000`). Used when `format` is set. Defaults to `8000`. |
+| <a id="url"></a> `url` | `string` | The URL of the audio input source. |
+
+***
+
+### FMp4LivestreamOptions
+
+Options for configuring an fMP4 livestream session.
+
+#### See
+
+FMp4AudioInputConfig
+
+#### Extends
+
+- [`FMp4BaseOptions`](#fmp4baseoptions)
+
+#### Properties
+
+| Property | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ |
+| <a id="audioinput"></a> `audioInput?` | `string` \| [`FMp4AudioInputConfig`](#fmp4audioinputconfig) | Optional. A separate audio input source. When provided, audio is read from this source instead of the primary `url`. Can be a URL string for self-describing sources (e.g., RTSP), or an `FMp4AudioInputConfig` object for raw audio streams that require format metadata. | - |
+| <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
+| <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
+| <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
+| <a id="hardwaredecoding-1"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareDecoding`](#hardwaredecoding) |
+| <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
+| <a id="url-1"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
+| <a id="videostream-1"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
+
 ## Other
 
 ### FMp4BaseOptions
@@ -577,28 +645,6 @@ Base options for configuring an fMP4 recording or livestream session. These opti
 | <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. |
 | <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. |
 | <a id="videostream"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). |
-
-***
-
-### FMp4LivestreamOptions
-
-Options for configuring an fMP4 recording or livestream session.
-
-#### Extends
-
-- [`FMp4BaseOptions`](#fmp4baseoptions)
-
-#### Properties
-
-| Property | Type | Description | Inherited from |
-| ------ | ------ | ------ | ------ |
-| <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
-| <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
-| <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
-| <a id="hardwaredecoding-1"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareDecoding`](#hardwaredecoding) |
-| <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
-| <a id="url"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
-| <a id="videostream-1"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
 
 ***
 

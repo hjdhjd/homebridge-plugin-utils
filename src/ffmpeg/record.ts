@@ -49,6 +49,49 @@ export interface FMp4BaseOptions {
 }
 
 /**
+ * Configuration for a separate audio input source in an fMP4 livestream session. This interface describes the audio source when video and audio come from different
+ * endpoints, such as cameras like DoorBird that expose audio through a separate HTTP API.
+ *
+ * When the audio source is a raw stream (not a self-describing container), specify `format`, `sampleRate`, and optionally `channels` so FFmpeg knows how to interpret
+ * the input. For self-describing sources like RTSP or container-based HTTP streams, only `url` is required.
+ *
+ * @property channels    - Optional. Number of audio channels. Defaults to `1`.
+ * @property format      - Optional. Raw audio format for the input stream. When set, FFmpeg is told to expect this format rather than probing the stream. Valid values
+ *                         are `alaw` (G.711 A-law), `mulaw` (G.711 mu-law), and `s16le` (16-bit signed little-endian PCM). Omit for self-describing sources.
+ * @property sampleRate  - Optional. Audio sample rate in Hz (e.g., `8000`). Used when `format` is set. Defaults to `8000`.
+ * @property url         - The URL of the audio input source.
+ *
+ * @example
+ *
+ * ```ts
+ * // Raw audio from a DoorBird audio.cgi endpoint.
+ * const rawAudioInput: FMp4AudioInputConfig = {
+ *
+ *   format: "mulaw",
+ *   sampleRate: 8000,
+ *   url: "http://doorbird-ip/bha-api/audio.cgi"
+ * };
+ *
+ * // Self-describing RTSP audio stream — only URL is needed.
+ * const rtspAudioInput: FMp4AudioInputConfig = {
+ *
+ *   url: "rtsp://camera-ip/audio"
+ * };
+ * ```
+ *
+ * @see FMp4LivestreamOptions
+ *
+ * @category FFmpeg
+ */
+export interface FMp4AudioInputConfig {
+
+  channels?: number;
+  format?: "alaw" | "mulaw" | "s16le";
+  sampleRate?: number;
+  url: string;
+}
+
+/**
  * Options for configuring an fMP4 recording or livestream session.
  *
  * @property audioFilters    - Audio filters for FFmpeg to process. These are passed as an array of filters.
@@ -69,12 +112,19 @@ export interface FMp4RecordingOptions extends FMp4BaseOptions {
 }
 
 /**
- * Options for configuring an fMP4 recording or livestream session.
+ * Options for configuring an fMP4 livestream session.
  *
- * @property url          - Source URL for livestream (RTSP) remuxing to fMP4.
+ * @property audioInput  - Optional. A separate audio input source. When provided, audio is read from this source instead of the primary `url`. Can be a URL string
+ *                         for self-describing sources (e.g., RTSP), or an `FMp4AudioInputConfig` object for raw audio streams that require format metadata.
+ * @property url         - Source URL for livestream (RTSP) remuxing to fMP4.
+ *
+ * @see FMp4AudioInputConfig
+ *
+ * @category FFmpeg
  */
 export interface FMp4LivestreamOptions extends FMp4BaseOptions {
 
+  audioInput?: FMp4AudioInputConfig | string;
   url: string;
 }
 
@@ -142,7 +192,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
    * @param ffmpegOptions     - FFmpeg configuration options.
    * @param recordingConfig   - HomeKit recording configuration for the session.
    * @param isAudioActive     - If `true`, enables audio stream processing.
-   * @param fMp4Options       - Configuration for the fMP4 session (fps, type, url, etc.).
+   * @param fMp4Options       - Configuration for the fMP4 session (fps, type, url, audio input, etc.).
    * @param isVerbose         - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
    *
    * @example
@@ -196,6 +246,10 @@ class FfmpegFMp4Process extends FfmpegProcess {
       "-max_delay", "500000"
     ];
 
+    // Track which FFmpeg input index contains the audio stream. By default, audio and video share the same input (index 0). When a separate audio input is provided
+    // for livestreaming, the audio input becomes index 1.
+    let audioInputIndex = 0;
+
     if(this.isLivestream && fMp4Options.url) {
 
       // -avioflags direct           Tell FFmpeg to minimize buffering to reduce latency for more realtime processing.
@@ -222,6 +276,43 @@ class FfmpegFMp4Process extends FfmpegProcess {
         "-i", "pipe:0",
         "-ss", (fMp4Options.timeshift ?? 0).toString() + "ms"
       );
+    }
+
+    // If a separate audio input has been configured for livestreaming, add it as a second FFmpeg input. This enables support for devices like DoorBird where video and
+    // audio are served from different endpoints.
+    if(this.isLivestream && fMp4Options.enableAudio && fMp4Options.audioInput) {
+
+      // Normalize the audio input configuration. A plain string is treated as a URL shorthand.
+      const audioInput: FMp4AudioInputConfig = (typeof fMp4Options.audioInput === "string") ?
+        { url: fMp4Options.audioInput } :
+        fMp4Options.audioInput;
+
+      // When a raw audio format is specified, we need to explicitly tell FFmpeg how to interpret the incoming stream since it cannot probe raw audio sources.
+      //
+      // -f format                       Specify the raw audio format (e.g., mulaw, alaw, s16le).
+      // -ar sampleRate                  Specify the audio sample rate in Hz.
+      // -ac channels                    Specify the number of audio channels.
+      if(audioInput.format) {
+
+        this.commandLineArgs.push(
+
+          "-f", audioInput.format,
+          "-ar", (audioInput.sampleRate ?? 8000).toString(),
+          "-ac", (audioInput.channels ?? 1).toString()
+        );
+      }
+
+      // For RTSP and RTSPS audio sources, we explicitly request TCP transport to match the behavior we use for the primary video input.
+      if([ "rtsp://", "rtsps://" ].some((protocol) => audioInput.url.toLowerCase().startsWith(protocol))) {
+
+        this.commandLineArgs.push("-rtsp_transport", "tcp");
+      }
+
+      // -i url                          Audio input URL.
+      this.commandLineArgs.push("-i", audioInput.url);
+
+      // Audio is now on the second input (index 1) instead of the primary input (index 0).
+      audioInputIndex = 1;
     }
 
     // Configure our recording options for the video stream:
@@ -275,8 +366,9 @@ class FfmpegFMp4Process extends FfmpegProcess {
 
       // Configure the audio portion of the command line. Options we use are:
       //
-      // -map 0:a:X?                 Selects the audio stream from the input, if it exists.
-      this.commandLineArgs.push("-map", "0:a:" + fMp4Options.audioStream.toString() + "?");
+      // -map N:a:X?                 Selects the audio stream from input N, if it exists. The input index is 0 when audio and video share the same input, or 1 when a
+      //                             separate audio input has been configured.
+      this.commandLineArgs.push("-map", audioInputIndex.toString() + ":a:" + fMp4Options.audioStream.toString() + "?");
 
       // Configure our audio filters, if we have them.
       if(fMp4Options.audioFilters.length) {
@@ -340,8 +432,8 @@ class FfmpegFMp4Process extends FfmpegProcess {
     super.configureProcess();
 
     // Initialize our variables that we need to process incoming FFmpeg packets.
-    let header: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-    let bufferRemaining: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let header: Buffer = Buffer.alloc(0);
+    let bufferRemaining: Buffer = Buffer.alloc(0);
     let dataLength = 0;
     let type = "";
 

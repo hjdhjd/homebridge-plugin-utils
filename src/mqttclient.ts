@@ -54,7 +54,7 @@ export class MqttClient {
   private reconnectInterval: number;
   private log: HomebridgePluginLogging;
   private mqtt: Nullable<MqttJsClient>;
-  private subscriptions: { [index: string]: ((cbBuffer: Buffer) => void) | undefined };
+  private subscriptions: Map<string, (cbBuffer: Buffer) => Promise<void> | void>;
   private topicPrefix: string;
 
   /**
@@ -80,7 +80,7 @@ export class MqttClient {
     this.log = log;
     this.mqtt = null;
     this.reconnectInterval = reconnectInterval;
-    this.subscriptions = {};
+    this.subscriptions = new Map();
     this.topicPrefix = topicPrefix;
 
     this.configure();
@@ -152,14 +152,18 @@ export class MqttClient {
     // Process inbound messages and pass it to the right message handler.
     this.mqtt.on("message", (topic: string, message: Buffer) => {
 
-      this.subscriptions[topic]?.(message);
+      void this.subscriptions.get(topic)?.(message);
     });
 
     // Notify the user when there's a connectivity error.
     this.mqtt.on("error", (error: Error) => {
 
-      const logError = (message: string): void => this.log.error("MQTT Broker: %s. Will retry again in %s minute%s.", message, this.reconnectInterval / 60,
-        this.reconnectInterval / 60 > 1 ? "s" : "");
+      const logError = (message: string): void => {
+
+
+        this.log.error("MQTT Broker: %s. Will retry again in %s minute%s.", message, this.reconnectInterval / 60,
+          this.reconnectInterval / 60 > 1 ? "s" : "");
+      };
 
       switch((error as NodeJS.ErrnoException).code) {
 
@@ -240,7 +244,7 @@ export class MqttClient {
    * });
    * ```
    */
-  public subscribe(id: string, topic: string, callback: (cbBuffer: Buffer) => void): void {
+  public subscribe(id: string, topic: string, callback: (cbBuffer: Buffer) => Promise<void> | void): void {
 
     const expandedTopic = this.expandTopic(id, topic);
 
@@ -253,7 +257,7 @@ export class MqttClient {
     this.log.debug("MQTT subscribe: %s.", expandedTopic);
 
     // Add to our callback list.
-    this.subscriptions[expandedTopic] = callback;
+    this.subscriptions.set(expandedTopic, callback);
 
     // Tell MQTT we're subscribing to this event.
     // By default, we subscribe as: pluginTopicPrefix/id/topic
@@ -358,7 +362,7 @@ export class MqttClient {
       return;
     }
 
-    delete this.subscriptions[expandedTopic];
+    this.subscriptions.delete(expandedTopic);
   }
 
   /**

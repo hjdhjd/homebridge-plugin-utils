@@ -237,7 +237,7 @@ export class RtpDemuxer extends EventEmitter {
  */
 export class RtpPortAllocator {
 
-  private portsInUse: { [index: number]: boolean };
+  private portsInUse: Set<number>;
 
   /**
    * Instantiates a new RTP port allocator and tracker.
@@ -245,7 +245,7 @@ export class RtpPortAllocator {
   constructor() {
 
     // Initialize our in use tracker.
-    this.portsInUse = {};
+    this.portsInUse = new Set();
   }
 
   /**
@@ -288,13 +288,13 @@ export class RtpPortAllocator {
         socket.close();
 
         // Check to see if the port is one we're already using. If it is, try again.
-        if(this.portsInUse[assignedPort]) {
+        if(this.portsInUse.has(assignedPort)) {
 
           continue;
         }
 
         // Now let's mark the port in use.
-        this.portsInUse[assignedPort] = true;
+        this.portsInUse.add(assignedPort);
 
         // Return the port.
         return assignedPort;
@@ -395,6 +395,6 @@ export class RtpPortAllocator {
    */
   public cancel(port: number): void {
 
-    delete this.portsInUse[port];
+    this.portsInUse.delete(port);
   }
 }

@@ -124,9 +124,9 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
 
     this.delegate = delegate;
 
-    this.delegate.adjustProbeSize ??= (): void => {};
+    this.delegate.adjustProbeSize ??= (): void => { /* No-op. */ };
     this.delegate.ffmpegErrorCheck ??= (): undefined => undefined;
-    this.delegate.stopStream ??= (): void => {};
+    this.delegate.stopStream ??= (): void => { /* No-op. */ };
 
     this.sessionId = sessionId;
 
@@ -188,7 +188,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
     socket.on("error", errorListener = (error: Error): void => {
 
       this.log.error("Socket error: %s.", error.name);
-      void this.delegate.stopStream?.(this.sessionId);
+      this.delegate.stopStream?.(this.sessionId);
     });
 
     // Manage our video streams in case we haven't received a stop request, but we're in fact dead zombies.
@@ -206,7 +206,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
         this.log.debug("Video stream appears to be inactive for 5 seconds. Stopping stream.");
 
         this.delegate.controller.forceStopStreamingSession(this.sessionId);
-        void this.delegate.stopStream?.(this.sessionId);
+        this.delegate.stopStream?.(this.sessionId);
       }, 5000);
     });
 
@@ -260,9 +260,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
     }
 
     // Test for probesize errors.
-    const probesizeRegex = new RegExp("not enough frames to estimate rate; consider increasing probesize");
-
-    if(this.stderrLog.some(logEntry => probesizeRegex.test(logEntry))) {
+    if(this.stderrLog.some(logEntry => logEntry.includes("not enough frames to estimate rate; consider increasing probesize"))) {
 
       // Let the streaming delegate know to adjust it's parameters for the next run and inform the user.
       this.delegate.adjustProbeSize?.();

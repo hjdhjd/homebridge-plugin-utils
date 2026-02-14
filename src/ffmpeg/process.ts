@@ -175,7 +175,7 @@ export class FfmpegProcess extends EventEmitter {
     this.isEnded = false;
 
     // If we've got a loglevel specified, ensure we display it.
-    if(this.commandLineArgs.indexOf("-loglevel") !== -1) {
+    if(this.commandLineArgs.includes("-loglevel")) {
 
       this.isLogging = true;
     }
@@ -237,7 +237,7 @@ export class FfmpegProcess extends EventEmitter {
 
       if(error.code === "ENOENT") {
 
-        message = "unable to find '" + error.path + "'";
+        message = "unable to find '" + (error.path ?? "unknown") + "'";
       }
 
       this.log.error("FFmpeg failed to start: %s.", message);
@@ -412,7 +412,7 @@ export class FfmpegProcess extends EventEmitter {
 
     this.log.error("FFmpeg (%s) command that errored out was: %s %s", this.options.codecSupport.ffmpegVersion, this.options.codecSupport.ffmpegExec,
       this.commandLineArgs.join(" "));
-    this.stderrLog.map(x => this.log.error(x));
+    this.stderrLog.map(x => { this.log.error(x); });
   }
 
   /**

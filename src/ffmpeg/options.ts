@@ -696,10 +696,7 @@ export class FfmpegOptions {
    *
    * @returns The FFmpeg audio decoder string.
    */
-  public get audioDecoder(): string {
-
-    return "libfdk_aac";
-  }
+  public readonly audioDecoder: string = "libfdk_aac";
 
   /**
    * Returns the video decoder arguments to use for decoding video.
@@ -743,7 +740,7 @@ export class FfmpegOptions {
     }
 
     // Intel QSV decoder to codec mapping.
-    const qsvDecoder: { [index: string]: string } = {
+    const qsvDecoder: Record<string, string> = {
 
       "av1": "av1_qsv",
       "h264": "h264_qsv",

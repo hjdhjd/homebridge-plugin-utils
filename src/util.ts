@@ -37,7 +37,7 @@
  */
 export type DeepPartial<T> = {
 
-  [P in keyof T]?: T[P] extends Array<infer I> ? Array<DeepPartial<I>> : DeepPartial<T[P]>
+  [P in keyof T]?: T[P] extends (infer I)[] ? DeepPartial<I>[] : DeepPartial<T[P]>
 };
 
 /**
@@ -68,7 +68,7 @@ export type DeepPartial<T> = {
  */
 export type DeepReadonly<T> = {
 
-  readonly [P in keyof T]: T[P] extends Array<infer I> ? Array<DeepReadonly<I>> : DeepReadonly<T[P]>
+  readonly [P in keyof T]: T[P] extends (infer I)[] ? DeepReadonly<I>[] : DeepReadonly<T[P]>
 };
 
 /**
@@ -288,7 +288,7 @@ export async function retry(operation: () => Promise<boolean>, retryInterval: nu
  */
 export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): Promise<Nullable<T>> {
 
-  const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout));
+  const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => { resolve(null); }, timeout));
 
   return Promise.race([ promise, timeoutPromise ]);
 }

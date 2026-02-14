@@ -34,12 +34,12 @@ import type { Nullable } from "../util.js";
  *
  * @category FFmpeg
  */
-export type ProcessResult = {
+export interface ProcessResult {
 
   exitCode: Nullable<number>;
   stderr: Buffer;
   stdout: Buffer;
-};
+}
 
 /**
  * Executes arbitrary FFmpeg commands and returns the results.

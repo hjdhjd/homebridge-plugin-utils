@@ -98,8 +98,8 @@ export class FfmpegCodecs {
   private _hostSystem?: string;
   private _cpuGeneration?: number;
   private readonly log: HomebridgePluginLogging | Logging;
-  private readonly ffmpegCodecs: { [index: string]: { decoders: string[]; encoders: string[] } };
-  private readonly ffmpegHwAccels: { [index: string]: boolean };
+  private readonly ffmpegCodecs: Record<string, { decoders: string[]; encoders: string[] }>;
+  private readonly ffmpegHwAccels: Set<string>;
 
   /**
    * Indicates whether verbose logging is enabled for FFmpeg probing.
@@ -115,7 +115,7 @@ export class FfmpegCodecs {
 
     this.ffmpegExec = options.ffmpegExec ?? "ffmpeg";
     this.ffmpegCodecs = {};
-    this.ffmpegHwAccels = {};
+    this.ffmpegHwAccels = new Set();
     this.log = options.log;
     this.verbose = options.verbose ?? false;
 
@@ -248,7 +248,7 @@ export class FfmpegCodecs {
    */
   public hasHwAccel(accel: string): boolean {
 
-    return this.ffmpegHwAccels[accel.toLowerCase()] ? true : false;
+    return this.ffmpegHwAccels.has(accel.toLowerCase());
   }
 
   /**
@@ -328,7 +328,7 @@ export class FfmpegCodecs {
         }
 
         // We've found a hardware acceleration method, let's add it.
-        this.ffmpegHwAccels[accel.toLowerCase()] = true;
+        this.ffmpegHwAccels.add(accel.toLowerCase());
       }
     }))) {
 
@@ -338,15 +338,15 @@ export class FfmpegCodecs {
     // Let's test to ensure that just because we have a codec or capability available to us, it doesn't necessarily mean that the user has the hardware capabilities
     // needed to use it, resulting in an FFmpeg error. We catch that here and prevent those capabilities from being exposed unless both software and hardware capabilities
     // enable it. This simple test, generates a one-second video that is processed by the requested codec. If it fails, we discard the codec.
-    for(const accel of Object.keys(this.ffmpegHwAccels)) {
+    for(const accel of this.ffmpegHwAccels) {
 
       // eslint-disable-next-line no-await-in-loop
       if(!(await this.probeCmd(this.ffmpegExec, [
 
         "-hide_banner", "-hwaccel", accel, "-v", "quiet", "-t", "1", "-f", "lavfi", "-i", "color=black:1920x1080", "-c:v", "libx264", "-f", "null", "-"
-      ], () => {}, true))) {
+      ], () => { /* No-op. */ }, true))) {
 
-        delete this.ffmpegHwAccels[accel];
+        this.ffmpegHwAccels.delete(accel);
 
         if(this.verbose) {
 
@@ -412,11 +412,11 @@ export class FfmpegCodecs {
         if(cpus()[0].model.includes("Apple")) {
 
           // Extract the CPU model.
-          const cpuModel = cpus()[0].model.match(/Apple M(\d+) .*/i);
+          const cpuModel = /Apple M(\d+) .*/i.exec(cpus()[0].model);
 
           this._cpuGeneration = 0;
 
-          if(cpuModel && cpuModel[1]) {
+          if(cpuModel?.[1]) {
 
             this._cpuGeneration = Number(cpuModel[1]);
           }
@@ -447,11 +447,11 @@ export class FfmpegCodecs {
         if(cpus()[0].model.includes("Intel")) {
 
           // Extract the CPU model.
-          const cpuModel = cpus()[0].model.match(/Intel.*Core.*i\d+-(\d{3,5})/i);
+          const cpuModel = /Intel.*Core.*i\d+-(\d{3,5})/i.exec(cpus()[0].model);
 
           this._cpuGeneration = 0;
 
-          if(cpuModel && cpuModel[1]) {
+          if(cpuModel?.[1]) {
 
             // Grab the individual SKU as both a number and string.
             const skuStr = cpuModel[1];

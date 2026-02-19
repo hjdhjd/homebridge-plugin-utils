@@ -374,7 +374,7 @@ export class FfmpegOptions {
           // It is safe to leave hardware decoding in place for h264 and h265/hevc because videotoolbox will
           // fallback to software internally, still supporting hardware surface outputs, however we should
           // inform the user that only partial hardware support is available pre-kaby lake
-          if (this.decodeCodec === "h265" && this.codecSupport.cpuGeneration < 7) {
+          if(this.decodeCodec === "h265" && this.codecSupport.cpuGeneration < 7) {
             
             this.log.warn("Pre-Kaby Lake machines will use partial hardware decoding as determined by videotoolbox. For full hardware decoding, try changing the camera encoding type to \"Standard\".");
           }

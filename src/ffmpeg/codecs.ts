@@ -408,7 +408,7 @@ export class FfmpegCodecs {
       
       this._cpuGeneration = 0;
       
-      if (cpuModel && cpuModel[1]) {
+      if(cpuModel && cpuModel[1]) {
         
         // Grab the individual SKU as both a number and string.
         const skuStr = cpuModel[1];
@@ -416,11 +416,11 @@ export class FfmpegCodecs {
         const skuNum = Number(skuStr);
         
         // Now deduce the CPU generation.
-        if (skuNum < 1000) {
+        if(skuNum < 1000) {
           
           // First generation CPUs are three digit SKUs.
           return 1;
-        } else if (skuStr.length > 4) {
+        } else if(skuStr.length > 4) {
           
           // For five-digit SKUs, the generation are the leading digits before the last three.
           return Number(skuStr.slice(0, skuStr.length - 3));

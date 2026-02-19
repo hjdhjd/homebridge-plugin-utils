@@ -280,7 +280,7 @@ export class FfmpegCodecs {
   }
 
   /**
-   * Returns the CPU generation if we're on Linux and have an Intel processor or on macOS and have an Apple Silicon processor.
+   * Returns the CPU generation if we're on Linux and have an Intel processor or on macOS and have an Apple Silicon or Intel processor.
    *
    * @returns Returns the CPU generation or 0 if it can't be detected or an invalid platform.
    */
@@ -399,6 +399,38 @@ export class FfmpegCodecs {
 
   // Identify what hardware and operating system environment we're actually running on.
   private probeHwOs(): void {
+      
+    // Utility to identify what generation of Intel CPU we have if we're on Intel.
+    const intelCpuGeneration = () => {
+      
+      // Extract the CPU model.
+      const cpuModel = cpus()[0].model.match(/Intel.*Core.*i\d+-(\d{3,5})/i);
+      
+      this._cpuGeneration = 0;
+      
+      if (cpuModel && cpuModel[1]) {
+        
+        // Grab the individual SKU as both a number and string.
+        const skuStr = cpuModel[1];
+        
+        const skuNum = Number(skuStr);
+        
+        // Now deduce the CPU generation.
+        if (skuNum < 1000) {
+          
+          // First generation CPUs are three digit SKUs.
+          return 1;
+        } else if (skuStr.length > 4) {
+          
+          // For five-digit SKUs, the generation are the leading digits before the last three.
+          return Number(skuStr.slice(0, skuStr.length - 3));
+        } else {
+          
+          // Finally, for four-digit SKUs, the generation is the first digit.
+          return Number(skuStr.charAt(0));
+        }
+      }
+    }
 
     // Take a look at the platform we're on for an initial hint of what we are.
     switch(platform) {
@@ -420,6 +452,10 @@ export class FfmpegCodecs {
 
             this._cpuGeneration = Number(cpuModel[1]);
           }
+        } else {
+          
+          // Identify what generation of Intel CPU we have if we're on Intel.
+          this._cpuGeneration = intelCpuGeneration();
         }
 
         break;
@@ -446,32 +482,7 @@ export class FfmpegCodecs {
         // Identify what generation of Intel CPU we have if we're on Intel.
         if(cpus()[0].model.includes("Intel")) {
 
-          // Extract the CPU model.
-          const cpuModel = /Intel.*Core.*i\d+-(\d{3,5})/i.exec(cpus()[0].model);
-
-          this._cpuGeneration = 0;
-
-          if(cpuModel?.[1]) {
-
-            // Grab the individual SKU as both a number and string.
-            const skuStr = cpuModel[1];
-            const skuNum = Number(skuStr);
-
-            // Now deduce the CPU generation.
-            if(skuNum < 1000) {
-
-              // First generation CPUs are three digit SKUs.
-              this._cpuGeneration = 1;
-            } else if(skuStr.length > 4) {
-
-              // For five-digit SKUs, the generation are the leading digits before the last three.
-              this._cpuGeneration = Number(skuStr.slice(0, skuStr.length - 3));
-            } else {
-
-              // Finally, for four-digit SKUs, the generation is the first digit.
-              this._cpuGeneration = Number(skuStr.charAt(0));
-            }
-          }
+          this._cpuGeneration = this.intelCpuGeneration();
         }
 
         break;

@@ -47,7 +47,7 @@ import type { HomebridgePluginLogging } from "../util.js";
  *   codecSupport: ffmpegCodecs,
  *   crop: { width: 1, height: 1, x: 0, y: 0 },
  *   debug: false,
- *   decodeCodec: "h264",
+ *   decodeCodec: () =>  "h264",
  *   hardwareDecoding: true,
  *   hardwareTranscoding: true,
  *   log,
@@ -378,7 +378,7 @@ export class FfmpegOptions {
           // It is safe to leave hardware decoding in place for h264 and h265/hevc because videotoolbox will
           // fallback to software internally, still supporting hardware surface outputs, however we should
           // inform the user that only partial hardware support is available pre-kaby lake
-          if((this.decodeCodec === "h265") && (this.codecSupport.cpuGeneration < 7)) {
+          if((codec === "h265") && (this.codecSupport.cpuGeneration < 7)) {
 
             this.log.warn("Pre-Kaby Lake machines will use partial hardware decoding as determined by videotoolbox. " +
               "For full hardware decoding, try changing the camera encoding type to \"Standard\".");
@@ -513,7 +513,7 @@ export class FfmpegOptions {
     // 4. Hardware decode -> Hardware encode: No transfer needed, stay in hardware.
     const needsUpload = !options.hardwareDecoding && options.hardwareTranscoding;
     const needsDownload = options.hardwareDecoding && !options.hardwareTranscoding;
-
+    
     if(needsUpload) {
 
       // We need to download frames from the GPU to system memory for software encoding.

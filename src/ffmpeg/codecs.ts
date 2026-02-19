@@ -430,6 +430,7 @@ export class FfmpegCodecs {
           return Number(skuStr.charAt(0));
         }
       }
+      return 0;
     };
 
     // Take a look at the platform we're on for an initial hint of what we are.

@@ -804,6 +804,18 @@ export class FfmpegOptions {
   }
 
   /**
+   * Returns the platform-appropriate FFmpeg video filters needed to transfer hardware-decoded frames to system memory. When hardware decoding is active, decoded frames
+   * may reside on the GPU and require explicit download before CPU-based filters (crop, scale, format conversion) can operate on them. Returns an empty array when
+   * hardware decoding is disabled or when the platform handles the transfer implicitly (e.g. Raspberry Pi).
+   *
+   * @returns An array of FFmpeg filter strings to prepend to a video filter chain, or an empty array if no transfer is needed.
+   */
+  public get hardwareDownloadFilters(): string[] {
+
+    return this.getHardwareTransferFilters({ hardwareDecoding: this.config.hardwareDecoding, hardwareTranscoding: false } as VideoEncoderOptions);
+  }
+
+  /**
    * Returns the FFmpeg crop filter string, or a default no-op filter if cropping is disabled.
    *
    * @returns The crop filter string for FFmpeg.

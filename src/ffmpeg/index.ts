@@ -4,6 +4,7 @@
  */
 export * from "./codecs.js";
 export * from "./exec.js";
+export * from "./fmp4.js";
 export * from "./options.js";
 export * from "./process.js";
 export * from "./record.js";

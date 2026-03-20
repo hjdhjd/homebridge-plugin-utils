@@ -26,6 +26,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [featureoptions](featureoptions.md) | A hierarchical feature option system for plugins and applications. |
 | [ffmpeg/codecs](ffmpeg/codecs.md) | Probe FFmpeg capabilities and codecs on the host system. |
 | [ffmpeg/exec](ffmpeg/exec.md) | Executes arbitrary FFmpeg commands and returns the results. |
+| [ffmpeg/fmp4](ffmpeg/fmp4.md) | ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data. |
 | [ffmpeg/options](ffmpeg/options.md) | Homebridge FFmpeg transcoding, decoding, and encoding options, selecting codecs, pixel formats, and hardware acceleration for the host system. |
 | [ffmpeg/process](ffmpeg/process.md) | FFmpeg process management and capability introspection. |
 | [ffmpeg/record](ffmpeg/record.md) | FFmpeg process management for HomeKit Secure Video (HKSV) events and fMP4 livestreaming. |

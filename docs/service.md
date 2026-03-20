@@ -146,7 +146,7 @@ Validates whether a specific service should exist on the given accessory, removi
 | ------ | ------ | ------ |
 | `accessory` | `PlatformAccessory` | The Homebridge accessory to inspect and potentially modify. |
 | `serviceType` | `WithUUID`\<*typeof* `Service`\> | The type of Homebridge service being checked or instantiated. |
-| `validate` | `boolean` \| (`hasService`) => `boolean` | A boolean or a function that determines if the service should exist. If a function is provided, it receives a boolean indicating whether the service currently exists, and should return `true` to keep the service, or `false` to remove it. |
+| `validate` | `boolean` \| ((`hasService`) => `boolean`) | A boolean or a function that determines if the service should exist. If a function is provided, it receives a boolean indicating whether the service currently exists, and should return `true` to keep the service, or `false` to remove it. |
 | `subtype?` | `string` | Optional service subtype to uniquely identify the service. |
 
 #### Returns

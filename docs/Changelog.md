@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
 
+## 1.33.0 (2026-03-20)
+  * New feature: fMP4 box parsing utilities for locating ISO BMFF boxes, detecting keyframe segments, and splitting moof/mdat components.
+  * Improvement: expose hardware download filters for use outside the encoder pipeline.
+  * Housekeeping.
+
 ## 1.32.0 (2026-02-14)
   * New feature: add separate audio input support for fMP4 livestreaming, enabling devices like DoorBird where video and audio are served from different endpoints.
   * Improvement: modernize ESLint configuration for ESLint 10 readiness.

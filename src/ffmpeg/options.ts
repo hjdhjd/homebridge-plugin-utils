@@ -33,6 +33,7 @@ import type { HomebridgePluginLogging } from "../util.js";
  * @property codecSupport         - FFmpeg codec capabilities and hardware support.
  * @property crop                 - Optional. Cropping rectangle for output video.
  * @property debug                - Optional. Enable debug logging.
+ * @property decodeCodec          - Optional. Codec to be decoded. Used to assist in configuring our hardware acceleration support.
  * @property hardwareDecoding     - Enable hardware-accelerated video decoding if available.
  * @property hardwareTranscoding  - Enable hardware-accelerated video encoding if available.
  * @property log                  - Logging interface for output and errors.
@@ -46,6 +47,7 @@ import type { HomebridgePluginLogging } from "../util.js";
  *   codecSupport: ffmpegCodecs,
  *   crop: { width: 1, height: 1, x: 0, y: 0 },
  *   debug: false,
+ *   decodeCodec: () =>  "h264",
  *   hardwareDecoding: true,
  *   hardwareTranscoding: true,
  *   log,
@@ -62,6 +64,7 @@ export interface FfmpegOptionsConfig {
   codecSupport: FfmpegCodecs;
   crop?: { height: number; width: number; x: number; y: number };
   debug?: boolean;
+  decodeCodec?: () => string;
   hardwareDecoding: boolean;
   hardwareTranscoding: boolean;
   log: HomebridgePluginLogging | Logging;
@@ -215,6 +218,11 @@ export class FfmpegOptions {
   public readonly debug: boolean;
 
   /**
+   * Codec that is being decoded.
+   */
+  public readonly decodeCodec: () => string;
+
+  /**
    * Logging interface for output and errors.
    */
   public readonly log: HomebridgePluginLogging | Logging;
@@ -240,6 +248,9 @@ export class FfmpegOptions {
     this.codecSupport = options.codecSupport;
     this.config = options;
     this.debug = options.debug ?? false;
+
+    // Ensure no errors will occur from decodeCodec undefined
+    this.decodeCodec = options.decodeCodec ?? (() : string => "");
 
     this.log = options.log;
     this.name = options.name;
@@ -330,12 +341,50 @@ export class FfmpegOptions {
         return true;
       };
 
+      const codec = this.decodeCodec();
+
       switch(this.codecSupport.hostSystem) {
 
         case "macOS.Apple":
+
+          // AV1 hardware decoding is supported on M3 and above
+          // We explicitly disable it for M2 and below and tell the user as proceeding with hardware decoding pipeline will fail
+          if((codec === "av1") && (this.codecSupport.cpuGeneration < 3)) {
+
+            this.log.error("Disabling hardware-accelerated decoding. Your machine does not have hardware decoding support for the " + codec +
+              " codec. Try changing the camera encoding type from \"Advanced\" to \"Enhanced\"");
+
+            this.config.hardwareDecoding = false;
+
+            break;
+          }
+
+          // Intentionally fall through
+
         case "macOS.Intel":
 
-          // Verify that we have hardware-accelerated decoding available to us.
+          // AV1 hardware decoding is never supported on Intel
+          // We explicitly disable it for M2 and below and tell the user as proceeding with hardware decoding pipeline will fail
+          if(codec === "av1") {
+
+            this.log.error("Disabling hardware-accelerated decoding. Your machine does not have support for hardware decoding for the " + codec +
+              " codec. Try changing the camera encoding type from \"Advanced\" to \"Enhanced\"");
+
+            this.config.hardwareDecoding = false;
+
+            break;
+          }
+
+          // It is safe to leave hardware decoding in place for h264 and h265/hevc because videotoolbox will
+          // fallback to software internally, still supporting hardware surface outputs, however we should
+          // inform the user that only partial hardware support is available pre-kaby lake
+          if((codec === "h265") && (this.codecSupport.cpuGeneration < 7)) {
+
+            this.log.warn("Pre-Kaby Lake machines will use partial hardware decoding as determined by videotoolbox. " +
+              "For full hardware decoding, try changing the camera encoding type to \"Standard\".");
+          }
+
+          // Verify that we have hardware-accelerated decoding available to us for other codecs.
           validateHwAccel("videotoolbox");
 
           break;
@@ -464,7 +513,7 @@ export class FfmpegOptions {
     // 4. Hardware decode -> Hardware encode: No transfer needed, stay in hardware.
     const needsUpload = !options.hardwareDecoding && options.hardwareTranscoding;
     const needsDownload = options.hardwareDecoding && !options.hardwareTranscoding;
-
+    
     if(needsUpload) {
 
       // We need to download frames from the GPU to system memory for software encoding.

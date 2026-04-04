@@ -9,7 +9,7 @@
  * @module
  */
 import type { HomebridgePluginLogging, Nullable } from "./util.js";
-import { type MqttClient as MqttJsClient, connect} from "mqtt";
+import { type MqttClient as MqttJsClient, connect } from "mqtt";
 import util from "node:util";
 
 const MQTT_DEFAULT_RECONNECT_INTERVAL = 60;
@@ -96,7 +96,7 @@ export class MqttClient {
     // Try to connect to the MQTT broker and make sure we catch any URL errors.
     try {
 
-      this.mqtt = connect(this.brokerUrl, { reconnectPeriod: this.reconnectInterval * 1000, rejectUnauthorized: false});
+      this.mqtt = connect(this.brokerUrl, { reconnectPeriod: this.reconnectInterval * 1000, rejectUnauthorized: false });
 
     } catch(error) {
 
@@ -160,9 +160,7 @@ export class MqttClient {
 
       const logError = (message: string): void => {
 
-
-        this.log.error("MQTT Broker: %s. Will retry again in %s minute%s.", message, this.reconnectInterval / 60,
-          this.reconnectInterval / 60 > 1 ? "s" : "");
+        this.log.error("MQTT Broker: %s. Will retry again in %s second%s.", message, this.reconnectInterval, this.reconnectInterval !== 1 ? "s" : "");
       };
 
       switch((error as NodeJS.ErrnoException).code) {
@@ -284,12 +282,12 @@ export class MqttClient {
    */
   public subscribeGet(id: string, topic: string, type: string, getValue: () => string, log = this.log): void {
 
-    // Return the current status of a given sensor.
+    // Subscribe to the get topic and publish the current value when requested.
     this.subscribe(id, topic + "/get", (message: Buffer) => {
 
       const value = message.toString().toLowerCase();
 
-      // When we get the right message, we return the system information JSON.
+      // We only respond to "true" messages on the get topic.
       if(value !== "true") {
 
         return;
@@ -323,7 +321,7 @@ export class MqttClient {
    */
   public subscribeSet(id: string, topic: string, type: string, setValue: (value: string, rawValue: string) => Promise<void> | void, log = this.log): void {
 
-    // Return the current status of a given sensor.
+    // Subscribe to the set topic and invoke the setter callback when a value is received.
     this.subscribe(id, topic + "/set", async (message: Buffer) => {
 
       const value = message.toString().toLowerCase();
@@ -363,6 +361,7 @@ export class MqttClient {
     }
 
     this.subscriptions.delete(expandedTopic);
+    this.mqtt?.unsubscribe(expandedTopic);
   }
 
   /**

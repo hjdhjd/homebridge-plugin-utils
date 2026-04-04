@@ -13,14 +13,16 @@
     "lib": [
 
       "DOM",
-      "ES2023"
+      "ES2024",
+      "ESNext.Array",
+      "ESNext.Collection",
+      "ESNext.Iterator"
     ],
 
-    "module": "ES2022",
-    "moduleResolution":"node",
+    "module": "nodenext",
     "sourceMap": true,
     "strict": true,
-    "target": "ES2023"
+    "target": "ES2024"
   }
 }
 /* When creating your own tsconfig.json, use the following as a starting point to inherit these defaults:

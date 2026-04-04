@@ -60,6 +60,17 @@ interface OptionInfoEntry {
 }
 
 /**
+ * Internal result of resolving a feature option through the scope hierarchy. Captures the scope where the option was found, whether it's enabled, and the raw string
+ * value for value-centric options. This single traversal result serves both boolean queries (test/scope) and value queries, eliminating duplicate scope walks.
+ */
+interface ResolvedOptionEntry {
+
+  enabled: boolean;
+  optionValue?: string;
+  scope: OptionScope;
+}
+
+/**
  * FeatureOptions provides a hierarchical feature option system for plugins and applications.
  *
  * Supports global, controller, and device-level configuration, value-centric feature options, grouping, and category management.
@@ -110,6 +121,7 @@ export class FeatureOptions {
   private _configuredOptions: string[];
   private _groups: Record<string, string[]>;
   private _options: Record<string, FeatureOptionEntry[]>;
+  private configLookup: Map<string, { enabled: boolean; value?: string }>;
   private defaults: Record<string, boolean>;
   private valueOptions: Record<string, number | string | undefined>;
 
@@ -133,6 +145,7 @@ export class FeatureOptions {
     this._configuredOptions = [];
     this._groups = {};
     this._options = {};
+    this.configLookup = new Map();
     this.defaultReturnValue = false;
     this.defaults = {};
     this.valueOptions = {};
@@ -197,9 +210,7 @@ export class FeatureOptions {
    */
   public exists(option: string, id?: string): boolean {
 
-    const regex = this.isValue(option) ? this.valueRegex(option, id) : this.optionRegex(option, id);
-
-    return this.configuredOptions.some(x => regex.test(x));
+    return this.configLookup.has(option.toLowerCase() + (id ? "." + id.toLowerCase() : ""));
   }
 
   /**
@@ -340,78 +351,29 @@ export class FeatureOptions {
       return null;
     }
 
-    // Normalize the option.
-    option = option.toLowerCase();
+    // Resolve the option through the scope hierarchy in a single traversal. This gives us the scope, enabled state, and raw value in one pass.
+    const resolved = this.resolveScope(option, device, controller);
 
-    const getValue = (checkOption: string, checkId?: string): Nullable<string | undefined> => {
-
-      const regex = this.valueRegex(checkOption, checkId);
-
-      // Get the option value, if we have one.
-      for(const entry of this.configuredOptions) {
-
-        const regexMatch = regex.exec(entry);
-
-        if(regexMatch) {
-
-          // If the option is enabled, return the value. Otherwise, we have nothing.
-          return (regexMatch[1].toLowerCase() === "enable") ? regexMatch[2] : null;
-        }
-      }
-
-      return undefined;
-    };
-
-    // Check to see if we have a device-level value first.
-    if(device) {
-
-      const value = getValue(option, device);
-
-      // The option's been explicitly disabled.
-      if(value === null) {
-
-        return null;
-      }
-
-      if(value) {
-
-        return value;
-      }
-    }
-
-    // Now check to see if we have an controller-level value.
-    if(controller) {
-
-      const value = getValue(option, controller);
-
-      // The option's been explicitly disabled.
-      if(value === null) {
-
-        return null;
-      }
-
-      if(value) {
-
-        return value;
-      }
-    }
-
-    // Finally, we check for a global-level value.
-    const value = getValue(option);
-
-    if(value) {
-
-      return value;
-    }
-
-    // The option's been explicitly disabled or is disabled by default.
-    if((value === null) || !this.defaultValue(option)) {
+    // If the option has been explicitly disabled at any scope, or wasn't configured and its default is disabled, there's no value.
+    if(!resolved.enabled) {
 
       return null;
     }
 
-    // Return the enabled value, or the default value if we've got nothing explicitly configured.
-    return value ?? this.valueOptions[option]?.toString();
+    // If we found an explicit value in the index, return it.
+    if(resolved.optionValue) {
+
+      return resolved.optionValue;
+    }
+
+    // The option is enabled but has no explicit value. If it wasn't configured at any scope (scope is "none"), fall back to the registered default value.
+    if(resolved.scope === "none") {
+
+      return this.valueOptions[option.toLowerCase()]?.toString() ?? null;
+    }
+
+    // The option is enabled at an explicit scope but no value was provided...return undefined to indicate "enabled, no value."
+    return undefined;
   }
 
   /**
@@ -432,6 +394,9 @@ export class FeatureOptions {
   public set categories(category: FeatureCategoryEntry[]) {
 
     this._categories = category;
+
+    // Regenerate defaults and the lookup index.
+    this.generateDefaults();
   }
 
   /**
@@ -453,6 +418,9 @@ export class FeatureOptions {
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     this._configuredOptions = options ?? [];
+
+    // Regenerate defaults and the lookup index.
+    this.generateDefaults();
   }
 
   /**
@@ -485,11 +453,12 @@ export class FeatureOptions {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     this._options = options ?? {};
 
-    // Regenerate our defaults.
+    // Regenerate defaults and the lookup index.
     this.generateDefaults();
   }
 
-  // Build our list of default values for our feature options.
+  // Rebuild the defaults, groups, value options, and lookup index from the current categories, options, and configured options. All three property setters call this so
+  // that state is always consistent regardless of which setter is called or in what order.
   private generateDefaults(): void {
 
     this.defaults = {};
@@ -530,82 +499,65 @@ export class FeatureOptions {
         }
       }
     }
+
+    // Rebuild the lookup index now that we know which options are value-centric.
+    this.buildConfigIndex();
   }
 
-  // Utility function to return the setting of a particular option and it's position in the scoping hierarchy.
-  private optionInfo(option: string, device?: string, controller?: string): OptionInfoEntry {
+  // Resolves a feature option through the scope hierarchy in a single traversal. Returns the scope where the option was found, whether it's enabled, and the raw string
+  // value for value-centric options. This is the core resolution method that both test()/scope() and value() build on, eliminating the need for separate traversals.
+  //
+  // There are a couple of ways to enable and disable options. The rules of the road are:
+  //
+  // 1. Explicitly disabling or enabling an option on the controller propagates to all the devices that are managed by that controller.
+  //
+  // 2. Explicitly disabling or enabling an option on a device always overrides the above. This means that it's possible to disable an option for a controller, and all
+  //    the devices that are managed by it, and then override that behavior on a single device that it's managing.
+  private resolveScope(option: string, device?: string, controller?: string): ResolvedOptionEntry {
 
-    // There are a couple of ways to enable and disable options. The rules of the road are:
-    //
-    // 1. Explicitly disabling, or enabling an option on the controller propogates to all the devices that are managed by that controller. Why might you want to do this?
-    //    Because...
-    //
-    // 2. Explicitly disabling, or enabling an option on a device always override the above. This means that it's possible to disable an option for a controller, and all
-    //    the devices that are managed by it, and then override that behavior on a single device that it's managing.
+    const normalizedOption = option.toLowerCase();
+    let entry;
 
     // Check to see if we have a device-level option first.
-    if(device && this.exists(option, device)) {
+    if(device) {
 
-      const value = this.isOptionEnabled(option, device);
+      entry = this.configLookup.get(normalizedOption + "." + device.toLowerCase());
 
-      if(value !== undefined) {
+      if(entry) {
 
-        return { scope: "device", value: value };
+        return { enabled: entry.enabled, optionValue: entry.value, scope: "device" };
       }
     }
 
-    // Now check to see if we have an controller-level option.
-    if(controller && this.exists(option, controller)) {
+    // Now check to see if we have a controller-level option.
+    if(controller) {
 
-      const value = this.isOptionEnabled(option, controller);
+      entry = this.configLookup.get(normalizedOption + "." + controller.toLowerCase());
 
-      if(value !== undefined) {
+      if(entry) {
 
-        return { scope: "controller", value: value };
+        return { enabled: entry.enabled, optionValue: entry.value, scope: "controller" };
       }
     }
 
     // Finally, we check for a global-level value.
-    if(this.exists(option)) {
+    entry = this.configLookup.get(normalizedOption);
 
-      const value = this.isOptionEnabled(option);
+    if(entry) {
 
-      if(value !== undefined) {
-
-        return { scope: "global", value: value };
-      }
+      return { enabled: entry.enabled, optionValue: entry.value, scope: "global" };
     }
 
     // The option hasn't been set at any scope, return our default value.
-    return { scope: "none", value: this.defaultValue(option) };
+    return { enabled: this.defaultValue(option), scope: "none" };
   }
 
-  // Utility to test whether an option is set in a given scope.
-  // We return true if an option is enabled, false for disabled, undefined otherwise. For value-centric options, we return true if a value exists.
-  private isOptionEnabled(option: string, id?: string): boolean | undefined {
+  // Thin wrapper over resolveScope() that returns the OptionInfoEntry shape expected by test() and scope().
+  private optionInfo(option: string, device?: string, controller?: string): OptionInfoEntry {
 
-    const regex = this.isValue(option) ? this.valueRegex(option, id) : this.optionRegex(option, id);
+    const resolved = this.resolveScope(option, device, controller);
 
-    // Get the option value, if we have one.
-    for(const entry of this.configuredOptions) {
-
-      const regexMatch = regex.exec(entry);
-
-      if(regexMatch) {
-
-        return regexMatch[1].toLowerCase() === "enable";
-      }
-    }
-
-    return undefined;
-  }
-
-  // Regular expression test for feature options.
-  private optionRegex(option: string, id?: string): RegExp {
-
-    // This regular expression is a bit more intricate than you might think it should be due to the need to ensure we capture values at the very end of the option. We
-    // also need to escape out our option to ensure we have no inadvertent issues in matching the regular expression.
-    return new RegExp("^(Enable|Disable)\\." + option.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + (!id ? "" : "\\." + id) + "$", "gi");
+    return { scope: resolved.scope, value: resolved.enabled };
   }
 
   // Utility function to parse and return a numeric configuration parameter.
@@ -630,14 +582,104 @@ export class FeatureOptions {
     return convertedValue;
   }
 
-  // Regular expression test for value-centric feature options.
-  private valueRegex(option: string, id?: string): RegExp {
+  // Build a lookup index from the configured option strings. Each entry is keyed by its normalized lookup path (option name, or option name + scope id) and stores
+  // whether the option is enabled along with the extracted value for value-centric options. The index is built once when configured options or option definitions change,
+  // and all subsequent lookups are O(1).
+  private buildConfigIndex(): void {
 
-    // Escape out our option to ensure we have no inadvertent issues in matching the regular expression.
-    option = option.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    this.configLookup = new Map();
 
-    // This regular expression is a bit more intricate than you might think it should be due to the need to ensure we capture values at the very end of the option when
-    // the option is enabled, and that we ignore the values at the end when the option is disabled in order to correctly traverse the hierarchy.
-    return new RegExp("^(Disable|Enable)\\." + option + (!id ? "" : "\\." + id) + "(?:(?<=^Enable\\." + option + (!id ? "" : "\\." + id) + ")\\.([^\\.]*))?$", "gi");
+    // Collect known value option names, sorted longest first for greedy prefix matching. This ensures that when option names overlap (e.g., a category "audio" and an
+    // option "audio.volume"), the more specific name matches first.
+    const valueOptionNames = Object.keys(this.valueOptions).sort((a, b) => b.length - a.length);
+
+    for(const rawEntry of this._configuredOptions) {
+
+      // Parse the action prefix (Enable or Disable).
+      const dotIndex = rawEntry.indexOf(".");
+
+      if(dotIndex === -1) {
+
+        continue;
+      }
+
+      const action = rawEntry.slice(0, dotIndex).toLowerCase();
+
+      if((action !== "enable") && (action !== "disable")) {
+
+        continue;
+      }
+
+      const enabled = action === "enable";
+      const tailOriginal = rawEntry.slice(dotIndex + 1);
+      const tail = tailOriginal.toLowerCase();
+
+      // Register the exact tail as a lookup key. First-write-wins...if the same option appears multiple times, the earliest entry in the array takes precedence.
+      if(!this.configLookup.has(tail)) {
+
+        this.configLookup.set(tail, { enabled });
+      }
+
+      // For Enable entries on value-centric options, extract the trailing value segment and register under the base key (option or option.id) so that value lookups
+      // resolve in O(1) instead of requiring regex matching and array scanning.
+      if(!enabled) {
+
+        continue;
+      }
+
+      for(const optName of valueOptionNames) {
+
+        if(!tail.startsWith(optName)) {
+
+          continue;
+        }
+
+        const remainder = tail.slice(optName.length);
+
+        // Exact match on the option name with no trailing segments...there's no value to extract.
+        if(!remainder.length) {
+
+          break;
+        }
+
+        // The next character must be a dot separator. If not, this option name is merely a prefix of a longer unrelated token.
+        if(!remainder.startsWith(".")) {
+
+          continue;
+        }
+
+        const extra = remainder.slice(1);
+        const extraOriginal = tailOriginal.slice(optName.length + 1);
+        const separatorIndex = extra.indexOf(".");
+
+        if(separatorIndex === -1) {
+
+          // Single trailing segment after the option name. At global scope this is the value; at scoped scope it's the id. Register under the option name as the
+          // base key so that global value lookups find it.
+          if(!this.configLookup.has(optName)) {
+
+            this.configLookup.set(optName, { enabled: true, value: extraOriginal });
+          }
+        } else {
+
+          // Two trailing segments: the first is the scope id and the second is the value.
+          const idLower = extra.slice(0, separatorIndex);
+          const valueOriginal = extraOriginal.slice(separatorIndex + 1);
+
+          // Only register if the value portion is a single segment (no additional dots).
+          if(!valueOriginal.includes(".")) {
+
+            const baseKey = optName + "." + idLower;
+
+            if(!this.configLookup.has(baseKey)) {
+
+              this.configLookup.set(baseKey, { enabled: true, value: valueOriginal });
+            }
+          }
+        }
+
+        break;
+      }
+    }
   }
 }

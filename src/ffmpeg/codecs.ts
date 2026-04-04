@@ -28,8 +28,11 @@ import { type ExecFileException, execFile } from "node:child_process";
 import { env, platform } from "node:process";
 import type { HomebridgePluginLogging } from "../util.js";
 import type { Logging } from "homebridge";
+import { promisify } from "node:util";
 import { readFileSync } from "node:fs";
-import util from "node:util";
+
+// Promisified execFile, created once at module level rather than per-invocation.
+const execFileAsync = promisify(execFile);
 
 /**
  * Options for configuring FFmpeg probing.
@@ -98,7 +101,7 @@ export class FfmpegCodecs {
   private _hostSystem?: string;
   private _cpuGeneration?: number;
   private readonly log: HomebridgePluginLogging | Logging;
-  private readonly ffmpegCodecs: Record<string, { decoders: string[]; encoders: string[] }>;
+  private readonly ffmpegCodecs: Record<string, { decoders: Set<string>; encoders: Set<string> }>;
   private readonly ffmpegHwAccels: Set<string>;
 
   /**
@@ -199,7 +202,7 @@ export class FfmpegCodecs {
     decoder = decoder.toLowerCase();
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    return this.ffmpegCodecs[codec]?.decoders.some(x => x === decoder) ?? false;
+    return this.ffmpegCodecs[codec]?.decoders.has(decoder) ?? false;
   }
 
   /**
@@ -227,7 +230,7 @@ export class FfmpegCodecs {
     encoder = encoder.toLowerCase();
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    return this.ffmpegCodecs[codec]?.encoders.some(x => x === encoder) ?? false;
+    return this.ffmpegCodecs[codec]?.encoders.has(encoder) ?? false;
   }
 
   /**
@@ -363,10 +366,10 @@ export class FfmpegCodecs {
 
     return this.probeCmd(this.ffmpegExec, [ "-hide_banner", "-codecs" ], (stdout: string) => {
 
-      // A regular expression to parse out the codec and it's supported decoders.
+      // A regular expression to parse out the codec and its supported decoders.
       const decodersRegex = /\S+\s+(\S+).+\(decoders: (.*?)\s*\)/;
 
-      // A regular expression to parse out the codec and it's supported encoders.
+      // A regular expression to parse out the codec and its supported encoders.
       const encodersRegex = /\S+\s+(\S+).+\(encoders: (.*?)\s*\)/;
 
       // Iterate through each line, and a build a list of encoders.
@@ -381,17 +384,15 @@ export class FfmpegCodecs {
         // If we found decoders, add them to our list of supported decoders for this format.
         if(decodersMatch) {
 
-          this.ffmpegCodecs[decodersMatch[1]] = { decoders: [], encoders: [] };
-
-          this.ffmpegCodecs[decodersMatch[1]].decoders = decodersMatch[2].split(" ").map(x => x.toLowerCase());
+          this.ffmpegCodecs[decodersMatch[1]] ??= { decoders: new Set(), encoders: new Set() };
+          this.ffmpegCodecs[decodersMatch[1]].decoders = new Set(decodersMatch[2].split(" ").map(x => x.toLowerCase()));
         }
 
-        // If we found decoders, add them to our list of supported decoders for this format.
+        // If we found encoders, add them to our list of supported encoders for this format.
         if(encodersMatch) {
 
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-          this.ffmpegCodecs[encodersMatch[1]] ||= { decoders: [], encoders: [] };
-          this.ffmpegCodecs[encodersMatch[1]].encoders = encodersMatch[2].split(" ").map(x => x.toLowerCase());
+          this.ffmpegCodecs[encodersMatch[1]] ??= { decoders: new Set(), encoders: new Set() };
+          this.ffmpegCodecs[encodersMatch[1]].encoders = new Set(encodersMatch[2].split(" ").map(x => x.toLowerCase()));
         }
       }
     });
@@ -400,19 +401,22 @@ export class FfmpegCodecs {
   // Identify what hardware and operating system environment we're actually running on.
   private probeHwOs(): void {
 
+    // Retrieve the CPU model string once to avoid repeated allocations from cpus().
+    const cpuModelString = cpus()[0].model;
+
     // Take a look at the platform we're on for an initial hint of what we are.
     switch(platform) {
 
       // The beloved macOS.
       case "darwin":
 
-        this._hostSystem = "macOS." + (cpus()[0].model.includes("Apple") ? "Apple" : "Intel");
+        this._hostSystem = "macOS." + (cpuModelString.includes("Apple") ? "Apple" : "Intel");
 
         // Identify what generation of Apple Silicon we have.
-        if(cpus()[0].model.includes("Apple")) {
+        if(cpuModelString.includes("Apple")) {
 
           // Extract the CPU model.
-          const cpuModel = /Apple M(\d+) .*/i.exec(cpus()[0].model);
+          const cpuModel = /Apple M(\d+) .*/i.exec(cpuModelString);
 
           this._cpuGeneration = 0;
 
@@ -444,10 +448,10 @@ export class FfmpegCodecs {
         }
 
         // Identify what generation of Intel CPU we have if we're on Intel.
-        if(cpus()[0].model.includes("Intel")) {
+        if(cpuModelString.includes("Intel")) {
 
           // Extract the CPU model.
-          const cpuModel = /Intel.*Core.*i\d+-(\d{3,5})/i.exec(cpus()[0].model);
+          const cpuModel = /Intel.*Core.*i\d+-(\d{3,5})/i.exec(cpuModelString);
 
           this._cpuGeneration = 0;
 
@@ -504,11 +508,8 @@ export class FfmpegCodecs {
 
     try {
 
-      // Promisify exec to allow us to wait for it asynchronously.
-      const execAsync = util.promisify(execFile);
-
       // Check for the codecs in our video processor.
-      const { stdout } = await execAsync(command, commandLineArgs);
+      const { stdout } = await execFileAsync(command, commandLineArgs);
 
       processOutput(stdout);
 

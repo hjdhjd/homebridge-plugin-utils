@@ -33,6 +33,9 @@ import type { StreamRequestCallback } from "homebridge";
 import os from "node:os";
 import util from "node:util";
 
+// Matches non-printable control characters for stripping from FFmpeg stderr output. Compiled once at module scope rather than per data event.
+const NON_PRINTABLE_CHARS = /\p{C}+/gu;
+
 /**
  * Base class providing FFmpeg process management and capability introspection.
  *
@@ -108,12 +111,12 @@ export class FfmpegProcess extends EventEmitter {
   /**
    * The underlying Node.js ChildProcess instance for the FFmpeg process.
    */
-  public process: Nullable<ChildProcessWithoutNullStreams>;
+  protected process: Nullable<ChildProcessWithoutNullStreams>;
 
   /**
    * Accumulated log lines from standard error for error reporting and debugging.
    */
-  protected stderrLog: string[];
+  private _stderrLog: string[];
 
   private ffmpegTimeout?: NodeJS.Timeout;
   private isLogging: boolean;
@@ -135,7 +138,7 @@ export class FfmpegProcess extends EventEmitter {
     this.options = options;
     this.process = null;
     this.stderrBuffer = "";
-    this.stderrLog = [];
+    this._stderrLog = [];
 
     // Toggle FFmpeg logging, if configured.
     this.isVerbose = this.options.codecSupport.verbose;
@@ -269,7 +272,7 @@ export class FfmpegProcess extends EventEmitter {
 
         this.isStarted = true;
         this.isEnded = false;
-        this.log.debug("Received the first frame.");
+        this.log.debug("FFmpeg process started.");
 
         // Always remember to execute the callback once we're setup to let homebridge know we're streaming.
         if(this.callback) {
@@ -280,7 +283,7 @@ export class FfmpegProcess extends EventEmitter {
       }
 
       // Append to the current line we've been buffering. We don't want to output not-printable characters to ensure the log output is readable.
-      this.stderrBuffer += data.toString().replace(/\p{C}+/gu, os.EOL);
+      this.stderrBuffer += data.toString().replace(NON_PRINTABLE_CHARS, os.EOL);
 
       // Debugging and additional logging collection.
       for(;;) {
@@ -298,7 +301,7 @@ export class FfmpegProcess extends EventEmitter {
         const line = this.stderrBuffer.slice(0, lineIndex);
 
         this.stderrBuffer = this.stderrBuffer.slice(lineIndex + os.EOL.length);
-        this.stderrLog.push(line);
+        this._stderrLog.push(line);
 
         // Show it to the user if it's been requested.
         if(this.isLogging || this.isVerbose || this.options.debug) {
@@ -339,7 +342,7 @@ export class FfmpegProcess extends EventEmitter {
         // Flush out any remaining output in our error buffer.
         if(this.stderrBuffer.length) {
 
-          this.stderrLog.push(this.stderrBuffer + "\n");
+          this._stderrLog.push(this.stderrBuffer + "\n");
           this.stderrBuffer = "";
         }
 
@@ -353,11 +356,10 @@ export class FfmpegProcess extends EventEmitter {
         }
       }
 
-      // Cleanup after ourselves.
+      // Cleanup after ourselves. We intentionally preserve _stderrLog so callers can inspect it for post-mortem diagnostics after the process exits.
       this.process?.stdin.off("error", errorListener);
       this.process?.stderr.off("data", dataListener);
       this.process = null;
-      this.stderrLog = [];
     });
   }
 
@@ -412,7 +414,21 @@ export class FfmpegProcess extends EventEmitter {
 
     this.log.error("FFmpeg (%s) command that errored out was: %s %s", this.options.codecSupport.ffmpegVersion, this.options.codecSupport.ffmpegExec,
       this.commandLineArgs.join(" "));
-    this.stderrLog.map(x => { this.log.error(x); });
+
+    for(const x of this._stderrLog) {
+
+      this.log.error(x);
+    }
+  }
+
+  /**
+   * Returns the accumulated standard error log lines from the FFmpeg process.
+   *
+   * @returns An array of stderr log lines.
+   */
+  public get stderrLog(): string[] {
+
+    return this._stderrLog;
   }
 
   /**

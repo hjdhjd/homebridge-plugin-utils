@@ -38,6 +38,11 @@ import type { HomebridgePluginLogging } from "../util.js";
  * @property log                  - Logging interface for output and errors.
  * @property name                 - Function returning the name or label for this options set.
  *
+ * @remarks The `hardwareDecoding` and `hardwareTranscoding` flags are bidirectional. On input, they express the caller's desired hardware acceleration state. During
+ * `FfmpegOptions` construction, the flags are resolved against the host's actual capabilities and the config object is mutated in place to reflect what is available.
+ * After construction, these flags represent the resolved state...`hardwareDecoding` or `hardwareTranscoding` may be set to `false` if the required codecs or
+ * accelerators are absent, or `hardwareDecoding` may be set to `true` if Intel Quick Sync Video is detected even when not explicitly requested.
+ *
  * @example
  *
  * ```ts
@@ -355,7 +360,7 @@ export class FfmpegOptions {
           }
 
           // Verify that we have the hardware decoder available to us. Unfortunately, as of FFmpeg 7, it seems that hardware decoding is flaky, at best, on Raspberry Pi.
-          // validateDecoder("h264_v4l2m2ml", [ "yuv420p" ]);
+          // validateDecoder("h264_v4l2m2m", [ "yuv420p" ]);
           this.config.hardwareDecoding = false;
 
           break;
@@ -467,14 +472,13 @@ export class FfmpegOptions {
 
     if(needsUpload) {
 
-      // We need to download frames from the GPU to system memory for software encoding.
+      // We need to upload frames from system memory to the GPU for hardware encoding.
       switch(this.codecSupport.hostSystem) {
 
         case "macOS.Apple":
         case "macOS.Intel":
 
-          // FFmpeg 8.x on macOS requires explicit upload when moving from VideoToolbox to software.
-          // We need to upload frames from system memory to the GPU for hardware encoding.
+          // FFmpeg 8.x on macOS requires explicit upload when moving from software decoding to VideoToolbox encoding.
           if(this.config.codecSupport.ffmpegVersion.startsWith("8.")) {
 
             filters.push("hwupload");
@@ -600,7 +604,7 @@ export class FfmpegOptions {
   public audioEncoder(options: AudioEncoderOptions = {}): string[] {
 
     // Default our codec to AAC_ELD unless specified.
-    options = Object.assign({}, { codec: AudioRecordingCodecType.AAC_ELD }, options);
+    options = { codec: AudioRecordingCodecType.AAC_ELD, ...options };
 
     // If we don't have libfdk_aac available to us, we're essentially dead in the water.
     let encoderOptions: string[] = [];
@@ -988,7 +992,7 @@ export class FfmpegOptions {
     // -filter:v                         Set the pixel format and scale the video to the size we want while respecting aspect ratios and ensuring our final
     //                                   dimensions are a power of two.
     // -g:v                              Set the group of pictures to the number of frames per second * the interval in between keyframes to ensure a solid
-    //                                   livestreamng exerience.
+    //                                   livestreaming experience.
     // -bufsize size                     This is the decoder buffer size, which drives the variability / quality of the output bitrate.
     // -maxrate bitrate                  The maximum bitrate tolerance, used with -bufsize. This provides an upper bound on bitrate, with a little bit extra to
     //                                   allow encoders some variation in order to maximize quality while honoring bandwidth constraints.
@@ -1038,9 +1042,9 @@ export class FfmpegOptions {
     // We always disable smart quality when recording due to HomeKit's strict requirements here.
     options.smartQuality = false;
 
-    // Generaly, we default to using the same encoding options we use to transcode livestreams, unless we have platform-specific quirks we need to address,
+    // Generally, we default to using the same encoding options we use to transcode livestreams, unless we have platform-specific quirks we need to address,
     // such as where we can have hardware-accelerated transcoded livestreaming, but not hardware-accelerated HKSV event recording. The other noteworthy
-    // aspect here is that HKSV is quite specific in what it wants, and isn't vary tolerant of creative license in how you may choose to alter bitrate to
+    // aspect here is that HKSV is quite specific in what it wants, and isn't very tolerant of creative license in how you may choose to alter bitrate to
     // address quality. When we call our encoders, we also let them know we don't want any additional quality optimizations when transcoding HKSV events.
     switch(this.codecSupport.hostSystem) {
 
@@ -1072,7 +1076,7 @@ export class FfmpegOptions {
   public streamEncoder(options: VideoEncoderOptions): string[] {
 
     // Default hardware decoding and smart quality to true unless specified.
-    options = Object.assign({}, { hardwareDecoding: true, hardwareTranscoding: this.config.hardwareTranscoding, smartQuality: true }, options);
+    options = { hardwareDecoding: true, hardwareTranscoding: this.config.hardwareTranscoding, smartQuality: true, ...options };
 
     // Disable hardware acceleration if we haven't detected it.
     if(!this.config.hardwareDecoding) {
@@ -1132,7 +1136,7 @@ export class FfmpegOptions {
         // -filter:v                     Set the pixel format, adjust the frame rate if needed, and scale the video to the size we want while respecting aspect ratios and
         //                               ensuring our final dimensions are a power of two.
         // -g:v                          Set the group of pictures to the number of frames per second * the interval in between keyframes to ensure a solid
-        //                               livestreamng exerience.
+        //                               livestreaming experience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.
@@ -1183,7 +1187,7 @@ export class FfmpegOptions {
         // -b:v                          Average bitrate that's being requested by HomeKit. We can't use a quality constraint and allow for more optimization of the
         //                               bitrate on Intel-based Macs due to hardware / API limitations.
         // -g:v                          Set the group of pictures to the number of frames per second * the interval in between keyframes to ensure a solid
-        //                               livestreaming exerience.
+        //                               livestreaming experience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.
@@ -1217,7 +1221,7 @@ export class FfmpegOptions {
         // -b:v                          Average bitrate that's being requested by HomeKit. We can't use a quality constraint and allow for more optimization of the
         //                               bitrate due to v4l2m2m limitations.
         // -g:v                          Set the group of pictures to the number of frames per second * the interval in between keyframes to ensure a solid
-        //                               livestreamng exerience.
+        //                               livestreaming experience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.
@@ -1251,7 +1255,7 @@ export class FfmpegOptions {
         // -filter:v                     Set the pixel format, adjust the frame rate if needed, and scale the video to the size we want while respecting aspect ratios and
         //                               ensuring our final dimensions are a power of two.
         // -g:v                          Set the group of pictures to the number of frames per second * the interval in between keyframes to ensure a solid
-        //                               livestreamng exerience.
+        //                               livestreaming experience.
         // -bufsize size                 This is the decoder buffer size, which drives the variability / quality of the output bitrate.
         // -maxrate bitrate              The maximum bitrate tolerance used in concert with -bufsize to constrain the maximum bitrate permitted.
         // -r framerate                  Set the output framerate. We use this to bypass doing this in filters so we can maximize the use of our hardware pipeline.

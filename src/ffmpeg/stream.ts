@@ -244,7 +244,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
    * @param exitCode - The exit code from FFmpeg.
    * @param signal   - The signal, if any, used to terminate the process.
    */
-  protected logFfmpegError(exitCode: number, signal: NodeJS.Signals): void {
+  protected logFfmpegError(exitCode: Nullable<number>, signal: Nullable<NodeJS.Signals>): void {
 
     // We want to process known streaming-related errors due to the performance and latency tweaks we've made to the FFmpeg command line. In some cases we may inform the
     // user and take no action, in others, we tune our own internal parameters.
@@ -262,7 +262,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
     // Test for probesize errors.
     if(this.stderrLog.some(logEntry => logEntry.includes("not enough frames to estimate rate; consider increasing probesize"))) {
 
-      // Let the streaming delegate know to adjust it's parameters for the next run and inform the user.
+      // Let the streaming delegate know to adjust its parameters for the next run and inform the user.
       this.delegate.adjustProbeSize?.();
 
       return;

@@ -15,7 +15,7 @@
  * - Automated setup and management of FFmpeg processes for HKSV event recording and livestreaming (with support for audio and video).
  * - Parsing and generation of fMP4 boxes/segments for HomeKit, including initialization and media segments.
  * - Async generator APIs for efficient, event-driven segment handling.
- * - Flexible error handling and timeouts for HomeKit’s strict realtime requirements.
+ * - Flexible error handling and timeouts for HomeKit's strict realtime requirements.
  * - Designed for Homebridge plugin authors or advanced users who need robust, platform-aware FFmpeg session control for HomeKit and related integrations.
  *
  * @module
@@ -25,26 +25,31 @@ import { HKSV_IDR_INTERVAL, HKSV_TIMEOUT } from "./settings.js";
 import { type Nullable, type PartialWithId, runWithTimeout } from "../util.js";
 import type { FfmpegOptions } from "./options.js";
 import { FfmpegProcess } from "./process.js";
-import events from "node:events";
 import { once } from "node:events";
 
 /**
- * Base options for configuring an fMP4 recording or livestream session. These options aren't used directly but are inherited and used by it's descendents.
+ * Base options shared by both fMP4 recording and livestream sessions.
  *
- * @property audioStream          - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
- * @property codec                - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`.
- * @property enableAudio          - Indicates whether to enable audio or not.
- * @property hardwareDecoding     - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`.
- * @property hardwareTranscoding  - Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`.
- * @property videoStream          - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
+ * @property audioFilters        - Audio filters for FFmpeg to process. These are passed as an array of filters.
+ * @property audioStream         - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
+ * @property codec               - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`.
+ * @property enableAudio         - Indicates whether to enable audio or not.
+ * @property hardwareDecoding    - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`.
+ * @property hardwareTranscoding - Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`.
+ * @property transcodeAudio      - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
+ * @property videoFilters        - Video filters for FFmpeg to process. These are passed as an array of filters.
+ * @property videoStream         - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
  */
 export interface FMp4BaseOptions {
 
+  audioFilters: string[];
   audioStream: number;
   codec: string;
   enableAudio: boolean;
   hardwareDecoding: boolean;
   hardwareTranscoding: boolean;
+  transcodeAudio: boolean;
+  videoFilters: string[];
   videoStream: number;
 }
 
@@ -72,7 +77,7 @@ export interface FMp4BaseOptions {
  *   url: "http://doorbird-ip/bha-api/audio.cgi"
  * };
  *
- * // Self-describing RTSP audio stream — only URL is needed.
+ * // Self-describing RTSP audio stream - only URL is needed.
  * const rtspAudioInput: FMp4AudioInputConfig = {
  *
  *   url: "rtsp://camera-ip/audio"
@@ -92,23 +97,17 @@ export interface FMp4AudioInputConfig {
 }
 
 /**
- * Options for configuring an fMP4 recording or livestream session.
+ * Options for configuring an fMP4 HKSV recording session.
  *
- * @property audioFilters    - Audio filters for FFmpeg to process. These are passed as an array of filters.
  * @property fps             - The video frames per second for the session.
  * @property probesize       - Number of bytes to analyze for stream information.
  * @property timeshift       - Timeshift offset for event-based recording (in milliseconds).
- * @property transcodeAudio  - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
- * @property videoFilters    - Video filters for FFmpeg to process. These are passed as an array of filters.
  */
 export interface FMp4RecordingOptions extends FMp4BaseOptions {
 
-  audioFilters: string[];
   fps: number;
   probesize: number;
   timeshift: number;
-  transcodeAudio: boolean;
-  videoFilters: string[];
 }
 
 /**
@@ -128,8 +127,8 @@ export interface FMp4LivestreamOptions extends FMp4BaseOptions {
   url: string;
 }
 
-// Utility to map HKSV audio recording profiles to FFmpeg profile strings. We also use satisfies here to ensure we account for any future changes that would require
-// updating this mapping.
+// Utility to map HKSV audio recording codec types to their AAC Object Type identifiers. We also use satisfies here to ensure we account for any future changes that
+// would require updating this mapping.
 const translateAudioRecordingCodecType = {
 
   [ AudioRecordingCodecType.AAC_ELD ]:   "38",
@@ -147,62 +146,51 @@ const translateAudioSampleRate = {
   [ AudioRecordingSamplerate.KHZ_48 ]:   "48"
 } as const satisfies Record<AudioRecordingSamplerate, string>;
 
+// Reusable empty buffer sentinel for the box-parsing loop. Avoids repeated zero-byte allocations on every box reset.
+const EMPTY_BUFFER = Buffer.alloc(0);
+
+// Known HKSV-related errors due to occasional inconsistencies produced by the input stream and FFmpeg's own occasional quirkiness. Compiled once at module scope
+// rather than on every error event.
+const FFMPEG_KNOWN_HKSV_ERROR = new RegExp([
+
+  "(Cannot determine format of input stream 0:0 after EOF)",
+  "(Could not write header \\(incorrect codec parameters \\?\\): Broken pipe)",
+  "(Could not write header for output file #0)",
+  "(Error closing file: Broken pipe)",
+  "(Error splitting the input into NAL units\\.)",
+  "(Invalid data found when processing input)",
+  "(moov atom not found)"
+].join("|"));
+
 /**
- * FFmpeg process controller for HomeKit Secure Video (HKSV) and fMP4 livestreaming and recording.
+ * Abstract base class for fMP4 FFmpeg processes. Owns the shared command line skeleton (preamble, video mapping, movflags, audio encoding, output format) and the fMP4
+ * box-parsing loop. Subclasses provide mode-specific pieces (input args, encoder selection, box handling) via protected hook methods, following the template method
+ * pattern.
  *
- * This class manages the lifecycle and parsing of an FFmpeg process to support HKSV and livestreaming in fMP4 format. It handles initialization segments, media segment
- * parsing, buffering, and HomeKit segment generation, and emits events for segment and initialization.
- *
- * @example
- *
- * ```ts
- * // Create a new recording process for an HKSV event.
- * const process = new FfmpegRecordingProcess(ffmpegOptions, recordingConfig, 30, true, 5000000, 0);
- *
- * // Start the process.
- * process.start();
- *
- * // Iterate over generated segments.
- * for await(const segment of process.segmentGenerator()) {
- *
- *   // Send segment to HomeKit, etc.
- * }
- *
- * // Stop when finished.
- * process.stop();
- * ```
- *
- * @see FfmpegOptions
+ * @see FfmpegRecordingProcess
+ * @see FfmpegLivestreamProcess
  * @see FfmpegProcess
  * @see {@link https://ffmpeg.org/ffmpeg.html | FFmpeg Documentation}
  */
-class FfmpegFMp4Process extends FfmpegProcess {
+abstract class FfmpegFMp4Process extends FfmpegProcess {
 
-  private hasInitSegment: boolean;
-  private _initSegment: Buffer;
-  private isLivestream: boolean;
   private isLoggingErrors: boolean;
-  public isTimedOut: boolean;
-  private recordingBuffer: { data: Buffer; header: Buffer; length: number; type: string }[];
-  public segmentLength?: number;
+
+  // The HomeKit recording configuration and resolved base options are stored as protected fields so subclass hook methods can reference them without needing their own
+  // copies of the shared state.
+  protected readonly fMp4Options: Required<FMp4BaseOptions>;
+  protected readonly recordingConfig: CameraRecordingConfiguration;
 
   /**
-   * Constructs a new fMP4 FFmpeg process for HKSV event recording or livestreaming.
+   * Constructs a new fMP4 FFmpeg process. Stores shared state and applies defaults to the base options. The command line is not assembled here...subclasses call
+   * `buildCommandLine()` after their own initialization to trigger the template method assembly.
    *
    * @param ffmpegOptions     - FFmpeg configuration options.
    * @param recordingConfig   - HomeKit recording configuration for the session.
-   * @param isAudioActive     - If `true`, enables audio stream processing.
-   * @param fMp4Options       - Configuration for the fMP4 session (fps, type, url, audio input, etc.).
+   * @param fMp4Options       - Partial base options with defaults applied for any unset fields.
    * @param isVerbose         - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
-   *
-   * @example
-   *
-   * ```ts
-   * const process = new FfmpegFMp4Process(ffmpegOptions, recordingConfig, true, { fps: 30 });
-   * ```
    */
-  constructor(ffmpegOptions: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fMp4Options: Partial<FMp4LivestreamOptions & FMp4RecordingOptions> = {},
-    isVerbose = false) {
+  constructor(ffmpegOptions: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fMp4Options: Partial<FMp4BaseOptions> = {}, isVerbose = false) {
 
     // Initialize our parent.
     super(ffmpegOptions);
@@ -210,24 +198,34 @@ class FfmpegFMp4Process extends FfmpegProcess {
     // We want to log errors when they occur.
     this.isLoggingErrors = true;
 
-    // Initialize our recording buffer.
-    this.hasInitSegment = false;
-    this._initSegment = Buffer.alloc(0);
-    this.recordingBuffer = [];
+    // Store the recording configuration for use by subclass hook methods.
+    this.recordingConfig = recordingConfig;
 
-    // Initialize our state.
-    this.isLivestream = !!fMp4Options.url;
-    this.isTimedOut = false;
-    fMp4Options.audioStream ??= 0;
-    fMp4Options.audioFilters ??= [];
-    fMp4Options.codec ??= "h264";
-    fMp4Options.enableAudio ??= true;
-    fMp4Options.fps ??= 30;
-    fMp4Options.hardwareDecoding ??= this.options.codecSupport.ffmpegVersion.startsWith("8.") ? this.options.config.hardwareDecoding : false;
-    fMp4Options.hardwareTranscoding ??= this.options.config.hardwareTranscoding;
-    fMp4Options.transcodeAudio ??= true;
-    fMp4Options.videoFilters ??= [];
-    fMp4Options.videoStream ??= 0;
+    // Apply defaults to the base options and store them. Subclasses store their own mode-specific options separately.
+    this.fMp4Options = {
+
+      audioFilters: fMp4Options.audioFilters ?? [],
+      audioStream: fMp4Options.audioStream ?? 0,
+      codec: fMp4Options.codec ?? "h264",
+      enableAudio: fMp4Options.enableAudio ?? true,
+      hardwareDecoding: fMp4Options.hardwareDecoding ?? (this.options.codecSupport.ffmpegVersion.startsWith("8.") ? this.options.config.hardwareDecoding : false),
+      hardwareTranscoding: fMp4Options.hardwareTranscoding ?? this.options.config.hardwareTranscoding,
+      transcodeAudio: fMp4Options.transcodeAudio ?? true,
+      videoFilters: fMp4Options.videoFilters ?? [],
+      videoStream: fMp4Options.videoStream ?? 0
+    };
+
+    // Store the verbose flag for use during command line assembly. We don't build the command line here...subclasses call buildCommandLine() after initializing their
+    // own state, which avoids the virtual-call-from-constructor problem.
+    this._isVerbose = isVerbose;
+  }
+
+  // Verbose flag stored during construction and consumed by buildCommandLine(). This avoids passing isVerbose through the hook method chain.
+  private _isVerbose: boolean;
+
+  // Assembles the FFmpeg command line by calling hook methods in the standard order. The shared skeleton lives here; mode-specific pieces come from subclass overrides.
+  // Subclasses call this as the last step of their constructor, after their own state is fully initialized.
+  protected buildCommandLine(): void {
 
     // Configure our video parameters for our input:
     //
@@ -242,112 +240,35 @@ class FfmpegFMp4Process extends FfmpegProcess {
       "-nostats",
       "-fflags", "+discardcorrupt",
       "-err_detect", "ignore_err",
-      ...this.options.videoDecoder(fMp4Options.codec),
-      "-max_delay", "500000"
+      ...this.options.videoDecoder(this.fMp4Options.codec),
+      "-max_delay", "500000",
+
+      // Mode-specific input arguments (RTSP input for livestream, stdin pipe for recording).
+      ...this.inputArgs(),
+
+      // Mode-specific separate audio input arguments (livestream with a separate audio endpoint, empty for recording).
+      ...this.separateAudioInputArgs()
     ];
-
-    // Track which FFmpeg input index contains the audio stream. By default, audio and video share the same input (index 0). When a separate audio input is provided
-    // for livestreaming, the audio input becomes index 1.
-    let audioInputIndex = 0;
-
-    if(this.isLivestream && fMp4Options.url) {
-
-      // -avioflags direct           Tell FFmpeg to minimize buffering to reduce latency for more realtime processing.
-      // -rtsp_transport tcp         Tell the RTSP stream handler that we're looking for a TCP connection.
-      // -i url            RTSPS URL to get our input stream from.
-      this.commandLineArgs.push(
-
-        "-avioflags", "direct",
-        "-rtsp_transport", "tcp",
-        "-i", fMp4Options.url
-      );
-    } else {
-
-      // -flags low_delay              Tell FFmpeg to optimize for low delay / realtime decoding.
-      // -probesize number             How many bytes should be analyzed for stream information.
-      // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
-      // -i pipe:0                     Use standard input to get video data.
-      // -ss                           Fast forward to where HKSV is expecting us to be for a recording event.
-      this.commandLineArgs.push(
-
-        "-flags", "low_delay",
-        "-probesize", (fMp4Options.probesize ?? 5000000).toString(),
-        "-f", "mp4",
-        "-i", "pipe:0",
-        "-ss", (fMp4Options.timeshift ?? 0).toString() + "ms"
-      );
-    }
-
-    // If a separate audio input has been configured for livestreaming, add it as a second FFmpeg input. This enables support for devices like DoorBird where video and
-    // audio are served from different endpoints.
-    if(this.isLivestream && fMp4Options.enableAudio && fMp4Options.audioInput) {
-
-      // Normalize the audio input configuration. A plain string is treated as a URL shorthand.
-      const audioInput: FMp4AudioInputConfig = (typeof fMp4Options.audioInput === "string") ?
-        { url: fMp4Options.audioInput } :
-        fMp4Options.audioInput;
-
-      // When a raw audio format is specified, we need to explicitly tell FFmpeg how to interpret the incoming stream since it cannot probe raw audio sources.
-      //
-      // -f format                       Specify the raw audio format (e.g., mulaw, alaw, s16le).
-      // -ar sampleRate                  Specify the audio sample rate in Hz.
-      // -ac channels                    Specify the number of audio channels.
-      if(audioInput.format) {
-
-        this.commandLineArgs.push(
-
-          "-f", audioInput.format,
-          "-ar", (audioInput.sampleRate ?? 8000).toString(),
-          "-ac", (audioInput.channels ?? 1).toString()
-        );
-      }
-
-      // For RTSP and RTSPS audio sources, we explicitly request TCP transport to match the behavior we use for the primary video input.
-      if([ "rtsp://", "rtsps://" ].some((protocol) => audioInput.url.toLowerCase().startsWith(protocol))) {
-
-        this.commandLineArgs.push("-rtsp_transport", "tcp");
-      }
-
-      // -i url                          Audio input URL.
-      this.commandLineArgs.push("-i", audioInput.url);
-
-      // Audio is now on the second input (index 1) instead of the primary input (index 0).
-      audioInputIndex = 1;
-    }
 
     // Configure our recording options for the video stream:
     //
     // -map 0:v:X                    Selects the video track from the input.
     this.commandLineArgs.push(
 
-      "-map", "0:v:" + fMp4Options.videoStream.toString(),
-      ...(this.isLivestream ? [ "-codec:v", "copy" ] : this.options.recordEncoder({
+      "-map", "0:v:" + this.fMp4Options.videoStream.toString(),
 
-        bitrate: recordingConfig.videoCodec.parameters.bitRate,
-        fps: recordingConfig.videoCodec.resolution[2],
-        hardwareDecoding: fMp4Options.hardwareDecoding,
-        hardwareTranscoding: fMp4Options.hardwareTranscoding,
-        height: recordingConfig.videoCodec.resolution[1],
-        idrInterval: HKSV_IDR_INTERVAL,
-        inputFps: fMp4Options.fps,
-        level: recordingConfig.videoCodec.parameters.level,
-        profile: recordingConfig.videoCodec.parameters.profile,
-        width: recordingConfig.videoCodec.resolution[0]
-      }))
+      // Mode-specific video encoder arguments (copy for livestream, recordEncoder for recording).
+      ...this.videoEncoderArgs()
     );
 
     // Configure our video filters, if we have them.
-    if(fMp4Options.videoFilters.length) {
+    if(this.fMp4Options.videoFilters.length) {
 
-      this.commandLineArgs.push("-filter:v", fMp4Options.videoFilters.join(", "));
+      this.commandLineArgs.push("-filter:v", this.fMp4Options.videoFilters.join(", "));
     }
 
-    // If we're livestreaming, emit fragments at one-second intervals.
-    if(this.isLivestream) {
-
-      // -frag_duration number       Length of each fMP4 fragment, in microseconds.
-      this.commandLineArgs.push("-frag_duration", "1000000");
-    }
+    // Mode-specific post-filter arguments (frag_duration for livestream, empty for recording).
+    this.commandLineArgs.push(...this.postFilterArgs());
 
     // -movflags flags               In the generated fMP4 stream: set the default-base-is-moof flag in the header, write an initial empty MOOV box, start a new fragment
     //                               at each keyframe, skip creating a segment index (SIDX) box in fragments, and skip writing the final MOOV trailer since it's unneeded.
@@ -359,27 +280,30 @@ class FfmpegFMp4Process extends FfmpegProcess {
       "-movflags", "default_base_moof+empty_moov+frag_keyframe+skip_sidx+skip_trailer",
       "-flush_packets", "1",
       "-reset_timestamps", "1",
-      "-metadata", "comment=" + this.options.name() + " " + (this.isLivestream ? "Livestream Buffer" : "HKSV Event")
+      "-metadata", "comment=" + this.options.name() + " " + this.metadataLabel()
     );
 
-    if(fMp4Options.enableAudio) {
+    // Assemble the audio encoding block. This is shared between both modes...the only mode-specific piece is which FFmpeg input index carries the audio stream.
+    let transcodeAudio = this.fMp4Options.transcodeAudio;
+
+    if(this.fMp4Options.enableAudio) {
 
       // Configure the audio portion of the command line. Options we use are:
       //
       // -map N:a:X?                 Selects the audio stream from input N, if it exists. The input index is 0 when audio and video share the same input, or 1 when a
       //                             separate audio input has been configured.
-      this.commandLineArgs.push("-map", audioInputIndex.toString() + ":a:" + fMp4Options.audioStream.toString() + "?");
+      this.commandLineArgs.push("-map", this.audioInputIndex().toString() + ":a:" + this.fMp4Options.audioStream.toString() + "?");
 
       // Configure our audio filters, if we have them.
-      if(fMp4Options.audioFilters.length) {
+      if(this.fMp4Options.audioFilters.length) {
 
-        this.commandLineArgs.push("-filter:a", fMp4Options.audioFilters.join(", "));
+        this.commandLineArgs.push("-filter:a", this.fMp4Options.audioFilters.join(", "));
 
-        // Audio filters require transcoding. If the user's decided to filter, we enforce this requirement even if they wanted to copy the audio stream.
-        fMp4Options.transcodeAudio = true;
+        // Audio filters require transcoding. If the user has decided to filter, we enforce this requirement even if they wanted to copy the audio stream.
+        transcodeAudio = true;
       }
 
-      if(fMp4Options.transcodeAudio) {
+      if(transcodeAudio) {
 
         // Configure the audio portion of the command line. Options we use are:
         //
@@ -389,10 +313,10 @@ class FfmpegFMp4Process extends FfmpegProcess {
         // -ac number                  Set the number of audio channels.
         this.commandLineArgs.push(
 
-          ...this.options.audioEncoder({ codec: recordingConfig.audioCodec.type }),
-          "-profile:a", translateAudioRecordingCodecType[recordingConfig.audioCodec.type],
-          "-ar", translateAudioSampleRate[recordingConfig.audioCodec.samplerate as AudioRecordingSamplerate] + "k",
-          "-ac", (recordingConfig.audioCodec.audioChannels ?? 1).toString()
+          ...this.options.audioEncoder({ codec: this.recordingConfig.audioCodec.type }),
+          "-profile:a", translateAudioRecordingCodecType[this.recordingConfig.audioCodec.type],
+          "-ar", translateAudioSampleRate[this.recordingConfig.audioCodec.samplerate as AudioRecordingSamplerate] + "k",
+          "-ac", (this.recordingConfig.audioCodec.audioChannels ?? 1).toString()
         );
       } else {
 
@@ -413,16 +337,39 @@ class FfmpegFMp4Process extends FfmpegProcess {
       "pipe:1");
 
     // Additional logging, but only if we're debugging.
-    if(isVerbose || this.isVerbose) {
+    if(this._isVerbose || this.isVerbose) {
 
       this.commandLineArgs.unshift("-loglevel", "level+verbose");
     }
   }
 
+  // Hook methods. Subclasses override these to provide their mode-specific FFmpeg command line pieces and box handling behavior.
+
+  // Returns the mode-specific input arguments that follow the shared preamble.
+  protected abstract inputArgs(): string[];
+
+  // Returns any additional input arguments for a separate audio source (livestream only, empty for recording).
+  protected abstract separateAudioInputArgs(): string[];
+
+  // Returns the FFmpeg input index that contains the audio stream (0 for shared input, 1 when a separate audio input is configured).
+  protected abstract audioInputIndex(): number;
+
+  // Returns the mode-specific video encoder arguments.
+  protected abstract videoEncoderArgs(): string[];
+
+  // Returns any arguments that go between video filters and movflags (frag_duration for livestream, empty for recording).
+  protected abstract postFilterArgs(): string[];
+
+  // Returns the metadata label suffix for this mode.
+  protected abstract metadataLabel(): string;
+
+  // Called by the shared box-parsing loop in configureProcess() for each complete fMP4 box. Subclasses provide their own handling: livestream tracks init segments and
+  // emits events, recording pushes to a buffer.
+  protected abstract handleParsedBox(header: Buffer, data: Buffer, dataLength: number, type: string): void;
+
   /**
-   * Prepares and configures the FFmpeg process for reading and parsing output fMP4 data.
-   *
-   * This method is called internally by the process lifecycle and is not typically invoked directly by consumers.
+   * Prepares and configures the FFmpeg process for reading and parsing output fMP4 data. The box parsing loop is shared...each complete box is dispatched to the
+   * subclass via handleParsedBox().
    */
   protected configureProcess(): void {
 
@@ -432,35 +379,40 @@ class FfmpegFMp4Process extends FfmpegProcess {
     super.configureProcess();
 
     // Initialize our variables that we need to process incoming FFmpeg packets.
-    let header: Buffer = Buffer.alloc(0);
-    let bufferRemaining: Buffer = Buffer.alloc(0);
+    let header: Buffer = EMPTY_BUFFER;
+    let bufferRemaining: Buffer = EMPTY_BUFFER;
     let dataLength = 0;
     let type = "";
 
-    // Process FFmpeg output and parse out the fMP4 stream it's generating for HomeKit Secure Video.
+    // Process FFmpeg output and parse out the fMP4 stream it's generating. Here, we take on the task of parsing the fMP4 stream that's being generated and split it up
+    // into the MP4 boxes that HAP-NodeJS is ultimately expecting.
     this.process?.stdout.on("data", dataListener = (buffer: Buffer): void => {
 
       // If we have anything left from the last buffer we processed, prepend it to this buffer.
       if(bufferRemaining.length > 0) {
 
         buffer = Buffer.concat([ bufferRemaining, buffer ]);
-        bufferRemaining = Buffer.alloc(0);
+        bufferRemaining = EMPTY_BUFFER;
       }
 
       let offset = 0;
 
-      // FFmpeg is outputting an fMP4 stream that's suitable for HomeKit Secure Video. However, we can't just pass this stream directly back to HomeKit since we're using
-      // a generator-based API to send packets back to HKSV. Here, we take on the task of parsing the fMP4 stream that's being generated and split it up into the MP4
-      // boxes that HAP-NodeJS is ultimately expecting.
+      // The MP4 container format is well-documented and designed around the concept of boxes. A box (or atom as they used to be called) is at the center of an MP4
+      // container. It's composed of an 8-byte header, followed by the data payload it carries.
       for(;;) {
 
         let data;
 
-        // The MP4 container format is well-documented and designed around the concept of boxes. A box (or atom as they used to be called) is at the center of an MP4
-        // container. It's composed of an 8-byte header, followed by the data payload it carries.
-
         // No existing header, let's start a new box.
         if(!header.length) {
+
+          // If there aren't enough bytes for a complete box header, save them for the next chunk.
+          if(buffer.length < 8) {
+
+            bufferRemaining = buffer;
+
+            break;
+          }
 
           // Grab the header. The first four bytes represents the length of the entire box. Second four bytes represent the box type.
           header = buffer.subarray(0, 8);
@@ -491,38 +443,11 @@ class FfmpegFMp4Process extends FfmpegProcess {
           break;
         }
 
-        // If we're creating a livestream to be consumed by the timeshift buffer, we need to track the initialization segment, and emit segments.
-        if(this.isLivestream) {
-
-          // If this is part of the initialization segment, store it for future use.
-          if(!this.hasInitSegment) {
-
-            // The initialization segment is everything before the first moof box. Once we've seen a moof box, we know we've captured it in full.
-            if(type === "moof") {
-
-              this.hasInitSegment = true;
-              this.emit("initsegment");
-            } else {
-
-              this._initSegment = Buffer.concat([ this._initSegment, header, data ]);
-            }
-          }
-
-          if(this.hasInitSegment) {
-
-            // We only emit segments once we have the initialization segment.
-            this.emit("segment", Buffer.concat([ header, data ]));
-          }
-        } else {
-
-          // Add it to our queue to be eventually pushed out through our generator function.
-          this.recordingBuffer.push({ data: data, header: header, length: dataLength, type: type });
-          this.emit("mp4box");
-        }
+        // Dispatch the complete box to the subclass for mode-specific handling.
+        this.handleParsedBox(header, data, dataLength, type);
 
         // Prepare to start a new box for the next buffer that we will be processing.
-        data = Buffer.alloc(0);
-        header = Buffer.alloc(0);
+        header = EMPTY_BUFFER;
         type = "";
 
         // We've parsed an entire box, and there's no more data in this buffer to parse.
@@ -547,71 +472,17 @@ class FfmpegFMp4Process extends FfmpegProcess {
   }
 
   /**
-   * Retrieves the fMP4 initialization segment generated by FFmpeg.
-   *
-   * Waits until the initialization segment is available, then returns it.
-   *
-   * @returns A promise resolving to the initialization segment as a Buffer.
-   *
-   * @example
-   *
-   * ```ts
-   * const initSegment = await process.getInitSegment();
-   * ```
-   */
-  protected async getInitSegment(): Promise<Buffer> {
-
-    // If we have the initialization segment, return it.
-    if(this.hasInitSegment) {
-
-      return this._initSegment;
-    }
-
-    // Wait until the initialization segment is seen and then try again.
-    await events.once(this, "initsegment");
-
-    return this.getInitSegment();
-  }
-
-  /**
-   * Stops the FFmpeg process and performs cleanup, including emitting termination events for segment generators.
-   *
-   * This is called as part of the process shutdown sequence.
+   * Stops the FFmpeg process and performs cleanup. Subclasses override this to emit mode-specific events before calling super, which handles the shared teardown and
+   * emits the "close" event.
    */
   protected stopProcess(): void {
 
     // Call our parent to get started.
     super.stopProcess();
 
-    // Ensure that we clear out of our segment generator by guaranteeing an exit path.
+    // Signal that the process has ended.
     this.isEnded = true;
-    this.emit("mp4box");
     this.emit("close");
-  }
-
-  /**
-   * Starts the FFmpeg process, adjusting segment length for livestreams if set.
-   *
-   * @example
-   *
-   * ```ts
-   * process.start();
-   * ```
-   */
-  public start(): void {
-
-    if(this.isLivestream && (this.segmentLength !== undefined)) {
-
-      const fragIndex = this.commandLineArgs.indexOf("-frag_duration");
-
-      if(fragIndex !== -1) {
-
-        this.commandLineArgs[fragIndex + 1] = (this.segmentLength * 1000).toString();
-      }
-    }
-
-    // Start the FFmpeg session.
-    super.start();
   }
 
   /**
@@ -645,7 +516,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
    * @param exitCode - The exit code from the FFmpeg process.
    * @param signal   - The signal (if any) used to terminate the process.
    */
-  protected logFfmpegError(exitCode: number, signal: NodeJS.Signals): void {
+  protected logFfmpegError(exitCode: Nullable<number>, signal: Nullable<NodeJS.Signals>): void {
 
     // If we're ignoring errors, we're done.
     if(!this.isLoggingErrors) {
@@ -653,20 +524,8 @@ class FfmpegFMp4Process extends FfmpegProcess {
       return;
     }
 
-    // Known HKSV-related errors due to occasional inconsistencies that are occasionally produced by the input stream and FFmpeg's own occasional quirkiness.
-    const ffmpegKnownHksvError = new RegExp([
-
-      "(Cannot determine format of input stream 0:0 after EOF)",
-      "(Could not write header \\(incorrect codec parameters \\?\\): Broken pipe)",
-      "(Could not write header for output file #0)",
-      "(Error closing file: Broken pipe)",
-      "(Error splitting the input into NAL units\\.)",
-      "(Invalid data found when processing input)",
-      "(moov atom not found)"
-    ].join("|"));
-
     // See if we know about this error.
-    if(this.stderrLog.some(x => ffmpegKnownHksvError.test(x))) {
+    if(this.stderrLog.some(x => FFMPEG_KNOWN_HKSV_ERROR.test(x))) {
 
       this.log.error("FFmpeg ended unexpectedly due to issues processing the media stream. This error can be safely ignored - it will occur occasionally.");
 
@@ -675,6 +534,136 @@ class FfmpegFMp4Process extends FfmpegProcess {
 
     // Otherwise, revert to our default logging in our parent.
     super.logFfmpegError(exitCode, signal);
+  }
+}
+
+/**
+ * Manages a HomeKit Secure Video recording FFmpeg process.
+ *
+ * @example
+ *
+ * ```ts
+ * const process = new FfmpegRecordingProcess(ffmpegOptions, recordingConfig, 30, true, 5000000, 0);
+ * process.start();
+ * ```
+ *
+ * @see FfmpegFMp4Process
+ *
+ * @category FFmpeg
+ */
+export class FfmpegRecordingProcess extends FfmpegFMp4Process {
+
+  /**
+   * Indicates whether the recording has timed out waiting for FFmpeg output.
+   */
+  public isTimedOut: boolean;
+
+  private readonly fps: number;
+  private readonly probesize: number;
+  private recordingBuffer: { data: Buffer; header: Buffer; length: number; type: string }[];
+  private readonly timeshift: number;
+
+  /**
+   * Constructs a new FFmpeg recording process for HKSV events.
+   *
+   * @param options          - FFmpeg configuration options.
+   * @param recordingConfig  - HomeKit recording configuration for the session.
+   * @param fMp4Options      - fMP4 recording options.
+   * @param isVerbose        - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
+   */
+  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fMp4Options: Partial<FMp4RecordingOptions> = {}, isVerbose = false) {
+
+    super(options, recordingConfig, fMp4Options, isVerbose);
+
+    // Store recording-specific options.
+    this.fps = fMp4Options.fps ?? 30;
+    this.isTimedOut = false;
+    this.probesize = fMp4Options.probesize ?? 5000000;
+    this.recordingBuffer = [];
+    this.timeshift = fMp4Options.timeshift ?? 0;
+
+    // Assemble the FFmpeg command line now that all state is initialized.
+    this.buildCommandLine();
+  }
+
+  // Recording input: read fMP4 data from standard input with low-delay optimizations and an optional timeshift for HKSV event alignment.
+  //
+  // -flags low_delay              Tell FFmpeg to optimize for low delay / realtime decoding.
+  // -probesize number             How many bytes should be analyzed for stream information.
+  // -f mp4                        Tell FFmpeg that it should expect an MP4-encoded input stream.
+  // -i pipe:0                     Use standard input to get video data.
+  // -ss                           Fast forward to where HKSV is expecting us to be for a recording event.
+  protected inputArgs(): string[] {
+
+    return [
+
+      "-flags", "low_delay",
+      "-probesize", this.probesize.toString(),
+      "-f", "mp4",
+      "-i", "pipe:0",
+      "-ss", this.timeshift.toString() + "ms"
+    ];
+  }
+
+  // Recordings always read audio from the primary input...no separate audio source.
+  protected separateAudioInputArgs(): string[] {
+
+    return [];
+  }
+
+  // Audio is always on the primary input (index 0) for recordings.
+  protected audioInputIndex(): number {
+
+    return 0;
+  }
+
+  // Recordings transcode video using the platform-appropriate encoder for HKSV.
+  protected videoEncoderArgs(): string[] {
+
+    return this.options.recordEncoder({
+
+      bitrate: this.recordingConfig.videoCodec.parameters.bitRate,
+      fps: this.recordingConfig.videoCodec.resolution[2],
+      hardwareDecoding: this.fMp4Options.hardwareDecoding,
+      hardwareTranscoding: this.fMp4Options.hardwareTranscoding,
+      height: this.recordingConfig.videoCodec.resolution[1],
+      idrInterval: HKSV_IDR_INTERVAL,
+      inputFps: this.fps,
+      level: this.recordingConfig.videoCodec.parameters.level,
+      profile: this.recordingConfig.videoCodec.parameters.profile,
+      width: this.recordingConfig.videoCodec.resolution[0]
+    });
+  }
+
+  // Recordings have no post-filter arguments.
+  protected postFilterArgs(): string[] {
+
+    return [];
+  }
+
+  // Metadata label identifying this as an HKSV event recording.
+  protected metadataLabel(): string {
+
+    return "HKSV Event";
+  }
+
+  // Each parsed box is queued in the recording buffer for consumption by segmentGenerator().
+  protected handleParsedBox(header: Buffer, data: Buffer, dataLength: number, type: string): void {
+
+    this.recordingBuffer.push({ data, header, length: dataLength, type });
+    this.emit("mp4box");
+  }
+
+  /**
+   * Stops the FFmpeg process and performs cleanup, ensuring the segment generator can exit.
+   */
+  protected stopProcess(): void {
+
+    // Emit mp4box to unblock segmentGenerator() if it's waiting, then let the base class handle the rest.
+    this.isEnded = true;
+    this.emit("mp4box");
+
+    super.stopProcess();
   }
 
   /**
@@ -700,7 +689,7 @@ class FfmpegFMp4Process extends FfmpegProcess {
     // Loop forever, generating either FTYP/MOOV box pairs or MOOF/MDAT box pairs for HomeKit Secure Video.
     for(;;) {
 
-      // FFmpeg has finished it's output - we're done.
+      // FFmpeg has finished its output - we're done.
       if(this.isEnded) {
 
         return;
@@ -745,6 +734,224 @@ class FfmpegFMp4Process extends FfmpegProcess {
       }
     }
   }
+}
+
+/**
+ * Manages a HomeKit livestream FFmpeg process for generating fMP4 segments.
+ *
+ * @example
+ *
+ * ```ts
+ * const process = new FfmpegLivestreamProcess(ffmpegOptions, recordingConfig, url, 30, true);
+ * process.start();
+ *
+ * const initSegment = await process.getInitSegment();
+ * ```
+ *
+ * @see FfmpegFMp4Process
+ *
+ * @category FFmpeg
+ */
+export class FfmpegLivestreamProcess extends FfmpegFMp4Process {
+
+  /**
+   * Optional override for the fMP4 fragment duration, in milliseconds. When set, the `-frag_duration` argument is updated before starting the FFmpeg process.
+   */
+  public segmentLength?: number;
+
+  // Set to true during separateAudioInputArgs() when a separate audio input is configured, so that audioInputIndex() returns the correct FFmpeg input index.
+  private _hasAudioInput: boolean;
+  private _initSegment: Buffer;
+  private _initSegmentParts: Buffer[];
+  private hasInitSegment: boolean;
+  private readonly livestreamOptions: PartialWithId<FMp4LivestreamOptions, "url">;
+
+  /**
+   * Constructs a new FFmpeg livestream process.
+   *
+   * @param options            - FFmpeg configuration options.
+   * @param recordingConfig    - HomeKit recording configuration for the session.
+   * @param livestreamOptions  - livestream segmenting options.
+   * @param isVerbose          - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
+   */
+  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, livestreamOptions: PartialWithId<FMp4LivestreamOptions, "url">, isVerbose = false) {
+
+    super(options, recordingConfig, livestreamOptions, isVerbose);
+
+    // Store livestream-specific options.
+    this._hasAudioInput = false;
+    this._initSegment = Buffer.alloc(0);
+    this._initSegmentParts = [];
+    this.hasInitSegment = false;
+    this.livestreamOptions = livestreamOptions;
+
+    // Assemble the FFmpeg command line now that all state is initialized.
+    this.buildCommandLine();
+  }
+
+  // Livestream input: connect to an RTSP source with direct I/O and TCP transport.
+  //
+  // -avioflags direct           Tell FFmpeg to minimize buffering to reduce latency for more realtime processing.
+  // -rtsp_transport tcp         Tell the RTSP stream handler that we're looking for a TCP connection.
+  // -i url                      RTSPS URL to get our input stream from.
+  protected inputArgs(): string[] {
+
+    return [
+
+      "-avioflags", "direct",
+      "-rtsp_transport", "tcp",
+      "-i", this.livestreamOptions.url
+    ];
+  }
+
+  // If a separate audio input has been configured, build the FFmpeg input arguments for it. This enables support for devices like DoorBird where video and audio are
+  // served from different endpoints.
+  protected separateAudioInputArgs(): string[] {
+
+    if(!this.fMp4Options.enableAudio || !this.livestreamOptions.audioInput) {
+
+      return [];
+    }
+
+    const args: string[] = [];
+
+    // Normalize the audio input configuration. A plain string is treated as a URL shorthand.
+    const audioInput: FMp4AudioInputConfig = (typeof this.livestreamOptions.audioInput === "string") ?
+      { url: this.livestreamOptions.audioInput } :
+      this.livestreamOptions.audioInput;
+
+    // When a raw audio format is specified, we need to explicitly tell FFmpeg how to interpret the incoming stream since it cannot probe raw audio sources.
+    //
+    // -f format                       Specify the raw audio format (e.g., mulaw, alaw, s16le).
+    // -ar sampleRate                  Specify the audio sample rate in Hz.
+    // -ac channels                    Specify the number of audio channels.
+    if(audioInput.format) {
+
+      args.push(
+
+        "-f", audioInput.format,
+        "-ar", (audioInput.sampleRate ?? 8000).toString(),
+        "-ac", (audioInput.channels ?? 1).toString()
+      );
+    }
+
+    // For RTSP and RTSPS audio sources, we explicitly request TCP transport to match the behavior we use for the primary video input.
+    if([ "rtsp://", "rtsps://" ].some((protocol) => audioInput.url.toLowerCase().startsWith(protocol))) {
+
+      args.push("-rtsp_transport", "tcp");
+    }
+
+    // -i url                          Audio input URL.
+    args.push("-i", audioInput.url);
+
+    // Track that we have a separate audio input so audioInputIndex() returns the correct value.
+    this._hasAudioInput = true;
+
+    return args;
+  }
+
+  // When a separate audio input is configured, audio is on the second FFmpeg input (index 1). Otherwise it shares the primary input (index 0).
+  protected audioInputIndex(): number {
+
+    return this._hasAudioInput ? 1 : 0;
+  }
+
+  // Livestreams remux the video stream directly without transcoding.
+  protected videoEncoderArgs(): string[] {
+
+    return [ "-codec:v", "copy" ];
+  }
+
+  // Livestreams emit fMP4 fragments at one-second intervals by default.
+  //
+  // -frag_duration number       Length of each fMP4 fragment, in microseconds.
+  protected postFilterArgs(): string[] {
+
+    return [ "-frag_duration", "1000000" ];
+  }
+
+  // Metadata label identifying this as a livestream buffer.
+  protected metadataLabel(): string {
+
+    return "Livestream Buffer";
+  }
+
+  // Livestream box handling: accumulate the initialization segment (everything before the first moof box), then emit each subsequent box as a segment event.
+  protected handleParsedBox(header: Buffer, data: Buffer, _dataLength: number, type: string): void {
+
+    // If this is part of the initialization segment, store it for future use.
+    if(!this.hasInitSegment) {
+
+      // The initialization segment is everything before the first moof box. Once we've seen a moof box, we know we've captured it in full. We collect the parts into an
+      // array and concatenate once at the end to avoid creating intermediate buffers on every pre-moof box.
+      if(type === "moof") {
+
+        this._initSegment = Buffer.concat(this._initSegmentParts);
+        this._initSegmentParts = [];
+        this.hasInitSegment = true;
+        this.emit("initsegment");
+      } else {
+
+        this._initSegmentParts.push(header, data);
+      }
+    }
+
+    if(this.hasInitSegment) {
+
+      // We only emit segments once we have the initialization segment.
+      this.emit("segment", Buffer.concat([ header, data ]));
+    }
+  }
+
+  /**
+   * Starts the FFmpeg process, adjusting the fragment duration if segmentLength has been set.
+   *
+   * @example
+   *
+   * ```ts
+   * process.start();
+   * ```
+   */
+  public start(): void {
+
+    if(this.segmentLength !== undefined) {
+
+      const fragIndex = this.commandLineArgs.indexOf("-frag_duration");
+
+      if(fragIndex !== -1) {
+
+        this.commandLineArgs[fragIndex + 1] = (this.segmentLength * 1000).toString();
+      }
+    }
+
+    // Start the FFmpeg session.
+    super.start();
+  }
+
+  /**
+   * Gets the fMP4 initialization segment generated by FFmpeg for the livestream.
+   *
+   * @returns A promise resolving to the initialization segment as a Buffer.
+   *
+   * @example
+   *
+   * ```ts
+   * const initSegment = await process.getInitSegment();
+   * ```
+   */
+  public async getInitSegment(): Promise<Buffer> {
+
+    // If we have the initialization segment, return it.
+    if(this.hasInitSegment) {
+
+      return this._initSegment;
+    }
+
+    // Wait until the initialization segment is seen and then try again.
+    await once(this, "initsegment");
+
+    return this.getInitSegment();
+  }
 
   /**
    * Returns the initialization segment as a Buffer, or null if not yet available.
@@ -769,83 +976,5 @@ class FfmpegFMp4Process extends FfmpegProcess {
     }
 
     return this._initSegment;
-  }
-}
-
-/**
- * Manages a HomeKit Secure Video recording FFmpeg process.
- *
- * @example
- *
- * ```ts
- * const process = new FfmpegRecordingProcess(ffmpegOptions, recordingConfig, 30, true, 5000000, 0);
- * process.start();
- * ```
- *
- * @see FfmpegFMp4Process
- *
- * @category FFmpeg
- */
-export class FfmpegRecordingProcess extends FfmpegFMp4Process {
-
-  /**
-   * Constructs a new FFmpeg recording process for HKSV events.
-   *
-   * @param options          - FFmpeg configuration options.
-   * @param recordingConfig  - HomeKit recording configuration for the session.
-   * @param fMp4Options      - fMP4 recording options.
-   * @param isVerbose        - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
-   */
-  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, fMp4Options: Partial<FMp4RecordingOptions> = {}, isVerbose = false) {
-
-    super(options, recordingConfig, fMp4Options, isVerbose);
-  }
-}
-
-/**
- * Manages a HomeKit livestream FFmpeg process for generating fMP4 segments.
- *
- * @example
- *
- * ```ts
- * const process = new FfmpegLivestreamProcess(ffmpegOptions, recordingConfig, url, 30, true);
- * process.start();
- *
- * const initSegment = await process.getInitSegment();
- * ```
- *
- * @see FfmpegFMp4Process
- *
- * @category FFmpeg
- */
-export class FfmpegLivestreamProcess extends FfmpegFMp4Process {
-
-  /**
-   * Constructs a new FFmpeg livestream process.
-   *
-   * @param options            - FFmpeg configuration options.
-   * @param recordingConfig    - HomeKit recording configuration for the session.
-   * @param livestreamOptions  - livestream segmenting options.
-   * @param isVerbose          - If `true`, enables more verbose logging for debugging purposes. Defaults to `false`.
-   */
-  constructor(options: FfmpegOptions, recordingConfig: CameraRecordingConfiguration, livestreamOptions: PartialWithId<FMp4LivestreamOptions, "url">, isVerbose = false) {
-
-    super(options, recordingConfig, livestreamOptions, isVerbose);
-  }
-
-  /**
-   * Gets the fMP4 initialization segment generated by FFmpeg for the livestream.
-   *
-   * @returns A promise resolving to the initialization segment as a Buffer.
-   *
-   * @example
-   *
-   * ```ts
-   * const initSegment = await process.getInitSegment();
-   * ```
-   */
-  public async getInitSegment(): Promise<Buffer> {
-
-    return super.getInitSegment();
   }
 }

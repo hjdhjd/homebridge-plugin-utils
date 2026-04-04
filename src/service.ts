@@ -17,6 +17,14 @@ let hasConfiguredNameUUIDs: Nullable<Set<string>> = null;
 let requiresNameUUIDs: Nullable<Set<string>> = null;
 let hasNameUUIDs: Nullable<Set<string>> = null;
 
+// Retrieves the Characteristic constructor from a service instance. Homebridge's HAP types don't expose a direct way to access the Characteristic constructor from a
+// service without holding a reference to the HAP object itself. This reflection pattern extracts it from the first characteristic on any service instance, which always
+// exists (every service has at least one required characteristic). Centralized here so the fragile cast lives in one place.
+function getCharacteristicConstructor(service: Service): typeof Characteristic {
+
+  return service.characteristics[0].constructor as unknown as typeof Characteristic;
+}
+
 /**
  * Initializes the cached UUID Sets for service characteristic lookups.
  *
@@ -123,7 +131,7 @@ export function acquireService(accessory: PlatformAccessory, serviceType: WithUU
     service = new serviceType(name, subtype!);
 
     // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
-    const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
+    const characteristic = getCharacteristicConstructor(service);
 
     // Add the Configured Name characteristic if we don't already have it and it's available to us.
     if(!serviceRequiresConfiguredName(service) && serviceHasConfiguredName(service) &&
@@ -284,7 +292,7 @@ export function getServiceName(service?: Service): string | undefined {
   }
 
   // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
-  const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
+  const characteristic = getCharacteristicConstructor(service);
 
   return (service.getCharacteristic(characteristic.ConfiguredName).value ?? service.getCharacteristic(characteristic.Name).value ?? undefined) as string | undefined;
 }
@@ -306,7 +314,7 @@ export function getServiceName(service?: Service): string | undefined {
 export function setServiceName(service: Service, name: string): void {
 
   // Grab the Characteristic constructor from the instance of our service so we can set the individual characteristics without needing the HAP object directly.
-  const characteristic = service.characteristics[0].constructor as unknown as typeof Characteristic;
+  const characteristic = getCharacteristicConstructor(service);
 
   // Ensure we have HomeKit approved naming.
   name = sanitizeName(name);

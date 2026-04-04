@@ -92,9 +92,10 @@ export type DeepReadonly<T> = {
 export type Nullable<T> = T | null;
 
 /**
- * Makes all properties in `T` optional except for `id`, which remains required.
+ * Makes all properties in `T` optional except for those specified by `K`, which remain required.
  *
- * @template T - The base interface or type.
+ * @typeParam T - The base interface or type.
+ * @typeParam K - The keys of `T` that should remain required.
  *
  * @example
  *
@@ -106,7 +107,7 @@ export type Nullable<T> = T | null;
  *   mac: string;
  * }
  *
- * type UserUpdate = PartialWithId<User>;
+ * type DeviceUpdate = PartialWithId<Device, "id">;
  *
  * // Valid: Only 'id' is required, others are optional.
  * const update: DeviceUpdate = { id: "123" };
@@ -115,7 +116,7 @@ export type Nullable<T> = T | null;
  * const another: DeviceUpdate = { id: "456", name: "SomeDevice" };
  *
  * // Error: 'id' is missing.
- * const error: DeviceUpdate = { name: "SomeOtherDevice" }; // TypeScript error
+ * const invalid: DeviceUpdate = { name: "SomeOtherDevice" }; // TypeScript error
  * ```
  *
  * @category Utilities
@@ -270,7 +271,8 @@ export async function retry(operation: () => Promise<boolean>, retryInterval: nu
  * @param promise         - The promise you want to run.
  * @param timeout         - The amount of time, in milliseconds, to wait for the promise to resolve.
  *
- * @returns Returns the result of resolving the promise it's been passed if it completes before timeout, or null if the timeout expires.
+ * @returns Returns the result of resolving the promise it's been passed if it completes before timeout, or null if the timeout expires. The internal timer is cleaned
+ * up regardless of which outcome wins the race. Note that the underlying promise is not cancelled...it continues to run, but its result is ignored.
  *
  * @example
  * ```ts
@@ -288,9 +290,11 @@ export async function retry(operation: () => Promise<boolean>, retryInterval: nu
  */
 export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): Promise<Nullable<T>> {
 
-  const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => { resolve(null); }, timeout));
+  let timer: NodeJS.Timeout;
 
-  return Promise.race([ promise, timeoutPromise ]);
+  const timeoutPromise = new Promise<null>((resolve) => { timer = setTimeout(() => { resolve(null); }, timeout); });
+
+  return Promise.race([ promise, timeoutPromise ]).finally(() => { clearTimeout(timer); });
 }
 
 /**
@@ -309,27 +313,29 @@ export async function runWithTimeout<T>(promise: Promise<T>, timeout: number): P
  *
  * @category Utilities
  */
-export async function sleep(sleepTimer: number): Promise<NodeJS.Timeout> {
+export async function sleep(sleepTimer: number): Promise<void> {
 
   return new Promise(resolve => setTimeout(resolve, sleepTimer));
 }
 
 /**
- * Camel case a string.
+ * Start case a string, capitalizing the first letter of each word unconditionally.
  *
- * @param input - The string to camel case.
+ * @param input - The string to start case.
  *
- * @returns Returns the camel cased string.
+ * @returns Returns the start cased string.
  *
  * @example
+ *
  * ```ts
- * toCamelCase(This is a test)
+ * toStartCase("this is a test");
  * ```
  *
- * Returns: `This Is A Test`, capitalizing the first letter of each word.
+ * Returns: `This Is A Test`.
+ *
  * @category Utilities
  */
-export function toCamelCase(input: string): string {
+export function toStartCase(input: string): string {
 
   return input.replace(/(^\w|\s+\w)/g, match => match.toUpperCase());
 }
@@ -351,13 +357,19 @@ export function toCamelCase(input: string): string {
  * @example
  * ```ts
  * sanitizeName("Test|Switch")
- * ```ts
+ * ```
  *
  * Returns: `Test Switch`, replacing the pipe (an invalid character in HomeKit's naming ruleset) with a space.
  *
  * @category Utilities
  */
 export function sanitizeName(name: string): string {
+
+  // Fast path: if the name already conforms to HomeKit's naming rules, skip the replacement chain entirely.
+  if(validateName(name)) {
+
+    return name;
+  }
 
   // Here are the steps we're taking to sanitize names for HomeKit:
   //
@@ -389,7 +401,7 @@ export function sanitizeName(name: string): string {
  * @example
  * ```ts
  * validateName("Test|Switch")
- * ```ts
+ * ```
  *
  * Returns: `false`.
  *

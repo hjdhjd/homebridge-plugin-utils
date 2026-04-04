@@ -342,7 +342,7 @@ export class RtpPortAllocator {
         }
 
         // We still haven't found what we're looking for...keep looking.
-        return this._reserve(ipFamily, portCount, attempts++);
+        return this._reserve(ipFamily, portCount, ++attempts);
       }
 
       // We've seen the first port we may be looking for, let's save it.

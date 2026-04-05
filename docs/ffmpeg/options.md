@@ -289,6 +289,13 @@ FfmpegOptions
 
 Configuration options for `FfmpegOptions`, defining transcoding, decoding, logging, and hardware acceleration settings.
 
+#### Remarks
+
+The `hardwareDecoding` and `hardwareTranscoding` flags are bidirectional. On input, they express the caller's desired hardware acceleration state. During
+`FfmpegOptions` construction, the flags are resolved against the host's actual capabilities and the config object is mutated in place to reflect what is available.
+After construction, these flags represent the resolved state...`hardwareDecoding` or `hardwareTranscoding` may be set to `false` if the required codecs or
+accelerators are absent, or `hardwareDecoding` may be set to `true` if Intel Quick Sync Video is detected even when not explicitly requested.
+
 #### Example
 
 ```ts

@@ -1,6 +1,16 @@
 # Changelog
 
-All notable changes to this project will be documented in this file. This project uses [semantic versioning](https://semver.org/).
+All notable changes to this project will be documented in this file.
+
+## 1.34.0 (2026-04-04)
+  * Breaking change: `toCamelCase` has been removed. Use `toStartCase` instead - the new name accurately reflects the function's behavior of capitalizing every word unconditionally.
+  * Breaking change: `FfmpegProcess.process` is no longer publicly accessible. Use the `stdin`, `stdout`, `stderr` getters, or `FfmpegStreamingProcess.ffmpegProcess` for process-level access.
+  * Behavior change: `sleep` now returns `Promise<void>` instead of `Promise<NodeJS.Timeout>`. No consumer should be affected since the resolved value was never meaningful.
+  * Improvement: feature option lookups are now significantly faster, using an indexed approach that resolves options in constant time rather than scanning the full configuration on every query.
+  * Improvement: fMP4 recording and livestreaming now share a cleaner internal architecture, with audio filter, video filter, and audio transcoding options available to both recording and livestream sessions.
+  * Improvement: FFmpeg process stream handling is now more robust, with improved error reporting, more accurate process lifecycle detection, and better protection against edge cases in fMP4 box parsing.
+  * Fix: MQTT unsubscribe now correctly notifies the broker to stop sending messages for the topic, rather than only removing the local callback.
+  * Housekeeping.
 
 ## 1.33.0 (2026-03-20)
   * New feature: fMP4 box parsing utilities for locating ISO BMFF boxes, detecting keyframe segments, and splitting moof/mdat components.

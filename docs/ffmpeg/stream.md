@@ -112,7 +112,6 @@ const process = new FfmpegStreamingProcess(delegate, sessionId, ffmpegOptions, c
 | <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | [`FfmpegProcess`](process.md#ffmpegprocess).[`hasError`](process.md#haserror) |
 | <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isEnded`](process.md#isended) |
 | <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isStarted`](process.md#isstarted) |
-| <a id="process"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | [`FfmpegProcess`](process.md#ffmpegprocess).[`process`](process.md#process) |
 
 #### Accessors
 
@@ -162,6 +161,26 @@ The standard error stream, or `null` if not available.
 ###### Inherited from
 
 [`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#stderr)
+
+##### stderrLog
+
+###### Get Signature
+
+```ts
+get stderrLog(): string[];
+```
+
+Returns the accumulated standard error log lines from the FFmpeg process.
+
+###### Returns
+
+`string`[]
+
+An array of stderr log lines.
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`stderrLog`](process.md#stderrlog)
 
 ##### stdin
 

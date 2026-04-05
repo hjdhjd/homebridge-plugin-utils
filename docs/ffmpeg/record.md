@@ -17,7 +17,7 @@ Key features:
 - Automated setup and management of FFmpeg processes for HKSV event recording and livestreaming (with support for audio and video).
 - Parsing and generation of fMP4 boxes/segments for HomeKit, including initialization and media segments.
 - Async generator APIs for efficient, event-driven segment handling.
-- Flexible error handling and timeouts for HomeKit’s strict realtime requirements.
+- Flexible error handling and timeouts for HomeKit's strict realtime requirements.
 - Designed for Homebridge plugin authors or advanced users who need robust, platform-aware FFmpeg session control for HomeKit and related integrations.
 
 ## FFmpeg
@@ -83,9 +83,7 @@ FfmpegFMp4Process.constructor
 | <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFMp4Process.hasError` |
 | <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
 | <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
-| <a id="istimedout"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFMp4Process.isTimedOut` |
-| <a id="process"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | `FfmpegFMp4Process.process` |
-| <a id="segmentlength"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFMp4Process.segmentLength` |
+| <a id="segmentlength"></a> `segmentLength?` | `public` | `number` | Optional override for the fMP4 fragment duration, in milliseconds. When set, the `-frag_duration` argument is updated before starting the FFmpeg process. | - |
 
 #### Accessors
 
@@ -115,12 +113,6 @@ if(init) {
 
 The initialization segment Buffer, or `null` if not yet generated.
 
-###### Inherited from
-
-```ts
-FfmpegFMp4Process.initSegment
-```
-
 ##### stderr
 
 ###### Get Signature
@@ -141,6 +133,28 @@ The standard error stream, or `null` if not available.
 
 ```ts
 FfmpegFMp4Process.stderr
+```
+
+##### stderrLog
+
+###### Get Signature
+
+```ts
+get stderrLog(): string[];
+```
+
+Returns the accumulated standard error log lines from the FFmpeg process.
+
+###### Returns
+
+`string`[]
+
+An array of stderr log lines.
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.stderrLog
 ```
 
 ##### stdin
@@ -209,52 +223,13 @@ A promise resolving to the initialization segment as a Buffer.
 const initSegment = await process.getInitSegment();
 ```
 
-###### Overrides
-
-```ts
-FfmpegFMp4Process.getInitSegment
-```
-
-##### segmentGenerator()
-
-```ts
-segmentGenerator(): AsyncGenerator<Buffer<ArrayBufferLike>>;
-```
-
-Asynchronously generates complete segments from FFmpeg output, formatted for HomeKit Secure Video.
-
-This async generator yields fMP4 segments as Buffers, or ends on process termination or timeout.
-
-###### Returns
-
-`AsyncGenerator`\<`Buffer`\<`ArrayBufferLike`\>\>
-
-###### Yields
-
-A Buffer containing a complete MP4 segment suitable for HomeKit.
-
-###### Example
-
-```ts
-for await(const segment of process.segmentGenerator()) {
-
-  // Process each segment for HomeKit.
-}
-```
-
-###### Inherited from
-
-```ts
-FfmpegFMp4Process.segmentGenerator
-```
-
 ##### start()
 
 ```ts
 start(): void;
 ```
 
-Starts the FFmpeg process, adjusting segment length for livestreams if set.
+Starts the FFmpeg process, adjusting the fragment duration if segmentLength has been set.
 
 ###### Returns
 
@@ -266,7 +241,7 @@ Starts the FFmpeg process, adjusting segment length for livestreams if set.
 process.start();
 ```
 
-###### Inherited from
+###### Overrides
 
 ```ts
 FfmpegFMp4Process.start
@@ -363,43 +338,9 @@ FfmpegFMp4Process.constructor
 | <a id="haserror-1"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFMp4Process.hasError` |
 | <a id="isended-1"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
 | <a id="isstarted-1"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
-| <a id="istimedout-1"></a> `isTimedOut` | `public` | `boolean` | - | `FfmpegFMp4Process.isTimedOut` |
-| <a id="process-1"></a> `process` | `public` | [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\> | The underlying Node.js ChildProcess instance for the FFmpeg process. | `FfmpegFMp4Process.process` |
-| <a id="segmentlength-1"></a> `segmentLength?` | `public` | `number` | - | `FfmpegFMp4Process.segmentLength` |
+| <a id="istimedout"></a> `isTimedOut` | `public` | `boolean` | Indicates whether the recording has timed out waiting for FFmpeg output. | - |
 
 #### Accessors
-
-##### initSegment
-
-###### Get Signature
-
-```ts
-get initSegment(): Nullable<Buffer<ArrayBufferLike>>;
-```
-
-Returns the initialization segment as a Buffer, or null if not yet available.
-
-###### Example
-
-```ts
-const init = process.initSegment;
-if(init) {
-
-  // Use the initialization segment.
-}
-```
-
-###### Returns
-
-[`Nullable`](../util.md#nullable)\<`Buffer`\<`ArrayBufferLike`\>\>
-
-The initialization segment Buffer, or `null` if not yet generated.
-
-###### Inherited from
-
-```ts
-FfmpegFMp4Process.initSegment
-```
 
 ##### stderr
 
@@ -421,6 +362,28 @@ The standard error stream, or `null` if not available.
 
 ```ts
 FfmpegFMp4Process.stderr
+```
+
+##### stderrLog
+
+###### Get Signature
+
+```ts
+get stderrLog(): string[];
+```
+
+Returns the accumulated standard error log lines from the FFmpeg process.
+
+###### Returns
+
+`string`[]
+
+An array of stderr log lines.
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.stderrLog
 ```
 
 ##### stdin
@@ -496,19 +459,24 @@ for await(const segment of process.segmentGenerator()) {
 }
 ```
 
-###### Inherited from
-
-```ts
-FfmpegFMp4Process.segmentGenerator
-```
-
 ##### start()
 
 ```ts
-start(): void;
+start(
+   commandLineArgs?, 
+   callback?, 
+   errorHandler?): void;
 ```
 
-Starts the FFmpeg process, adjusting segment length for livestreams if set.
+Starts the FFmpeg process with the provided command line and callback.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `commandLineArgs?` | `string`[] | Optional. Arguments for FFmpeg command line. |
+| `callback?` | `StreamRequestCallback` | Optional. Callback invoked when streaming is ready. |
+| `errorHandler?` | (`errorMessage`) => `void` \| `Promise`\<`void`\> | Optional. Function called if FFmpeg fails to start or terminates with error. |
 
 ###### Returns
 
@@ -517,7 +485,7 @@ Starts the FFmpeg process, adjusting segment length for livestreams if set.
 ###### Example
 
 ```ts
-process.start();
+process.start(["-i", "input.mp4", "-f", "null", "-"]);
 ```
 
 ###### Inherited from
@@ -577,7 +545,7 @@ const rawAudioInput: FMp4AudioInputConfig = {
   url: "http://doorbird-ip/bha-api/audio.cgi"
 };
 
-// Self-describing RTSP audio stream — only URL is needed.
+// Self-describing RTSP audio stream - only URL is needed.
 const rtspAudioInput: FMp4AudioInputConfig = {
 
   url: "rtsp://camera-ip/audio"
@@ -615,20 +583,23 @@ FMp4AudioInputConfig
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
+| <a id="audiofilters-1"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioFilters`](#audiofilters) |
 | <a id="audioinput"></a> `audioInput?` | `string` \| [`FMp4AudioInputConfig`](#fmp4audioinputconfig) | Optional. A separate audio input source. When provided, audio is read from this source instead of the primary `url`. Can be a URL string for self-describing sources (e.g., RTSP), or an `FMp4AudioInputConfig` object for raw audio streams that require format metadata. | - |
 | <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
 | <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="hardwaredecoding-1"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareDecoding`](#hardwaredecoding) |
 | <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
+| <a id="transcodeaudio-1"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`transcodeAudio`](#transcodeaudio) |
 | <a id="url-1"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
+| <a id="videofilters-1"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoFilters`](#videofilters) |
 | <a id="videostream-1"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
 
 ## Other
 
 ### FMp4BaseOptions
 
-Base options for configuring an fMP4 recording or livestream session. These options aren't used directly but are inherited and used by it's descendents.
+Base options shared by both fMP4 recording and livestream sessions.
 
 #### Extended by
 
@@ -639,18 +610,21 @@ Base options for configuring an fMP4 recording or livestream session. These opti
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="audiofilters"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. |
 | <a id="audiostream"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). |
 | <a id="codec"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. |
 | <a id="enableaudio"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. |
 | <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`. |
 | <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. |
+| <a id="transcodeaudio"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. |
+| <a id="videofilters"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. |
 | <a id="videostream"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). |
 
 ***
 
 ### FMp4RecordingOptions
 
-Options for configuring an fMP4 recording or livestream session.
+Options for configuring an fMP4 HKSV recording session.
 
 #### Extends
 
@@ -660,7 +634,7 @@ Options for configuring an fMP4 recording or livestream session.
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
-| <a id="audiofilters"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. | - |
+| <a id="audiofilters-2"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioFilters`](#audiofilters) |
 | <a id="audiostream-2"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-2"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec) |
 | <a id="enableaudio-2"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
@@ -669,6 +643,6 @@ Options for configuring an fMP4 recording or livestream session.
 | <a id="hardwaretranscoding-2"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
 | <a id="probesize"></a> `probesize` | `number` | Number of bytes to analyze for stream information. | - |
 | <a id="timeshift"></a> `timeshift` | `number` | Timeshift offset for event-based recording (in milliseconds). | - |
-| <a id="transcodeaudio"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. | - |
-| <a id="videofilters"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. | - |
+| <a id="transcodeaudio-2"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`transcodeAudio`](#transcodeaudio) |
+| <a id="videofilters-2"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoFilters`](#videofilters) |
 | <a id="videostream-2"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |

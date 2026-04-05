@@ -147,14 +147,14 @@ id = "device-001";
 type PartialWithId<T, K> = Partial<T> & Pick<T, K>;
 ```
 
-Makes all properties in `T` optional except for `id`, which remains required.
+Makes all properties in `T` optional except for those specified by `K`, which remain required.
 
 #### Type Parameters
 
 | Type Parameter | Description |
 | ------ | ------ |
 | `T` | The base interface or type. |
-| `K` *extends* keyof `T` | - |
+| `K` *extends* keyof `T` | The keys of `T` that should remain required. |
 
 #### Example
 
@@ -166,7 +166,7 @@ interface Device {
   mac: string;
 }
 
-type UserUpdate = PartialWithId<User>;
+type DeviceUpdate = PartialWithId<Device, "id">;
 
 // Valid: Only 'id' is required, others are optional.
 const update: DeviceUpdate = { id: "123" };
@@ -175,7 +175,7 @@ const update: DeviceUpdate = { id: "123" };
 const another: DeviceUpdate = { id: "456", name: "SomeDevice" };
 
 // Error: 'id' is missing.
-const error: DeviceUpdate = { name: "SomeOtherDevice" }; // TypeScript error
+const invalid: DeviceUpdate = { name: "SomeOtherDevice" }; // TypeScript error
 ```
 
 ***
@@ -252,7 +252,8 @@ Run a promise with a guaranteed timeout to complete.
 
 `Promise`\<[`Nullable`](#nullable)\<`T`\>\>
 
-Returns the result of resolving the promise it's been passed if it completes before timeout, or null if the timeout expires.
+Returns the result of resolving the promise it's been passed if it completes before timeout, or null if the timeout expires. The internal timer is cleaned
+up regardless of which outcome wins the race. Note that the underlying promise is not cancelled...it continues to run, but its result is ignored.
 
 #### Example
 
@@ -302,7 +303,7 @@ and HAP specification documentation:
 
 ```ts
 sanitizeName("Test|Switch")
-```ts
+```
 
 Returns: `Test Switch`, replacing the pipe (an invalid character in HomeKit's naming ruleset) with a space.
 
@@ -311,7 +312,7 @@ Returns: `Test Switch`, replacing the pipe (an invalid character in HomeKit's na
 ### sleep()
 
 ```ts
-function sleep(sleepTimer): Promise<Timeout>;
+function sleep(sleepTimer): Promise<void>;
 ```
 
 Emulate a sleep function.
@@ -324,7 +325,7 @@ Emulate a sleep function.
 
 #### Returns
 
-`Promise`\<`Timeout`\>
+`Promise`\<`void`\>
 
 Returns a promise that resolves after the specified time elapses.
 
@@ -338,33 +339,33 @@ await sleep(3000)
 
 ***
 
-### toCamelCase()
+### toStartCase()
 
 ```ts
-function toCamelCase(input): string;
+function toStartCase(input): string;
 ```
 
-Camel case a string.
+Start case a string, capitalizing the first letter of each word unconditionally.
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `input` | `string` | The string to camel case. |
+| `input` | `string` | The string to start case. |
 
 #### Returns
 
 `string`
 
-Returns the camel cased string.
+Returns the start cased string.
 
 #### Example
 
 ```ts
-toCamelCase(This is a test)
+toStartCase("this is a test");
 ```
 
-Returns: `This Is A Test`, capitalizing the first letter of each word.
+Returns: `This Is A Test`.
 
 ***
 
@@ -402,7 +403,7 @@ and HAP specification documentation:
 
 ```ts
 validateName("Test|Switch")
-```ts
+```
 
 Returns: `false`.
 

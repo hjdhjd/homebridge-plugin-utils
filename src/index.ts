@@ -2,6 +2,7 @@
  *
  * index.ts: Homebridge plugin utilities.
  */
+export * from "./backpressure.js";
 export * from "./featureoptions.js";
 export * from "./mqttclient.js";
 export * from "./service.js";

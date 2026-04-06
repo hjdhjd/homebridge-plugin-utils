@@ -7,8 +7,8 @@
  * ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data.
  *
  * This module provides lightweight, Buffer-based utilities for inspecting ISO Base Media File Format (ISO BMFF) structures commonly found in fragmented MP4 (fMP4)
- * streams. It enables locating specific box types, splitting fragments into their moof/mdat components, and detecting keyframe (sync sample) segments by parsing the
- * TRUN sample flags.
+ * streams. It enables locating specific box types, splitting fragments into their moof/mdat components, detecting keyframe (sync sample) segments by parsing the TRUN
+ * sample flags, and identifying audio track presence in initialization segments.
  *
  * These utilities operate on complete Buffers and are independent of FFmpeg processes or streaming pipelines.
  *
@@ -16,8 +16,12 @@
  */
 import type { Nullable } from "../util.js";
 
-// ISO BMFF box header size: 4 bytes big-endian size + 4 bytes ASCII type.
-const BOX_HEADER_SIZE = 8;
+/**
+ * ISO BMFF box header size in bytes: 4 bytes big-endian size + 4 bytes ASCII type.
+ *
+ * @category FFmpeg
+ */
+export const BOX_HEADER_SIZE = 8;
 
 // TRUN fullbox header size: standard box header + 4 bytes version/flags + 4 bytes sample_count.
 const TRUN_HEADER_SIZE = BOX_HEADER_SIZE + 8;
@@ -31,6 +35,12 @@ const TRUN_FLAG_SAMPLE_FLAGS = 0x000400;
 
 // Sample flags bit indicating a non-sync sample. When this bit is clear (0), the sample is a sync sample (keyframe/IDR).
 const SAMPLE_FLAG_NON_SYNC = 0x00010000;
+
+// Handler type for audio tracks in ISO BMFF: "soun" encoded as a 32-bit integer.
+const HDLR_TYPE_SOUN = 0x736F756E;
+
+// Offset from the start of an hdlr fullbox to the handler_type field: standard box header (8 bytes) + version/flags (4 bytes) + pre_defined (4 bytes).
+const HDLR_TYPE_OFFSET = BOX_HEADER_SIZE + 8;
 
 /**
  * Describes the location of an ISO BMFF box within a buffer.
@@ -193,6 +203,67 @@ export function isKeyframe(segment: Buffer): boolean {
 
   // No sample flags information available in the trun...we can't determine keyframe status.
   return false;
+}
+
+/**
+ * Determines whether an fMP4 initialization segment contains an audio track by inspecting the handler type in each track's media handler box.
+ *
+ * Traverses the box hierarchy `moov -> trak -> mdia -> hdlr` for every track in the init segment and checks the handler_type field for "soun" (0x736F756E). This is the
+ * standard ISO BMFF mechanism for identifying track media types - "soun" for audio, "vide" for video, "subt" for subtitles, etc.
+ *
+ * @param initSegment   - A buffer containing a complete fMP4 initialization segment (typically ftyp + moov).
+ *
+ * @returns `true` if the init segment contains at least one audio track, `false` otherwise.
+ *
+ * @category FFmpeg
+ */
+export function hasAudioTrack(initSegment: Buffer): boolean {
+
+  // Locate the moov box at the top level.
+  const moov = findBox(initSegment, "moov");
+
+  if(!moov) {
+
+    return false;
+  }
+
+  const moovStart = moov.offset + BOX_HEADER_SIZE;
+  const moovEnd = moov.offset + moov.size;
+
+  // Walk each trak box inside the moov. After finding one, search for the next starting after it.
+  let trakStart = moovStart;
+
+  for(;;) {
+
+    const trak = findBox(initSegment, "trak", trakStart, moovEnd);
+
+    if(!trak) {
+
+      return false;
+    }
+
+    // Locate the mdia box inside this trak.
+    const mdia = findBox(initSegment, "mdia", trak.offset + BOX_HEADER_SIZE, trak.offset + trak.size);
+
+    if(mdia) {
+
+      // Locate the hdlr box inside the mdia.
+      const hdlr = findBox(initSegment, "hdlr", mdia.offset + BOX_HEADER_SIZE, mdia.offset + mdia.size);
+
+      // Read the handler_type field. In a hdlr fullbox, the layout after the standard box header is: version/flags (4 bytes) + pre_defined (4 bytes) + handler_type
+      // (4 bytes). We check that the box is large enough to contain the field before reading.
+      if(hdlr && (hdlr.size >= (HDLR_TYPE_OFFSET + 4))) {
+
+        if(initSegment.readUInt32BE(hdlr.offset + HDLR_TYPE_OFFSET) === HDLR_TYPE_SOUN) {
+
+          return true;
+        }
+      }
+    }
+
+    // Advance past this trak to search for the next one.
+    trakStart = trak.offset + trak.size;
+  }
 }
 
 /**

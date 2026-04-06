@@ -24,6 +24,7 @@
  */
 import type { CameraController, CameraStreamingDelegate, StreamRequestCallback } from "homebridge";
 import type { ChildProcessWithoutNullStreams } from "child_process";
+import { FFMPEG_INPUT_TIMEOUT } from "./settings.js";
 import type { FfmpegOptions } from "./options.js";
 import { FfmpegProcess } from "./process.js";
 import type { Nullable } from "../util.js";
@@ -170,7 +171,8 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
 
     let errorListener: (error: Error) => void;
     let messageListener: () => void;
-    const socket = createSocket(portInfo.addressVersion === "ipv6" ? "udp6" : "udp4");
+    const isIPv6 = portInfo.addressVersion === "ipv6";
+    const socket = createSocket(isIPv6 ? "udp6" : "udp4");
 
     // Cleanup after ourselves when the socket closes.
     socket.once("close", () => {
@@ -207,11 +209,11 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
 
         this.delegate.controller.forceStopStreamingSession(this.sessionId);
         this.delegate.stopStream?.(this.sessionId);
-      }, 5000);
+      }, FFMPEG_INPUT_TIMEOUT);
     });
 
     // Bind to the port we're opening.
-    socket.bind(portInfo.port, (portInfo.addressVersion === "ipv6") ? "::1" : "127.0.0.1");
+    socket.bind(portInfo.port, isIPv6 ? "::1" : "127.0.0.1");
   }
 
   /**

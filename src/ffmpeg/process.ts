@@ -27,10 +27,11 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import type { HomebridgePluginLogging, Nullable } from "../util.js";
 import type { Readable, Writable } from "node:stream";
+import { EOL } from "node:os";
 import { EventEmitter } from "node:events";
+import { FFMPEG_INPUT_TIMEOUT } from "./settings.js";
 import type { FfmpegOptions } from "./options.js";
 import type { StreamRequestCallback } from "homebridge";
-import os from "node:os";
 import util from "node:util";
 
 // Matches non-printable control characters for stripping from FFmpeg stderr output. Compiled once at module scope rather than per data event.
@@ -69,21 +70,6 @@ const NON_PRINTABLE_CHARS = /\p{C}+/gu;
 export class FfmpegProcess extends EventEmitter {
 
   /**
-   * Indicates if an error has occurred during FFmpeg process execution.
-   */
-  public hasError: boolean;
-
-  /**
-   * Indicates whether the FFmpeg process has ended.
-   */
-  public isEnded: boolean;
-
-  /**
-   * Indicates whether the FFmpeg process has started.
-   */
-  public isStarted: boolean;
-
-  /**
    * Optional callback to be called when the FFmpeg process is ready for streaming.
    */
   protected callback: Nullable<StreamRequestCallback>;
@@ -113,6 +99,9 @@ export class FfmpegProcess extends EventEmitter {
    */
   protected process: Nullable<ChildProcessWithoutNullStreams>;
 
+  private _hasError: boolean;
+  private _isStarted: boolean;
+
   /**
    * Accumulated log lines from standard error for error reporting and debugging.
    */
@@ -122,6 +111,11 @@ export class FfmpegProcess extends EventEmitter {
   private isLogging: boolean;
   private stderrBuffer: string;
 
+  /**
+   * Indicates whether the FFmpeg process has ended. Protected to allow subclass state transitions (e.g., signaling generators before shutdown).
+   */
+  protected _isEnded: boolean;
+
   // Create a new FFmpeg process instance.
   constructor(options: FfmpegOptions, commandLineArgs?: string[], callback?: StreamRequestCallback) {
 
@@ -130,10 +124,10 @@ export class FfmpegProcess extends EventEmitter {
 
     this.callback = null;
     this.commandLineArgs = [];
-    this.hasError = false;
+    this._hasError = false;
+    this._isEnded = false;
+    this._isStarted = false;
     this.isLogging = false;
-    this.isEnded = false;
-    this.isStarted = false;
     this.log = options.log;
     this.options = options;
     this.process = null;
@@ -174,8 +168,8 @@ export class FfmpegProcess extends EventEmitter {
     this.isLogging = false;
 
     // Track if we've started or ended FFmpeg.
-    this.isStarted = false;
-    this.isEnded = false;
+    this._isStarted = false;
+    this._isEnded = false;
 
     // If we've got a loglevel specified, ensure we display it.
     if(this.commandLineArgs.includes("-loglevel")) {
@@ -268,10 +262,10 @@ export class FfmpegProcess extends EventEmitter {
       // Inform us when we start receiving data back from FFmpeg. We do this here because it's the only
       // truly reliable place we can check on FFmpeg. stdin and stdout may not be used at all, depending
       // on the way FFmpeg is called, but stderr will always be there.
-      if(!this.isStarted) {
+      if(!this._isStarted) {
 
-        this.isStarted = true;
-        this.isEnded = false;
+        this._isStarted = true;
+        this._isEnded = false;
         this.log.debug("FFmpeg process started.");
 
         // Always remember to execute the callback once we're setup to let homebridge know we're streaming.
@@ -283,13 +277,13 @@ export class FfmpegProcess extends EventEmitter {
       }
 
       // Append to the current line we've been buffering. We don't want to output not-printable characters to ensure the log output is readable.
-      this.stderrBuffer += data.toString().replace(NON_PRINTABLE_CHARS, os.EOL);
+      this.stderrBuffer += data.toString().replace(NON_PRINTABLE_CHARS, EOL);
 
       // Debugging and additional logging collection.
       for(;;) {
 
         // Find the next newline.
-        const lineIndex = this.stderrBuffer.indexOf(os.EOL);
+        const lineIndex = this.stderrBuffer.indexOf(EOL);
 
         // If there's no newline, we're done until we get more data.
         if(lineIndex === -1) {
@@ -300,7 +294,7 @@ export class FfmpegProcess extends EventEmitter {
         // Grab the next complete line, and increment our buffer.
         const line = this.stderrBuffer.slice(0, lineIndex);
 
-        this.stderrBuffer = this.stderrBuffer.slice(lineIndex + os.EOL.length);
+        this.stderrBuffer = this.stderrBuffer.slice(lineIndex + EOL.length);
         this._stderrLog.push(line);
 
         // Show it to the user if it's been requested.
@@ -320,8 +314,8 @@ export class FfmpegProcess extends EventEmitter {
         clearTimeout(this.ffmpegTimeout);
       }
 
-      this.isStarted = false;
-      this.isEnded = true;
+      this._isStarted = false;
+      this._isEnded = true;
 
       // Some utilities to streamline things.
       const logPrefix = "FFmpeg process ended ";
@@ -337,7 +331,7 @@ export class FfmpegProcess extends EventEmitter {
       } else {
 
         // Flag that we've run into an FFmpeg error.
-        this.hasError = true;
+        this._hasError = true;
 
         // Flush out any remaining output in our error buffer.
         if(this.stderrBuffer.length) {
@@ -380,7 +374,7 @@ export class FfmpegProcess extends EventEmitter {
     this.ffmpegTimeout = setTimeout(() => {
 
       this.process?.kill("SIGKILL");
-    }, 5000);
+    }, FFMPEG_INPUT_TIMEOUT);
 
     // Send the kill shot.
     this.process?.kill();
@@ -419,6 +413,30 @@ export class FfmpegProcess extends EventEmitter {
 
       this.log.error(x);
     }
+  }
+
+  /**
+   * Indicates if an error has occurred during FFmpeg process execution.
+   */
+  public get hasError(): boolean {
+
+    return this._hasError;
+  }
+
+  /**
+   * Indicates whether the FFmpeg process has ended.
+   */
+  public get isEnded(): boolean {
+
+    return this._isEnded;
+  }
+
+  /**
+   * Indicates whether the FFmpeg process has started.
+   */
+  public get isStarted(): boolean {
+
+    return this._isStarted;
   }
 
   /**

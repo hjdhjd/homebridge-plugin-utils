@@ -18,5 +18,9 @@ export const HKSV_IDR_INTERVAL = 4;
 // HomeKit Secure Video communication timeout threshold, in milliseconds. HKSV has a strict 5 second threshold for communication, so we set this a little below that.
 export const HKSV_TIMEOUT = 4500;
 
+// FFmpeg's default input timeout, in milliseconds. FFmpeg terminates input streams that receive no data for this duration. The SIGKILL failsafe in process.ts and the
+// stream health monitor in stream.ts are both coordinated with this value.
+export const FFMPEG_INPUT_TIMEOUT = 5000;
+
 // Minimum required GPU memory on a Raspberry Pi to enable hardware acceleration.
 export const RPI_GPU_MINIMUM = 128;

@@ -23,6 +23,7 @@
 import { AudioRecordingCodecType, AudioRecordingSamplerate, type CameraRecordingConfiguration } from "homebridge";
 import { HKSV_IDR_INTERVAL, HKSV_TIMEOUT } from "./settings.js";
 import { type Nullable, type PartialWithId, runWithTimeout } from "../util.js";
+import { BOX_HEADER_SIZE } from "./fmp4.js";
 import type { FfmpegOptions } from "./options.js";
 import { FfmpegProcess } from "./process.js";
 import { once } from "node:events";
@@ -145,6 +146,11 @@ const translateAudioSampleRate = {
   [ AudioRecordingSamplerate.KHZ_44_1 ]: "44.1",
   [ AudioRecordingSamplerate.KHZ_48 ]:   "48"
 } as const satisfies Record<AudioRecordingSamplerate, string>;
+
+// ISO BMFF box type constants encoded as 32-bit integers for comparison without string allocation in the box-parsing hot path.
+const BOX_TYPE_MDAT = 0x6D646174;
+const BOX_TYPE_MOOF = 0x6D6F6F66;
+const BOX_TYPE_MOOV = 0x6D6F6F76;
 
 // Reusable empty buffer sentinel for the box-parsing loop. Avoids repeated zero-byte allocations on every box reset.
 const EMPTY_BUFFER = Buffer.alloc(0);
@@ -365,7 +371,7 @@ abstract class FfmpegFMp4Process extends FfmpegProcess {
 
   // Called by the shared box-parsing loop in configureProcess() for each complete fMP4 box. Subclasses provide their own handling: livestream tracks init segments and
   // emits events, recording pushes to a buffer.
-  protected abstract handleParsedBox(header: Buffer, data: Buffer, dataLength: number, type: string): void;
+  protected abstract handleParsedBox(header: Buffer, data: Buffer, dataLength: number, type: number): void;
 
   /**
    * Prepares and configures the FFmpeg process for reading and parsing output fMP4 data. The box parsing loop is shared...each complete box is dispatched to the
@@ -382,7 +388,7 @@ abstract class FfmpegFMp4Process extends FfmpegProcess {
     let header: Buffer = EMPTY_BUFFER;
     let bufferRemaining: Buffer = EMPTY_BUFFER;
     let dataLength = 0;
-    let type = "";
+    let type = 0;
 
     // Process FFmpeg output and parse out the fMP4 stream it's generating. Here, we take on the task of parsing the fMP4 stream that's being generated and split it up
     // into the MP4 boxes that HAP-NodeJS is ultimately expecting.
@@ -407,7 +413,7 @@ abstract class FfmpegFMp4Process extends FfmpegProcess {
         if(!header.length) {
 
           // If there aren't enough bytes for a complete box header, save them for the next chunk.
-          if(buffer.length < 8) {
+          if(buffer.length < BOX_HEADER_SIZE) {
 
             bufferRemaining = buffer;
 
@@ -415,19 +421,20 @@ abstract class FfmpegFMp4Process extends FfmpegProcess {
           }
 
           // Grab the header. The first four bytes represents the length of the entire box. Second four bytes represent the box type.
-          header = buffer.subarray(0, 8);
+          header = buffer.subarray(0, BOX_HEADER_SIZE);
 
           // Now we retrieve the length of the box.
           dataLength = header.readUInt32BE(0);
 
-          // Get the type of the box. This is always a string and has a funky history to it that makes for an interesting read!
-          type = header.subarray(4).toString();
+          // Read the box type as a 32-bit integer to avoid per-box string allocation. Box types are 4-byte ASCII codes ("moof", "mdat", etc.) - a legacy of Apple's
+          // original QuickTime "atoms" from 1991, carried forward when MPEG-4 Part 12 standardized the container as ISO BMFF and renamed atoms to "boxes."
+          type = header.readUInt32BE(4);
 
           // Finally, we get the data portion of the box.
-          data = buffer.subarray(8, dataLength);
+          data = buffer.subarray(BOX_HEADER_SIZE, dataLength);
 
           // Mark our data offset so we account for the length of the data header and subtract it from the overall length to capture just the data portion.
-          dataLength -= offset = 8;
+          dataLength -= offset = BOX_HEADER_SIZE;
         } else {
 
           // Grab the data from our buffer.
@@ -448,7 +455,7 @@ abstract class FfmpegFMp4Process extends FfmpegProcess {
 
         // Prepare to start a new box for the next buffer that we will be processing.
         header = EMPTY_BUFFER;
-        type = "";
+        type = 0;
 
         // We've parsed an entire box, and there's no more data in this buffer to parse.
         if(buffer.length === (offset + dataLength)) {
@@ -481,7 +488,7 @@ abstract class FfmpegFMp4Process extends FfmpegProcess {
     super.stopProcess();
 
     // Signal that the process has ended.
-    this.isEnded = true;
+    this._isEnded = true;
     this.emit("close");
   }
 
@@ -560,7 +567,7 @@ export class FfmpegRecordingProcess extends FfmpegFMp4Process {
 
   private readonly fps: number;
   private readonly probesize: number;
-  private recordingBuffer: { data: Buffer; header: Buffer; length: number; type: string }[];
+  private recordingBuffer: { data: Buffer; header: Buffer; length: number; type: number }[];
   private readonly timeshift: number;
 
   /**
@@ -648,7 +655,7 @@ export class FfmpegRecordingProcess extends FfmpegFMp4Process {
   }
 
   // Each parsed box is queued in the recording buffer for consumption by segmentGenerator().
-  protected handleParsedBox(header: Buffer, data: Buffer, dataLength: number, type: string): void {
+  protected handleParsedBox(header: Buffer, data: Buffer, dataLength: number, type: number): void {
 
     this.recordingBuffer.push({ data, header, length: dataLength, type });
     this.emit("mp4box");
@@ -660,7 +667,7 @@ export class FfmpegRecordingProcess extends FfmpegFMp4Process {
   protected stopProcess(): void {
 
     // Emit mp4box to unblock segmentGenerator() if it's waiting, then let the base class handle the rest.
-    this.isEnded = true;
+    this._isEnded = true;
     this.emit("mp4box");
 
     super.stopProcess();
@@ -690,7 +697,7 @@ export class FfmpegRecordingProcess extends FfmpegFMp4Process {
     for(;;) {
 
       // FFmpeg has finished its output - we're done.
-      if(this.isEnded) {
+      if(this._isEnded) {
 
         return;
       }
@@ -727,7 +734,7 @@ export class FfmpegRecordingProcess extends FfmpegFMp4Process {
       //   of MOOF as the audio/video data "header", and MDAT as the "payload".
       //
       // Once we see these, we combine all the segments in our queue to send back to HomeKit.
-      if((box.type === "moov") || (box.type === "mdat")) {
+      if((box.type === BOX_TYPE_MOOV) || (box.type === BOX_TYPE_MDAT)) {
 
         yield Buffer.concat(segment);
         segment = [];
@@ -877,14 +884,14 @@ export class FfmpegLivestreamProcess extends FfmpegFMp4Process {
   }
 
   // Livestream box handling: accumulate the initialization segment (everything before the first moof box), then emit each subsequent box as a segment event.
-  protected handleParsedBox(header: Buffer, data: Buffer, _dataLength: number, type: string): void {
+  protected handleParsedBox(header: Buffer, data: Buffer, _dataLength: number, type: number): void {
 
     // If this is part of the initialization segment, store it for future use.
     if(!this.hasInitSegment) {
 
       // The initialization segment is everything before the first moof box. Once we've seen a moof box, we know we've captured it in full. We collect the parts into an
       // array and concatenate once at the end to avoid creating intermediate buffers on every pre-moof box.
-      if(type === "moof") {
+      if(type === BOX_TYPE_MOOF) {
 
         this._initSegment = Buffer.concat(this._initSegmentParts);
         this._initSegmentParts = [];
@@ -947,10 +954,10 @@ export class FfmpegLivestreamProcess extends FfmpegFMp4Process {
       return this._initSegment;
     }
 
-    // Wait until the initialization segment is seen and then try again.
+    // Wait until the initialization segment is available.
     await once(this, "initsegment");
 
-    return this.getInitSegment();
+    return this._initSegment;
   }
 
   /**

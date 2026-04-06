@@ -207,7 +207,7 @@ export class FfmpegOptions {
    * FFmpeg codec and hardware capabilities for the current host.
    *
    */
-  public codecSupport: FfmpegCodecs;
+  public readonly codecSupport: FfmpegCodecs;
 
   /**
    * The configuration options used to initialize this instance.
@@ -319,7 +319,7 @@ export class FfmpegOptions {
         return true;
       };
 
-      // Utility function to check that we have a specific decoder codec available to us.
+      // Utility function to check that we have a specific hardware accelerator available to us.
       const validateHwAccel = (accel: string): boolean => {
 
         if(!this.config.codecSupport.hasHwAccel(accel)) {

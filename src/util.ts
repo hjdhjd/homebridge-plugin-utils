@@ -9,6 +9,9 @@
  * @module
  */
 
+// Validates a name against HomeKit's naming conventions. Compiled once at module scope since this sits on the fast path of sanitizeName().
+const VALID_HOMEKIT_NAME = /^(?!.*\p{Extended_Pictographic})(?!.* {2})(?=^[\p{L}\p{N}].*[\p{L}\p{N}.]$)[\p{L}\p{N}\-"'.,#& ]+$/u;
+
 /**
  * A utility type that recursively makes all properties of an object, including nested objects, optional.
  *
@@ -246,22 +249,32 @@ export function formatBps(value: number): string {
  */
 export async function retry(operation: () => Promise<boolean>, retryInterval: number, totalRetries?: number): Promise<boolean> {
 
-  if((totalRetries !== undefined) && (totalRetries <= 0)) {
+  let remainingRetries = totalRetries;
 
-    return false;
-  }
+  for(;;) {
 
-  // Try the operation that was requested.
-  if(!(await operation())) {
+    // If we've exhausted our retries, we're done.
+    if((remainingRetries !== undefined) && (remainingRetries <= 0)) {
 
-    // If the operation wasn't successful, let's sleep for the requested interval and try again.
+      return false;
+    }
+
+    // Try the operation that was requested.
+    // eslint-disable-next-line no-await-in-loop
+    if(await operation()) {
+
+      return true;
+    }
+
+    // If the operation wasn't successful, sleep for the requested interval and try again.
+    if(remainingRetries !== undefined) {
+
+      remainingRetries--;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
     await sleep(retryInterval);
-
-    return retry(operation, retryInterval, (totalRetries === undefined) ? undefined : --totalRetries);
   }
-
-  // We were successful - we're done.
-  return true;
 }
 
 /**
@@ -409,5 +422,5 @@ export function sanitizeName(name: string): string {
  */
 export function validateName(name: string): boolean {
 
-  return /^(?!.*\p{Extended_Pictographic})(?!.* {2})(?=^[\p{L}\p{N}].*[\p{L}\p{N}.]$)[\p{L}\p{N}\-"'.,#& ]+$/u.test(name);
+  return VALID_HOMEKIT_NAME.test(name);
 }

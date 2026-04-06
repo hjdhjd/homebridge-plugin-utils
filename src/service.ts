@@ -280,7 +280,7 @@ function serviceHasName(service: Service): boolean {
  * @param service - The service from which to retrieve the name.
  * @returns The configured or display name of the service, or `undefined` if neither is set.
  *
- * @see setServiceName — to update the current name n a service.
+ * @see setServiceName — to update the current name on a service.
  * @category Accessory
  */
 export function getServiceName(service?: Service): string | undefined {

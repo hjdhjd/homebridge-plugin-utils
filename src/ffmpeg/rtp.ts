@@ -57,8 +57,8 @@ const TWOWAY_HEARTBEAT_INTERVAL = 3;
  */
 export class RtpDemuxer extends EventEmitter {
 
-  private heartbeatTimer!: NodeJS.Timeout;
-  private heartbeatMsg!: Buffer;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private heartbeatMsg?: Buffer;
   private _isRunning: boolean;
   private log?: HomebridgePluginLogging;
   private inputPort: number;
@@ -141,6 +141,11 @@ export class RtpDemuxer extends EventEmitter {
     // Send a heartbeat to FFmpeg every few seconds to keep things open. FFmpeg has a five-second timeout in reading input, and we want to be comfortably within the
     // margin for error to ensure the process continues to run.
     this.heartbeatTimer = setTimeout(() => {
+
+      if(!this.heartbeatMsg) {
+
+        return;
+      }
 
       this.log?.debug("Sending ffmpeg a heartbeat.");
 
@@ -287,8 +292,14 @@ export class RtpPortAllocator {
         // We're done with the socket, let's cleanup.
         socket.close();
 
-        // Check to see if the port is one we're already using. If it is, try again.
+        // Check to see if the port is one we're already using. For specific port requests, return failure and let the caller retry with a fresh port pair. For random
+        // port requests, loop and let the OS assign a different one.
         if(this.portsInUse.has(assignedPort)) {
+
+          if(port) {
+
+            return -1;
+          }
 
           continue;
         }

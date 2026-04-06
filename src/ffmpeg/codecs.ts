@@ -385,14 +385,22 @@ export class FfmpegCodecs {
         if(decodersMatch) {
 
           this.ffmpegCodecs[decodersMatch[1]] ??= { decoders: new Set(), encoders: new Set() };
-          this.ffmpegCodecs[decodersMatch[1]].decoders = new Set(decodersMatch[2].split(" ").map(x => x.toLowerCase()));
+
+          for(const decoder of decodersMatch[2].split(" ")) {
+
+            this.ffmpegCodecs[decodersMatch[1]].decoders.add(decoder.toLowerCase());
+          }
         }
 
         // If we found encoders, add them to our list of supported encoders for this format.
         if(encodersMatch) {
 
           this.ffmpegCodecs[encodersMatch[1]] ??= { decoders: new Set(), encoders: new Set() };
-          this.ffmpegCodecs[encodersMatch[1]].encoders = new Set(encodersMatch[2].split(" ").map(x => x.toLowerCase()));
+
+          for(const encoder of encodersMatch[2].split(" ")) {
+
+            this.ffmpegCodecs[encodersMatch[1]].encoders.add(encoder.toLowerCase());
+          }
         }
       }
     });
@@ -521,12 +529,14 @@ export class FfmpegCodecs {
       if(execError.code === "ENOENT") {
 
         this.log.error("Unable to find '%s' in path: '%s'.", command, env.PATH);
+
+        return false;
       } else if(quietRunErrors) {
 
         return false;
       } else {
 
-        this.log.error("Error running %s: %s", command, execError.message);
+        this.log.error("Error running %s: %s.", command, execError.message.replace(/\.$/, ""));
       }
 
       this.log.error("Unable to probe the capabilities of your Homebridge host without access to '%s'. Ensure that it is available in your path and correctly working.",

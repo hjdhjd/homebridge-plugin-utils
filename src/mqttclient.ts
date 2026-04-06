@@ -333,7 +333,7 @@ export class MqttClient {
         log.info("MQTT: set message received for %s: %s.", type, value);
       } catch(error) {
 
-        log.error("MQTT: error setting message received for %s: %s. %s", type, value, error);
+        log.error("MQTT: error setting %s to %s: %s.", type, value, (error instanceof Error ? error.message : String(error)).replace(/\.$/, ""));
       }
     });
   }

@@ -230,7 +230,8 @@ export function hasAudioTrack(initSegment: Buffer): boolean {
   const moovStart = moov.offset + BOX_HEADER_SIZE;
   const moovEnd = moov.offset + moov.size;
 
-  // Walk each trak box inside the moov. After finding one, search for the next starting after it.
+  // Walk each trak box inside the moov, advancing past each one we find. Once we've passed the last trak, findBox runs out of range and returns null, which is how we
+  // know we're done.
   let trakStart = moovStart;
 
   for(;;) {

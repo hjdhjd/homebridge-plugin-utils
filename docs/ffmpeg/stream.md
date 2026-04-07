@@ -105,14 +105,6 @@ const process = new FfmpegStreamingProcess(delegate, sessionId, ffmpegOptions, c
 
 [`FfmpegProcess`](process.md#ffmpegprocess).[`constructor`](process.md#constructor)
 
-#### Properties
-
-| Property | Modifier | Type | Description | Inherited from |
-| ------ | ------ | ------ | ------ | ------ |
-| <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | [`FfmpegProcess`](process.md#ffmpegprocess).[`hasError`](process.md#haserror) |
-| <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isEnded`](process.md#isended) |
-| <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | [`FfmpegProcess`](process.md#ffmpegprocess).[`isStarted`](process.md#isstarted) |
-
 #### Accessors
 
 ##### ffmpegProcess
@@ -141,6 +133,60 @@ if(ffmpeg) {
 [`Nullable`](../util.md#nullable)\<`ChildProcessWithoutNullStreams`\>
 
 The current FFmpeg process, or `null` if not running.
+
+##### hasError
+
+###### Get Signature
+
+```ts
+get hasError(): boolean;
+```
+
+Indicates if an error has occurred during FFmpeg process execution.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`hasError`](process.md#haserror)
+
+##### isEnded
+
+###### Get Signature
+
+```ts
+get isEnded(): boolean;
+```
+
+Indicates whether the FFmpeg process has ended.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`isEnded`](process.md#isended)
+
+##### isStarted
+
+###### Get Signature
+
+```ts
+get isStarted(): boolean;
+```
+
+Indicates whether the FFmpeg process has started.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`isStarted`](process.md#isstarted)
 
 ##### stderr
 

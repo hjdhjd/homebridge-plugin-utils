@@ -226,7 +226,8 @@ abstract class FfmpegFMp4Process extends FfmpegProcess {
     this._isVerbose = isVerbose;
   }
 
-  // Verbose flag stored during construction and consumed by buildCommandLine(). This avoids passing isVerbose through the hook method chain.
+  // Per-instance verbose flag, distinct from the inherited isVerbose which reflects the global codecSupport.verbose setting. We keep both so either a global debug
+  // setting or a per-session opt-in can enable verbose FFmpeg logging...the check in buildCommandLine() ORs them together.
   private _isVerbose: boolean;
 
   // Assembles the FFmpeg command line by calling hook methods in the standard order. The shared skeleton lives here; mode-specific pieces come from subclass overrides.

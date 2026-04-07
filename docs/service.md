@@ -93,7 +93,7 @@ The configured or display name of the service, or `undefined` if neither is set.
 
 #### See
 
-setServiceName — to update the current name n a service.
+setServiceName — to update the current name on a service.
 
 ***
 

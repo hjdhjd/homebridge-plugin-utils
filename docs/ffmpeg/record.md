@@ -78,14 +78,31 @@ FfmpegFMp4Process.constructor
 
 #### Properties
 
-| Property | Modifier | Type | Description | Inherited from |
-| ------ | ------ | ------ | ------ | ------ |
-| <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFMp4Process.hasError` |
-| <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
-| <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
-| <a id="segmentlength"></a> `segmentLength?` | `public` | `number` | Optional override for the fMP4 fragment duration, in milliseconds. When set, the `-frag_duration` argument is updated before starting the FFmpeg process. | - |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="segmentlength"></a> `segmentLength?` | `public` | `number` | Optional override for the fMP4 fragment duration, in milliseconds. When set, the `-frag_duration` argument is updated before starting the FFmpeg process. |
 
 #### Accessors
+
+##### hasError
+
+###### Get Signature
+
+```ts
+get hasError(): boolean;
+```
+
+Indicates if an error has occurred during FFmpeg process execution.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.hasError
+```
 
 ##### initSegment
 
@@ -112,6 +129,46 @@ if(init) {
 [`Nullable`](../util.md#nullable)\<`Buffer`\<`ArrayBufferLike`\>\>
 
 The initialization segment Buffer, or `null` if not yet generated.
+
+##### isEnded
+
+###### Get Signature
+
+```ts
+get isEnded(): boolean;
+```
+
+Indicates whether the FFmpeg process has ended.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.isEnded
+```
+
+##### isStarted
+
+###### Get Signature
+
+```ts
+get isStarted(): boolean;
+```
+
+Indicates whether the FFmpeg process has started.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.isStarted
+```
 
 ##### stderr
 
@@ -333,14 +390,71 @@ FfmpegFMp4Process.constructor
 
 #### Properties
 
-| Property | Modifier | Type | Description | Inherited from |
-| ------ | ------ | ------ | ------ | ------ |
-| <a id="haserror-1"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. | `FfmpegFMp4Process.hasError` |
-| <a id="isended-1"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. | `FfmpegFMp4Process.isEnded` |
-| <a id="isstarted-1"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. | `FfmpegFMp4Process.isStarted` |
-| <a id="istimedout"></a> `isTimedOut` | `public` | `boolean` | Indicates whether the recording has timed out waiting for FFmpeg output. | - |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="istimedout"></a> `isTimedOut` | `public` | `boolean` | Indicates whether the recording has timed out waiting for FFmpeg output. |
 
 #### Accessors
+
+##### hasError
+
+###### Get Signature
+
+```ts
+get hasError(): boolean;
+```
+
+Indicates if an error has occurred during FFmpeg process execution.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.hasError
+```
+
+##### isEnded
+
+###### Get Signature
+
+```ts
+get isEnded(): boolean;
+```
+
+Indicates whether the FFmpeg process has ended.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.isEnded
+```
+
+##### isStarted
+
+###### Get Signature
+
+```ts
+get isStarted(): boolean;
+```
+
+Indicates whether the FFmpeg process has started.
+
+###### Returns
+
+`boolean`
+
+###### Inherited from
+
+```ts
+FfmpegFMp4Process.isStarted
+```
 
 ##### stderr
 

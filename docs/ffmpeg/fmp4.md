@@ -29,6 +29,16 @@ Describes the location of an ISO BMFF box within a buffer.
 
 ***
 
+### BOX\_HEADER\_SIZE
+
+```ts
+const BOX_HEADER_SIZE: 8 = 8;
+```
+
+ISO BMFF box header size in bytes: 4 bytes big-endian size + 4 bytes ASCII type.
+
+***
+
 ### findBox()
 
 ```ts
@@ -58,6 +68,31 @@ matching box, or `null` if no match is found. Does not handle extended-size boxe
 [`Nullable`](../util.md#nullable)\<[`FMp4Box`](#fmp4box)\>
 
 The box location, or `null` if not found.
+
+***
+
+### hasAudioTrack()
+
+```ts
+function hasAudioTrack(initSegment): boolean;
+```
+
+Determines whether an fMP4 initialization segment contains an audio track by inspecting the handler type in each track's media handler box.
+
+Traverses the box hierarchy `moov -> trak -> mdia -> hdlr` for every track in the init segment and checks the handler_type field for "soun" (0x736F756E). This is the
+standard ISO BMFF mechanism for identifying track media types - "soun" for audio, "vide" for video, "subt" for subtitles, etc.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `initSegment` | `Buffer` | A buffer containing a complete fMP4 initialization segment (typically ftyp + moov). |
+
+#### Returns
+
+`boolean`
+
+`true` if the init segment contains at least one audio track, `false` otherwise.
 
 ***
 

@@ -94,7 +94,7 @@ const ffmpegOpts = new FfmpegOptions(optionsConfig);
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
 | <a id="audiodecoder"></a> `audioDecoder` | `readonly` | `string` | `"libfdk_aac"` | Returns the audio decoder to use when decoding. |
-| <a id="codecsupport"></a> `codecSupport` | `public` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | `undefined` | FFmpeg codec and hardware capabilities for the current host. |
+| <a id="codecsupport"></a> `codecSupport` | `readonly` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | `undefined` | FFmpeg codec and hardware capabilities for the current host. |
 | <a id="config"></a> `config` | `readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | `undefined` | The configuration options used to initialize this instance. |
 | <a id="debug"></a> `debug` | `readonly` | `boolean` | `undefined` | Indicates if debug logging is enabled. |
 | <a id="log"></a> `log` | `readonly` | \| [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) \| `Logging` | `undefined` | Logging interface for output and errors. |

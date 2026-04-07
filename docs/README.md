@@ -23,6 +23,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 
 | Module | Description |
 | ------ | ------ |
+| [backpressure](backpressure.md) | Backpressure-aware write queue for Node.js writable streams. |
 | [featureoptions](featureoptions.md) | A hierarchical feature option system for plugins and applications. |
 | [ffmpeg/codecs](ffmpeg/codecs.md) | Probe FFmpeg capabilities and codecs on the host system. |
 | [ffmpeg/exec](ffmpeg/exec.md) | Executes arbitrary FFmpeg commands and returns the results. |

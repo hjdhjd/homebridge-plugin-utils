@@ -93,15 +93,49 @@ new FfmpegProcess(
 EventEmitter.constructor
 ```
 
-#### Properties
-
-| Property | Modifier | Type | Description |
-| ------ | ------ | ------ | ------ |
-| <a id="haserror"></a> `hasError` | `public` | `boolean` | Indicates if an error has occurred during FFmpeg process execution. |
-| <a id="isended"></a> `isEnded` | `public` | `boolean` | Indicates whether the FFmpeg process has ended. |
-| <a id="isstarted"></a> `isStarted` | `public` | `boolean` | Indicates whether the FFmpeg process has started. |
-
 #### Accessors
+
+##### hasError
+
+###### Get Signature
+
+```ts
+get hasError(): boolean;
+```
+
+Indicates if an error has occurred during FFmpeg process execution.
+
+###### Returns
+
+`boolean`
+
+##### isEnded
+
+###### Get Signature
+
+```ts
+get isEnded(): boolean;
+```
+
+Indicates whether the FFmpeg process has ended.
+
+###### Returns
+
+`boolean`
+
+##### isStarted
+
+###### Get Signature
+
+```ts
+get isStarted(): boolean;
+```
+
+Indicates whether the FFmpeg process has started.
+
+###### Returns
+
+`boolean`
 
 ##### stderr
 

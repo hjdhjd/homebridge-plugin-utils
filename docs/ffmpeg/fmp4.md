@@ -9,8 +9,8 @@
 ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data.
 
 This module provides lightweight, Buffer-based utilities for inspecting ISO Base Media File Format (ISO BMFF) structures commonly found in fragmented MP4 (fMP4)
-streams. It enables locating specific box types, splitting fragments into their moof/mdat components, and detecting keyframe (sync sample) segments by parsing the
-TRUN sample flags.
+streams. It enables locating specific box types, splitting fragments into their moof/mdat components, detecting keyframe (sync sample) segments by parsing the TRUN
+sample flags, and identifying audio track presence in initialization segments.
 
 These utilities operate on complete Buffers and are independent of FFmpeg processes or streaming pipelines.
 

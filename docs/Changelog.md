@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.35.0 (2026-04-07)
+  * New feature: `BackpressureWriter`, a backpressure-aware write queue that handles the full serialize-write-pause-drain dance for you when feeding data into writable streams - handy for piping fMP4 segments into FFmpeg without drowning it.
+  * New feature: `hasAudioTrack` inspects an fMP4 initialization segment and tells you whether it contains an audio track, which is useful for deciding whether to wire up audio on the FFmpeg command line at all.
+  * Improvement: fMP4 box parsing in HKSV recording and livestreaming is now faster and shares its plumbing with the standalone fMP4 utilities, so the two parsers can't drift apart.
+  * Improvement: `FfmpegProcess.hasError`, `isEnded`, and `isStarted` are now formally read-only. Reading them works as it always did - we're just making the existing "please don't touch these" contract enforceable by the compiler.
+  * Improvement: `FfmpegOptions.codecSupport` is now read-only, because there's no reason anyone should ever be reassigning it after construction.
+  * Improvement: `RtpPortAllocator` no longer gets stuck in an infinite loop when asked for a specific port that's already reserved. It now cleanly reports failure so the caller can retry.
+  * Improvement: `retry()` is now an iterative loop rather than a recursive call chain. Same behavior, clearer control flow.
+  * Improvement: `validateName` compiles its regex once at module scope, giving the `sanitizeName` fast path a little more pep.
+  * Improvement: codec probing accumulates decoder and encoder sets cleanly even if a codec appears on multiple lines, and probing failures no longer double-log when FFmpeg isn't in your path.
+  * Improvement: error messages in MQTT and codec probing no longer end with double periods when the underlying error message already includes one.
+  * Housekeeping.
+
 ## 1.34.0 (2026-04-04)
   * Breaking change: `toCamelCase` has been removed. Use `toStartCase` instead - the new name accurately reflects the function's behavior of capitalizing every word unconditionally.
   * Breaking change: `FfmpegProcess.process` is no longer publicly accessible. Use the `stdin`, `stdout`, `stderr` getters, or `FfmpegStreamingProcess.ffmpegProcess` for process-level access.

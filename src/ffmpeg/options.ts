@@ -962,6 +962,12 @@ export class FfmpegOptions {
     // Add any required hardware transfer filters. This handles downloading from GPU if we were hardware decoding.
     pixelFilters.push(...this.getHardwareTransferFilters(options));
 
+    // Add the crop filter if configured.
+    if(this.config.crop) {
+
+      pixelFilters.push(this.cropFilter);
+    }
+
     // Set our FFmpeg pixel-level filters:
     //
     // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are

@@ -1,18 +1,36 @@
 {
 
   "$schema": "https://typedoc-plugin-markdown.org/schema.json",
-  "categoryOrder": ["Constructor", "Utilities" , "Accessory", "FFmpeg"],
+  "categoryOrder": ["Constructor", "Utilities" , "Accessory", "FFmpeg", "Log Client", "Testing"],
   "cleanOutputDir": false,
   "disableSources": true,
-  "entryPoints": ["src/*.ts", "src/ffmpeg/*.ts"],
+  "entryPoints": ["src/*.ts", "src/ffmpeg/*.ts", "src/logclient/*.ts"],
   "enumMembersFormat": "table",
-  "exclude": [ "src/ffmpeg/index.ts", "src/ffmpeg/settings.ts", "src/index.ts", "src/settings.ts"],
+  "exclude": [ "src/**/*.fixtures.ts", "src/**/*.helpers.ts", "src/**/*.test.ts", "src/ffmpeg/index.ts", "src/index.ts", "src/logclient/index.ts", "src/logclient/settings.ts", "src/settings.ts" ],
   "excludeExternals": true,
   "excludeInternal": true,
   "excludeNotDocumented": false,
   "excludePrivate": true,
   "excludeProtected": true,
   "expandObjects": true,
+  "externalSymbolLinkMappings": {
+
+    "@types/node": {
+
+      "\"node:dgram\".Socket": "https://nodejs.org/api/dgram.html#class-dgramsocket",
+      "Stream.Readable": "https://nodejs.org/api/stream.html#class-streamreadable",
+      "Stream.Writable": "https://nodejs.org/api/stream.html#class-streamwritable"
+    },
+    "typescript": {
+
+      "AbortSignal": "https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal",
+      "AsyncDisposable": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose",
+      "Disposable": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose",
+      "DOMException": "https://developer.mozilla.org/en-US/docs/Web/API/DOMException",
+      "Promise": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise",
+      "TypeError": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError"
+    }
+  },
   "gitRevision": "main",
   "hideGenerator": true,
   "indexFormat": "table",
@@ -27,6 +45,13 @@
 
     "breadcrumbs.home": "Home"
   },
+  "treatWarningsAsErrors": true,
   "typeDeclarationFormat": "table",
-  "useCodeBlocks": true
+  "useCodeBlocks": true,
+  "validation": {
+
+    "invalidLink": true,
+    "notDocumented": false,
+    "notExported": true
+  }
 }

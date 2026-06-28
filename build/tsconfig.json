@@ -5,10 +5,13 @@
 {
   "compilerOptions": {
 
-    "allowSyntheticDefaultImports": true,
+    "allowImportingTsExtensions": true,
     "declaration": true,
+    "declarationMap": true,
+    "erasableSyntaxOnly": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
 
     "lib": [
 
@@ -16,13 +19,25 @@
       "ES2024",
       "ESNext.Array",
       "ESNext.Collection",
-      "ESNext.Iterator"
+      "ESNext.Disposable",
+      "ESNext.Iterator",
+      "ESNext.Promise"
     ],
 
     "module": "nodenext",
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "noUncheckedSideEffectImports": true,
+    "resolveJsonModule": true,
+    "rewriteRelativeImportExtensions": true,
+    "skipLibCheck": true,
     "sourceMap": true,
     "strict": true,
-    "target": "ES2024"
+    "target": "ES2024",
+    "verbatimModuleSyntax": true
   }
 }
 /* When creating your own tsconfig.json, use the following as a starting point to inherit these defaults:

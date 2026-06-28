@@ -9,3 +9,6 @@
 !dist/**
 !homebridge-ui/**
 !package.json
+
+# Exclude these.
+dist/**/*.d.ts.map

@@ -1,8 +1,14 @@
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
+ *
+ * tsconfig.json: Project declaration discovered by IDEs and `typescript-eslint`'s project service. Broad include with `allowJs` so the build scripts, web UI assets, and
+ * root-level config files are claimed by a real project (instead of falling through to the default-project escape hatch). `noEmit` keeps `tsc -p tsconfig.json` from
+ * producing build output - that responsibility lives exclusively in `tsconfig.build.json`.
+ */
 {
   "compilerOptions": {
 
-    "outDir": "dist",
-    "rootDir": "src"
+    "allowJs": true,
+    "noEmit": true
   },
 
   "exclude": [ "dist", "node_modules" ],

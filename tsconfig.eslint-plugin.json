@@ -1,0 +1,32 @@
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
+ *
+ * tsconfig.eslint-plugin.json: Declaration-only project that extracts `.d.mts` type declarations from the hand-authored ESLint plugin under `build/eslint-plugin/`
+ * and emits them into `dist/eslint-plugin/`, so the `./eslint` package export can advertise a `types` condition alongside its runtime `import`. The plugin ships as
+ * hand-written `.mjs` tooling rather than compiled `src/` output, so the library build never produces its types; this project derives them from the same
+ * JSDoc-annotated source. The source stays the single point of truth and the declarations are a regenerated artifact that lands in `dist/` with the rest of the
+ * generated output (already gitignored and swept by `clean`), leaving `build/` purely hand-authored.
+ *
+ * It extends the shared base so the lib, target, and module-resolution settings match the rest of the project, but turns `noImplicitAny` off on purpose. The base
+ * encodes the strict posture appropriate for compiling the TypeScript library, where a missing annotation should fail the build. Declaration extraction from
+ * hand-authored JS is the opposite job: it should emit the types the JSDoc expresses and fall back to `any` for whatever is left, never blocking the build on an
+ * inferred type that strict mode would reject. `checkJs` stays off for the same reason - this project emits declarations, it does not type-check the tooling.
+ *
+ * The project root is the plugin's single public entrypoint, `index.mjs`; `tsc` emits declarations for its full import closure - `config.mjs`, `plugin.mjs`, and the
+ * rule modules - and naturally skips the co-located test files, which nothing in that closure imports. There is no test-file exclude list to drift out of sync.
+ */
+{
+  "compilerOptions": {
+
+    "allowJs": true,
+    "checkJs": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "noImplicitAny": false,
+    "outDir": "dist/eslint-plugin",
+    "rootDir": "build/eslint-plugin",
+    "sourceMap": false
+  },
+
+  "extends": "./build/tsconfig.json",
+  "files": [ "build/eslint-plugin/index.mjs" ]
+}

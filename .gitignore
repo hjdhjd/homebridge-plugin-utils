@@ -7,6 +7,10 @@ dist
 # Ignore macOS attribute files.
 .DS_Store
 
+# Ignore e2e screenshot-on-failure captures.
+test/.failures/*
+!test/.failures/.gitkeep
+
 # ------------- Defaults ------------- #
 
 # Logs
@@ -92,7 +96,6 @@ web_modules/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 
 # Gatsby files
 .cache/

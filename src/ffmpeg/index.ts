@@ -2,12 +2,18 @@
  *
  * ffmpeg/index.ts: FFmpeg classes.
  */
-export * from "./codecs.js";
-export * from "./exec.js";
-export * from "./fmp4.js";
-export * from "./options.js";
-export * from "./process.js";
-export * from "./record.js";
-export * from "./rtp.js";
-export * from "./settings.js";
-export * from "./stream.js";
+export * from "./codecs.ts";
+export * from "./dgram-util.ts";
+export * from "./exec.ts";
+export * from "./fmp4.ts";
+export * from "./hap-enums.ts";
+export * from "./mp4-assembler.ts";
+export * from "./mp4-parser.ts";
+export * from "./options.ts";
+export * from "./process.ts";
+export * from "./record.ts";
+export * from "./recording-process-double.ts";
+export * from "./rtp-parser.ts";
+export * from "./rtp.ts";
+export * from "./settings.ts";
+export * from "./stream.ts";

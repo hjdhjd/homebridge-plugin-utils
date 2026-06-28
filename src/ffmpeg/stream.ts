@@ -1,276 +1,227 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/stream.ts: Provide FFmpeg process control to support HomeKit livestreaming.
+ * ffmpeg/stream.ts: FFmpeg process control for HomeKit livestreaming with signal-driven stream-health monitoring.
  */
 
 /**
- * FFmpeg process management and socket handling to support HomeKit livestreaming sessions.
+ * HomeKit livestreaming FFmpeg process with a signal-driven internal stream-health monitor.
  *
- * This module defines the `FfmpegStreamingProcess` class and related interfaces for orchestrating and monitoring FFmpeg-powered video streams. It manages process
- * lifecycle, handles UDP socket creation for video health monitoring, and enables integration with Homebridge streaming delegates for robust error handling, stream
- * cleanup, and automatic tuning.
+ * This module defines `FfmpegStreamingProcess`, the specialization of {@link FfmpegProcess} for HomeKit live video sessions. The subclass extends the base directly and
+ * composes an internal UDP socket that watches the return port for inbound packets - the HomeKit client's RTCP receiver reports, which flow only once the client is
+ * receiving FFmpeg's output. The watchdog arms on the first such packet; if that return traffic then stops for longer than the configured window the socket aborts the
+ * process with `HbpuAbortError("timeout")` and the base class teardown handles the rest. There is no separate "delegate" surface, no error callbacks,
+ * and no reach-through to the raw ChildProcess - every external interaction is through the inherited `signal`, `ready`, `exited`, `stdin`, `stderr`, `stderrLog`,
+ * `abort()`, and `[Symbol.asyncDispose]`.
  *
- * Key features:
+ * `stdout` stays externally readable on this subclass because HBUP's two-way-audio talkback path forwards stdout bytes to the WebSocket that carries audio from the
+ * camera back to the HomeKit client. Unlike the fMP4 subclasses, there is no internal consumer of the stdout stream that would race with an external reader.
  *
- * - Automated start, monitoring, and termination of HomeKit-compatible FFmpeg video streams.
- * - Integration with Homebridge’s CameraStreamingDelegate for custom error hooks and lifecycle control.
- * - UDP socket creation and management for realtime video stream liveness detection.
- * - Intelligent error handling, including automatic tuning for FFmpeg’s stream probing requirements.
- * - Exposes access to the underlying FFmpeg child process for advanced scenarios.
- *
- * Designed for plugin developers and advanced users who require fine-grained control and diagnostics for HomeKit livestreaming, with seamless Homebridge integration.
+ * The stream-health socket is intentionally simpler than {@link ffmpeg/rtp!RtpDemuxer | RtpDemuxer}: its sole job is to detect liveness on a known return port. It
+ * does not classify RTP vs. RTCP or forward packets. Two-way-audio demuxing is `RtpDemuxer`'s responsibility and lives in its own class.
  *
  * @module
  */
-import type { CameraController, CameraStreamingDelegate, StreamRequestCallback } from "homebridge";
-import type { ChildProcessWithoutNullStreams } from "child_process";
-import { FFMPEG_INPUT_TIMEOUT } from "./settings.js";
-import type { FfmpegOptions } from "./options.js";
-import { FfmpegProcess } from "./process.js";
-import type { Nullable } from "../util.js";
-import { createSocket } from "node:dgram";
+import { HbpuAbortError, Watchdog, onAbort } from "../util.ts";
+import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
+import type { FfmpegOptions } from "./options.ts";
+import { FfmpegProcess } from "./process.ts";
+import type { FfmpegProcessInit } from "./process.ts";
+import type { IpFamily } from "./dgram-util.ts";
+import { STREAM_HEALTH_TIMEOUT } from "./settings.ts";
 
 /**
- * Extension of the Homebridge CameraStreamingDelegate with additional streaming controls and error handling hooks.
+ * UDP return-port descriptor for the stream-health monitor.
  *
- * @property adjustProbeSize     - Optional. Invoked to adjust probe size after stream startup errors.
- * @property controller          - The Homebridge CameraController instance managing the stream.
- * @property ffmpegErrorCheck    - Optional. Returns a user-friendly error message for specific FFmpeg errors, if detected.
- * @property stopStream          - Optional. Invoked to force stop a specific stream session by ID.
- *
- * @see CameraController
- * @see CameraStreamingDelegate
+ * @property ipFamily   - The IP family: `"ipv4"` binds to `127.0.0.1`, `"ipv6"` binds to `::1`. Shares the {@link IpFamily} alias with `RtpDemuxerInit`,
+ *                        `PortReservationInit`, and `PortReservation` so every UDP-aware init type in the FFmpeg subsystem reads from the same vocabulary.
+ * @property port       - The UDP port to bind to. Pass `0` to request kernel-assigned ephemeral allocation: the bind succeeds atomically against whichever port
+ *                        the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The assigned port is then
+ *                        observable via {@link FfmpegStreamingProcess.returnPort} once {@link FfmpegStreamingProcess.ready} resolves.
  *
  * @category FFmpeg
  */
-export interface HomebridgeStreamingDelegate extends CameraStreamingDelegate {
+export interface FfmpegStreamingReturnPort {
 
-  adjustProbeSize?: () => void;
-  controller: CameraController;
-  ffmpegErrorCheck?: (logEntry: string[]) => string | undefined;
-  stopStream?: (sessionId: string) => void;
+  ipFamily: IpFamily;
+  port: number;
 }
 
 /**
- * Provides FFmpeg process management and socket handling to support HomeKit livestreaming sessions.
+ * Construction-time options for {@link FfmpegStreamingProcess}.
  *
- * This class extends `FfmpegProcess` to create, monitor, and terminate HomeKit-compatible video streams. Additionally, it invokes delegate hooks for error processing and
- * stream lifecycle management.
+ * @property healthTimeout    - Optional inactivity window, in milliseconds, between inbound packets on the return port (the HomeKit client's RTCP receiver reports).
+ *                              The watchdog arms on the first such packet, then aborts with `HbpuAbortError("timeout")` if a later window elapses with no packet.
+ *                              Defaults to {@link STREAM_HEALTH_TIMEOUT} (5 seconds). This is the watchdog's own cadence, not an FFmpeg input timeout.
+ * @property returnPort       - Optional UDP return-port descriptor. When provided, the subclass binds a UDP socket to the port and enforces the liveness watchdog on
+ *                              inbound traffic. Omit for two-way-audio sessions where packet flow is demuxed externally (e.g., via `RtpDemuxer`).
+ *
+ * @see FfmpegProcessInit
+ *
+ * @category FFmpeg
+ */
+export interface FfmpegStreamingInit extends FfmpegProcessInit {
+
+  healthTimeout?: number;
+  returnPort?: FfmpegStreamingReturnPort;
+}
+
+/**
+ * FFmpeg process specialization for HomeKit livestreaming. Extends {@link FfmpegProcess} directly and composes an internal stream-health UDP socket when a return port
+ * is configured.
+ *
+ * Lifecycle is entirely signal-driven: construction spawns the child and (optionally) binds the health socket; the socket watches for inbound packets and aborts the
+ * process with `"timeout"` if the window lapses; the inherited teardown path closes the socket and clears the watchdog timer as part of its signal-abort listener
+ * fan-out. The subclass adds no new public verbs beyond what {@link FfmpegProcess} provides.
  *
  * @example
  *
  * ```ts
- * const streamingDelegate: HomebridgeStreamingDelegate = {
+ * await using proc = new FfmpegStreamingProcess(ffmpegOptions, {
  *
- *   controller,
- *   stopStream: (sessionId) => { ... } // End-of-session cleanup code.
- * };
+ *   args: commandLineArgs,
+ *   returnPort: { ipFamily: "ipv4", port: 50000 },
+ *   signal: session.controller.signal
+ * });
  *
- * const process = new FfmpegStreamingProcess(
+ * await proc.ready;
  *
- *   streamingDelegate,
- *   sessionId,
- *   ffmpegOptions,
- *   commandLineArgs,
- *   { addressVersion: "ipv4", port: 5000 }
- * );
+ * // Observe the process from the session's own control flow. When the health socket detects a stall, proc.signal fires
+ * // with reason "timeout" and proc.exited resolves with the kill-driven exit context. Surface crashes via the owning
+ * // session's error path.
+ * proc.exited.catch((error) => session.onStreamingError(error));
  * ```
  *
- * @see HomebridgeStreamingDelegate
  * @see FfmpegProcess
  *
  * @category FFmpeg
  */
 export class FfmpegStreamingProcess extends FfmpegProcess {
 
-  /*
-   * The streaming delegate instance responsible for handling stream events and errors.
-   */
-  private delegate: HomebridgeStreamingDelegate;
+  // The return-port descriptor requested at construction (verbatim from `init.returnPort`). Undefined when no return port was configured. Read through the
+  // {@link FfmpegStreamingProcess.returnPort} getter, which projects the kernel-assigned port over this descriptor once the bind settles.
+  readonly #requestedReturnPort: FfmpegStreamingReturnPort | undefined;
+
+  // The port the kernel actually bound the health socket to, captured from `socket.address().port` once the `"listening"` event fires. Undefined until then. For
+  // specific-port binds this duplicates {@link #requestedReturnPort}'s port field but the assignment keeps the post-bind read path uniform across both construction
+  // modes (specific port and `port: 0` ephemeral).
+  #assignedReturnPort: number | undefined;
 
   /**
-   * The unique session identifier for this streaming process.
+   * Construct and spawn a new streaming FFmpeg process.
+   *
+   * Spawning happens synchronously as part of construction. When `init.returnPort` is supplied, the subclass binds a UDP socket and enforces the liveness watchdog; the
+   * socket closes and the watchdog clears as part of the inherited teardown when the signal aborts for any reason.
+   *
+   * @param options - Shared {@link FfmpegOptions} configuration (codec support, logger, debug flag, name).
+   * @param init    - Optional init options. See {@link FfmpegStreamingInit}.
    */
-  private sessionId: string;
+  public constructor(options: FfmpegOptions, init: FfmpegStreamingInit = {}) {
+
+    super(options, init);
+
+    this.#requestedReturnPort = init.returnPort;
+
+    if(init.returnPort) {
+
+      this.#startHealthMonitor(init.returnPort, init.healthTimeout ?? STREAM_HEALTH_TIMEOUT);
+    }
+  }
 
   /**
-   * The timeout reference used to monitor UDP stream health.
+   * The UDP return-port descriptor the health socket is bound to, or `undefined` when no return port was configured. For a specific-port construction
+   * (`init.returnPort.port` non-zero), this descriptor equals `init.returnPort` from the moment the constructor returns; for an ephemeral construction
+   * (`init.returnPort.port === 0`), the `port` field is `0` until the kernel completes the bind, then the kernel-assigned port. Consumers that need the assigned
+   * ephemeral port `await proc.ready` before reading it; in practice the health-socket bind completes well before the FFmpeg child reaches the `ready` signal, so a
+   * post-`ready` read always observes the kernel's pick.
+   *
+   * Returns a fresh descriptor on every read; callers must treat the result as read-only. The `ipFamily` field is the verbatim value passed at construction; the
+   * `port` field reads from the live socket-address projection once captured (specific and ephemeral binds converge on a single read path).
+   *
+   * @returns The bound return-port descriptor, or `undefined` when no return port was configured.
    */
-  private streamTimeout?: NodeJS.Timeout;
+  public get returnPort(): FfmpegStreamingReturnPort | undefined {
 
-  /**
-   * Constructs a new FFmpeg streaming process for a HomeKit session.
-   *
-   * Sets up required delegate hooks, creates UDP return sockets if needed, and starts the FFmpeg process. Automatically handles FFmpeg process errors and cleans up on
-   * failures.
-   *
-   * @param delegate         - The Homebridge streaming delegate for this session.
-   * @param sessionId        - The HomeKit session identifier for this stream.
-   * @param ffmpegOptions    - The FFmpeg configuration options.
-   * @param commandLineArgs  - FFmpeg command-line arguments.
-   * @param returnPort       - Optional. UDP port info for talkback support (used for two-way audio in HomeKit for cameras that support it).
-   * @param callback         - Optional. Callback invoked when the stream is ready or errors occur.
-   *
-   * @example
-   *
-   * ```ts
-   * const process = new FfmpegStreamingProcess(delegate, sessionId, ffmpegOptions, commandLineArgs, { addressVersion: "ipv6", port: 6000 });
-   * ```
-   */
-  constructor(delegate: HomebridgeStreamingDelegate, sessionId: string, ffmpegOptions: FfmpegOptions, commandLineArgs: string[],
-    returnPort?: { addressVersion: string; port: number }, callback?: StreamRequestCallback) {
+    if(this.#requestedReturnPort === undefined) {
 
-    // Initialize our parent.
-    super(ffmpegOptions);
-
-    this.delegate = delegate;
-
-    this.delegate.adjustProbeSize ??= (): void => { /* No-op. */ };
-    this.delegate.ffmpegErrorCheck ??= (): undefined => undefined;
-    this.delegate.stopStream ??= (): void => { /* No-op. */ };
-
-    this.sessionId = sessionId;
-
-    // Create the return port for FFmpeg, if requested to do so. The only time we don't do this is when we're standing up
-    // a two-way audio stream - in that case, the audio work is done through RtpSplitter and not here.
-    if(returnPort) {
-
-      this.createSocket(returnPort);
+      return undefined;
     }
 
-    // Start it up, with appropriate error handling.
-    this.start(commandLineArgs, callback, (errorMessage: string) => {
+    return {
 
-      // Stop the stream.
-      this.delegate.stopStream?.(this.sessionId);
-
-      // Let homebridge know what happened and stop the stream if we've already started.
-      if(!this.isStarted && this.callback) {
-
-        this.callback(new Error(errorMessage));
-        this.callback = null;
-
-        return;
-      }
-
-      // Tell Homebridge to forcibly stop the streaming session.
-      this.delegate.controller.forceStopStreamingSession(this.sessionId);
-      this.delegate.stopStream?.(this.sessionId);
-    });
+      ipFamily: this.#requestedReturnPort.ipFamily,
+      port: this.#assignedReturnPort ?? this.#requestedReturnPort.port
+    };
   }
 
-  /**
-   * Creates and binds a UDP socket for monitoring the health of the outgoing video stream.
-   *
-   * Listens for UDP "message" events, sets and clears timeouts, and handles error/cleanup scenarios. If no messages are received within 5 seconds, forcibly stops the
-   * stream and informs the delegate.
-   *
-   * @param portInfo - Object containing the address version ("ipv4" or "ipv6") and port number.
-   */
-  private createSocket(portInfo: { addressVersion: string; port: number }): void {
+  // Bind a UDP socket to the return port and enforce a re-armed inactivity watchdog. Called from the constructor when a return-port descriptor is provided. The
+  // pre-aborted-signal guard is load-bearing: if the caller passed an already-aborted parent signal, the base class's teardown runs synchronously during `super()` and
+  // `this.signal` is aborted by the time we get here. Registering an `"abort"` listener on an already-aborted signal does NOT re-dispatch, so the socket and watchdog
+  // timer would leak if we proceeded. Short-circuiting leaves no resources allocated.
+  #startHealthMonitor(returnPort: FfmpegStreamingReturnPort, timeoutMs: number): void {
 
-    let errorListener: (error: Error) => void;
-    let messageListener: () => void;
-    const isIPv6 = portInfo.addressVersion === "ipv6";
-    const socket = createSocket(isIPv6 ? "udp6" : "udp4");
-
-    // Cleanup after ourselves when the socket closes.
-    socket.once("close", () => {
-
-      if(this.streamTimeout) {
-
-        clearTimeout(this.streamTimeout);
-      }
-
-      socket.off("error", errorListener);
-      socket.off("message", messageListener);
-    });
-
-    // Handle potential network errors.
-    socket.on("error", errorListener = (error: Error): void => {
-
-      this.log.error("Socket error: %s.", error.name);
-      this.delegate.stopStream?.(this.sessionId);
-    });
-
-    // Manage our video streams in case we haven't received a stop request, but we're in fact dead zombies.
-    socket.on("message", messageListener = (): void => {
-
-      // Clear our last canary.
-      if(this.streamTimeout) {
-
-        clearTimeout(this.streamTimeout);
-      }
-
-      // Set our new canary.
-      this.streamTimeout = setTimeout(() => {
-
-        this.log.debug("Video stream appears to be inactive for 5 seconds. Stopping stream.");
-
-        this.delegate.controller.forceStopStreamingSession(this.sessionId);
-        this.delegate.stopStream?.(this.sessionId);
-      }, FFMPEG_INPUT_TIMEOUT);
-    });
-
-    // Bind to the port we're opening.
-    socket.bind(portInfo.port, isIPv6 ? "::1" : "127.0.0.1");
-  }
-
-  /**
-   * Returns the underlying FFmpeg child process, or null if the process is not running.
-   *
-   * @returns The current FFmpeg process, or `null` if not running.
-   *
-   * @example
-   *
-   * ```ts
-   * const ffmpeg = process.ffmpegProcess;
-   *
-   * if(ffmpeg) {
-   *
-   *   // Interact directly with the child process if necessary.
-   * }
-   * ```
-   */
-  public get ffmpegProcess(): Nullable<ChildProcessWithoutNullStreams> {
-
-    return this.process;
-  }
-
-  /**
-   * Handle and logs FFmpeg process errors.
-   *
-   * If a known error condition is detected by the delegate, logs the custom message and returns. For "not enough frames to estimate rate; consider increasing probesize"
-   * errors, invokes the delegate's `adjustProbeSize` hook for automatic tuning. Otherwise, falls back to the parent class's logging.
-   *
-   * @param exitCode - The exit code from FFmpeg.
-   * @param signal   - The signal, if any, used to terminate the process.
-   */
-  protected logFfmpegError(exitCode: Nullable<number>, signal: Nullable<NodeJS.Signals>): void {
-
-    // We want to process known streaming-related errors due to the performance and latency tweaks we've made to the FFmpeg command line. In some cases we may inform the
-    // user and take no action, in others, we tune our own internal parameters.
-
-    // Process any specific errors our caller is interested in.
-    const errTest = this.delegate.ffmpegErrorCheck?.(this.stderrLog);
-
-    if(errTest) {
-
-      this.log.error(errTest);
+    if(this.aborted) {
 
       return;
     }
 
-    // Test for probesize errors.
-    if(this.stderrLog.some(logEntry => logEntry.includes("not enough frames to estimate rate; consider increasing probesize"))) {
+    const socket = createDgramSocket(returnPort.ipFamily);
 
-      // Let the streaming delegate know to adjust its parameters for the next run and inform the user.
-      this.delegate.adjustProbeSize?.();
+    // Capture the kernel-assigned port as soon as the bind succeeds. For specific-port binds this duplicates `returnPort.port`; for ephemeral binds (port: 0) this
+    // is where the kernel's pick becomes observable via {@link returnPort}. Wired as `once("listening", ...)` so it fires exactly when the bind transitions to the
+    // listening state - the same moment after which message events can arrive. The handler captures `socket` by closure to avoid `this.#socket`-style reads from
+    // an async event handler.
+    socket.once("listening", () => {
 
-      return;
-    }
+      this.#assignedReturnPort = socket.address().port;
+    });
 
-    // Otherwise, revert to our default logging in our parent.
-    super.logFfmpegError(exitCode, signal);
+    // Inactivity watchdog: if no packets arrive within `timeoutMs`, abort the process with `"timeout"`. Self-cleans when `this.signal` aborts for any other reason,
+    // so the teardown listener below only has to close the socket.
+    const watchdog = new Watchdog({
+
+      onFire: (): void => {
+
+        this.log.debug("Streaming process inactivity watchdog fired after %d ms with no inbound packets.", timeoutMs);
+        this.abort(new HbpuAbortError("timeout"));
+      },
+      signal: this.signal,
+      timeoutMs
+    });
+
+    // Inbound-packet handler and the SOLE arm site for the watchdog. The first inbound packet performs the initial arm; every subsequent packet re-arms it. We do
+    // not inspect the payload - liveness is the only signal this socket cares about.
+    socket.on("message", () => { watchdog.arm(); });
+
+    // Socket errors on the health port are treated as fatal - if the kernel cannot deliver us packets, we cannot tell the stream is alive. Abort with `"failed"` and
+    // surface the underlying error via `cause` so downstream diagnostics carry the root cause.
+    socket.on("error", (error: Error) => {
+
+      this.log.error("Streaming process return-port socket error: %s.", error.message);
+
+      if(!this.aborted) {
+
+        this.abort(new HbpuAbortError("failed", { cause: error }));
+      }
+    });
+
+    // Teardown convergence point: when `this.signal` aborts for any reason, close the socket. The watchdog's timer is handled by its own self-clean listener on the
+    // same signal, so nothing else is owed here. `onAbort` is preferred over bare `addEventListener` even though the early `aborted` short-circuit above already
+    // guards the pre-aborted case for this allocation path - resource-class teardown handlers throughout HBPU go through `onAbort` so no constructor site has to
+    // re-implement the AbortSignal pre-aborted-listener workaround.
+    onAbort(this.signal, () => socket.close());
+
+    // Bind. Binding may fail asynchronously with an `"error"` event, which the listener above catches.
+    socket.bind(returnPort.port, loopbackAddress(returnPort.ipFamily));
+
+    // This is an inactivity watchdog, and "inactivity" presupposes prior activity: it watches one thing - a *flowing* return stream that dried up - so it arms only
+    // on the first inbound packet (the message handler above), then re-arms on every subsequent one. There is deliberately NO arm at construction or on `ready`,
+    // because the watchdog must not police startup or establishment. Those are separate concerns owned elsewhere: "did the child process start" is the base-class
+    // optional `startupTimeout` (documented in process.ts), and "did the return stream ever go live" is the consumer's - the HomeKit session lifecycle and the
+    // consumer's establishment gate - which is the only thing that bounds a stream that never delivers a first packet. We do not fold that bound in here, and on the
+    // one-way live-view path it remains an external bound exactly as it was before this watchdog ever existed. Arming on `ready` was wrong precisely because a
+    // ready-armed clock starts before any media has round-tripped: on a cold start the first return packet cannot arrive within the window (prime, transcode, SRTP
+    // egress, client decode, client RTCP back all have to complete first), so the clock counts down through that legitimate first-packet latency and false-positives
+    // on a perfectly healthy stream. Arming on the packet itself is immune by construction. Note the message handler arms regardless of `ready`: any datagram that
+    // arrives before stderr does still starts the inactivity clock, so a stream that is already alive never waits on the spawn signal to be protected.
   }
 }

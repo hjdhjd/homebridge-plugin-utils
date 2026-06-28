@@ -14,7 +14,7 @@
  *
  * @module
  */
-import type { Nullable } from "../util.js";
+import type { Nullable } from "../util.ts";
 
 /**
  * ISO BMFF box header size in bytes: 4 bytes big-endian size + 4 bytes ASCII type.
@@ -26,18 +26,56 @@ export const BOX_HEADER_SIZE = 8;
 // TRUN fullbox header size: standard box header + 4 bytes version/flags + 4 bytes sample_count.
 const TRUN_HEADER_SIZE = BOX_HEADER_SIZE + 8;
 
-// TRUN box flags indicating the presence of optional fields.
-const TRUN_FLAG_DATA_OFFSET = 0x000001;
-const TRUN_FLAG_FIRST_SAMPLE_FLAGS = 0x000004;
-const TRUN_FLAG_SAMPLE_DURATION = 0x000100;
-const TRUN_FLAG_SAMPLE_SIZE = 0x000200;
-const TRUN_FLAG_SAMPLE_FLAGS = 0x000400;
+/**
+ * TRUN fullbox flags bit indicating that a `data_offset` field follows the sample_count in the box header.
+ *
+ * @category FFmpeg
+ */
+export const TRUN_FLAG_DATA_OFFSET = 0x000001;
 
-// Sample flags bit indicating a non-sync sample. When this bit is clear (0), the sample is a sync sample (keyframe/IDR).
-const SAMPLE_FLAG_NON_SYNC = 0x00010000;
+/**
+ * TRUN fullbox flags bit indicating that a `first_sample_flags` field follows (after `data_offset` if present). When this flag is set, the first sample's flags are
+ * stored in a dedicated header field rather than in the per-sample entries - the common arrangement for fragments emitted with FFmpeg's `frag_keyframe` movflag.
+ *
+ * @category FFmpeg
+ */
+export const TRUN_FLAG_FIRST_SAMPLE_FLAGS = 0x000004;
 
-// Handler type for audio tracks in ISO BMFF: "soun" encoded as a 32-bit integer.
-const HDLR_TYPE_SOUN = 0x736F756E;
+/**
+ * TRUN fullbox flags bit indicating that each sample entry carries a 4-byte duration field.
+ *
+ * @category FFmpeg
+ */
+export const TRUN_FLAG_SAMPLE_DURATION = 0x000100;
+
+/**
+ * TRUN fullbox flags bit indicating that each sample entry carries a 4-byte size field.
+ *
+ * @category FFmpeg
+ */
+export const TRUN_FLAG_SAMPLE_SIZE = 0x000200;
+
+/**
+ * TRUN fullbox flags bit indicating that each sample entry carries a 4-byte sample_flags field.
+ *
+ * @category FFmpeg
+ */
+export const TRUN_FLAG_SAMPLE_FLAGS = 0x000400;
+
+/**
+ * Sample-flags bit indicating a non-sync (non-keyframe) sample. When this bit is clear (0), the sample is a sync sample / IDR frame / keyframe.
+ *
+ * @category FFmpeg
+ */
+export const SAMPLE_FLAG_NON_SYNC = 0x00010000;
+
+/**
+ * Handler-type code for audio tracks in ISO BMFF `hdlr` boxes: ASCII `"soun"` encoded as a 32-bit big-endian integer. Compared against the `handler_type` field of
+ * each track's `hdlr` fullbox to identify the audio track during init-segment inspection.
+ *
+ * @category FFmpeg
+ */
+export const HDLR_TYPE_SOUN = 0x736F756E;
 
 // Offset from the start of an hdlr fullbox to the handler_type field: standard box header (8 bytes) + version/flags (4 bytes) + pre_defined (4 bytes).
 const HDLR_TYPE_OFFSET = BOX_HEADER_SIZE + 8;

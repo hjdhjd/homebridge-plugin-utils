@@ -4,181 +4,285 @@
  */
 "use strict";
 
-import { webUiFeatureOptions } from "./webUi-featureoptions.mjs";
+import { PluginConfigSession } from "./pluginConfigSession.mjs";
+import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 
+/**
+ * @typedef {Object} FirstRunContext
+ * @property {(patch: Object) => Promise<void>} [commit] - Persist a patch to the primary platform-config entry. Supplied only to `onSubmit` (the one write hook).
+ * @property {Object} config - The primary platform-config entry, injected so the hook is a pure function of its input rather than reaching for the config itself.
+ */
+
+/**
+ * @typedef {Object} FirstRunHandlers
+ * @property {(context: FirstRunContext) => boolean | Promise<boolean>} [isRequired] - Returns truthy when the first-run flow must run before the main UI is shown.
+ * @property {(context: FirstRunContext) => boolean | Promise<boolean>} [onStart] - Initialization for the first-run UI; populates forms and runs any startup tasks.
+ * @property {(context: FirstRunContext) => boolean | Promise<boolean>} [onSubmit] - Executes the first-run workflow, typically a login or configuration validation.
+ */
+
+/**
+ * @typedef {Object} WebUiConfig
+ * @property {Object} [featureOptions] - Parameters forwarded to {@link webUiFeatureOptions}.
+ * @property {FirstRunHandlers} [firstRun] - First-run lifecycle hooks.
+ * @property {string} [name] - Plugin name used to seed a fresh configuration.
+ */
+
+/**
+ * webUi - Top-level plugin webUI orchestrator.
+ *
+ * Owns the page-level menu state, the first-run flow, and the {@link webUiFeatureOptions} instance that renders the feature options page. The orchestrator is the
+ * single entry point Homebridge invokes to render the configuration UI; everything else - feature option discovery, theming, sidebar navigation, search - lives in
+ * the composed {@link webUiFeatureOptions} instance and its sub-components.
+ */
 export class webUi {
 
-  // Feature options class instance.
   featureOptions;
 
-  // First run webUI callback endpoints for customization.
   #firstRun;
-
-  // Plugin name.
   #name;
+  #session;
 
   /**
-   * featureOptions - parameters to webUiFeatureOptions.
-   * firstRun - first run handlers:
-   *   isRequired - do we need to run the first run UI workflow?
-   *   onStart - initialization for the first run webUI to populate forms and other startup tasks.
-   *   onSubmit - execute the first run workflow, typically a login or configuration validation of some sort.
-   * name - plugin name.
+   * Initialize the plugin webUI orchestrator.
+   *
+   * Constructs the composed {@link webUiFeatureOptions} instance immediately so the feature-options page is ready to render the moment the user navigates to it.
+   * Caller-supplied first-run hooks are merged in a single spread over the default no-op handlers, so partial overrides work naturally - a caller can supply only
+   * `onSubmit` and the other two slots stay at the defaults that keep the flow driveable.
+   *
+   * @param {WebUiConfig} [options] - Configuration options for the webUI. All fields are optional and fall back to no-op handlers.
    */
   constructor({ featureOptions, firstRun = {}, name } = {}) {
 
-    // Defaults for our first run handlers.
-    this.#firstRun = { isRequired: () => false, onStart: () => true, onSubmit: () => true };
+    // First-run handlers default to no-ops; caller-supplied entries override per-key. The single-statement spread lands `#firstRun` in its final shape on first
+    // assignment, so there is no intermediate object that gets discarded a line later.
+    this.#firstRun = { isRequired: () => false, onStart: () => true, onSubmit: () => true, ...firstRun };
 
-    // Figure out the options passed in to us.
     this.featureOptions = new webUiFeatureOptions(featureOptions);
-    this.#firstRun = Object.assign({}, this.#firstRun, firstRun);
     this.#name = name;
   }
 
   /**
    * Render the webUI.
+   *
+   * Public entry point Homebridge invokes when the configuration UI is opened. Delegates the actual rendering to {@link #launchWebUI}; this wrapper exists to
+   * standardize error handling (a launch failure becomes a user-facing toast rather than a silent broken UI) and to guarantee the spinner is hidden no matter how
+   * the launch settles. The `finally` runs after the awaited launch resolves or rejects, so the spinner stays visible for the full duration of the async setup
+   * rather than disappearing the moment the synchronous portion of the call returns.
+   *
+   * @returns {Promise<void>}
+   * @public
    */
-  // Render the UI.
-  show() {
+  async show() {
 
-    // Fire off our UI, catching errors along the way.
     try {
 
-      this.#launchWebUI();
+      await this.#launchWebUI();
     } catch(err) {
 
-      // If we had an error instantiating or updating the UI, notify the user.
-      homebridge.toast.error(err.message, "Error");
+      // Outermost user-facing diagnostic seam in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape (strings, plain
+      // objects, primitives), so normalize before reaching the toast: `err?.message` extracts the message field when present, the nullish coalesce falls back
+      // to a string coercion of the whole value otherwise. This keeps the toast text useful regardless of what bubbled out of `#launchWebUI`.
+      homebridge.toast.error(err?.message ?? String(err), "Error");
     } finally {
 
-      // Always leave the UI in a usable place for the end user.
       homebridge.hideSpinner();
     }
   }
 
-  // Show the first run user experience if needed.
+  /**
+   * Show the first-run user experience.
+   *
+   * Wires the submit button to run the caller-supplied submit handler, swap the page from first-run to feature-options, and hand off to the feature-options view.
+   * The save button stays disabled until the user completes the first-run flow so a partially-configured plugin cannot be written back to disk.
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
   async #showFirstRun() {
 
     const buttonFirstRun = document.getElementById("firstRun");
 
-    // Run a custom initialization handler the user may have provided.
-    if(!(await this.#processHandler(this.#firstRun.onStart))) {
+    // Inject the primary platform-config entry so the hook reads its config from its argument rather than reaching for the session or the host. onStart only reads
+    // (it pre-populates the form), so it receives config without the writer.
+    if(!(await this.#processHandler(this.#firstRun.onStart, { config: this.#session.platform }))) {
 
       return;
     }
 
-    // We disable saving any settings until we configure the plugin.
     homebridge.disableSaveButton();
 
-    // First run user experience.
     buttonFirstRun.addEventListener("click", async () => {
 
-      // Show the beachball while we setup.
       homebridge.showSpinner();
 
-      // Run a custom submit handler the user may have provided.
-      if(!(await this.#processHandler(this.#firstRun.onSubmit))) {
+      try {
 
-        return;
+        // onSubmit is the one write hook: it validates credentials and persists them. It receives both the current config and a `commit` bound to the session's
+        // single write seam, so the hook owns the shape of the write (it knows credentials live under the controllers array) while the session owns persistence.
+        if(!(await this.#processHandler(this.#firstRun.onSubmit, { commit: (patch) => this.#session.commit(patch), config: this.#session.platform }))) {
+
+          return;
+        }
+
+        // Swap from the first-run page to the main configuration UI and hand off to the feature-options view. The feature-options surface manages its own
+        // progressive disclosure - page-shell visible immediately, regions populating as their I/O resolves - so the click handler's spinner is the only one that
+        // brackets this transition. The `try/finally` ensures it comes down on every exit path, including the early bail above.
+        document.getElementById("pageFirstRun").style.display = "none";
+        document.getElementById("menuWrapper").style.display = "inline-flex";
+
+        await this.featureOptions.show(this.#session);
+
+        homebridge.enableSaveButton();
+      } finally {
+
+        homebridge.hideSpinner();
       }
-
-      // Create our UI and allow users to save the configuration.
-      document.getElementById("pageFirstRun").style.display = "none";
-      document.getElementById("menuWrapper").style.display = "inline-flex";
-
-      await this.featureOptions.show();
-
-      homebridge.enableSaveButton();
-
-      // All done. Let the user interact with us, although in practice, we shouldn't get here.
-      // homebridge.hideSpinner();
     });
 
     document.getElementById("pageFirstRun").style.display = "block";
   }
 
-  // Show the main plugin configuration tab.
-  #showSettings() {
+  /**
+   * Show the main plugin configuration tab.
+   *
+   * Hides the feature-options view, swaps the menu button states (home and feature-options become elegant; settings becomes primary to indicate the active tab),
+   * and asks Homebridge to render its built-in schema-driven settings form. The spinner brackets the swap so transient layout shifts are not visible to the user.
+   *
+   * Awaits `featureOptions.hide()` BEFORE revealing the schema form so any debounced-but-unwritten option edit is flushed into Homebridge's in-memory config model
+   * first - the Settings form then renders against the flushed config rather than a stale snapshot. The try/finally guarantees the spinner comes down and the tab
+   * reveals even if the drain rejects (the drain's own failure path already toasts via `persist:failed`), so a persistence error never strands the user on a spinner.
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #showSettings() {
 
-    // Show the beachball while we setup.
     homebridge.showSpinner();
-    this.featureOptions.hide();
 
-    // Highlight the tab in our UI.
-    this.#toggleClasses("menuHome", "btn-elegant", "btn-primary");
-    this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
-    this.#toggleClasses("menuSettings", "btn-primary", "btn-elegant");
+    try {
 
-    document.getElementById("pageSupport").style.display = "none";
-    document.getElementById("pageFeatureOptions").style.display = "none";
+      await this.featureOptions.hide();
+    } finally {
 
-    homebridge.showSchemaForm();
+      this.#toggleClasses("menuHome", "btn-elegant", "btn-primary");
+      this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
+      this.#toggleClasses("menuSettings", "btn-primary", "btn-elegant");
 
-    // All done. Let the user interact with us.
-    homebridge.hideSpinner();
+      document.getElementById("pageSupport").style.display = "none";
+      document.getElementById("pageFeatureOptions").style.display = "none";
+
+      homebridge.showSchemaForm();
+
+      homebridge.hideSpinner();
+    }
   }
 
-  // Show the support tab.
-  #showSupport() {
+  /**
+   * Show the support tab.
+   *
+   * Hides the feature-options view and the schema form, swaps the menu button states (home becomes primary as the active tab; feature-options and settings revert
+   * to elegant), and reveals the static support page. Spinner brackets the swap to mask transient layout shifts.
+   *
+   * Awaits `featureOptions.hide()` BEFORE revealing the support page so any debounced-but-unwritten option edit is flushed first, matching the Settings path. The
+   * try/finally guarantees the spinner comes down and the tab reveals even if the drain rejects (the drain's own failure path already toasts via `persist:failed`).
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #showSupport() {
 
-    // Show the beachball while we setup.
     homebridge.showSpinner();
     homebridge.hideSchemaForm();
-    this.featureOptions.hide();
 
-    // Highlight the tab in our UI.
-    this.#toggleClasses("menuHome", "btn-primary", "btn-elegant");
-    this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
-    this.#toggleClasses("menuSettings", "btn-elegant", "btn-primary");
+    try {
 
-    document.getElementById("pageSupport").style.display = "block";
-    document.getElementById("pageFeatureOptions").style.display = "none";
+      await this.featureOptions.hide();
+    } finally {
 
-    // All done. Let the user interact with us.
-    homebridge.hideSpinner();
+      this.#toggleClasses("menuHome", "btn-primary", "btn-elegant");
+      this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
+      this.#toggleClasses("menuSettings", "btn-elegant", "btn-primary");
+
+      document.getElementById("pageSupport").style.display = "block";
+      document.getElementById("pageFeatureOptions").style.display = "none";
+
+      homebridge.hideSpinner();
+    }
   }
 
-  // Launch our webUI.
+  /**
+   * Launch the webUI.
+   *
+   * Opens the configuration session, wires the menu event listeners, and routes the user to either the feature-options view (when the caller's first-run gate says
+   * no) or the first-run flow (when it says yes). The session loads the host config once and seeds the minimum shape, so routing and every downstream reader share
+   * one config owner rather than fetching it independently.
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
   async #launchWebUI() {
 
-    // Retrieve the current plugin configuration.
-    this.featureOptions.currentConfig = await homebridge.getPluginConfig();
+    // Open the configuration session: one host read, seeded to the minimum shape. Routing, the first-run flow, and the feature-options page all read their config
+    // from this single owner rather than re-fetching it independently - so the routing decision lands before any UI work begins and against the same data every
+    // later reader sees.
+    this.#session = await PluginConfigSession.open({ host: homebridge, name: this.#name });
 
-    // Add our event listeners to animate the UI.
+    // Menu click listeners use a uniform shape: an arrow expression that calls the handler and returns its result. addEventListener discards the return value, so an
+    // async handler's promise is dropped either way; wrapping `featureOptions.show()` in `async () => await ...` would add a microtask hop and break the visual
+    // symmetry across the three sibling registrations for no behavioral benefit. All three handlers are now async (show() syncs; #showSettings / #showSupport await
+    // the navigate-away flush before revealing the next tab), and the dropped promise is a deliberate fire-and-forget: each handler's own try/finally reveals the tab
+    // and drains the spinner on every path, and the flush drain's failure surfaces internally via persist:failed's toast - so there is no unobserved rejection here.
     document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
-    document.getElementById("menuFeatureOptions").addEventListener("click", async () => await this.featureOptions.show());
+    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.featureOptions.show(this.#session));
     document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
 
-    // If we've got devices detected, we launch our feature option UI. Otherwise, we launch our first run UI.
-    if(this.featureOptions.currentConfig.length && !(await this.#processHandler(this.#firstRun.isRequired))) {
+    // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
+    // flow returns true on a fresh config (no valid credentials yet), and a plugin without one keeps the default `() => false` gate and lands straight on feature
+    // options - the right destination for a device-discovery plugin even on a brand-new install. The session has already seeded the minimum shape, so the first-run
+    // flow can persist credentials on submit without a separate eager write here.
+    if(!(await this.#processHandler(this.#firstRun.isRequired, { config: this.#session.platform }))) {
 
       document.getElementById("menuWrapper").style.display = "inline-flex";
-      await this.featureOptions.show();
+      await this.featureOptions.show(this.#session);
 
       return;
     }
 
-    // If we have the name property set for the plugin configuration yet, let's do so now. If we don't have a configuration, let's initialize it as well.
-    (this.featureOptions.currentConfig[0] ??= { name: this.#name }).name ??= this.#name;
-
-    // Update the plugin configuration and launch the first run UI.
-    await homebridge.updatePluginConfig(this.featureOptions.currentConfig);
-    this.#showFirstRun();
+    // Await first-run setup so the spinner-bracketed window in `show()` only closes after the first-run page is fully wired up - the onStart handler has resolved,
+    // the save button is disabled, the click listener is registered, and the page is visible. Returning before this would let `show()`'s `finally` hide the spinner
+    // while initialization is still in flight, leaving the user looking at a half-rendered first-run UI.
+    await this.#showFirstRun();
   }
 
-  // Utility to process user-provided custom handlers that can handle both synchronous and asynchronous handlers.
-  async #processHandler(handler) {
+  /**
+   * Resolve a caller-supplied handler whose shape may be a function or a plain truthy/falsy value.
+   *
+   * The first-run hooks accept either a function (synchronous or asynchronous - both forms are awaited via the `await handler()` call below) or a literal truthy
+   * value (e.g., a caller that always wants the flow to continue can pass `true`). This helper unifies both shapes into a single `Promise<boolean>` answer so the
+   * call sites stay flat. The context object is forwarded to the function form so each hook is a pure function of its injected config (and, for `onSubmit`, the
+   * write seam) rather than reaching for the session or the host itself.
+   *
+   * @param {Function|*} handler - Caller-supplied handler. When a function, it is awaited; otherwise it is treated as a truthy/falsy continuation flag.
+   * @param {FirstRunContext} [context] - The injected context forwarded to the function form of the handler.
+   * @returns {Promise<boolean>} `true` when the workflow should continue, `false` when it should be aborted.
+   * @private
+   */
+  async #processHandler(handler, context) {
 
-    if(((typeof handler === "function") && !(await handler())) || ((typeof handler !== "function") && !handler)) {
-
-      return false;
-    }
-
-    return true;
+    return Boolean((typeof handler === "function") ? await handler(context) : handler);
   }
 
-  // Utility to toggle our classes.
+  /**
+   * Swap one Bootstrap button class for another on a DOM element.
+   *
+   * The menu uses the Bootstrap (Material Design for Bootstrap) `btn-primary` / `btn-elegant` pair to encode active vs inactive tabs. Tab-switch handlers call this
+   * helper three times - once per menu button - so the exact class swap each tab needs lives at the call site rather than embedded in this helper.
+   *
+   * @param {string} id          - The element ID to update.
+   * @param {string} removeClass - The class to remove.
+   * @param {string} addClass    - The class to add.
+   * @private
+   */
   #toggleClasses(id, removeClass, addClass) {
 
     const element = document.getElementById(id);

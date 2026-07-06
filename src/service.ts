@@ -233,6 +233,33 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
 }
 
 /**
+ * Build a `validService` predicate for a service gated on a hardware capability and a user toggle, applying an additive-eager / subtractive-conservative asymmetry
+ * between the two: the user `toggle` is absolute - when false, the service is removed - while the hardware `capability` is conservative - an existing service is kept
+ * through a transient capability-false, and a new service is created only when the capability reports.
+ *
+ * @param options - The `capability` and `toggle` inputs for the gate.
+ *
+ * @returns A `validService` function-form predicate, `(hasService) => toggle && (hasService || capability)`.
+ *
+ * @remarks
+ * Pass the result as `validService`'s `validate` argument. The asymmetry keeps a capability-gated service from being removed during a transient window in which the
+ * device under-reports its capability, while still honoring a user who disables the service. A service with no user toggle should gate on its capability directly.
+ *
+ * @example
+ * ```typescript
+ * // Keep the service while its user toggle is on, add it when the capability reports, and keep an existing one through a transient capability-false.
+ * validService(accessory, Service.Switch, capabilityGate({ capability: deviceReportsFeature, toggle: config.enableSwitch }));
+ * ```
+ *
+ * @see validService - consumes the returned predicate.
+ * @category Accessory
+ */
+export function capabilityGate({ capability, toggle }: { capability: boolean; toggle: boolean }): (hasService: boolean) => boolean {
+
+  return hasService => toggle && (hasService || capability);
+}
+
+/**
  * Determines whether the specified service type requires the ConfiguredName characteristic.
  *
  * @param service - The service instance to check.

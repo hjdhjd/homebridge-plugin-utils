@@ -10,7 +10,7 @@
  */
 import * as hap from "@homebridge/hap-nodejs";
 import type { Characteristic, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { acquireService, getServiceName, setServiceName, validService } from "./service.ts";
+import { acquireService, capabilityGate, getServiceName, setServiceName, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -336,6 +336,41 @@ describe("validService", () => {
     assert.equal(validService(accessory, hap.Service.Switch, false, "sub-a"), false);
     assert.equal(accessory.getServiceById(hap.Service.Switch, "sub-a"), undefined, "matching-subtype service must be removed");
     assert.ok(accessory.getServiceById(hap.Service.Switch, "sub-b"), "non-matching-subtype service must remain");
+  });
+});
+
+describe("capabilityGate", () => {
+
+  test("the user toggle is absolute: a false toggle removes the service across every capability and existence cell", () => {
+
+    // The toggle is the absolute override. When the user disables the feature the predicate votes false across both (hasService) inputs and both capability values, so
+    // an existing service is pruned and a missing one is never created. This pins all four toggle-false cells.
+    for(const capability of [ false, true ]) {
+
+      const gate = capabilityGate({ capability, toggle: false });
+
+      assert.equal(gate(false), false, "a disabled toggle must never create a service");
+      assert.equal(gate(true), false, "a disabled toggle must prune an existing service");
+    }
+  });
+
+  test("the capability is conservative: a capability-false keeps an existing service but adds no new one", () => {
+
+    // With the toggle on but the capability not yet reporting, the conservative half keeps an existing service through the transient capability-false window, while
+    // still declining to create one that does not exist.
+    const gate = capabilityGate({ capability: false, toggle: true });
+
+    assert.equal(gate(false), false, "a toggle-on, capability-false gate must not create a service that does not exist");
+    assert.equal(gate(true), true, "a toggle-on, capability-false gate must keep an existing service through a transient capability-false");
+  });
+
+  test("the capability is additive-eager: a capability-true creates a missing service and keeps an existing one", () => {
+
+    // With the toggle on and the capability reporting, the additive-eager half creates the service when it is missing and keeps it when it already exists.
+    const gate = capabilityGate({ capability: true, toggle: true });
+
+    assert.equal(gate(false), true, "a toggle-on, capability-true gate must create the service when it is missing");
+    assert.equal(gate(true), true, "a toggle-on, capability-true gate must keep an existing service");
   });
 });
 

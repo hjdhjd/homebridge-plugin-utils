@@ -10,8 +10,9 @@ import { delay } from "../utils.mjs";
  * Register the theme effect. Adopts the layout/behavior stylesheet, applies color-scheme + dark-mode class from the Homebridge lighting-mode setting, listens for
  * `prefers-color-scheme` changes, and probes Bootstrap's `.btn-primary` to enhance the accent tokens.
  *
- * Cleanup is automatic via the AbortSignal: aborting releases the stylesheet from the document, removes the matchMedia listener (via `{signal}` on addEventListener),
- * and short-circuits the in-progress Bootstrap probe at the next await checkpoint.
+ * Cleanup is automatic via the AbortSignal: aborting releases the stylesheet from the document, clears the `color-scheme`, `.fo-dark` class, and accent-token inline
+ * overrides the effect wrote on `:root` (so it leaves no trace on a shared document), removes the matchMedia listener (via `{signal}` on addEventListener), and
+ * short-circuits the in-progress Bootstrap probe at the next await checkpoint.
  *
  * The function returns once the synchronous portion completes (stylesheet adopted, color-scheme applied, matchMedia listener registered). The Bootstrap accent
  * probe runs in the background - the caller's `show()` pipeline is not blocked on probe completion. Until the probe resolves, the tokens' declared `AccentColor` /
@@ -44,7 +45,16 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
 
   signal.addEventListener("abort", () => {
 
+    // Restore the document to its pre-effect state, symmetric with every mutation the effect made to it: drop the adopted stylesheet, then the `color-scheme` and
+    // `.fo-dark` class that applyColorScheme set on `:root` and the accent-token inline overrides the Bootstrap probe wrote there. The `color-scheme` removal is the
+    // load-bearing one - it is a native property, so a leftover `dark` value would tint default form-control and scrollbar rendering on whatever content occupies the
+    // document after teardown (in a multi-page host, a sibling tab). The class and token overrides are inert once the stylesheet that reads them is gone, but are
+    // cleared too so the effect leaves no trace on `:root`.
     document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== stylesheet);
+    document.documentElement.classList.remove("fo-dark");
+    document.documentElement.style.removeProperty("color-scheme");
+    document.documentElement.style.removeProperty("--fo-accent-bg");
+    document.documentElement.style.removeProperty("--fo-accent-fg");
   }, { once: true });
 
   // Apply the color-scheme from the current Homebridge setting. The lightweight portion of "apply theme" - no Bootstrap probe required; just sets the color-scheme
@@ -56,8 +66,9 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
     return;
   }
 
-  // Listen for system / browser changes to the current dark-mode setting. Re-applying the color-scheme is cheap (no probe); the deferred accent probe separately
-  // refreshes the custom properties when Bootstrap is ready.
+  // Listen for system / browser changes to the current dark-mode setting. Re-applying the color-scheme is cheap (no probe); the accent is then re-probed directly
+  // and immediately below - not through the deferred wait-for-Bootstrap path used at initial registration - since Bootstrap is assumed to already be loaded by
+  // the time a preference change can fire.
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", async () => {
 
     applyColorScheme(await host.userCurrentLightingMode());
@@ -138,6 +149,8 @@ const probeAccentColor = () => {
   const probeBtn = document.createElement("button");
 
   probeBtn.className = "btn btn-primary";
+
+  // getComputedStyle resolves color and background-color independent of layout, so hiding the probe button via display: none does not affect the readout below.
   probeBtn.style.display = "none";
   document.body.appendChild(probeBtn);
 
@@ -175,6 +188,8 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
     return false;
   }
 
+  // .d-none is a Bootstrap-defined utility class, not a native CSS keyword; its display: none effect on this off-DOM probe element only appears once Bootstrap's
+  // stylesheet has actually applied, making it a reliable readiness signal.
   const isBootstrapApplied = () => {
 
     const testElem = document.createElement("div");
@@ -223,8 +238,9 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
   return false;
 };
 
-// The theme stylesheet. Layout, sidebar, category-frame, search bar, dark-mode utility-class overrides. Every rule references the `--fo-*` tokens declared by the
-// tokens effect; consumers see one cohesive design language regardless of which mode is active.
+// The theme stylesheet. Layout, sidebar, category-frame, search bar, dark-mode utility-class overrides. Color, spacing, radius, and motion values reference the
+// `--fo-*` tokens declared by the tokens effect; structural layout rules (resets, flex containers, container queries) intentionally use raw values since they are
+// not design-token concerns. Consumers see one cohesive design language regardless of which mode is active.
 const buildThemeCss = () => [
 
   // Base layout reset.
@@ -233,15 +249,20 @@ const buildThemeCss = () => [
   // Single source of truth for option-row visibility. Search, filter, and dependency logic all toggle this class.
   ".fo-hidden { display: none !important; }",
 
-  // Page background.
-  "body { background-color: var(--fo-surface-bg) !important; }",
+  // Page background AND base text color - the two halves of the base contrast pair, owned together. HBPU forces the surface background, so it must also own the text
+  // color: otherwise the body inherits config-ui-x's cascade, which - because the custom-UI iframe body carries Bootstrap's `.modal-content` class - resolves the
+  // text from `--bs-modal-color` rather than the surface's body color, so an unrelated host value can land on the forced background and render inherited text
+  // (category headers, device names) unreadable. `!important` beats `.modal-content`'s class-level color; elements carrying their own `.text-*` class still set
+  // their own color, so only un-classed inherited text is affected.
+  "body { background-color: var(--fo-surface-bg) !important; color: var(--fo-text-on-elevated) !important; }",
 
   // Page layout.
   "#pageFeatureOptions { display: flex !important; flex-direction: column; width: 100%; }",
   ".feature-main-content { display: flex !important; flex-direction: row !important; width: 100%; }",
 
-  // Sidebar.
-  "#sidebar { display: block; width: 200px; min-width: 200px; max-width: 200px; position: relative; background-color: var(--fo-elevated-bg) !important; }",
+  // Sidebar. Background matches the main surface rather than an elevated fill; an accent-derived border delineates it, consistent with the other container frames.
+  "#sidebar { display: block; width: 200px; min-width: 200px; max-width: 200px; position: relative; " +
+    "background-color: var(--fo-surface-bg) !important; border: 1px solid var(--fo-border-accent); border-radius: var(--fo-radius-md); }",
   "#sidebar .sidebar-content { padding: 0rem; overflow: unset; }",
   "#controllersContainer { padding: 0; margin-bottom: 0; }",
   "#devicesContainer { padding: 0; margin-top: 0; padding-top: 0 !important; }",
@@ -274,33 +295,37 @@ const buildThemeCss = () => [
   "details[open] > .fo-category-rows { content-visibility: auto; contain-intrinsic-size: 0 200px; }",
 
   // Per-row subgrid inheriting the parent's column tracks. The checkbox top-aligns (align-items: start) so that on a multi-line label - or a value option whose field
-  // stacks beneath the label - it sits beside the first line rather than floating against the vertical centre of a tall cell.
+  // stacks beneath the label - it sits beside the first line rather than floating against the vertical center of a tall cell.
   ".fo-option-row { align-items: start; display: grid; gap: var(--fo-space-sm); grid-column: 1 / -1; " +
     "grid-template-columns: subgrid; padding: var(--fo-space-xs) var(--fo-space-md); " +
     "transition: background-color var(--fo-transition-fast); }",
   ".fo-option-row:hover { background-color: var(--fo-row-hover-bg); }",
   ".fo-option-row.fo-hidden { display: none !important; }",
 
-  // The checkbox top-aligns with the row; this nudge re-centres it on the label's first line (half the line's leading), so a single-line row keeps the control optically
-  // centred on its text exactly as before while a multi-line or stacked row aligns the control to the first line.
+  // The checkbox top-aligns with the row; this nudge re-centers it on the label's first line (half the line's leading), so a single-line row keeps the control optically
+  // centered on its text while a multi-line or stacked row aligns the control to the first line.
   ".fo-option-checkbox { margin-top: calc((1lh - 1em) / 2); }",
 
   // Content cell: the label and, for a value option, its field stack vertically. align-items: flex-start keeps the fixed-width field left-aligned at its declared width
   // rather than stretching, and min-width: 0 lets a long label wrap within the grid track instead of forcing the track wider.
   ".fo-option-content { align-items: flex-start; display: flex; flex-direction: column; gap: var(--fo-space-xs); min-width: 0; }",
 
-  // Main options area.
-  ".options-content { padding: 1rem; margin: 0; }",
+  // Main options area. Owns its outline with a theme-aware border rather than config-ui-x's box-shadow "border", which exists only in the host's dark theme (so it
+  // is absent in light) and bleeds outside the box (so it clips at the flush iframe edge). Every outer container frame shares --fo-border-accent (the probed theme
+  // accent, subtled), a step lighter than the full-accent per-category frame nested inside so the two read as one family at different weights; the border sits
+  // inside the box, so no edge gutter, and box-shadow: none drops the leftover host shadow.
+  "#optionsContainer { border: 1px solid var(--fo-border-accent); box-shadow: none; margin: 0; padding: 1rem; }",
 
-  // Info header.
-  "#headerInfo { flex-shrink: 0; padding: var(--fo-space-sm) !important; margin-bottom: var(--fo-space-sm) !important; }",
+  // Info header. Owns its outline via --fo-border-accent (see #optionsContainer) so it reads in both themes; the inside-the-box border needs no edge gutter.
+  "#headerInfo { border: 1px solid var(--fo-border-accent); box-shadow: none; flex-shrink: 0; " +
+    "margin-bottom: var(--fo-space-sm) !important; padding: var(--fo-space-sm) !important; }",
 
   // Device stats grid. The `#headerInfo` ancestor carries `container-type: inline-size` (below) so the grid's responsive hiding fires when its container narrows -
   // not when the viewport does. The Homebridge plugin UI panel can resize independently of the viewport (custom UI tab, embedded contexts), so container-relative
   // sizing is what users actually want.
   "#headerInfo { container-type: inline-size; }",
-  ".device-stats-grid { display: flex; justify-content: space-between; gap: var(--fo-space-md); " +
-    "margin-bottom: var(--fo-space-sm); padding: 0 var(--fo-space-md); flex-wrap: nowrap; overflow: hidden; }",
+  ".device-stats-grid { border: 1px solid var(--fo-border-accent); border-radius: var(--fo-radius-md); display: flex; " +
+    "justify-content: space-between; gap: var(--fo-space-md); margin-bottom: var(--fo-space-sm); padding: 0 var(--fo-space-md); flex-wrap: nowrap; overflow: hidden; }",
   ".device-stats-grid .stat-item:first-child { flex: 0 0 25%; }",
   ".device-stats-grid .stat-item:not(:first-child) { flex-grow: 1; min-width: 0; }",
   ".stat-item { display: flex; flex-direction: column; gap: var(--fo-space-xxs); }",
@@ -321,14 +346,32 @@ const buildThemeCss = () => [
     "padding: var(--fo-space-xs) var(--fo-space-md) !important; line-height: 1.2; font-size: var(--fo-font-size-sm); }",
   ".nav-link:hover { background-color: var(--fo-accent-hover); color: var(--fo-accent-bg) !important; }",
   ".nav-link.active { background-color: var(--fo-accent-bg); color: var(--fo-accent-fg) !important; }",
+  // In-scope controller affordance: a 1px accent ring (inset box-shadow so it follows the radius and adds no layout shift) marking the controller whose devices are
+  // currently listed. `:not(.active)` suppresses it when that controller is the active selection - so it shows only in the Global-selected state, one tier below the
+  // filled active pill.
+  ".nav-link.context:not(.active) { box-shadow: inset 0 0 0 1px var(--fo-border-accent); }",
   ".nav-header { border-bottom: 1px solid var(--fo-border-subtle); margin-bottom: var(--fo-space-xxs); " +
     "padding: var(--fo-space-xs) var(--fo-space-md) !important; font-size: var(--fo-font-size-xs) !important; line-height: 1.2; }",
   "#devicesContainer .nav-header, #controllersContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: var(--fo-space-sm) !important; }",
+  // The Global Options link shares `.nav-header` for its bold-uppercase look but is a selectable, highlighted pill, not a section separator - so it keeps symmetric
+  // vertical padding rather than inheriting the section-header top spacing above (which otherwise pushes its text below the pill's center).
+  "#controllersContainer .nav-link[data-navigation=\"global\"] { padding-top: var(--fo-space-xs) !important; }",
 
   // Search bar.
   ".search-toolbar { border-radius: var(--fo-radius-md); padding: 0 0 var(--fo-space-sm) 0; }",
   ".search-input-wrapper { min-width: 0; }",
   ".filter-pills { display: flex; gap: var(--fo-space-sm); flex-wrap: wrap; }",
+
+  // Search input resting border. Matches the container frames via --fo-border-accent for a consistent outline; scoped :not(:focus) so it never touches the focus
+  // state - the accent glow (box-shadow) and focus border that appear when the field is selected are left entirely to the focus rules below.
+  "#search .form-control:not(:focus) { border-color: var(--fo-border-accent); }",
+
+  // Search input focus state (governs light mode). Sets the accent border and glow so the selected field matches the theme instead of Bootstrap's blue; the
+  // dark-mode override further below wins in dark and carries the same glow via the shared --fo-focus-ring token.
+  "#search .form-control:focus { border-color: var(--fo-border-accent); box-shadow: var(--fo-focus-ring); }",
+
+  // Status bar. Owns its outline via --fo-border-accent (see #optionsContainer) for a consistent border in both themes.
+  "#featureStatusBar { border: 1px solid var(--fo-border-accent); box-shadow: none; }",
 
   // Grouped-option visual indicator.
   ".fo-option-row.grouped-option { background-color: var(--fo-accent-subtle); }",
@@ -338,10 +381,9 @@ const buildThemeCss = () => [
   // Dark-mode-only overrides for Bootstrap utility classes that need treatment beyond what tokens express.
   ":root.fo-dark .text-body { color: var(--fo-text-muted) !important; }",
   ":root.fo-dark .text-muted { color: var(--fo-text-muted) !important; }",
-  ":root.fo-dark .device-stats-grid { background-color: var(--fo-elevated-bg); border-color: var(--fo-border-strong); }",
-  ":root.fo-dark #search .form-control { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); color: var(--fo-text-on-elevated); }",
+  ":root.fo-dark #search .form-control { background-color: var(--fo-form-control-bg); border-color: var(--fo-border-accent); color: var(--fo-text-on-elevated); }",
   ":root.fo-dark #search .form-control:focus { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-focus-border); " +
-    "color: var(--fo-text-on-elevated); box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--fo-accent-bg) 25%, transparent); }",
+    "color: var(--fo-text-on-elevated); box-shadow: var(--fo-focus-ring); }",
   ":root.fo-dark #search .form-control::placeholder { color: var(--fo-form-control-placeholder); }",
   ":root.fo-dark #statusInfo .text-muted { color: var(--fo-statusinfo-muted) !important; }",
 

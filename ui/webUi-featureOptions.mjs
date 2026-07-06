@@ -66,9 +66,9 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  * connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal: every effect's
  * subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically.
  *
- * Public API matches the pre-refactor architecture byte-for-byte: constructor takes the same options shape, `show()` reveals the UI, `hide()` is the navigate-away
- * (it flushes any pending edit, then tears down), `cleanup()` is immediate destructive teardown (may drop an unsaved debounced edit; for forced/synchronous
- * disposal), `getHomebridgeDevices()` is the default device source. Plugins consuming the library see no change.
+ * Public API: constructor takes the same options shape, `show()` reveals the UI, `hide()` is the navigate-away (it flushes any pending edit, then tears down),
+ * `cleanup()` is immediate destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default
+ * device source. Plugins consuming the library see no change to this surface.
  *
  * Internally, the orchestrator does no state management of its own - the store owns state, effects own side effects, views own DOM. The orchestrator is the
  * lifecycle seam: it boots, it tears down. Everything else flows through the store.
@@ -108,8 +108,9 @@ export class webUiFeatureOptions {
   // edits through it. Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(), and re-used across show() cycles.
   #session;
 
-  // The reactive state container. Created in show() with the loaded catalog + configured options; nulled out on cleanup(). The orchestrator never reaches into
-  // store state for state management - all reads/writes go through dispatched actions and subscribed events.
+  // The reactive state container. Created in show() with the loaded catalog + configured options; a fresh instance replaces the prior one on every show() call.
+  // Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(). The orchestrator never reaches into store state for state
+  // management - all reads/writes go through dispatched actions and subscribed events.
   #store;
 
   // The configuredOptions array captured at the FIRST show()'s `model:loaded`. Survives subsequent cleanup() / show() cycles so a re-show that loads a set-equal
@@ -186,15 +187,19 @@ export class webUiFeatureOptions {
    *
    *   1. Synchronous page-shell setup: hide schema form, update menu state, reveal the feature-options page. The user sees the layout immediately; the async I/O
    *      below populates each region against the visible shell.
-   *   2. Create the page abort controller. Every effect and view registers listeners with this signal so cleanup() tears them all down in one operation.
-   *   3. Adopt the design tokens. Synchronous - tokens are static declarations with no I/O dependencies.
-   *   4. Fire the theme effect, persist effect, keyboard effect in parallel. The theme effect's I/O (Bootstrap probe) runs in the background.
-   *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
+   *   2. Tear down any prior show() cycle via hide() (it flushes any pending edit before tearing down), then re-sync the session against the host config; a sync
+   *      failure toasts the error message and bails.
+   *   3. Create the page abort controller. Every effect and view registers listeners with this signal so cleanup() tears them all down in one operation.
+   *   4. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
-   *   6. Once controllers resolves: if controller-based mode with empty controllers, show the no-controllers message and return.
-   *   7. Pre-fire the devices fetch for the initial controller so it overlaps with the feature catalog.
-   *   8. Once the feature catalog resolves: build the catalog, dispatch model:loaded, mount all views.
-   *   9. Once devices resolve: dispatch devices:loaded, set the initial scope.
+   *   5. Adopt the design tokens. Synchronous - tokens are static declarations with no I/O dependencies.
+   *   6. Fire the theme effect, persist effect, keyboard effect in parallel. The theme effect's I/O (Bootstrap probe) runs in the background.
+   *   7. Once controllers resolves: if controller-based mode with empty controllers, show the no-controllers message and return.
+   *   8. Pre-fire the devices fetch for the initial controller so it overlaps with the feature catalog.
+   *   9. Once the feature catalog resolves: build the catalog, dispatch model:loaded, mount all views.
+   *  10. Once devices resolve: dispatch devices:loaded. If a controller is selected but no devices were returned, fetch the error message, dispatch
+   *      connection:error, and return; otherwise set the initial scope.
+   *  11. Reveal regions that views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
    *        persisted config and the seam through which option edits are persisted.
@@ -343,7 +348,7 @@ export class webUiFeatureOptions {
       return;
     }
 
-    this.#store.dispatch({ devices: devices ?? [], type: "devices:loaded" });
+    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, devices: devices ?? [], type: "devices:loaded" });
 
     // Connection-error short-circuit: controller-based mode with a selected controller but no devices returned means the controller is configured but unreachable.
     // Fetch the user-facing error message from the host and dispatch connection:error so the connection-error view takes over the header. Do not transition the
@@ -386,8 +391,8 @@ export class webUiFeatureOptions {
   }
 
   /**
-   * Drain any debounced-but-unwritten edit to disk, bounded so a stalled host write cannot hang teardown. Shared by the two flushed-teardown paths - `hide()`
-   * (navigate-away) and `[Symbol.asyncDispose]` (scope-exit) - because both must flush BEFORE the page signal is aborted: the persist drain guards on that signal, so
+   * Drain any debounced-but-unwritten edit to disk, bounded so a stalled host write cannot hang teardown. Shared by every flushed-teardown path - currently
+   * `hide()` (navigate-away) and `[Symbol.asyncDispose]` (scope-exit) - because each must flush BEFORE the page signal is aborted: the persist drain guards on it, so
    * aborting first (as the synchronous `cleanup()` does) would re-introduce the very edit-drop this exists to prevent. Races the flush against a non-rejecting
    * {@link FLUSH_TEARDOWN_TIMEOUT_MS} timeout - delay(ms) with no signal simply resolves after ms, so the race settles on whichever finishes first without ever
    * rejecting. On timeout the in-flight commit continues independently and still lands if the host recovers; under that host-stall trade the no-hang guarantee

@@ -79,6 +79,29 @@ describe("registerThemeEffect - lifecycle", () => {
     assert.equal(document.adoptedStyleSheets.length, before, "stylesheet released");
   });
 
+  test("aborting clears the color-scheme, fo-dark class, and accent overrides it set on :root", async () => {
+
+    using _dom = createTestDom();
+
+    const controller = new AbortController();
+
+    // Register in dark mode so applyColorScheme sets both color-scheme and the fo-dark class; stamp accent overrides directly (the probe is skipped via
+    // timeoutMs: 0) so the teardown has every kind of :root mutation to undo.
+    await registerThemeEffect({ host: fakeHost("dark"), probe: { timeoutMs: 0 }, signal: controller.signal });
+    document.documentElement.style.setProperty("--fo-accent-bg", "rgb(1, 2, 3)");
+    document.documentElement.style.setProperty("--fo-accent-fg", "rgb(4, 5, 6)");
+
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "dark", "precondition: dark applied");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: fo-dark set");
+
+    controller.abort();
+
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "color-scheme cleared on teardown");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "fo-dark class removed on teardown");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), "", "accent-bg override cleared on teardown");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-fg"), "", "accent-fg override cleared on teardown");
+  });
+
   test("a pre-aborted signal does not adopt anything", async () => {
 
     using _dom = createTestDom();

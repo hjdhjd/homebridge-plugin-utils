@@ -10,7 +10,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * State shape, action vocabulary, and reducer for the feature options webUI.
  *
  * This module is the SSOT for what state the UI carries and how that state transitions. Every dispatch lands here; every component reads from {@link FeatureOptionsState}
- * and derives its view via selectors. Three discriminated unions encode the variant types the UI moves through:
+ * and derives its view via selectors. Discriminated unions encode the variant types the UI moves through, each listed below:
  *
  *   - {@link Scope} - `{kind: "global"}` | `{kind: "controller", controllerId}` | `{kind: "device", controllerId, deviceId}`. The selection pointer. Discriminated
  *     because each kind carries different data; merging them into a flat record would smear the invariants across two fields and force consumers to recover the
@@ -113,10 +113,13 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {readonly string[]} configuredOptions - The canonical user-state array. Mutations replace it via the pure transforms from featureOptions.ts.
  * @property {readonly Controller[]} controllers - Controllers list (empty in device-only mode or before resolution).
  * @property {readonly Device[]} devices - Devices list for the active controller (or the cached-accessories list in device-only mode).
+ * @property {string | null} devicesControllerId - Serial of the controller whose `devices` are loaded, or null (device-only / none yet). Preserves the
+ *   device-to-controller association that `scope` drops once the selection goes global, so a loaded device's parent controller stays resolvable after the
+ *   selection leaves controller scope.
  * @property {{mode: "all" | "modified", query: string}} filter - Search and filter state. Two-field record because the dimensions are orthogonal (every combination
  *                                                                is valid and meaningful).
- * @property {readonly string[]} initialOptions - The at-show() snapshot for "Revert to Saved." Stable across the session except when re-show() finds set-equal
- *                                                 options arriving with a different reference.
+ * @property {readonly string[]} initialOptions - The at-show() snapshot for "Revert to Saved." Stable across the session except when re-show() loads an option
+ *                                                 set that is not set-equal to the prior snapshot, in which case the snapshot is replaced.
  * @property {"controller-based" | "device-only"} mode - Operating mode. Set once at model:loaded based on whether the plugin provided `getControllers`.
  * @property {readonly string[]} persistedAnchor - The last-known-on-disk state. Updated on every successful persist; restored to configuredOptions on a final
  *                                                  persist failure (memory then matches disk).
@@ -126,7 +129,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
 
 // The placeholder catalog used during the "loading" status, before {@link model:loaded} has fired with the real one. Built from empty inputs so every selector
 // works against it without null guards; selectors that iterate categories or options produce empty results, which matches the "nothing to render yet" semantics.
-// Validators default to permissive (return true) so any speculative iteration during loading does not accidentally hide everything.
+// validOption and validOptionCategory default to permissive (return true) so any speculative iteration during loading does not accidentally hide a category
+// or option; isController defaults to false since it plays no role in visibility.
 const EMPTY_CATALOG = {
 
   ...buildCatalogIndex([], {}),
@@ -151,8 +155,8 @@ const EMPTY_CATALOG = {
  */
 export const initialState = () => {
 
-  // Share a single empty-array reference across the three options-array fields so the persist effect's "are we dirty?" check (configuredOptions === persistedAnchor)
-  // returns true at registration time and does not trigger a spurious initial persist. After model:loaded, all three are set to the loaded array's reference; the
+  // Share a single empty-array reference across every array-typed option field so the persist effect's "are we dirty?" check (configuredOptions === persistedAnchor)
+  // returns true at registration time and does not trigger a spurious initial persist. After model:loaded, each field is set to the loaded array's reference; the
   // invariant is preserved.
   const empty = [];
 
@@ -162,6 +166,7 @@ export const initialState = () => {
     configuredOptions: empty,
     controllers: [],
     devices: [],
+    devicesControllerId: null,
     filter: { mode: "all", query: "" },
     initialOptions: empty,
     mode: "device-only",
@@ -212,9 +217,10 @@ export const reducer = (state, action) => {
 
     case "devices:loaded": {
 
-      // Devices list updated when the active controller changes or device-only mode resolves the cached-accessories list. Scope is not touched here - the caller
-      // dispatches `scope:changed` separately if the selection needs to move.
-      return { ...state, devices: action.devices };
+      // Devices list updated when the active controller changes or device-only mode resolves the cached-accessories list. `devicesControllerId` records which
+      // controller these devices belong to (null in device-only mode), so the association survives a later move to global scope. Scope is not touched here - the
+      // caller dispatches `scope:changed` separately if the selection needs to move.
+      return { ...state, devices: action.devices, devicesControllerId: action.controllerId ?? null };
     }
 
     case "scope:changed": {

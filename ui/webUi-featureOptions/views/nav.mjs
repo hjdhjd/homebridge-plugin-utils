@@ -10,7 +10,7 @@ import { effect } from "../store.mjs";
 /**
  * Mount the sidebar navigation view.
  *
- * The sidebar has two containers (controllers + devices) and three kinds of links:
+ * The sidebar has two containers (controllers + devices) and the following kinds of links:
  *
  *   - **Global Options** (always present, in the controllers container): `data-navigation="global"`. Clicked -> dispatch `scope:changed` with `kind: "global"`.
  *   - **Controller links** (one per controller, in the controllers container, only when mode is controller-based): `data-navigation="controller"` +
@@ -38,7 +38,7 @@ import { effect } from "../store.mjs";
  *        - Plugin-provided fetcher for a controller's devices. Called on controller-link click.
  * @param {string} args.labelControllers - Section header label for the controllers list.
  * @param {string} args.labelDevices - Section header label for the devices list.
- * @param {{ host: { request: (path: string) => Promise<unknown> } }} args.host - Homebridge bridge (used to fetch the error message on connection failure).
+ * @param {{ request: (path: string) => Promise<unknown> }} args.host - Homebridge bridge (used to fetch the error message on connection failure).
  * @param {HTMLElement} args.rootControllers - The `#controllersContainer` element.
  * @param {HTMLElement} args.rootDevices - The `#devicesContainer` element.
  * @param {AbortSignal} args.signal - Lifecycle signal.
@@ -58,7 +58,7 @@ export const mountNavView = ({ getDevices, host, labelControllers, labelDevices,
       }
 
       buildControllersList({ controllerLabel: labelControllers, mode: store.state.mode, root: rootControllers, state: store.state });
-      applyControllersHighlight(rootControllers, store.state.scope);
+      applyControllersHighlight(rootControllers, store.state.scope, store.state.devicesControllerId);
     },
     signal,
     store
@@ -89,7 +89,7 @@ export const mountNavView = ({ getDevices, host, labelControllers, labelDevices,
     events: ["scope:changed"],
     fn: () => {
 
-      applyControllersHighlight(rootControllers, store.state.scope);
+      applyControllersHighlight(rootControllers, store.state.scope, store.state.devicesControllerId);
       applyDevicesHighlight(rootDevices, store.state.scope);
     },
     signal,
@@ -205,18 +205,24 @@ const buildDevicesList = ({ catalog, deviceLabel, devices, root }) => {
   }
 };
 
-// Highlight the controller link matching the current scope. For global scope the global link activates; for controller / device scope the matching controller's
-// link activates (or no link, if the scope's controllerId is not in the current controllers list).
-const applyControllersHighlight = (root, scope) => {
+// Highlight the controller link matching the current scope, and mark the in-scope controller. The Global Options link activates only for a true global scope
+// (`scope.kind === "global"`), so a device-only device scope - which carries a null controllerId - does not light Global; only the device link
+// lights in that case. A controller link activates when its serial matches the scope's controllerId; no controller link activates when that serial is absent (a
+// global scope, or a controllerId not in the current list). Separately, the controller whose devices are currently loaded (`devicesControllerId`) carries the
+// `context` class so the sidebar can outline it - the affordance that keeps the device list's owning controller identifiable even when the active selection is
+// Global (the CSS suppresses it when the entry is `active`).
+const applyControllersHighlight = (root, scope, devicesControllerId) => {
 
   const targetSerial = (scope.kind === "global") ? null : scope.controllerId;
 
   for(const entry of root.querySelectorAll(".nav-link[data-navigation]")) {
 
     const isGlobal = entry.getAttribute("data-navigation") === "global";
-    const matches = (targetSerial === null) ? isGlobal : (entry.getAttribute("data-device-serial") === targetSerial);
+    const serial = entry.getAttribute("data-device-serial");
+    const matches = isGlobal ? (scope.kind === "global") : (serial === targetSerial);
 
     entry.classList.toggle("active", matches);
+    entry.classList.toggle("context", !isGlobal && (devicesControllerId !== null) && (serial === devicesControllerId));
   }
 };
 
@@ -277,7 +283,7 @@ const handleNavClick = async ({ event, getDevices, host, signal, store }) => {
           return;
         }
 
-        store.dispatch({ devices, type: "devices:loaded" });
+        store.dispatch({ controllerId: deviceSerial, devices, type: "devices:loaded" });
 
         if(devices.length === 0) {
 
@@ -311,7 +317,9 @@ const handleNavClick = async ({ event, getDevices, host, signal, store }) => {
 
     case "device": {
 
-      const controllerId = store.state.scope.kind === "global" ? null : store.state.scope.controllerId;
+      // The device's parent controller is the one whose device list this device belongs to, not the live scope's controller - arriving here from global scope, the
+      // scope carries no controller, so reading it would drop the parent and mis-highlight Global. `devicesControllerId` preserves the association.
+      const controllerId = store.state.devicesControllerId;
 
       store.dispatch({ scope: { controllerId, deviceId: deviceSerial, kind: "device" }, type: "scope:changed" });
     }

@@ -6,7 +6,7 @@
 /**
  * fMP4 FFmpeg processes for HomeKit Secure Video (HKSV) events and livestreaming.
  *
- * Three classes live here: an abstract base {@link FfmpegFMp4Process} and two concrete specializations,
+ * This module defines an abstract base {@link FfmpegFMp4Process} and its concrete fMP4-mode specializations,
  * {@link FfmpegRecordingProcess} for HKSV event recording (stdin pipe input, transcoded output) and
  * {@link FfmpegLivestreamProcess} for fMP4 livestreaming (RTSP input, codec copy). The base exists **solely to centralize
  * composition wiring** - it owns the internal {@link Mp4SegmentAssembler}, delegates `getInitSegment` / `segments` to it,
@@ -25,14 +25,15 @@
  *
  * The command-line hook values that differ per mode:
  *
- * | Hook                     | Recording                        | Livestream                               |
- * |--------------------------|----------------------------------|------------------------------------------|
- * | `inputArgs`              | `-i pipe:0` + probesize + `-ss`  | `-i <url>` + `-rtsp_transport tcp`       |
- * | `separateAudioInputArgs` | `[]`                             | Separate audio URL when configured       |
- * | `audioInputIndex`        | `0`                              | `0` or `1` (if separate audio)           |
- * | `videoEncoderArgs`       | `options.recordEncoder(...)`     | `-codec:v copy`                          |
- * | `postFilterArgs`         | `[]`                             | `-frag_duration <segmentLength * 1000>`  |
- * | `metadataLabel`          | `"HKSV Event"`                   | `"Livestream Buffer"`                    |
+ * | Hook                     | Recording                                  | Livestream                              |
+ * |--------------------------|--------------------------------------------|-----------------------------------------|
+ * | `inputArgs`              | `-i pipe:0` + probesize + `-ss`            | `-i <url>` + `-rtsp_transport tcp`      |
+ * | `separateAudioInputArgs` | `[]`                                       | Separate audio URL when configured      |
+ * | `audioInputIndex`        | `0`                                        | `0` or `1` (if separate audio)          |
+ * | `audioTarget`            | `recordingConfig.audioCodec` (transcoding) | `init.audio` when provided              |
+ * | `videoEncoderArgs`       | `options.recordEncoder(...)`               | `-codec:v copy`                         |
+ * | `postFilterArgs`         | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
+ * | `metadataLabel`          | `"HKSV Event"`                             | `"Livestream Buffer"`                   |
  *
  * The shared pipeline primitive ({@link Mp4SegmentAssembler}) also means this module avoids template-method coupling between
  * the base and the concrete subclasses: no abstract hook methods, no mode-specific state on the base. The base is pure lifecycle
@@ -89,13 +90,17 @@ const RTSP_TRANSPORT_PATTERNS = [ "rtsp://", "rtsps://" ];
 /**
  * Base options shared by both fMP4 recording and livestream sessions.
  *
- * @property audioFilters        - Audio filters for FFmpeg to process. These are passed as an array of filters.
+ * @property audioFilters        - Audio filters for FFmpeg to process. These are passed as an array of filters. Recording-only: the livestream builder ignores this
+ *                                 field, driving its audio-filter decision from the `audio` target instead.
  * @property audioStream         - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
- * @property codec               - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc`. Defaults to `h264`.
+ * @property codec               - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`).
+ *                                 Defaults to `h264`.
  * @property enableAudio         - Indicates whether to enable audio or not.
- * @property hardwareDecoding    - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions`.
+ * @property hardwareDecoding    - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least
+ *                                 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies.
  * @property hardwareTranscoding - Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`.
- * @property transcodeAudio      - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
+ * @property transcodeAudio      - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. Recording-only: the
+ *                                 livestream builder ignores this field, driving its transcode decision from the `audio` target instead.
  * @property videoFilters        - Video filters for FFmpeg to process. These are passed as an array of filters.
  * @property videoStream         - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
  *
@@ -140,11 +145,32 @@ export interface FMp4AudioInputConfig {
 }
 
 /**
+ * The resolved audio-encode target for fMP4 production. Its presence on an fMP4 command line is the single signal to transcode the audio stream to this target; its
+ * absence means the already-encoded audio is copied through untouched. Any audio filters are carried inside the target because filtering requires transcoding - a filter
+ * without a transcode is unrepresentable by construction, so the filters-require-transcoding rule holds declaratively rather than through a runtime override.
+ *
+ * @property channels    - Optional. Number of output audio channels. Defaults to `1` when omitted.
+ * @property codec       - The AAC codec variant to encode to (low-complexity or enhanced low-delay).
+ * @property filters     - Optional. Audio filters applied ahead of the encoder. Supplying filters is what makes the transcode carry them; an empty or omitted list
+ *                         transcodes without filtering.
+ * @property samplerate  - The output audio sample rate.
+ *
+ * @category FFmpeg
+ */
+export interface FMp4AudioTarget {
+
+  channels?: number;
+  codec: AudioRecordingCodecType;
+  filters?: string[];
+  samplerate: AudioRecordingSamplerate;
+}
+
+/**
  * Options for configuring an fMP4 HKSV recording session.
  *
- * @property fps             - The video frames per second for the session.
- * @property probesize       - Number of bytes to analyze for stream information.
- * @property timeshift       - Timeshift offset for event-based recording (in milliseconds).
+ * @property fps             - The video frames per second for the session. Defaults to 30.
+ * @property probesize       - Number of bytes to analyze for stream information. Defaults to 5,000,000 bytes (mirrors FFmpeg's own default probesize).
+ * @property timeshift       - Timeshift offset for event-based recording (in milliseconds). Defaults to 0.
  *
  * @category FFmpeg
  */
@@ -200,25 +226,27 @@ export interface FfmpegRecordingInit extends FfmpegProcessInit {
 /**
  * Construction-time options for {@link FfmpegLivestreamProcess}.
  *
+ * @property audio              - Optional. The resolved audio-encode target. When provided, the audio stream is transcoded to it (with any filters it carries); when
+ *                                omitted, the already-encoded audio is copied through untouched. This is the livestream path's sole audio-filter source.
  * @property livestream         - Livestream source configuration. `url` is required; other {@link FMp4BaseOptions} fields are optional and default when omitted.
- * @property recordingConfig    - The HomeKit recording configuration (resolution, codec profile, audio codec, sample rate, channels) that shapes the fMP4 output.
  * @property segmentLength      - Optional. fMP4 fragment duration in milliseconds, applied to `-frag_duration` at construction time. Defaults to 1000 ms (1 second).
  * @property verbose            - Optional. When `true`, FFmpeg is invoked with verbose logging (`-loglevel level+verbose`) regardless of the global
  *                                `codecSupport.verbose` flag. Defaults to `false`.
  *
  * @remarks Supplying `args` (inherited from {@link FfmpegProcessInit}) is an advanced escape hatch that replaces the auto-built command line entirely. When `args` is
- * present, the mode-specific config fields (`livestream`, `segmentLength`, `verbose`) do not participate in command-line assembly - they become no-ops. Typical callers
- * omit `args` and let the class build the command line from `livestream` + `recordingConfig`.
+ * present, the mode-specific config fields (`audio`, `livestream`, `segmentLength`, `verbose`) do not participate in command-line assembly - they become no-ops. Typical
+ * callers omit `args` and let the class build the command line from `livestream` + `audio`.
  *
  * @see FfmpegProcessInit
+ * @see FMp4AudioTarget
  * @see FMp4LivestreamOptions
  *
  * @category FFmpeg
  */
 export interface FfmpegLivestreamInit extends FfmpegProcessInit {
 
+  audio?: FMp4AudioTarget;
   livestream: PartialWithId<FMp4LivestreamOptions, "url">;
-  recordingConfig: CameraRecordingConfiguration;
   segmentLength?: number;
   verbose?: boolean;
 }
@@ -228,12 +256,12 @@ export interface FfmpegLivestreamInit extends FfmpegProcessInit {
 interface FMp4CommandLineInput {
 
   audioInputIndex: number;
+  audioTarget?: FMp4AudioTarget;
   fMp4Options: Required<FMp4BaseOptions>;
   inputArgs: string[];
   metadataLabel: string;
   options: FfmpegOptions;
   postFilterArgs: string[];
-  recordingConfig: CameraRecordingConfiguration;
   separateAudioInputArgs: string[];
   verbose: boolean;
   videoEncoderArgs: string[];
@@ -261,7 +289,7 @@ function resolveBaseOptions(options: FfmpegOptions, partial: Partial<FMp4BaseOpt
 // hooks inline against their own init and FfmpegOptions, then invoke this function once to produce the final arg vector.
 function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
 
-  const { audioInputIndex, fMp4Options, inputArgs, metadataLabel, options, postFilterArgs, recordingConfig, separateAudioInputArgs, verbose, videoEncoderArgs } = input;
+  const { audioInputIndex, audioTarget, fMp4Options, inputArgs, metadataLabel, options, postFilterArgs, separateAudioInputArgs, verbose, videoEncoderArgs } = input;
 
   // Configure our video parameters for our input:
   //
@@ -321,35 +349,32 @@ function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
     //                             separate audio input has been configured.
     args.push("-map", audioInputIndex.toString() + ":a:" + fMp4Options.audioStream.toString() + "?");
 
-    // Audio filters require transcoding. If the user has decided to filter, we enforce this requirement even if they wanted to copy the audio stream.
-    let transcodeAudio = fMp4Options.transcodeAudio;
+    // A resolved audio target is the single signal to transcode: its presence means we encode to it, its absence means we copy the already-encoded audio through
+    // untouched. The target carries its own filters, so filtering-without-transcoding is unrepresentable here by construction rather than enforced by a runtime override.
+    if(audioTarget) {
 
-    if(fMp4Options.audioFilters.length) {
+      // Audio filters ride inside the transcode request. When the target supplies them, we apply them ahead of the encoder.
+      if(audioTarget.filters?.length) {
 
-      args.push("-filter:a", fMp4Options.audioFilters.join(", "));
-      transcodeAudio = true;
-    }
-
-    if(transcodeAudio) {
+        args.push("-filter:a", audioTarget.filters.join(", "));
+      }
 
       // Configure the audio portion of the command line:
       //
       // -codec:a                    Encode using the codecs available to us on given platforms.
-      // -profile:a                  Specify either low-complexity AAC or enhanced low-delay AAC for HKSV events.
-      // -ar samplerate              Sample rate to use for this audio. This is specified by HKSV.
+      // -profile:a                  Specify either low-complexity AAC or enhanced low-delay AAC per the resolved audio target's codec.
+      // -ar samplerate              Sample rate to use for this audio, per the resolved audio target.
       // -ac number                  Set the number of audio channels.
       args.push(
 
-        ...options.audioEncoder({ codec: recordingConfig.audioCodec.type }),
-        "-profile:a", translateAudioRecordingCodecType[recordingConfig.audioCodec.type],
-        // homebridge types `audioCodec.samplerate` more loosely than our local enum, but HKSV only ever supplies a valid `AudioRecordingSamplerate` member, so the `as`
-        // narrows a known-good value into the exhaustive translation table.
-        "-ar", translateAudioSampleRate[recordingConfig.audioCodec.samplerate as AudioRecordingSamplerate] + "k",
-        "-ac", (recordingConfig.audioCodec.audioChannels ?? 1).toString()
+        ...options.audioEncoder({ codec: audioTarget.codec }),
+        "-profile:a", translateAudioRecordingCodecType[audioTarget.codec],
+        "-ar", translateAudioSampleRate[audioTarget.samplerate] + "k",
+        "-ac", (audioTarget.channels ?? 1).toString()
       );
     } else {
 
-      // -codec:a copy               Copy the audio stream, since it is already in AAC.
+      // -codec:a copy               Copy the audio stream through untouched when no transcode target is supplied.
       args.push("-codec:a", "copy");
     }
   }
@@ -373,8 +398,8 @@ function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
   return args;
 }
 
-// Build the separate-audio-input arg segment for livestream sessions and report whether a separate input was actually configured. Returns a tuple because the input
-// index in the subsequent audio mapping step depends on whether a separate input exists - the two results must stay consistent.
+// Build the separate-audio-input arg segment for livestream sessions and report whether a separate input was actually configured. Returns both results together as a
+// named pair because the input index in the subsequent audio mapping step depends on whether a separate input exists - the two results must stay consistent.
 function buildLivestreamAudioInputArgs(livestream: PartialWithId<FMp4LivestreamOptions, "url">, enableAudio: boolean): { args: string[]; hasSeparateInput: boolean } {
 
   if(!enableAudio || !livestream.audioInput) {
@@ -422,6 +447,18 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
   const { recordingConfig } = init;
   const fps = recording.fps ?? 30;
 
+  // Recording transcodes audio to the HKSV-selected codec whenever transcoding is requested or an audio filter forces it; otherwise the already-encoded audio is copied
+  // through untouched. The filters ride inside the target, so the filters-require-transcoding rule is expressed by the target's presence rather than a runtime override.
+  const audioTarget: FMp4AudioTarget | undefined = (fMp4Options.transcodeAudio || (fMp4Options.audioFilters.length > 0)) ? {
+
+    channels: recordingConfig.audioCodec.audioChannels,
+    codec: recordingConfig.audioCodec.type,
+    filters: fMp4Options.audioFilters,
+    // homebridge types `audioCodec.samplerate` more loosely than our local enum, but HKSV only ever supplies a valid `AudioRecordingSamplerate` member, so the `as`
+    // narrows a known-good value into the exhaustive translation table.
+    samplerate: recordingConfig.audioCodec.samplerate as AudioRecordingSamplerate
+  } : undefined;
+
   // The default mirrors FFmpeg's own default probesize and is sufficient to discover the fMP4 stream's parameters before decoding begins.
   const probesize = recording.probesize ?? 5_000_000;
   const timeshift = recording.timeshift ?? 0;
@@ -460,12 +497,12 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
   return buildFMp4CommandLine({
 
     audioInputIndex: 0,
+    audioTarget,
     fMp4Options,
     inputArgs,
     metadataLabel: "HKSV Event",
     options,
     postFilterArgs: [],
-    recordingConfig,
     separateAudioInputArgs: [],
     verbose: init.verbose ?? false,
     videoEncoderArgs
@@ -476,7 +513,7 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
 function buildLivestreamCommandLine(options: FfmpegOptions, init: FfmpegLivestreamInit): string[] {
 
   const fMp4Options = resolveBaseOptions(options, init.livestream);
-  const { livestream, recordingConfig } = init;
+  const { audio, livestream } = init;
 
   // Livestream input: connect to an RTSP source with direct I/O and TCP transport.
   //
@@ -505,24 +542,25 @@ function buildLivestreamCommandLine(options: FfmpegOptions, init: FfmpegLivestre
   return buildFMp4CommandLine({
 
     audioInputIndex: separateAudio.hasSeparateInput ? 1 : 0,
+    audioTarget: audio,
     fMp4Options,
     inputArgs,
     metadataLabel: "Livestream Buffer",
     options,
     postFilterArgs,
-    recordingConfig,
     separateAudioInputArgs: separateAudio.args,
     verbose: init.verbose ?? false,
     videoEncoderArgs
   });
 }
 
-// Propagate assembler aborts up to the process when the assembler ends its life for a reason the process's own exit handler cannot recover. The assembler can abort with
-// four reasons: `"timeout"` (inter-segment watchdog), `"failed"` (source stream error), `"closed"` (source ended naturally), or any reason supplied to an external
-// `abort()` call. The first two and any external reason must propagate so the FFmpeg child is actively torn down via the process's kill path; `"closed"` must NOT
-// propagate because the child's own `"exit"` event follows shortly and the base class computes the correct reason from the actual exit code - propagating `"closed"`
-// here would race with and pre-empt that, converting a nonzero-exit `"failed"` into a `"closed"` and losing the error signal. `onAbort` provides one-shot semantics
-// AND covers the pre-aborted-signal edge case where a parent-aborted assembler would otherwise miss the bridge entirely.
+// Propagate assembler aborts up to the process when the assembler ends its life for a reason the process's own exit handler cannot recover. The assembler dispatches
+// on a two-way branch: the named reason `"closed"` (source ended naturally) defers to the process's own exit path, while every other reason - `"timeout"`
+// (inter-segment watchdog), `"failed"` (source stream error), or any reason supplied to an external `abort()` call - propagates so the FFmpeg child is actively torn
+// down via the process's kill path. `"closed"` must NOT propagate because the child's own `"exit"` event follows shortly and the base class computes the correct
+// reason from the actual exit code - propagating `"closed"` here would race with and pre-empt that, converting a nonzero-exit `"failed"` into a `"closed"` and losing
+// the error signal. `onAbort` provides one-shot semantics AND covers the pre-aborted-signal edge case where a parent-aborted assembler would otherwise miss the bridge
+// entirely.
 function bridgeAssemblerToProcess(process: FfmpegProcess, assembler: Mp4SegmentAssembler): void {
 
   onAbort(assembler.signal, () => {
@@ -550,7 +588,7 @@ function bridgeAssemblerToProcess(process: FfmpegProcess, assembler: Mp4SegmentA
  * cannot discover on its own (watchdog timeout, source stream error).
  *
  * This base deliberately contains **no pipeline logic** and **no command-line assembly**. The byte-to-segment pipeline lives in {@link Mp4SegmentAssembler}, and each
- * concrete subclass builds its own FFmpeg arg vector. The base exists solely to consolidate the composition shape - internal assembler field, the two delegating public
+ * concrete subclass builds its own FFmpeg arg vector. The base exists solely to consolidate the composition shape - internal assembler field, the delegating public
  * methods, and the bridge registration - that would otherwise duplicate across every fMP4 subclass. The constructor takes only `segmentTimeout` as a mode-specific knob
  * and holds no mode-specific state, so the base avoids template-method coupling with its subclasses.
  *
@@ -816,8 +854,8 @@ export const recordingProcessFactory: RecordingProcessFactory = {
  * ```ts
  * await using proc = new FfmpegLivestreamProcess(ffmpegOptions, {
  *
+ *   audio: { codec: AudioRecordingCodecType.AAC_LC, samplerate: AudioRecordingSamplerate.KHZ_16 },
  *   livestream: { url: "rtsp://camera/stream" },
- *   recordingConfig,
  *   segmentLength: 1000,
  *   signal: session.controller.signal
  * });

@@ -309,8 +309,7 @@ describe("FfmpegLivestreamProcess - init segment and media segments", () => {
     await using proc = new FfmpegLivestreamProcess(makeOptions(), {
 
       args: buildFMp4EmissionScript(2),
-      livestream: { url: "rtsp://test/stream" },
-      recordingConfig: makeRecordingConfig()
+      livestream: { url: "rtsp://test/stream" }
     });
 
     const init = await proc.getInitSegment();
@@ -338,7 +337,6 @@ describe("FfmpegLivestreamProcess - init segment and media segments", () => {
     await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
 
       livestream: { url: "rtsp://test/stream" },
-      recordingConfig: makeRecordingConfig(),
       segmentLength: 500
     });
 
@@ -359,8 +357,7 @@ describe("FfmpegLivestreamProcess - init segment and media segments", () => {
     await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
 
       args: buildInitOnlyIdleScript(),
-      livestream: { url: "rtsp://test/stream" },
-      recordingConfig: makeRecordingConfig()
+      livestream: { url: "rtsp://test/stream" }
     });
 
     await proc.getInitSegment();
@@ -392,8 +389,7 @@ async function livestreamArgsWithAudio(audioInput: unknown, overrides: { enableA
 
   await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
 
-    livestream: { audioInput: audioInput as never, enableAudio: overrides.enableAudio, url: "rtsp://primary/stream" },
-    recordingConfig: makeRecordingConfig()
+    livestream: { audioInput: audioInput as never, enableAudio: overrides.enableAudio, url: "rtsp://primary/stream" }
   });
 
   // The stand-in binary (Node) does not understand FFmpeg args and exits; we are inspecting the construction-time command log, not the process's behavior.
@@ -480,8 +476,7 @@ describe("FfmpegLivestreamProcess - separate audio input configurations", () => 
 
     await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
 
-      livestream: { url: "rtsp://primary/stream" },
-      recordingConfig: makeRecordingConfig()
+      livestream: { url: "rtsp://primary/stream" }
     });
 
     await proc.exited.catch(() => { /* ignore. */ });
@@ -489,6 +484,117 @@ describe("FfmpegLivestreamProcess - separate audio input configurations", () => 
     const args = commandLineArgs(logger);
 
     assert.ok(args.includes("0:a:0"), "no separate audio input means the audio mapping stays on input index 0");
+  });
+});
+
+describe("FfmpegLivestreamProcess - audio target", () => {
+
+  test("a present audio target transcodes to its codec / samplerate / channels and applies its coupled filters in the same command line", async () => {
+
+    // A resolved target is the single signal to transcode: the encoder profile, sample rate, and channel count all come from the target, and the filters it carries are
+    // applied ahead of the encoder in the same pass - proving the coupling of filters to the transcode request.
+    const logger = capturingLog();
+
+    await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
+
+      audio: { channels: 1, codec: AudioRecordingCodecType.AAC_LC, filters: ["highpass=f=200"], samplerate: AudioRecordingSamplerate.KHZ_16 },
+      livestream: { url: "rtsp://test/stream" }
+    });
+
+    await proc.exited.catch(() => { /* The stand-in binary exits on seeing ffmpeg args - we are inspecting the construction-time command log, not the process. */ });
+
+    const args = commandLineArgs(logger);
+
+    assert.ok(args.includes("-filter:a highpass=f=200"), "the target's filters must be applied ahead of the encoder");
+    assert.ok(args.includes("-profile:a 1"), "AAC_LC must map to the -profile:a 1 encoder profile");
+    assert.ok(args.includes("-ar 16k"), "the target's samplerate must drive -ar");
+    assert.ok(args.includes("-ac 1"), "the target's channel count must drive -ac");
+    assert.ok(!args.includes("-codec:a copy"), "a present target transcodes rather than copies the audio stream");
+  });
+
+  test("an absent audio target copies the already-encoded audio through untouched", async () => {
+
+    const logger = capturingLog();
+
+    await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
+
+      livestream: { url: "rtsp://test/stream" }
+    });
+
+    await proc.exited.catch(() => { /* Inspecting the construction-time command log, not the process. */ });
+
+    const args = commandLineArgs(logger);
+
+    assert.ok(args.includes("-codec:a copy"), "an absent target copies the audio stream");
+    assert.ok(!args.includes("-profile:a"), "an absent target must not invoke the audio encoder");
+  });
+
+  test("a base-option audioFilters knob without an audio target cannot force a transcode - the audio is copied and the filter is inexpressible", async () => {
+
+    // The livestream path takes its audio filters ONLY from the audio target, so a filter supplied through the base options has no target to ride inside. There is no
+    // runtime force that promotes it to a transcode, so the audio is copied and the filter is silently unrepresentable - a single source of truth with no contradictory
+    // state.
+    const logger = capturingLog();
+
+    await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
+
+      livestream: { audioFilters: ["highpass=f=200"], url: "rtsp://test/stream" }
+    });
+
+    await proc.exited.catch(() => { /* Inspecting the construction-time command log, not the process. */ });
+
+    const args = commandLineArgs(logger);
+
+    assert.ok(args.includes("-codec:a copy"), "without a target the audio is copied");
+    assert.ok(!args.includes("-filter:a"), "a base-option filter is not applied on the livestream path - filters come only from the audio target");
+  });
+});
+
+describe("FfmpegRecordingProcess - audio target parity", () => {
+
+  // The recording path derives its audio target from the transcode decision (transcode when requested or when a filter forces it) and the HKSV recording configuration's
+  // audio codec. These cells lock the byte-identity of that decision against the pre-target behavior: the common no-filter copy case (which HBUP relies on for cameras
+  // whose audio is already AAC), the filter-forces-transcode case, and the default-transcode case.
+
+  // Construct a recording process without an `args` override so the command line is built, await its exit, and return the captured arg vector string.
+  async function recordingArgs(recording: Record<string, unknown>): Promise<string> {
+
+    const logger = capturingLog();
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), { recording, recordingConfig: makeRecordingConfig() });
+
+    await proc.exited.catch(() => { /* The stand-in binary exits on seeing ffmpeg args - we are inspecting the construction-time command log, not the process. */ });
+
+    return commandLineArgs(logger);
+  }
+
+  test("transcodeAudio false with no filters copies the already-encoded audio through untouched", async () => {
+
+    const args = await recordingArgs({ transcodeAudio: false });
+
+    assert.ok(args.includes("-codec:a copy"), "transcodeAudio false with no filters must copy the audio stream");
+    assert.ok(!args.includes("-profile:a"), "the copy case must not invoke the audio encoder");
+  });
+
+  test("an audio filter forces a transcode even when transcodeAudio is false", async () => {
+
+    const args = await recordingArgs({ audioFilters: ["highpass=f=200"], transcodeAudio: false });
+
+    assert.ok(args.includes("-filter:a highpass=f=200"), "the audio filter must be applied ahead of the encoder");
+    assert.ok(args.includes("-profile:a 38"), "the filter forces a transcode to the recording configuration's AAC_ELD codec (-profile:a 38)");
+    assert.ok(args.includes("-ar 32k"), "the recording configuration's samplerate must drive -ar");
+    assert.ok(args.includes("-ac 1"), "the recording configuration's channel count must drive -ac");
+    assert.ok(!args.includes("-codec:a copy"), "a forced transcode must not copy the audio stream");
+  });
+
+  test("the default transcodeAudio transcodes to the recording configuration's audio codec", async () => {
+
+    const args = await recordingArgs({});
+
+    assert.ok(args.includes("-profile:a 38"), "the default transcode targets the recording configuration's AAC_ELD codec (-profile:a 38)");
+    assert.ok(args.includes("-ar 32k"), "the recording configuration's samplerate must drive -ar");
+    assert.ok(args.includes("-ac 1"), "the recording configuration's channel count must drive -ac");
+    assert.ok(!args.includes("-codec:a copy"), "the default transcode must not copy the audio stream");
   });
 });
 

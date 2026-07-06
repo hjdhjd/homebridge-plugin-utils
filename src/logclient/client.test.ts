@@ -136,7 +136,7 @@ describe("HomebridgeLogClient - tail channel selection", () => {
   test("history mode uses the REST channel and never opens a socket", async () => {
 
     const factory = new TestLogSocketFactory();
-    const { calls, fetch } = immediateFetch([ "[t] [P] one", "[t] [P] two", "[t] [P] three" ]);
+    const { calls, fetch } = immediateFetch([ "[6/29/2026, 12:00:00 PM] [P] one", "[6/29/2026, 12:00:00 PM] [P] two", "[6/29/2026, 12:00:00 PM] [P] three" ]);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -150,7 +150,8 @@ describe("HomebridgeLogClient - tail channel selection", () => {
   test("history mode with a numeric quantity retains only the most recent N records", async () => {
 
     const factory = new TestLogSocketFactory();
-    const { fetch } = immediateFetch([ "[t] [P] one", "[t] [P] two", "[t] [P] three", "[t] [P] four" ]);
+    const { fetch } = immediateFetch([ "[6/29/2026, 12:00:00 PM] [P] one", "[6/29/2026, 12:00:00 PM] [P] two",
+      "[6/29/2026, 12:00:00 PM] [P] three", "[6/29/2026, 12:00:00 PM] [P] four" ]);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -161,7 +162,7 @@ describe("HomebridgeLogClient - tail channel selection", () => {
 
   test("follow mode uses the socket channel and never hits REST", async () => {
 
-    const socketLines = [ "[t] [P] live one", "[t] [P] live two" ];
+    const socketLines = [ "[6/29/2026, 12:00:00 PM] [P] live one", "[6/29/2026, 12:00:00 PM] [P] live two" ];
     const { calls, fetch } = immediateFetch();
 
     // Pre-seed the single socket the factory hands out with the live lines it should yield.
@@ -177,6 +178,34 @@ describe("HomebridgeLogClient - tail channel selection", () => {
     assert.equal(factory.createCalls.length, 1, "follow mode must construct exactly one socket");
     assert.equal(calls.filter((call) => call.url.includes("/log/download")).length, 0, "follow mode must never hit the REST download endpoint");
   });
+
+  test("follow mode drops the byte-seeded seed's leading fragment and preamble, starting at the first real entry", async () => {
+
+    // The server seeds a native/file tail from a byte offset, so the raw stream opens with its `Loading logs...` / `File: ...` preamble, a blank line, and a truncated
+    // fragment (the tail end of the line the offset cut through), before the first genuine entry. The seed gate must suppress all of that and deliver the log from the
+    // first real `[timestamp]` line onward - the continuation line that follows a real entry still flows through, because the gate never re-closes once open.
+    const socketLines = [
+      "Loading logs using native method...",
+      "File: /Users/hjd/.homebridge/homebridge.log",
+      "",
+      "e frame RPS.",
+      "[6/29/2026, 12:00:00 PM] [P] first real entry",
+      "    a continuation of the first entry",
+      "[6/29/2026, 12:00:01 PM] [P] second real entry"
+    ];
+    const { fetch } = immediateFetch();
+
+    const { TestLogSocket } = await import("./socket-double.ts");
+    const preset = new TestLogSocket({ lines: socketLines });
+    const factory = new TestLogSocketFactory(preset);
+
+    await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
+
+    const records = await collect(client.tail({ mode: "follow" }), 3);
+
+    assert.deepEqual(records.map((record) => record.message), [ "first real entry", "    a continuation of the first entry", "second real entry" ],
+      "the follow stream must start at the first real entry, dropping the preamble and truncated fragment while keeping post-entry continuation lines");
+  });
 });
 
 describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
@@ -185,8 +214,8 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
 
     // History (oldest first) is A, B, C; the socket seed B, C overlaps history's tail and D is a genuinely new live line. The socket-first join must buffer the seed
     // before history finishes (the deferred fetch guarantees that), stitch at the 2-line overlap, and emit A, B, C, D with no dropped or extra line at the boundary.
-    const historyLines = [ "[t] [P] A", "[t] [P] B", "[t] [P] C" ];
-    const seedLines = [ "[t] [P] B", "[t] [P] C", "[t] [P] D" ];
+    const historyLines = [ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C" ];
+    const seedLines = [ "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C", "[6/29/2026, 12:00:00 PM] [P] D" ];
 
     const { TestLogSocket } = await import("./socket-double.ts");
     const preset = new TestLogSocket({ lines: seedLines });
@@ -229,20 +258,20 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
       signal: controller.signal,
       stdout: async function *(): AsyncGenerator<string> {
 
-        yield "[t] [P] B";
-        yield "[t] [P] C";
+        yield "[6/29/2026, 12:00:00 PM] [P] B";
+        yield "[6/29/2026, 12:00:00 PM] [P] C";
 
         // Suspend until the test releases the continuation, mirroring a live stream that has delivered its seed and is awaiting genuinely new lines.
         await release.promise;
 
-        yield "[t] [P] D";
-        yield "[t] [P] E";
+        yield "[6/29/2026, 12:00:00 PM] [P] D";
+        yield "[6/29/2026, 12:00:00 PM] [P] E";
       },
       [Symbol.asyncDispose]: async (): Promise<void> => controller.abort(new Error("disposed"))
     };
 
     const factory: LogSocketFactory = { create: (): LogSocketLike => socket };
-    const { fetch, resolveHistory } = deferredFetch([ "[t] [P] A", "[t] [P] B", "[t] [P] C" ]);
+    const { fetch, resolveHistory } = deferredFetch([ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C" ]);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -271,8 +300,8 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
 
     // History has four lines but the request asks for the most recent two (C, D); the socket seed C, D overlaps that trimmed tail and E is new. The trimmed history must
     // be the stitch basis, so the output is exactly C, D, E - the older A, B are excluded by the quantity, and no live line is dropped at the boundary.
-    const historyLines = [ "[t] [P] A", "[t] [P] B", "[t] [P] C", "[t] [P] D" ];
-    const seedLines = [ "[t] [P] C", "[t] [P] D", "[t] [P] E" ];
+    const historyLines = [ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C", "[6/29/2026, 12:00:00 PM] [P] D" ];
+    const seedLines = [ "[6/29/2026, 12:00:00 PM] [P] C", "[6/29/2026, 12:00:00 PM] [P] D", "[6/29/2026, 12:00:00 PM] [P] E" ];
 
     const { TestLogSocket } = await import("./socket-double.ts");
     const preset = new TestLogSocket({ lines: seedLines });
@@ -310,14 +339,14 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
       signal: controller.signal,
       stdout: async function *(): AsyncGenerator<string> {
 
-        yield "[t] [P] B";
-        yield "[t] [P] C";
+        yield "[6/29/2026, 12:00:00 PM] [P] B";
+        yield "[6/29/2026, 12:00:00 PM] [P] C";
       },
       [Symbol.asyncDispose]: async (): Promise<void> => controller.abort(new Error("disposed"))
     };
 
     const factory: LogSocketFactory = { create: (): LogSocketLike => socket };
-    const { fetch, resolveHistory } = deferredFetch([ "[t] [P] A", "[t] [P] B", "[t] [P] C" ]);
+    const { fetch, resolveHistory } = deferredFetch([ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C" ]);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -342,7 +371,7 @@ describe("HomebridgeLogClient - leak-free teardown", () => {
   test("an early break disposes the per-call socket rather than leaking it", async () => {
 
     const { TestLogSocket } = await import("./socket-double.ts");
-    const preset = new TestLogSocket({ lines: [ "[t] [P] first", "[t] [P] second", "[t] [P] third" ] });
+    const preset = new TestLogSocket({ lines: [ "[6/29/2026, 12:00:00 PM] [P] first", "[6/29/2026, 12:00:00 PM] [P] second", "[6/29/2026, 12:00:00 PM] [P] third" ] });
     const factory = new TestLogSocketFactory(preset);
     const { fetch } = immediateFetch();
 
@@ -383,7 +412,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
   test("password credentials re-authenticate on every connect (the socket gets a fresh token provider invocation)", async () => {
 
     const { TestLogSocket } = await import("./socket-double.ts");
-    const preset = new TestLogSocket({ lines: ["[t] [P] live"] });
+    const preset = new TestLogSocket({ lines: ["[6/29/2026, 12:00:00 PM] [P] live"] });
     const factory = new TestLogSocketFactory(preset);
     const { calls, fetch } = immediateFetch();
 
@@ -421,7 +450,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
   test("a static token credential returns the same token verbatim with no network call (no refresh)", async () => {
 
     const { TestLogSocket } = await import("./socket-double.ts");
-    const preset = new TestLogSocket({ lines: ["[t] [P] live"] });
+    const preset = new TestLogSocket({ lines: ["[6/29/2026, 12:00:00 PM] [P] live"] });
     const factory = new TestLogSocketFactory(preset);
     const { calls, fetch } = immediateFetch();
 
@@ -838,8 +867,8 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
-    // Let the download fail and the gate enter Phase 2 (awaiting the parked seed pull), then feed a leading null-timestamp orphan (which Phase 2 must skip past) and a
-    // covering seed line.
+    // Let the download fail and the gate enter Phase 2 (awaiting the parked seed pull), then feed a leading null-timestamp orphan and a covering seed line. The seed
+    // gate drops the orphan upstream, so Phase 2's first parked pull resolves to the covering line directly; `pre` (10:00) is out of the window and `in-window` is kept.
     await tick(10);
     socket.feed("    an orphan continuation with no timestamp");
     socket.feed(line(10, 0, "pre"));
@@ -849,7 +878,8 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     const records = await collected;
 
-    assert.deepEqual(records.map((record) => record.message), ["in-window"], "Phase 2 must skip orphans and serve the covering seed despite the failed download");
+    assert.deepEqual(records.map((record) => record.message), ["in-window"],
+      "Phase 2 must serve the covering seed despite the failed download, with the orphan gate-dropped");
   });
 
   test("a deep window whose download fails AFTER the seed is shown not to cover surfaces the actionable error", async (t) => {
@@ -910,8 +940,8 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
 
-    // The download fails AND the seed is undecidable (a null-timestamp orphan) AND the socket never ends. Phase 2 must NOT hang: at its wall-clock deadline it surfaces
-    // the download's actionable error rather than awaiting a parseable line that never comes.
+    // The download fails AND the only seed line is a null-timestamp orphan (which the seed gate drops upstream) AND the socket never ends, so no parseable line ever
+    // reaches Phase 2. Phase 2 must NOT hang: at its wall-clock deadline it surfaces the download's actionable error rather than awaiting a line that never comes.
     const socket = new ScriptedSocket(["    an orphan continuation line with no timestamp"]);
     const download = windowFetch({ mode: "reject" });
 
@@ -927,7 +957,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       return true;
     });
 
-    // Let the download fail and Phase 2 buffer the orphan and park, then fire the wall-clock gate deadline.
+    // Let the download fail and Phase 2 park on a pull that never resolves (the gate drops the orphan and the socket never ends), then fire the wall-clock gate deadline.
     await tick(10);
     t.mock.timers.tick(SEED_WINDOW_MAX_MS + 1);
 

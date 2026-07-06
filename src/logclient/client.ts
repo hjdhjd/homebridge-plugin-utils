@@ -7,7 +7,7 @@
  * AsyncDisposable client for the Homebridge UI log stream.
  *
  * {@link HomebridgeLogClient} is the subsystem-local composition root: it holds the connection configuration and the credentials, and it composes the pure leaf modules
- * (`parser.ts`, `stitch.ts`, `time-window.ts`) with the three transports (`auth.ts`, `rest.ts`, `socket.ts`) into three consumer-facing channels, each returning a
+ * (`parser.ts`, `stitch.ts`, `time-window.ts`) with the transports (`auth.ts`, `rest.ts`, `socket.ts`) into the consumer-facing channels below, each returning a
  * {@link LogStream}:
  *
  * - {@link HomebridgeLogClient.history} - a one-shot REST whole-file download parsed into records, optionally trimmed to the most recent N lines.
@@ -15,7 +15,7 @@
  * - {@link HomebridgeLogClient.tail} - a {@link TailRequest}-driven dispatcher that selects `history`, `follow`, the socket-first `follow-history` join, or the
  *   hedged-seed time-bounded `window` channel.
  *
- * Two design points are load-bearing:
+ * The following design points are load-bearing:
  *
  * - **Token lifecycle via a closure.** The client builds one {@link TokenProvider} closure over {@link acquireToken} and the stored credentials. The socket invokes it on
  *   every connect attempt, so a `password`/`noauth` credential re-authenticates from the stored credentials on each reconnect (surviving token expiry across a drop). A
@@ -30,12 +30,12 @@
  *
  * @module
  */
-import { DEFAULT_HOST, DEFAULT_PORT, SEED_QUIESCENCE_MS, SEED_SETTLE_MS, SEED_WINDOW_MAX_MS } from "./settings.ts";
+import { DEFAULT_HOST, DEFAULT_PORT, SEED_GATE_MAX_SKIP, SEED_QUIESCENCE_MS, SEED_SETTLE_MS, SEED_WINDOW_MAX_MS } from "./settings.ts";
 import { HbpuAbortError, Watchdog, composeSignals, noOpLog, takeLast } from "../util.ts";
 import type { HomebridgePluginLogging, Nullable } from "../util.ts";
 import type { LogClientCredentials, LogQuantity, LogRecord, TailRequest } from "./types.ts";
 import type { LogSocketFactory, LogSocketLike, TokenProvider } from "./socket.ts";
-import { parseLogLine, parseLogTimestamp } from "./parser.ts";
+import { SeedGate, parseLogLine, parseLogTimestamp } from "./parser.ts";
 import { acquireToken } from "./auth.ts";
 import { downloadLog } from "./rest.ts";
 import { logSocketFactory } from "./socket.ts";
@@ -346,6 +346,25 @@ export class HomebridgeLogClient implements AsyncDisposable {
     yield* records;
   }
 
+  // Wrap a socket's raw `stdout()` in a per-stream seed gate, dropping the leading lines the server's byte-offset seed makes unusable - the truncated first fragment and
+  // the `Loading logs...` / `File: ...` preamble - up to the first genuine log entry, then yielding every line thereafter. Every socket-sourced channel (follow,
+  // follow-history, window) funnels its live lines through here, so the seed hygiene is defined ONCE; the REST download path is clean from byte 0 and is deliberately not
+  // gated. The gate is a single per-call object, so it latches open once at the start of the stream and is a boolean short-circuit for the rest of the stream's life. It
+  // wraps a single `stdout()` iterator, preserving the socket's single-consumer contract, and forwards cleanup: an early `return` on this generator propagates to the
+  // underlying `stdout()` iteration, and disposing the socket ends `stdout()` and so ends this wrapper.
+  async *#gatedStdout(socket: LogSocketLike): AsyncGenerator<string> {
+
+    const gate = new SeedGate(SEED_GATE_MAX_SKIP);
+
+    for await (const line of socket.stdout()) {
+
+      if(gate.admit(line)) {
+
+        yield line;
+      }
+    }
+  }
+
   // Follow channel implementation. Builds a per-call socket through the factory seam and yields each parsed line. The socket is disposed in the `finally` so an early
   // `break` or client disposal tears it down leak-free, mirroring the `await using` discipline `mp4-assembler.ts` relies on for its source.
   async *#follow(callSignal: AbortSignal): AsyncGenerator<LogRecord> {
@@ -354,7 +373,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
     try {
 
-      for await (const line of socket.stdout()) {
+      for await (const line of this.#gatedStdout(socket)) {
 
         yield parseLogLine(line);
       }
@@ -377,8 +396,9 @@ export class HomebridgeLogClient implements AsyncDisposable {
     try {
 
       // The single live iterator. The class is single-consumer, so exactly one iterator is pulled - here and, after the stitch, for the live continuation. We hold the
-      // in-flight `next()` promise across the buffering loop so the pull that is outstanding when history finishes is not discarded.
-      const liveIterator = socket.stdout()[Symbol.asyncIterator]();
+      // in-flight `next()` promise across the buffering loop so the pull that is outstanding when history finishes is not discarded. The gate wrapper drops the seed's
+      // leading fragment/preamble so the stitch aligns clean seed lines against the clean REST history.
+      const liveIterator = this.#gatedStdout(socket)[Symbol.asyncIterator]();
 
       // Start the REST history download in parallel with buffering the socket's seed-plus-live. Trimming to `quantity` happens inside so the resolved value is already
       // the history tail to stitch against. The promise is observed below; until then it runs concurrently with the buffering race.
@@ -481,17 +501,19 @@ export class HomebridgeLogClient implements AsyncDisposable {
     }
   }
 
-  // The raw (pre-time-window) record stream for the windowed channel: the hedge setup, the bounded two-phase coverage gate, the seed-vs-download branch, and the
+  // The raw (pre-time-window) record stream for the windowed channel: the hedge setup, the bounded multi-phase coverage gate, the seed-vs-download branch, and the
   // wall-clock one-shot terminator. Separate from `#window` so the gate's exit semantics - which diverge from `#followHistory` and ARE the channel's essence - read as
-  // their own two race loops rather than being forced behind a shared callback; only the small buffer-and-carry primitive (`#bufferLine`), the download collector
+  // their own dedicated race loops rather than being forced behind a shared callback; only the small buffer-and-carry primitive (`#bufferLine`), the download collector
   // (`#collectHistory`), and the `Watchdog` are reused. `socket` is owned by `#window`; this method owns the download child controller and the terminator timers.
   async *#windowRecords(request: WindowRequest, horizonNow: number, socket: LogSocketLike, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
 
     const { follow, since } = request;
 
-    // The single live iterator. The socket is single-consumer, so exactly one iterator is pulled - here through the gate and, on the seed-served path, for the live
-    // continuation. One in-flight `next()` is carried across the gate so the pull outstanding when the gate decides is never discarded.
-    const liveIterator = socket.stdout()[Symbol.asyncIterator]();
+    // The single live iterator. The socket is single-consumer, so exactly one iterator is pulled - here through the coverage gate and, on the seed-served path, for the
+    // live continuation. One in-flight `next()` is carried across the coverage gate so the pull outstanding when it decides is never discarded. The seed gate wrapper
+    // drops the seed's leading fragment/preamble upstream, so the first line this channel sees is a genuine entry and the coverage decision reads a real timestamp; the
+    // channel's own leading-orphan handling below remains as defense in depth and never assumes the gate ran.
+    const liveIterator = this.#gatedStdout(socket)[Symbol.asyncIterator]();
 
     // A dedicated child controller composed under the call signal, so aborting it cancels ONLY the speculative download (reason `"replaced"`) and never the socket or the
     // call - the socket must survive a seed-covers abort to keep serving the window.
@@ -499,7 +521,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
     const downloadSignal = composeSignals(callSignal, downloadController.signal);
 
     // Start the speculative whole-file download in parallel with buffering the seed. It is reused verbatim from the history path (`#collectHistory("all", ...)`), made
-    // abortable because `#collectHistory` forwards the download child controller's signal to `downloadLog`. Two observers attach AT CREATION so neither floats on any
+    // abortable because `#collectHistory` forwards the download child controller's signal to `downloadLog`. Every observer attaches AT CREATION so none floats on any
     // exit: the base `.catch` absorbs the rejection that arrives on a seed-covers abort or a genuine failure, and the derived `downloadTag` turns completion into a
     // non-rejecting value the gate's race can win on.
     const downloadPromise = this.#collectHistory("all", downloadSignal);

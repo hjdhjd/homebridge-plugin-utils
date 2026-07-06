@@ -6,7 +6,7 @@
 /**
  * Pure, incremental text-to-{@link LogRecord} parsing for the Homebridge UI log stream.
  *
- * Two pure pieces live here, both shared by the socket and REST transports:
+ * The pure pieces that live here, shared by the socket and REST transports, are:
  *
  * - {@link LogLineSplitter} - a cursor-based incremental splitter that turns an unbounded stream of text chunks (from a WebSocket `stdout` event or a streamed REST
  *   download) into discrete raw lines, transparently handling lines split across chunk boundaries and the four newline conventions the stream mixes.
@@ -52,15 +52,21 @@ const SGR_LEVEL: Readonly<Record<string, LogLevel>> = Object.freeze({
 // eslint-disable-next-line no-control-regex
 const SGR_PATTERN = /\[([0-9;]*)m/g;
 
-// Match the conventional `[timestamp] [Plugin Name] ` prefix at the start of an ANSI-stripped line, capturing the timestamp and plugin text. The two bracketed fields
-// are the timestamp (rendered white) and the plugin name (rendered cyan); the remainder after the second bracket and its trailing space is the message body. Both
-// captures use a negated character class (`[^\]]*`) that cannot cross a `]`, so a message containing brackets is not absorbed into the prefix.
+// Match the conventional `[timestamp] [Plugin Name] ` prefix at the start of an ANSI-stripped line, capturing the timestamp and plugin text. Each bracketed field is
+// guaranteed present when the match succeeds: the timestamp is rendered white and the plugin name is rendered cyan; the remainder after the closing plugin bracket and
+// its trailing space is the message body. Both captures use a negated character class (`[^\]]*`) that cannot cross a `]`, so a message containing brackets is not
+// absorbed into the prefix.
 const BRACKET_PREFIX_PATTERN = /^\[([^\]]*)\] \[([^\]]*)\] /;
 
 // Recognize the Homebridge en-US default timestamp in both renderings the server emits: the 12-hour `M/D/YYYY, h:mm:ss AM` and the 24-hour `M/D/YYYY, HH:mm:ss` (meridiem
 // absent). One module-scope regex serves both - the meridiem group is optional - mirroring the other compiled-once patterns above. The capture groups are, in order:
 // month, day, four-digit year, hour, minute, second, and the optional AM/PM token.
 const LOG_TIMESTAMP_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),\s+(\d{1,2}):(\d{2}):(\d{2})(?:\s*([AaPp][Mm]))?$/;
+
+// Capture the contents of the FIRST bracket at the very start of an ANSI-stripped line - used by {@link isLogLineStart} to test whether a line opens with a timestamp.
+// Only the first bracket is captured (the negated class cannot cross a `]`), because a genuine log entry begins with `[timestamp]` whether or not a `[plugin]` bracket
+// follows; the timestamp's parseability, not the presence of a second bracket, is what marks an entry start.
+const LOG_LINE_START_PATTERN = /^\[([^\]]*)\]/;
 
 // Strip every ANSI escape sequence from a string, leaving only the printable text. Used to derive the human-readable `message` from a raw line; the raw line itself
 // retains the escapes so a `--raw` consumer can reproduce the server's coloring.
@@ -227,8 +233,8 @@ export function parseLogLine(raw: string): LogRecord {
   const colored = stripped.length !== raw.length;
   const level = readLevel(raw, messageColorStart(raw)) ?? (colored ? "info" : null);
 
-  // `match[1]` is the timestamp text and `match[2]` is the plugin text; both are guaranteed present by the two capture groups when the match succeeds. The
-  // message is the stripped text after the matched prefix.
+  // `match[1]` is the timestamp text and `match[2]` is the plugin text; each bracketed field is guaranteed present when the match succeeds. The message is the
+  // stripped text after the matched prefix.
   return { level, message: stripped.slice(match[0].length), plugin: match[2] ?? null, raw, timestamp: match[1] ?? null };
 }
 
@@ -286,7 +292,7 @@ function readLevel(raw: string, from: number): LogRecord["level"] {
  * host's own timezone), and returns its epoch milliseconds. The shared {@link normalizeClock} helper owns the meridiem-to-24-hour conversion and the clock-component
  * range check, so that rule lives in exactly one place.
  *
- * Two deliberate limitations, in the same register as the rest of the client: only the en-US 12h/24h default is recognized, so a server running another locale yields
+ * Deliberate limitations, in the same register as the rest of the client: only the en-US 12h/24h default is recognized, so a server running another locale yields
  * `null` (the time-window stage carries forward the most recent parsed instant, so a null-epoch line is kept iff its parent record is in-window, never dropped merely for
  * lacking a parseable epoch); and the interpretation is LOCAL time, so a client whose timezone differs from the server's skews the absolute values. A well-formed but
  * impossible calendar date (for example `2/30`) returns `null`; a wall-clock time that falls in the client's DST spring-forward gap is best-effort accepted rather than
@@ -307,8 +313,8 @@ export function parseLogTimestamp(text: string): Nullable<number> {
     return null;
   }
 
-  // The six numeric groups are guaranteed present by a successful match; the meridiem (group 7) is undefined for a 24-hour rendering. We parse the calendar fields here
-  // and delegate the clock fields to `normalizeClock`, which owns the range check and the 12-hour-to-24-hour conversion.
+  // The numeric groups are guaranteed present by a successful match; the optional meridiem group is undefined for a 24-hour rendering. We parse the calendar fields
+  // here and delegate the clock fields to `normalizeClock`, which owns the range check and the 12-hour-to-24-hour conversion.
   const month = Number.parseInt(match[1] ?? "", 10);
   const day = Number.parseInt(match[2] ?? "", 10);
   const year = Number.parseInt(match[3] ?? "", 10);
@@ -390,4 +396,119 @@ export function normalizeClock(parts: { hour: number; meridiem?: string; minute:
   }
 
   return { hour: isPm ? hour + 12 : hour, minute, second };
+}
+
+/**
+ * Determine whether a raw log line begins a new Homebridge log entry - that is, whether it opens with a parseable bracketed timestamp.
+ *
+ * Every genuine entry the server emits starts with a `[timestamp]` field; a `[plugin]` bracket may or may not follow, because Homebridge's own core lines (for example
+ * `[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 ... is running`) carry a timestamp but no plugin prefix. Only the FIRST bracket is inspected: requiring a second `[plugin]`
+ * bracket would wrongly reject those core lines. A line that is not an entry start - the server's `Loading logs...` / `File: ...` seed preamble, a byte-truncated seed
+ * fragment, or a continuation line such as a stack frame or a wrapped object dump - has no leading parseable timestamp and returns `false`. ANSI is stripped first
+ * because the server wraps the timestamp in an SGR color, so the raw line begins with an escape sequence rather than the `[`.
+ *
+ * @param raw - A single raw log line (escapes intact, terminator already removed by {@link LogLineSplitter}).
+ *
+ * @returns `true` when the line opens with a parseable en-US timestamp bracket, `false` otherwise.
+ *
+ * @category Log Client
+ */
+export function isLogLineStart(raw: string): boolean {
+
+  const match = LOG_LINE_START_PATTERN.exec(stripAnsi(raw));
+
+  return (match !== null) && (parseLogTimestamp(match[1] ?? "") !== null);
+}
+
+/**
+ * A one-way admission latch that suppresses the unusable leading lines of a live socket log seed until the first genuine log entry.
+ *
+ * The homebridge-config-ui-x native/file log method seeds a live tail by streaming the tail of the log file from a BYTE offset rather than a line boundary, so the first
+ * line of file content is a fragment - the tail end of whatever line the offset fell inside - preceded by the server's own `Loading logs...` / `File: ...` preamble. None
+ * of that is a showable entry. This gate drops every line until the first that begins a real entry - a parseable leading `[timestamp]`, per {@link isLogLineStart} - then
+ * latches OPEN and admits everything thereafter, so the continuation lines and plugin-less core lines that legitimately lack a full prefix flow through untouched.
+ *
+ * It is composed per stream, exactly as {@link LogLineSplitter} is: the consumer owns WHEN to apply it (only on the byte-seeded socket seed - the REST whole-file
+ * download starts at byte 0 and needs no gate), while this owns the latch policy. Once open it never closes, so steady-state admission is a single boolean read and the
+ * recognition predicate runs only across the short leading prefix, never the live stream.
+ *
+ * A bounded safety valve guards the pathological case of a stream whose timestamps are not the recognized en-US rendering (a non-default server locale): if no entry
+ * start is seen within `maxSkip` lines, the gate concludes the format is unrecognized, latches open, and admits the rest rather than suppressing the stream forever.
+ * `maxSkip` is sized above any plausible leading-noise run yet well below the ~500-line seed, so it never fires for a normal log and bounds worst-case loss when it does.
+ *
+ * @example
+ *
+ * ```ts
+ * const gate = new SeedGate(SEED_GATE_MAX_SKIP);
+ *
+ * for(const line of splitter.consume(chunk)) {
+ *
+ *   if(gate.admit(line)) {
+ *
+ *     emit(line);
+ *   }
+ * }
+ * ```
+ *
+ * @category Log Client
+ */
+export class SeedGate {
+
+  // Whether the latch has opened. Once true, every line is admitted with a single boolean read and the recognition predicate is never consulted again.
+  #open = false;
+
+  // The number of leading non-entry lines dropped so far while the latch is still closed. Bounded by `#maxSkip`, at which point the gate gives up and opens.
+  #skipped = 0;
+
+  // The safety-valve bound: the most leading non-entry lines to drop before concluding the stream carries no recognizable entry start and opening the latch regardless.
+  readonly #maxSkip: number;
+
+  /**
+   * @param maxSkip - The safety-valve bound: the most leading non-entry lines to drop before opening the latch unconditionally. The consumer injects it (production
+   *                  passes `SEED_GATE_MAX_SKIP`) so a test can drive the bounded-open path with a small value.
+   */
+  constructor(maxSkip: number) {
+
+    this.#maxSkip = maxSkip;
+  }
+
+  /**
+   * Decide whether a raw line is admitted, advancing the latch. Once the latch has opened every line is admitted; before then, only the first line that begins a genuine
+   * entry (which opens the latch) or the line at which the skip bound is reached (the unrecognized-format safety valve) is admitted, and every leading non-entry line is
+   * dropped.
+   *
+   * @param line - A single raw log line from the seed stream.
+   *
+   * @returns `true` if the line should be emitted, `false` if it is leading seed noise to drop.
+   */
+  public admit(line: string): boolean {
+
+    // Once the first real entry has opened the latch, every subsequent line is admitted with a single boolean read - no re-parsing across the live stream.
+    if(this.#open) {
+
+      return true;
+    }
+
+    // The first line that begins a genuine entry opens the latch and is itself admitted.
+    if(isLogLineStart(line)) {
+
+      this.#open = true;
+
+      return true;
+    }
+
+    // Still leading seed noise (the byte-seek fragment, the server preamble, or an orphaned continuation of the truncated entry): drop it - unless we have already
+    // dropped `#maxSkip` lines without seeing an entry start, which means the stream carries no recognized timestamp (an unrecognized locale/format). In that case
+    // stop gating and admit the rest so the stream is never suppressed indefinitely.
+    if(this.#skipped >= this.#maxSkip) {
+
+      this.#open = true;
+
+      return true;
+    }
+
+    this.#skipped++;
+
+    return false;
+  }
 }

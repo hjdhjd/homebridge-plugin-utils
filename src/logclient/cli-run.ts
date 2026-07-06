@@ -12,19 +12,19 @@
  * codes - exercisable in tests against captured streams and fake transports, with no live server and no real process signals.
  *
  * The bin (`cli.ts`) is a thin shell that resolves its own real directory, dynamic-imports this module, and calls {@link runHblog} with the real `process` streams,
- * environment, and `process.exit`. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code,
- * so the bin never has to encode policy.
+ * environment, and directories. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code. The
+ * bin records that code on `process.exitCode` and lets the event loop drain - so a piped stdout flushes in full - rather than forcing termination with `process.exit`.
  *
  * @module
  */
 import type { HblogConnectionFlags, HblogEnv, ResolvedConnection } from "./config.ts";
 import type { LogClientCredentials, LogQuantity, LogRecord, TailRequest } from "./types.ts";
+import { formatErrorMessage, onAbort } from "../util.ts";
 import { loadConfigFile, resolveConfigPath, resolveConnection } from "./config.ts";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogSocketFactory } from "./socket.ts";
 import type { Nullable } from "../util.ts";
 import { createLogFilter } from "./filter.ts";
-import { formatErrorMessage } from "../util.ts";
 import { parseArgs } from "node:util";
 import { parseTimeExpression } from "./time-expression.ts";
 import { systemClock } from "../clock.ts";
@@ -82,17 +82,30 @@ const ANSI_PATTERN = /\[[0-9;?]*[ -/]*[@-~]/g;
 const VALID_LEVELS = new Set<string>([ "debug", "error", "info", "success", "warn" ]);
 
 /**
+ * The event-hook shape {@link CliStream} exposes for the stream events the CLI observes. Modeled as an overloaded call signature - the same shape `EventEmitter.on`/
+ * `off` present - so each event's listener is typed to exactly what that event delivers: `"error"` hands the listener the failing error (an `EPIPE` broken pipe, or a
+ * genuine write fault such as `ENOSPC`), while `"drain"` delivers nothing and merely signals that the writable buffer has fallen back below its high-water mark.
+ *
+ * @category Log Client
+ */
+export interface CliStreamEventHook {
+
+  (event: "drain", listener: () => void): void;
+  (event: "error", listener: (error: NodeJS.ErrnoException) => void): void;
+}
+
+/**
  * A minimal output-stream surface {@link runHblog} writes to. Models the subset of a Node `WriteStream` the CLI actually uses: `write` for output, the optional `isTTY`
- * flag that drives the auto-color decision, and the optional `on`/`off` event hooks used to trap a broken-pipe (`EPIPE`) error. Modeling it as this narrow interface
- * keeps a test sink small (a `write` capturing function is enough) while the production `process.stdout`/`process.stderr` satisfy it structurally.
+ * flag that drives the auto-color decision, and the optional `on`/`off` event hooks used to trap a broken-pipe (`EPIPE`) error and to await `drain` when a write reports
+ * backpressure. The narrow interface keeps a test sink small (a `write` function is enough) while `process.stdout`/`process.stderr` satisfy it structurally.
  *
  * @category Log Client
  */
 export interface CliStream {
 
   isTTY?: boolean;
-  off?: (event: "error", listener: (error: NodeJS.ErrnoException) => void) => void;
-  on?: (event: "error", listener: (error: NodeJS.ErrnoException) => void) => void;
+  off?: CliStreamEventHook;
+  on?: CliStreamEventHook;
   write: (chunk: string) => boolean;
 }
 
@@ -129,7 +142,8 @@ export interface RunHblogOptions {
   readonly stdout: CliStream;
 }
 
-// The parsed shape of the command-line flags, after `parseArgs`. Booleans are present-or-absent; repeatable options are arrays; `lines`/`grep` are single strings.
+// The parsed shape of the command-line flags, after `parseArgs`. The flag-style booleans default to `false` when absent; `tls` is the one exception, staying
+// `boolean | undefined` so its absence can fall through to file/default resolution. Repeatable options are arrays; `lines`/`grep` are single strings.
 interface ParsedFlags {
 
   all: boolean;
@@ -173,8 +187,9 @@ function stripAnsi(text: string): string {
 
 // Redact a bearer token from any text the CLI is about to print. A network-level error message can embed the connect URL (which carries `token=<jwt>`), and a token can
 // appear in other diagnostic shapes, so we replace both the bare token substring and any `token=...` query parameter with a placeholder. This is the chokepoint for
-// credential-safe diagnostics: the two hard-error stderr writes (the setup failure and the streaming catch) route through it, while the usage banner, the
-// config-permission warning, and the level advisory never carry a token.
+// credential-safe diagnostics: the hard-error stderr writes (the setup failure, a captured stdout write error - via failWithStdoutError, on either the normal-completion
+// or the catch path - and the streaming catch's generic error) route through it, while the usage banner, the config-permission warning, and the level advisory never
+// carry a token.
 function redactToken(text: string, token: Nullable<string>): string {
 
   // Always scrub a `token=...` query parameter regardless of whether we hold the literal token, since a URL built from a refreshed token may carry a value we never saw.
@@ -279,7 +294,7 @@ function connectionFlags(flags: ParsedFlags): HblogConnectionFlags {
   return { host: flags.host, otp: flags.otp, password: flags.pass, port, tls: flags.tls, token: flags.token, username: flags.user };
 }
 
-// Extract the environment slice `resolveConnection` consumes from the process environment. The six `HBLOG_*` variables map to the same fields the flags carry; they sit
+// Extract the environment slice `resolveConnection` consumes from the process environment. The `HBLOG_*` variables map to the same fields the flags carry; they sit
 // between flags and the config file in precedence.
 function environmentSlice(env: NodeJS.ProcessEnv): HblogEnv {
 
@@ -319,7 +334,7 @@ function deriveCredentials(connection: ResolvedConnection): LogClientCredentials
 }
 
 // Build a usage error for an unparseable `--since`/`--until` value, naming the offending flag and listing the accepted forms. The accepted-forms text lives here as one
-// source of truth so the two throw sites (one per flag) cannot drift apart.
+// source of truth so every throw site for a time-range flag shares this one message.
 function timeExpressionError(flag: string, value: string): UsageError {
 
   return new UsageError("The " + flag + " value \"" + value + "\" is not a recognized time expression; use a relative age (1d, 2h30m), a clock (7am, 14:30), " +
@@ -327,7 +342,7 @@ function timeExpressionError(flag: string, value: string): UsageError {
 }
 
 // Resolve the `--since`/`--until` flags into an absolute epoch window against the single `now` instant. Each present flag is parsed via `parseTimeExpression`; an
-// unparseable value is a usage error naming the offending flag (two distinct throw sites). `--since` binds to the interval's lower edge (`.start`) and `--until` to its
+// unparseable value is a usage error naming the offending flag. `--since` binds to the interval's lower edge (`.start`) and `--until` to its
 // upper edge (`.end`), so a date-only `--until 2026-06-29` includes the whole named day while `--since 2026-06-29` starts at midnight. An inverted window (since after
 // until) can never match a line, so it too is a usage error rather than silent empty output.
 function deriveWindow(flags: ParsedFlags, now: number): { since: Nullable<number>; until: Nullable<number> } {
@@ -541,8 +556,8 @@ function formatRecord(record: LogRecord, json: boolean, color: boolean): string 
  * `HBLOG_CONFIG`), maps the result into a {@link LogClientCredentials} and a {@link TailRequest}, builds a {@link HomebridgeLogClient}, runs the selected channel,
  * applies the {@link createLogFilter} criteria, and writes log data to stdout (NDJSON for `--json`, raw/stripped lines otherwise) while routing diagnostics and warnings
  * to stderr. A SIGINT/SIGTERM aborts the run cleanly (exit 0); a broken pipe (`EPIPE`) on stdout also ends cleanly (exit 0); a usage error returns 2; a connection or
- * authentication failure returns 1. Token redaction is applied at the two hard-error stderr writes (the setup failure and the streaming catch); the usage and
- * advisory writes never carry a token.
+ * authentication failure returns 1. Token redaction is applied at the hard-error stderr writes (the setup failure, a captured stdout write error on either the
+ * normal-completion or the catch path, and the streaming catch's generic error); the usage and advisory writes never carry a token.
  *
  * @param options - The injected argument vector, environment, streams, directories, and seams. See {@link RunHblogOptions}.
  *
@@ -638,7 +653,7 @@ async function defaultReadFile(path: string): Promise<string> {
 }
 
 // Best-effort capture of the token that will be used for the connection, for redaction of a setup-phase error before `resolveConnection` has run. We read the flag/env
-// token directly (the two highest-precedence sources); a file-only token is not yet known here, but a file-only token never appears in a setup error message.
+// token directly (the sources known before the config file loads); a file-only token is not yet known here, but a file-only token never appears in a setup error message.
 function connectionToken(flags: ParsedFlags, env: NodeJS.ProcessEnv): Nullable<string> {
 
   return flags.token ?? env["HBLOG_TOKEN"] ?? null;
@@ -690,6 +705,10 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
   // success rather than a failure.
   let cleanStop = false;
 
+  // A non-EPIPE stdout write error (for example ENOSPC when redirecting to a full disk) is a genuine failure rather than a clean stop; capture it here so the catch can
+  // surface it with an actionable message instead of the run ending silently.
+  let stdoutError: NodeJS.ErrnoException | null = null;
+
   // The signal and EPIPE wiring. Registered now and removed in the `finally` so the CLI leaves no dangling listeners (important when `runHblog` is invoked repeatedly in
   // a test process).
   const onSignal = (): void => {
@@ -701,12 +720,25 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
   const onPipeError = (error: NodeJS.ErrnoException): void => {
 
     // A broken downstream pipe (`hblog -f | head`) is the canonical clean stop: the reader went away, so we end with success rather than an error. Any other stdout error
-    // is surfaced as a failure.
+    // (for example a full disk when redirecting to a file) is a genuine failure. Either way we abort so the run unwinds promptly; the catch distinguishes the two.
     if(error.code === "EPIPE") {
 
       cleanStop = true;
-      controller.abort();
+    } else {
+
+      stdoutError = error;
     }
+
+    controller.abort();
+  };
+
+  // Surface a captured non-EPIPE stdout write error as a failure with a redacted, actionable message. Shared by the two paths that can observe it: the drain completing
+  // normally, and the drain unwinding into the catch when the abort interrupts it - so the failure message lives in exactly one place.
+  const failWithStdoutError = (writeError: NodeJS.ErrnoException): number => {
+
+    stderr.write(redactToken("Error: " + formatErrorMessage(writeError) + ".", token) + "\n");
+
+    return EXIT.failure;
   };
 
   const signalCleanup = registerSignalHandlers(onSignal);
@@ -765,14 +797,34 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
         continue;
       }
 
-      // Write the formatted record. A `false` return means the stream is buffering (backpressure); we intentionally do not handle backpressure here, even for the
-      // whole-file `--all`/`-n` download. This is a short-lived CLI process that exits once the stream is fully written, and a broken pipe surfaces via the `error`
-      // listener rather than the write return.
-      stdout.write(formatRecord(record, flags.json, color));
+      // Write the formatted record, honoring backpressure. A `false` return means the writable buffer has crossed its high-water mark; we suspend until it drains (or the
+      // run aborts) so a bulk `--all`/`-n` download bounds its memory to that mark rather than buffering the whole history in Node's write queue. Pairing this with the
+      // bin's natural exit (`process.exitCode`, not `process.exit`) is what guarantees the tail reaches the consumer: a `write` returning is not the same as its bytes
+      // reaching the OS, and only an event-loop-drained exit flushes the final buffered chunk. A broken pipe still surfaces via the `error` listener, aborting the wait.
+      if(!stdout.write(formatRecord(record, flags.json, color))) {
+
+        await awaitWritable(stdout, controller.signal);
+      }
+    }
+
+    // The stream drained without throwing. A stdout write error captured during the drain is still a failure: the abort fired from the stdout `error` listener does not
+    // always unwind the loop before it finishes, since a fully-buffered history download drains synchronously.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if(stdoutError !== null) {
+
+      return failWithStdoutError(stdoutError);
     }
 
     return EXIT.success;
   } catch(error: unknown) {
+
+    // A non-EPIPE stdout write error is a genuine failure, so surface it ahead of the clean-stop check. Like `cleanStop` it is set asynchronously from the stdout `error`
+    // listener, so the compiler's linear-flow narrowing does not reflect its runtime value here.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if(stdoutError !== null) {
+
+      return failWithStdoutError(stdoutError);
+    }
 
     // A clean stop (signal or EPIPE) unwinds the iteration via the aborted signal; classify that as success. Anything else is a genuine connection or authentication
     // failure: surface a redacted, actionable message and return the failure code. `cleanStop` and the aborted state are both set asynchronously from signal/EPIPE
@@ -807,4 +859,37 @@ function registerSignalHandlers(onSignal: () => void): () => void {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
   };
+}
+
+// Wait until the output stream can accept more data (its `drain` event) or the run aborts - whichever comes first. This is the seam-adapted twin of the
+// `events.once(stream, "drain", { signal })` idiom the BackpressureWriter uses: the narrow `CliStream` is not a full `EventEmitter`, so we race the stream's `drain`
+// against the controller's `abort` over the seam's `on`/`off` hooks by hand. Tying the wait to the signal is load-bearing, not decorative - a broken pipe (or a SIGINT)
+// during backpressure aborts the controller, and without the race the run would block forever on a `drain` that a closed pipe never emits. A seam that reports
+// backpressure but exposes no event hooks (a capturing test sink) cannot signal drain, so we resolve at once and let the loop proceed.
+function awaitWritable(stream: CliStream, signal: AbortSignal): Promise<void> {
+
+  // A run that is already aborting has nothing to wait for, and a seam that exposes no event hooks (a capturing test sink) cannot signal drain - either way, resolve at
+  // once and let the loop proceed. Guarding the aborted case here also means `onAbort` below never fires its handler inline, so `finish` runs on a later tick when
+  // `registration` is fully initialized.
+  if(signal.aborted || !stream.on || !stream.off) {
+
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+
+    // The single settlement point, shared by the drain and the abort path so listener teardown lives in one place: it removes the drain listener, disposes the abort
+    // registration (which removes the abort listener, so a bulk download's many drain cycles never accumulate handlers on the signal), and resolves. Each removal is
+    // idempotent, so whichever event fires second is a safe no-op.
+    const finish = (): void => {
+
+      stream.off?.("drain", finish);
+      registration[Symbol.dispose]();
+      resolve();
+    };
+
+    stream.on?.("drain", finish);
+
+    const registration = onAbort(signal, finish);
+  });
 }

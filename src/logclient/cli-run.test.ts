@@ -12,36 +12,61 @@ import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { runHblog } from "./cli-run.ts";
 
-// A capturing CliStream double. Records every chunk written so a test asserts the exact output, exposes a settable `isTTY`, and supports the `on`/`off` error hooks the
-// EPIPE trap uses. The optional `failOnWrite` hook lets an EPIPE test fire a synthetic broken-pipe error to the registered listener the first time the run writes.
+// A capturing CliStream double. Records every chunk written so a test asserts the exact output, exposes a settable `isTTY`, and supports `on`/`off` hooks for the stdout
+// `error` trap and the backpressure `drain` wait. Optional behaviors drive the run's non-happy paths, each fired at most once (on the first write):
+//
+// - `failOnWrite` / `failCode`: fire a SYNCHRONOUS stdout error to the error listeners - an EPIPE (the clean-stop path) or an arbitrary errno (the failure path) - then
+//   report the write as accepted. This models an error observed inline with the write.
+// - `backpressure`: report the first N writes as buffer-full (return `false`) and schedule a `drain` on a later turn so the parked writer resumes, exercising the
+//   backpressure-honoring loop and `awaitWritable`'s drain path.
+// - `asyncErrorCode`: report the first write as buffer-full (return `false`, parking the writer in its drain wait) and then deliver the error on a LATER turn, with no
+//   drain ever scheduled - modeling a pipe that breaks while the run is blocked on backpressure, so only the abort race can unwind the wait.
 class CaptureStream implements CliStream {
 
   public readonly chunks: string[] = [];
   public isTTY: boolean | undefined;
 
+  readonly #asyncErrorCode: string | undefined;
+  #backpressureRemaining: number;
+  readonly #drainListeners: (() => void)[] = [];
   readonly #errorListeners: ((error: NodeJS.ErrnoException) => void)[] = [];
-  readonly #failOnWrite: boolean;
+  readonly #failCode: string | undefined;
   #failed = false;
 
-  public constructor(options: { failOnWrite?: boolean; isTTY?: boolean } = {}) {
+  public constructor(options: { asyncErrorCode?: string; backpressure?: number; failCode?: string; failOnWrite?: boolean; isTTY?: boolean } = {}) {
 
-    this.#failOnWrite = options.failOnWrite ?? false;
+    this.#asyncErrorCode = options.asyncErrorCode;
+    this.#backpressureRemaining = options.backpressure ?? 0;
+
+    // `failOnWrite` is the EPIPE-specific convenience the clean-stop test uses; `failCode` generalizes it to any errno so the non-EPIPE failure path is testable.
+    this.#failCode = options.failCode ?? (options.failOnWrite ? "EPIPE" : undefined);
     this.isTTY = options.isTTY;
   }
 
-  public off(_event: "error", listener: (error: NodeJS.ErrnoException) => void): void {
+  public off(event: "drain", listener: () => void): void;
+  public off(event: "error", listener: (error: NodeJS.ErrnoException) => void): void;
+  public off(event: "drain" | "error", listener: unknown): void {
 
-    const index = this.#errorListeners.indexOf(listener);
+    const listeners: unknown[] = (event === "drain") ? this.#drainListeners : this.#errorListeners;
+    const index = listeners.indexOf(listener);
 
     if(index !== -1) {
 
-      this.#errorListeners.splice(index, 1);
+      listeners.splice(index, 1);
     }
   }
 
-  public on(_event: "error", listener: (error: NodeJS.ErrnoException) => void): void {
+  public on(event: "drain", listener: () => void): void;
+  public on(event: "error", listener: (error: NodeJS.ErrnoException) => void): void;
+  public on(event: "drain" | "error", listener: unknown): void {
 
-    this.#errorListeners.push(listener);
+    if(event === "drain") {
+
+      this.#drainListeners.push(listener as () => void);
+    } else {
+
+      this.#errorListeners.push(listener as (error: NodeJS.ErrnoException) => void);
+    }
   }
 
   public get text(): string {
@@ -51,25 +76,61 @@ class CaptureStream implements CliStream {
 
   public write(chunk: string): boolean {
 
-    // On the first write, optionally fire a synthetic EPIPE to the registered listeners, modeling a downstream pipe (`| head`) that closed. The chunk is still recorded
-    // so a test can see what was attempted.
-    if(this.#failOnWrite && !this.#failed) {
+    // Record the chunk first so a test can see exactly what was attempted, regardless of which behavior path the write takes below.
+    this.chunks.push(chunk);
+
+    // Deferred stdout error: the first write reports backpressure (returns `false`, parking the writer in its drain wait), then delivers the error on a later turn - with
+    // no drain ever scheduled - so the wait can only unwind via the abort race, modeling a pipe that breaks mid-backpressure.
+    if((this.#asyncErrorCode !== undefined) && !this.#failed) {
 
       this.#failed = true;
 
-      const error = new Error("write EPIPE") as NodeJS.ErrnoException;
+      const code = this.#asyncErrorCode;
 
-      error.code = "EPIPE";
+      setImmediate(() => this.#emitError(code));
 
-      for(const listener of [...this.#errorListeners]) {
-
-        listener(error);
-      }
+      return false;
     }
 
-    this.chunks.push(chunk);
+    // Synchronous stdout error: fire on the first write, before returning, modeling a downstream pipe that closed (EPIPE) or a genuine write failure (any other errno).
+    if((this.#failCode !== undefined) && !this.#failed) {
+
+      this.#failed = true;
+
+      this.#emitError(this.#failCode);
+    }
+
+    // Simulated backpressure: report the first N writes as buffer-full and schedule a `drain` on a later turn so the parked writer resumes.
+    if(this.#backpressureRemaining > 0) {
+
+      this.#backpressureRemaining--;
+
+      setImmediate(() => {
+
+        for(const listener of [...this.#drainListeners]) {
+
+          listener();
+        }
+      });
+
+      return false;
+    }
 
     return true;
+  }
+
+  // Fire a synthetic stdout error carrying `code` to every registered error listener, snapshotting the list so a listener that removes itself during dispatch does not
+  // perturb the iteration.
+  #emitError(code: string): void {
+
+    const error = new Error("write " + code) as NodeJS.ErrnoException;
+
+    error.code = code;
+
+    for(const listener of [...this.#errorListeners]) {
+
+      listener(error);
+    }
   }
 }
 
@@ -442,7 +503,8 @@ describe("runHblog - filtering", () => {
   test("a --level filter on a colored log filters strictly with no FORCE_COLOR warning", async () => {
 
     // Colored lines carry real severity - an uncolored message resolves to "info", a red one to "error" - so a level filter applies normally and the FORCE_COLOR advisory
-    // must NOT fire. Regression guard for the bug where an all-info colored window was mistaken for a colorless log and every line was passed through unfiltered.
+    // must NOT fire. Regression guard: a colored line with an uncolored message must resolve to "info", never null, so a strict --level filter on a colored log must
+    // never trip the FORCE_COLOR bypass.
     const ESC = String.fromCharCode(27);
     const prefix = ESC + "[37m[t]" + ESC + "[39m " + ESC + "[36m[P]" + ESC + "[39m ";
     const { fetch } = fakeFetch({ lines: [ prefix + "motion detected", prefix + ESC + "[31mboom" + ESC + "[39m" ] });
@@ -515,6 +577,18 @@ describe("runHblog - failures, EPIPE, and signals", () => {
     assert.equal(code, 0, "a broken downstream pipe must end the run cleanly with exit 0");
   });
 
+  test("a non-EPIPE stdout error surfaces as a failure (exit 1)", async () => {
+
+    const { fetch } = fakeFetch({ lines: [ "[t] [P] one", "[t] [P] two", "[t] [P] three" ] });
+    const stdout = new CaptureStream({ failCode: "ENOSPC" });
+    const { options, stderr } = makeOptions({ argv: [ "--token", "abc.jwt", "--all" ], fetch, stdout });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 1, "a non-EPIPE stdout write error must surface as a failure with exit 1");
+    assert.match(stderr.text, /ENOSPC/, "the stdout write failure must be reported to stderr");
+  });
+
   test("SIGTERM aborts a live follow cleanly (exit 0)", async () => {
 
     const { fetch } = fakeFetch();
@@ -530,6 +604,64 @@ describe("runHblog - failures, EPIPE, and signals", () => {
     const code = await run;
 
     assert.equal(code, 0, "a SIGTERM-terminated follow must exit 0");
+  });
+});
+
+describe("runHblog - backpressure", () => {
+
+  test("a stdout that reports backpressure drains and still writes every record (exit 0)", async () => {
+
+    // The first two writes report the buffer as full; the sink schedules a `drain` after each, so the run must suspend and resume rather than dropping records. All three
+    // history lines must survive the round trip, which proves the backpressure-honoring loop neither loses nor reorders output.
+    const { fetch } = fakeFetch({ lines: [ "[t] [P] one", "[t] [P] two", "[t] [P] three" ] });
+    const stdout = new CaptureStream({ backpressure: 2 });
+    const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--all" ], fetch, stdout });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 0, "a run that honors backpressure must still complete cleanly with exit 0");
+    assert.deepEqual(stdout.text.split("\n").filter((line) => line.length > 0), [ "[t] [P] one", "[t] [P] two", "[t] [P] three" ],
+      "every record must be written in order once the stream drains");
+  });
+
+  test("a broken pipe while parked on backpressure ends the run cleanly without hanging (exit 0)", async () => {
+
+    // The write reports backpressure and then delivers an EPIPE on a later turn, with no drain ever scheduled - so the run is genuinely parked in its drain wait when the
+    // pipe breaks. Only the abort race can unwind that wait; if it did not, this test would hang rather than fail, which is the regression the race guards against.
+    const { fetch } = fakeFetch({ lines: ["[t] [P] one"] });
+    const stdout = new CaptureStream({ asyncErrorCode: "EPIPE" });
+    const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--all" ], fetch, stdout });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 0, "a broken pipe during a backpressure wait must end the run cleanly with exit 0");
+  });
+
+  test("a non-EPIPE stdout error while parked on backpressure surfaces as a failure (exit 1)", async () => {
+
+    // The counterpart to the EPIPE case: an ENOSPC delivered while the run is parked on backpressure must still be classified as a failure, surfaced to stderr, and
+    // reported with exit 1 - the deferred error observed during the drain wait takes the same failure path as one observed inline with the write.
+    const { fetch } = fakeFetch({ lines: ["[t] [P] one"] });
+    const stdout = new CaptureStream({ asyncErrorCode: "ENOSPC" });
+    const { options, stderr } = makeOptions({ argv: [ "--token", "abc.jwt", "--all" ], fetch, stdout });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 1, "a non-EPIPE stdout error during a backpressure wait must surface as a failure with exit 1");
+    assert.match(stderr.text, /ENOSPC/, "the deferred stdout write failure must be reported to stderr");
+  });
+
+  test("a write that reports backpressure after the run has already aborted resolves without parking (exit 0)", async () => {
+
+    // The first write fires a synchronous EPIPE - which aborts the run inline - and then reports the buffer as full. By the time the loop reaches its drain wait the run
+    // is already aborted, so `awaitWritable` takes its fast path and resolves at once rather than registering a `drain` listener that would never be cleaned up.
+    const { fetch } = fakeFetch({ lines: [ "[t] [P] one", "[t] [P] two" ] });
+    const stdout = new CaptureStream({ backpressure: 1, failOnWrite: true });
+    const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--all" ], fetch, stdout });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 0, "a broken pipe that also reports backpressure must end the run cleanly with exit 0");
   });
 });
 

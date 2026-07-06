@@ -68,3 +68,11 @@ export const SEED_SETTLE_MS = 1000;
 // multi-second whole-file download), the cap is comfortably longer than any legitimate seed burst and so never truncates one - it bounds only the busy-log case where
 // post-horizon live lines (filtered out of the window) would otherwise keep the channel open forever.
 export const SEED_WINDOW_MAX_MS = 5000;
+
+// The maximum number of leading, non-entry lines the seed gate will drop before it gives up and admits the stream unconditionally. The server seeds a live tail from a
+// BYTE offset in the log file, so the first line of content is a truncated fragment preceded by the server's `Loading logs...` / `File: ...` preamble; the gate drops
+// those until the first genuine `[timestamp]` entry (see `SeedGate` in `parser.ts`). This bound is the safety valve for the pathological case of a stream whose
+// timestamps are not the recognized en-US rendering (a non-default server locale): with no line ever recognized as an entry start, the gate would otherwise suppress the
+// stream forever, so after this many drops it concludes the format is unrecognized and opens. It is sized well above any plausible leading-noise run yet well below the
+// ~500-line seed, so it never fires for a normal log and bounds the worst-case loss to a fraction of the seed when it does.
+export const SEED_GATE_MAX_SKIP = 100;

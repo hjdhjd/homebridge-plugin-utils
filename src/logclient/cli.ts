@@ -12,7 +12,7 @@
  * fracture. So the bin imports only `node:` builtins for value, takes the engine's type via an erased `import type` (which the compiler strips entirely from the emitted
  * output), and reaches the actual CLI logic ({@link runHblog} in `cli-run.ts`) through a realpath-canonicalized DYNAMIC import of a computed file URL.
  *
- * Two properties make this robust:
+ * This design is robust because:
  *
  * - The engine is reached by a COMPUTED URL (`pathToFileURL(join(dir, "cli-run.js")).href`), so the TypeScript compiler never tries to resolve it - which matters because
  *   `npm run typecheck` runs with no `dist/` present and before the build. A static `import { runHblog } from "./cli-run.ts"` would emit a `./cli-run.js` value import
@@ -37,9 +37,9 @@ import type { runHblog } from "./cli-run.ts";
  *
  * The realpath normalization is load-bearing, exactly as in `cli/index.ts`: npm exposes a bin as a symlink in `node_modules/.bin`, so under default Node the launch path
  * is the symlink while `import.meta.url` is the resolved target - a raw string comparison never matches and the bin silently does nothing. Canonicalizing both sides
- * collapses that indirection (and any `file:`-dependency, copied-package, or `--preserve-symlinks` layout) to a single real path. We use this rather than
- * `import.meta.main` because the latter is `undefined` on Node 22.0-22.17 (it landed in 22.18), which would reintroduce the silent no-op on the lower end of the `>=22`
- * support range.
+ * collapses that indirection (and any `file:`-dependency, copied-package, or `--preserve-symlinks` layout) to a single real path. We keep this explicit realpath
+ * comparison rather than deferring to `import.meta.main`: the symlink and copied-package indirection above is the load-bearing concern the entry-point check exists to
+ * handle, and resolving it explicitly keeps that handling visible at the call site.
  *
  * @returns `true` when invoked as the program entry, `false` when imported or when the launch path cannot be resolved.
  */
@@ -74,8 +74,24 @@ if(isEntryPoint()) {
   // computed-URL import is `any` to the compiler (it cannot resolve a non-literal specifier), so the assertion narrows it to the engine's known shape.
   const engine = await import(engineUrl) as { runHblog: typeof runHblog };
 
-  // `process.exit` propagates the exit code the CLI decided (0 success / clean signal / help / version, 1 connection or auth failure, 2 usage error).
-  process.exit(await engine.runHblog({
+  // Absorb a broken-pipe (`EPIPE`) error on stdout at the process level. A downstream reader that closes early - `hblog | head`, or quitting `less` early - breaks the
+  // pipe, and the write that discovers it emits an `error` on `process.stdout`. The engine traps that during its run to stop cleanly, but because the process exits by
+  // draining the event loop (rather than calling `process.exit`), Node's final flush of any still-buffered output re-attempts the write to the dead pipe AFTER the engine
+  // has removed its own trap - and an `error` with no listener is a fatal unhandled exception. This persistent, process-lifetime listener is the safety net for exactly
+  // that window: it makes a broken pipe a quiet, successful stop. It is deliberately a no-op, not a re-thrower: a stdout error during the run also reaches the engine's
+  // trap on this same event (emit fires every listener), and that trap is the single place that classifies errors - a benign `EPIPE` as a clean stop, an `ENOSPC` and the
+  // like as a failure. Re-throwing here would pre-empt that classification and crash the run.
+  process.stdout.on("error", (): void => {
+
+    // Intentionally empty: swallowing the event is the whole point - it keeps a broken pipe from ever surfacing as a fatal unhandled `error`. See the rationale above.
+  });
+
+  // Record the exit code the CLI decided (0 success / clean signal / help / version, 1 connection or auth failure, 2 usage error) on `process.exitCode`, then let the
+  // process exit on its own once the event loop empties. We deliberately do NOT call `process.exit`: it terminates immediately and discards whatever is still buffered in
+  // an asynchronous stdout - the pipe case, `hblog | less` - which truncates the tail of the output. A `write` returning is not the same as its bytes having reached the
+  // OS, so forcing exit races the final flush. Setting the code and returning lets Node drain stdout in full before exiting; the client and its sockets are torn down by
+  // `runHblog`'s `await using` and its signal listeners removed, so nothing keeps the loop alive once the output has flushed.
+  process.exitCode = await engine.runHblog({
 
     argv: process.argv.slice(2),
     cwd: process.cwd(),
@@ -83,5 +99,5 @@ if(isEntryPoint()) {
     homedir: (await import("node:os")).homedir(),
     stderr: process.stderr,
     stdout: process.stdout
-  }));
+  });
 }

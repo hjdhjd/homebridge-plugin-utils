@@ -2,7 +2,7 @@
  *
  * logclient/parser.test.ts: Unit tests for the incremental line splitter and the per-line log parser.
  */
-import { LogLineSplitter, normalizeClock, parseLogLine, parseLogTimestamp } from "./parser.ts";
+import { LogLineSplitter, SeedGate, isLogLineStart, normalizeClock, parseLogLine, parseLogTimestamp } from "./parser.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -344,5 +344,123 @@ describe("normalizeClock", () => {
 
     assert.deepEqual(normalizeClock({ hour: 23, minute: 59, second: 59 }), { hour: 23, minute: 59, second: 59 });
     assert.deepEqual(normalizeClock({ hour: 0, minute: 0, second: 0 }), { hour: 0, minute: 0, second: 0 });
+  });
+});
+
+describe("isLogLineStart", () => {
+
+  test("accepts a full [timestamp] [plugin] entry", () => {
+
+    assert.equal(isLogLineStart("[6/29/2026, 7:00:00 AM] [UniFi Protect] Dog Room: Tamper event detected."), true);
+  });
+
+  test("accepts a plugin-less core Homebridge entry (single bracket, timestamp only)", () => {
+
+    // Homebridge's own core lines carry a timestamp but no plugin bracket; requiring a second bracket would wrongly reject them, so only the first bracket is inspected.
+    assert.equal(isLogLineStart("[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 (HAP v0.14.2) (House UniFi Protect) is running on port 36680."), true);
+    assert.equal(isLogLineStart("[7/3/2026, 4:31:34 PM] Got SIGTERM, shutting down child bridge process..."), true);
+  });
+
+  test("accepts an ANSI-wrapped timestamp (the real wire shape) and a 24-hour rendering", () => {
+
+    // On the wire the server wraps the timestamp in a white SGR, so the raw line begins with an escape rather than the '['; the predicate strips ANSI before testing.
+    assert.equal(isLogLineStart(ESC + "[37m[7/4/2026, 8:42:02 PM]" + ESC + "[39m " + ESC + "[36m[UniFi Protect]" + ESC + "[39m message"), true);
+    assert.equal(isLogLineStart("[6/29/2026, 19:30:15] [P] a 24-hour entry"), true);
+  });
+
+  test("rejects the byte-truncated seed fragment", () => {
+
+    // The tail end of a line the server's byte-offset seed cut mid-way: no leading timestamp bracket, so it is not an entry start.
+    assert.equal(isLogLineStart(ESC + "[0me frame RPS." + ESC + "[39m"), false);
+  });
+
+  test("rejects the server seed preamble", () => {
+
+    assert.equal(isLogLineStart("Loading logs using native method..."), false);
+    assert.equal(isLogLineStart("File: /Users/hjd/.homebridge/homebridge.log"), false);
+  });
+
+  test("rejects a continuation line with no leading timestamp", () => {
+
+    assert.equal(isLogLineStart("    at Object.<anonymous> (/x/y.js:1:1)"), false);
+    assert.equal(isLogLineStart("  reason: 'Requests to the controller are throttled.'"), false);
+    assert.equal(isLogLineStart("}"), false);
+  });
+
+  test("rejects a leading bracket that is not a parseable timestamp", () => {
+
+    // A mid-line cut can leave a line that starts with '[' but whose first bracket is not a timestamp; only a parseable timestamp counts as an entry start.
+    assert.equal(isLogLineStart("[hevc @ 0xb6d02ca80] Skipping invalid undecodable NALU: 1"), false);
+    assert.equal(isLogLineStart("[SomeTag] a tagged but timestamp-less line"), false);
+  });
+
+  test("rejects an empty line", () => {
+
+    assert.equal(isLogLineStart(""), false);
+  });
+});
+
+describe("SeedGate", () => {
+
+  // Drive a gate across an ordered list of lines, returning only the admitted ones so a test can assert exactly what survives the latch.
+  function admitAll(lines: readonly string[], maxSkip = 100): string[] {
+
+    const gate = new SeedGate(maxSkip);
+
+    return lines.filter((line) => gate.admit(line));
+  }
+
+  test("drops the leading preamble and truncated fragment, then admits from the first real entry", () => {
+
+    // The exact shape of a native-method seed: two preamble lines, a blank, the byte-truncated fragment, then genuine entries.
+    const admitted = admitAll([
+      "Loading logs using native method...",
+      "File: /Users/hjd/.homebridge/homebridge.log",
+      "",
+      "e frame RPS.",
+      "[6/29/2026, 8:42:02 PM] [UniFi Protect] first real line",
+      "[6/29/2026, 8:42:03 PM] [UniFi Protect] second real line"
+    ]);
+
+    assert.deepEqual(admitted, [ "[6/29/2026, 8:42:02 PM] [UniFi Protect] first real line", "[6/29/2026, 8:42:03 PM] [UniFi Protect] second real line" ]);
+  });
+
+  test("admits from the first line when it is already an entry (drops nothing)", () => {
+
+    const lines = [ "[6/29/2026, 8:42:02 PM] [P] one", "[6/29/2026, 8:42:03 PM] [P] two" ];
+
+    assert.deepEqual(admitAll(lines), lines);
+  });
+
+  test("once open, admits subsequent continuation lines that lack a timestamp", () => {
+
+    // After the latch opens on a real entry, a following continuation (a stack frame, a plugin-less core line) must flow through untouched - the gate never re-closes.
+    const admitted = admitAll([
+      "[6/29/2026, 8:42:02 PM] [P] an error occurred:",
+      "    at Object.<anonymous> (/x/y.js:1:1)",
+      "[7/3/2026, 4:31:46 PM] a plugin-less core line"
+    ]);
+
+    assert.deepEqual(admitted,
+      [ "[6/29/2026, 8:42:02 PM] [P] an error occurred:", "    at Object.<anonymous> (/x/y.js:1:1)", "[7/3/2026, 4:31:46 PM] a plugin-less core line" ]);
+  });
+
+  test("the safety valve opens the latch after maxSkip drops when no entry is ever recognized", () => {
+
+    // A stream whose timestamps are not the recognized en-US rendering never yields an entry start; the gate must not suppress it forever. With maxSkip 3 it drops the
+    // first three non-entry lines, then opens and admits the rest.
+    const admitted = admitAll([ "no-ts one", "no-ts two", "no-ts three", "no-ts four", "no-ts five" ], 3);
+
+    assert.deepEqual(admitted, [ "no-ts four", "no-ts five" ], "after maxSkip drops the gate opens and admits every remaining line");
+  });
+
+  test("the safety valve drops exactly maxSkip lines before opening", () => {
+
+    const gate = new SeedGate(2);
+
+    assert.equal(gate.admit("noise one"), false, "the first non-entry line is dropped");
+    assert.equal(gate.admit("noise two"), false, "the second non-entry line is dropped (reaching the bound)");
+    assert.equal(gate.admit("noise three"), true, "the line at which the bound is reached opens the latch and is admitted");
+    assert.equal(gate.admit("noise four"), true, "the latch stays open thereafter");
   });
 });

@@ -10,35 +10,66 @@ Homebridge service helper utilities.
 
 ## Accessory
 
+### AcquireServiceTarget
+
+```ts
+type AcquireServiceTarget<T> = WithUUID<typeof Service> & (displayName?, subtype?) => T;
+```
+
+The constructor shape [acquireService](#acquireservice) expects for a Service subclass. Every HAP Service subclass (Lightbulb, Switch, Television, ...) satisfies both halves
+of this intersection naturally:
+
+- `WithUUID<typeof Service>` - provides the static `UUID` property AND assignability to HAP's `getService` / `getServiceById` lookup APIs that require this exact
+  shape.
+- `new (displayName?: string, subtype?: string) => T` - the actual runtime constructor signature every Service subclass exposes; supersedes the BASE Service
+  class's `(displayName, UUID, subtype?)` signature that the wider `WithUUID<typeof Service>` would otherwise surface.
+
+Intersecting both shapes lets the function invoke `new serviceType(sanitized, subtype)` against an honest type-checked signature without any cast or non-null
+assertion.
+
+#### Type Parameters
+
+| Type Parameter | Default type | Description |
+| ------ | ------ | ------ |
+| `T` *extends* `Service` | `Service` | The concrete Service subclass produced by the constructor. Inferred from the call site so callers receive the specific subclass type back. |
+
+***
+
 ### acquireService()
 
 ```ts
-function acquireService(
+function acquireService<T>(
    accessory, 
    serviceType, 
    name, 
    subtype?, 
-onServiceCreate?): Nullable<Service>;
+onServiceCreate?): Nullable<T>;
 ```
 
 Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
 service instance. Additionally, the various name characteristics of the service are set to the specified name, and optionally added if necessary.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` *extends* `Service` | The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back rather than the wider `Service` type. |
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `accessory` | `PlatformAccessory` | The Homebridge accessory to check or modify. |
-| `serviceType` | `WithUUID`\<*typeof* `Service`\> | The type of service to instantiate or retrieve. |
+| `serviceType` | [`AcquireServiceTarget`](#acquireservicetarget)\<`T`\> | The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see [AcquireServiceTarget](#acquireservicetarget). |
 | `name` | `string` | Name to be displayed to the end user for this service. |
 | `subtype?` | `string` | Optional service subtype to uniquely identify the service. |
 | `onServiceCreate?` | (`svc`) => `void` | Optional callback invoked only when a new service is created, receiving the new service as its argument. |
 
 #### Returns
 
-[`Nullable`](util.md#nullable)\<`Service`\>
+[`Nullable`](util.md#nullable)\<`T`\>
 
-Returns the created or retrieved service, or `null` if service creation failed.
+Returns the created or retrieved service. Construction failures throw rather than returning `null`.
 
 #### Remarks
 
@@ -50,10 +81,11 @@ The `ConfiguredName` and `Name` characteristics are conditionally added or updat
 #### Example
 
 ```typescript
-// Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created.
-const lightbulbService = acquireService(accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc: Service): void => {
+// Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created. The return type is narrowed to `Lightbulb | null`,
+// so callers can invoke subclass-specific behavior on the result without casts.
+const lightbulbService = acquireService(accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc): void => {
 
-  // Called only if the service is newly created.
+  // Called only if the service is newly created. `svc` is typed as `Lightbulb` here.
   svc.setCharacteristic(hap.Characteristic.On, false);
 });
 
@@ -66,8 +98,50 @@ if(lightbulbService) {
 
 #### See
 
- - setServiceName — updates the newly created (or existing) service’s name-related characteristics.
- - validService — validate or prune services after acquisition.
+ - setServiceName - updates the newly created (or existing) service's name-related characteristics.
+ - validService - validate or prune services after acquisition.
+
+***
+
+### capabilityGate()
+
+```ts
+function capabilityGate(options): (hasService) => boolean;
+```
+
+Build a `validService` predicate for a service gated on a hardware capability and a user toggle, applying an additive-eager / subtractive-conservative asymmetry
+between the two: the user `toggle` is absolute - when false, the service is removed - while the hardware `capability` is conservative - an existing service is kept
+through a transient capability-false, and a new service is created only when the capability reports.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `capability`: `boolean`; `toggle`: `boolean`; \} | The `capability` and `toggle` inputs for the gate. |
+| `options.capability` | `boolean` | - |
+| `options.toggle` | `boolean` | - |
+
+#### Returns
+
+A `validService` function-form predicate, `(hasService) => toggle && (hasService || capability)`.
+
+(`hasService`) => `boolean`
+
+#### Remarks
+
+Pass the result as `validService`'s `validate` argument. The asymmetry keeps a capability-gated service from being removed during a transient window in which the
+device under-reports its capability, while still honoring a user who disables the service. A service with no user toggle should gate on its capability directly.
+
+#### Example
+
+```typescript
+// Keep the service while its user toggle is on, add it when the capability reports, and keep an existing one through a transient capability-false.
+validService(accessory, Service.Switch, capabilityGate({ capability: deviceReportsFeature, toggle: config.enableSwitch }));
+```
+
+#### See
+
+validService - consumes the returned predicate.
 
 ***
 
@@ -77,7 +151,8 @@ if(lightbulbService) {
 function getServiceName(service?): string | undefined;
 ```
 
-Retrieves the primary name of a service, preferring the ConfiguredName characteristic over the Name characteristic.
+Retrieves the primary name of a service, preferring the ConfiguredName characteristic over the Name characteristic. This is a pure read - it never mutates the
+service.
 
 #### Parameters
 
@@ -89,11 +164,11 @@ Retrieves the primary name of a service, preferring the ConfiguredName character
 
 `string` \| `undefined`
 
-The configured or display name of the service, or `undefined` if neither is set.
+The configured or display name of the service, or `undefined` if neither characteristic is present or set.
 
 #### See
 
-setServiceName — to update the current name on a service.
+setServiceName - to update the current name on a service.
 
 ***
 
@@ -123,8 +198,8 @@ characteristics when supported by the service type.
 
 #### See
 
- - acquireService — to add or retrieve services.
- - getServiceName — to retrieve the current name set on a service.
+ - acquireService - to add or retrieve services.
+ - getServiceName - to retrieve the current name set on a service.
 
 ***
 
@@ -178,4 +253,4 @@ validService(accessory, Service.Switch, (hasService) => hasService || config.ena
 
 #### See
 
-acquireService — to add or retrieve services.
+acquireService - to add or retrieve services.

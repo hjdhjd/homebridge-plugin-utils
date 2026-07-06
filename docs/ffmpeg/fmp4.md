@@ -39,6 +39,78 @@ ISO BMFF box header size in bytes: 4 bytes big-endian size + 4 bytes ASCII type.
 
 ***
 
+### HDLR\_TYPE\_SOUN
+
+```ts
+const HDLR_TYPE_SOUN: 1936684398 = 0x736F756E;
+```
+
+Handler-type code for audio tracks in ISO BMFF `hdlr` boxes: ASCII `"soun"` encoded as a 32-bit big-endian integer. Compared against the `handler_type` field of
+each track's `hdlr` fullbox to identify the audio track during init-segment inspection.
+
+***
+
+### SAMPLE\_FLAG\_NON\_SYNC
+
+```ts
+const SAMPLE_FLAG_NON_SYNC: 65536 = 0x00010000;
+```
+
+Sample-flags bit indicating a non-sync (non-keyframe) sample. When this bit is clear (0), the sample is a sync sample / IDR frame / keyframe.
+
+***
+
+### TRUN\_FLAG\_DATA\_OFFSET
+
+```ts
+const TRUN_FLAG_DATA_OFFSET: 1 = 0x000001;
+```
+
+TRUN fullbox flags bit indicating that a `data_offset` field follows the sample_count in the box header.
+
+***
+
+### TRUN\_FLAG\_FIRST\_SAMPLE\_FLAGS
+
+```ts
+const TRUN_FLAG_FIRST_SAMPLE_FLAGS: 4 = 0x000004;
+```
+
+TRUN fullbox flags bit indicating that a `first_sample_flags` field follows (after `data_offset` if present). When this flag is set, the first sample's flags are
+stored in a dedicated header field rather than in the per-sample entries - the common arrangement for fragments emitted with FFmpeg's `frag_keyframe` movflag.
+
+***
+
+### TRUN\_FLAG\_SAMPLE\_DURATION
+
+```ts
+const TRUN_FLAG_SAMPLE_DURATION: 256 = 0x000100;
+```
+
+TRUN fullbox flags bit indicating that each sample entry carries a 4-byte duration field.
+
+***
+
+### TRUN\_FLAG\_SAMPLE\_FLAGS
+
+```ts
+const TRUN_FLAG_SAMPLE_FLAGS: 1024 = 0x000400;
+```
+
+TRUN fullbox flags bit indicating that each sample entry carries a 4-byte sample_flags field.
+
+***
+
+### TRUN\_FLAG\_SAMPLE\_SIZE
+
+```ts
+const TRUN_FLAG_SAMPLE_SIZE: 512 = 0x000200;
+```
+
+TRUN fullbox flags bit indicating that each sample entry carries a 4-byte size field.
+
+***
+
 ### findBox()
 
 ```ts
@@ -52,7 +124,9 @@ end?): Nullable<FMp4Box>;
 Locates the first ISO BMFF box of a given type within a byte range.
 
 Walks the standard box headers (4-byte big-endian size + 4-byte ASCII type) starting at `start` and ending at `end`. Returns the offset and size of the first
-matching box, or `null` if no match is found. Does not handle extended-size boxes (64-bit size field) as these are uncommon in fMP4 livestream contexts.
+matching box. Returns `null` when no box of the requested type is found in range, and also when the walk encounters a box whose declared size is invalid - below
+the header size, extending past the search range, or an extended/open-ended size (64-bit size field, uncommon in fMP4 livestream contexts and unsupported here) -
+since a malformed size makes it unsafe to keep walking; the two cases are indistinguishable from the return value alone.
 
 #### Parameters
 

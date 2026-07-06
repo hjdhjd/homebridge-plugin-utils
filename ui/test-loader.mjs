@@ -17,9 +17,8 @@
  * **Why the parent-URL match.** Scoping to `/ui/` parent URLs leaves unrelated `./featureOptions.js` specifiers (e.g., a future file in `src/` or `build/`) free
  * to resolve via the default mechanism. Any browser-shipped UI file gets the redirect; nothing outside `ui/` does.
  *
- * **Version contract.** `registerHooks` is a Node 22.15+ API. The library's production `engines.node: ">=22"` is NOT narrowed by this file - test infrastructure is
- * a developer-only concern, and the library itself loads on any Node 22.x without touching this loader. Contributors running the test suite need Node 22.15+; end
- * users installing the published package do not.
+ * **Version contract.** `registerHooks` is a Node 22.15+ API. The library's production floor is `engines.node: ">=22.20"`, which already exceeds that requirement, so
+ * this loader adds no constraint beyond the published engines floor - any environment that satisfies the package's own Node requirement can run the test suite.
  */
 "use strict";
 

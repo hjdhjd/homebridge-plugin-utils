@@ -2,9 +2,14 @@
  *
  * index.ts: Homebridge plugin utilities.
  */
-export * from "./backpressure.js";
-export * from "./featureoptions.js";
-export * from "./mqttclient.js";
-export * from "./service.js";
-export * from "./util.js";
-export * from "./ffmpeg/index.js";
+export * from "./backpressure.ts";
+export * from "./clock-double.ts";
+export * from "./clock.ts";
+export * from "./featureOptions.ts";
+export * from "./featureOptions-docs.ts";
+export * from "./homebridge-enums.ts";
+export * from "./mqttClient.ts";
+export * from "./service.ts";
+export * from "./util.ts";
+export * from "./ffmpeg/index.ts";
+export * from "./logclient/index.ts";

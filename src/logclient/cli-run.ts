@@ -26,6 +26,8 @@ import type { Nullable } from "../util.ts";
 import { createLogFilter } from "./filter.ts";
 import { formatErrorMessage } from "../util.ts";
 import { parseArgs } from "node:util";
+import { parseTimeExpression } from "./time-expression.ts";
+import { systemClock } from "../clock.ts";
 
 // The usage banner shown for `--help` and on a usage error. Kept as a module constant so the help text and the misuse text are one source of truth and a test can assert
 // against it without coupling to formatting. The flags here mirror the `parseArgs` option table below; the two must stay in lockstep.
@@ -48,6 +50,10 @@ const USAGE = [
   "  -f, --follow           Live-tail the log (default).",
   "  -n, --lines <N>        Retrieve the most recent N lines.",
   "  --all                  Retrieve the entire log (cannot be combined with -n).",
+  "",
+  "Time range:",
+  "  --since <when>         Only show lines at or after <when> (e.g. 1d, 7am, 2026-06-29, \"2026-06-29 6am\").",
+  "  --until <when>         Only show lines at or before <when>; bounds a closed past window (cannot combine with --follow).",
   "",
   "Filters:",
   "  -p, --plugin <name>    Only show lines from this plugin (repeatable).",
@@ -98,8 +104,8 @@ export interface CliStream {
  * @property env           - The environment map (typically `process.env`).
  * @property fetch         - Optional `fetch` seam forwarded to the engine's auth and REST transports. Defaults to the global `fetch`.
  * @property homedir       - The user's home directory, used to locate `~/.hblog.json` unless `HBLOG_CONFIG` overrides the path.
- * @property now           - Optional monotonic/clock seam, reserved for future time-stamped diagnostics. The CLI keeps no `Clock` dependency, so this is unused today but
- *                           part of the injection contract.
+ * @property now           - Optional wall-clock epoch source (milliseconds) used to resolve the `--since`/`--until` time-range expressions against a single deterministic
+ *                           instant. Defaults to `systemClock.now`; a test injects a fixed clock so a windowed run's bounds are reproducible.
  * @property readFile      - Optional file-read seam forwarded to the config loader and used to read the package version. Defaults to `node:fs/promises` `readFile`.
  * @property socketFactory - Optional socket-factory seam forwarded to the engine, so a test drives the live tail without a WebSocket. Defaults to the real factory.
  * @property stat          - Optional file-stat seam forwarded to the config loader for the permissions warning. Defaults to `node:fs/promises` `stat`.
@@ -140,8 +146,10 @@ interface ParsedFlags {
   plugin: string[];
   port: string | undefined;
   raw: boolean;
+  since: string | undefined;
   tls: boolean | undefined;
   token: string | undefined;
+  until: string | undefined;
   user: string | undefined;
   version: boolean;
 }
@@ -164,8 +172,9 @@ function stripAnsi(text: string): string {
 }
 
 // Redact a bearer token from any text the CLI is about to print. A network-level error message can embed the connect URL (which carries `token=<jwt>`), and a token can
-// appear in other diagnostic shapes, so we replace both the bare token substring and any `token=...` query parameter with a placeholder. This is the single chokepoint
-// for credential-safe diagnostics: every stderr write goes through it, so no error path can leak the JWT.
+// appear in other diagnostic shapes, so we replace both the bare token substring and any `token=...` query parameter with a placeholder. This is the chokepoint for
+// credential-safe diagnostics: the two hard-error stderr writes (the setup failure and the streaming catch) route through it, while the usage banner, the
+// config-permission warning, and the level advisory never carry a token.
 function redactToken(text: string, token: Nullable<string>): string {
 
   // Always scrub a `token=...` query parameter regardless of whether we hold the literal token, since a URL built from a refreshed token may carry a value we never saw.
@@ -208,8 +217,10 @@ function parseFlags(argv: readonly string[]): ParsedFlags {
         plugin: { multiple: true, short: "p", type: "string" },
         port: { type: "string" },
         raw: { type: "boolean" },
+        since: { type: "string" },
         tls: { type: "boolean" },
         token: { type: "string" },
+        until: { type: "string" },
         user: { type: "string" },
         version: { type: "boolean" }
       },
@@ -238,8 +249,10 @@ function parseFlags(argv: readonly string[]): ParsedFlags {
     plugin: values.plugin ?? [],
     port: values.port,
     raw: values.raw ?? false,
+    since: values.since,
     tls: values.tls,
     token: values.token,
+    until: values.until,
     user: values.user,
     version: values.version ?? false
   };
@@ -305,20 +318,92 @@ function deriveCredentials(connection: ResolvedConnection): LogClientCredentials
   return { kind: "noauth" };
 }
 
-// Map the mode flags into a `TailRequest`. `--all` and `-n` are mutually exclusive (one says "everything," the other "the most recent N"); supplying both is a usage
-// error. A numeric `-n` is validated to a positive integer. The four combinations of {follow, history-quantity} map to the request DU: follow alone -> live tail;
-// follow + a quantity -> seeded live tail; a quantity alone -> one-shot history; nothing -> the default live tail (the tool's primary use).
-function deriveRequest(flags: ParsedFlags): TailRequest {
+// Build a usage error for an unparseable `--since`/`--until` value, naming the offending flag and listing the accepted forms. The accepted-forms text lives here as one
+// source of truth so the two throw sites (one per flag) cannot drift apart.
+function timeExpressionError(flag: string, value: string): UsageError {
+
+  return new UsageError("The " + flag + " value \"" + value + "\" is not a recognized time expression; use a relative age (1d, 2h30m), a clock (7am, 14:30), " +
+    "a date (2026-06-29), a date and time (\"2026-06-29 6am\"), or now/today/yesterday.");
+}
+
+// Resolve the `--since`/`--until` flags into an absolute epoch window against the single `now` instant. Each present flag is parsed via `parseTimeExpression`; an
+// unparseable value is a usage error naming the offending flag (two distinct throw sites). `--since` binds to the interval's lower edge (`.start`) and `--until` to its
+// upper edge (`.end`), so a date-only `--until 2026-06-29` includes the whole named day while `--since 2026-06-29` starts at midnight. An inverted window (since after
+// until) can never match a line, so it too is a usage error rather than silent empty output.
+function deriveWindow(flags: ParsedFlags, now: number): { since: Nullable<number>; until: Nullable<number> } {
+
+  let since: Nullable<number> = null;
+  let until: Nullable<number> = null;
+
+  if(flags.since !== undefined) {
+
+    const resolved = parseTimeExpression(flags.since, now);
+
+    if(resolved === null) {
+
+      throw timeExpressionError("--since", flags.since);
+    }
+
+    since = resolved.start;
+  }
+
+  if(flags.until !== undefined) {
+
+    const resolved = parseTimeExpression(flags.until, now);
+
+    if(resolved === null) {
+
+      throw timeExpressionError("--until", flags.until);
+    }
+
+    until = resolved.end;
+  }
+
+  if((since !== null) && (until !== null) && (since > until)) {
+
+    throw new UsageError("The --since value must be earlier than the --until value.");
+  }
+
+  return { since, until };
+}
+
+// Map the mode flags and the resolved time window into a `TailRequest`. `--all` and `-n` are mutually exclusive; a time range cannot combine with `-n` (a window is a
+// filter over a whole-file retrieval, not a line count); and a `--until` bound cannot combine with a live `--follow` (a closed past window never ends). A time-bounded
+// query maps to the engine's `window` channel, which owns the hedged-seed retrieval and the time-bounded selection: the user's `since`/`until` pass through UNCHANGED (a
+// bare `--since` keeps `until: null`, which the engine fills with the snapshot horizon for a one-shot - there is no implicit `until = now` at the CLI), and `follow`
+// selects live continuation versus one-shot termination. The non-windowed {follow, quantity} combinations map to the other arms: follow alone -> live tail; follow + a
+// quantity -> seeded live tail; a quantity alone -> one-shot history; nothing -> the default live tail.
+function deriveRequest(flags: ParsedFlags, windowBounds: { since: Nullable<number>; until: Nullable<number> }): TailRequest {
 
   if(flags.all && (flags.lines !== undefined)) {
 
     throw new UsageError("Use either -n/--lines or --all, not both.");
   }
 
+  const hasWindow = (windowBounds.since !== null) || (windowBounds.until !== null);
+
+  if(hasWindow && (flags.lines !== undefined)) {
+
+    throw new UsageError("Use a time range (--since/--until) or -n/--lines, not both.");
+  }
+
+  if((windowBounds.until !== null) && flags.follow) {
+
+    throw new UsageError("--until bounds a closed window and cannot combine with --follow.");
+  }
+
+  if(hasWindow) {
+
+    // A time-bounded query is delivered over the engine's windowed channel. The user's bounds pass through verbatim; the engine serves it from the socket seed when the
+    // seed covers the window and otherwise falls back to the whole-file download, and owns the `[since, until]` filtering.
+    return { follow: flags.follow, mode: "window", since: windowBounds.since, until: windowBounds.until };
+  }
+
   let quantity: LogQuantity | undefined;
 
   if(flags.all) {
 
+    // `--all` asks for the entire log over the whole-file download.
     quantity = "all";
   } else if(flags.lines !== undefined) {
 
@@ -456,7 +541,8 @@ function formatRecord(record: LogRecord, json: boolean, color: boolean): string 
  * `HBLOG_CONFIG`), maps the result into a {@link LogClientCredentials} and a {@link TailRequest}, builds a {@link HomebridgeLogClient}, runs the selected channel,
  * applies the {@link createLogFilter} criteria, and writes log data to stdout (NDJSON for `--json`, raw/stripped lines otherwise) while routing diagnostics and warnings
  * to stderr. A SIGINT/SIGTERM aborts the run cleanly (exit 0); a broken pipe (`EPIPE`) on stdout also ends cleanly (exit 0); a usage error returns 2; a connection or
- * authentication failure returns 1. Every stderr write is routed through token redaction so no error path leaks the JWT.
+ * authentication failure returns 1. Token redaction is applied at the two hard-error stderr writes (the setup failure and the streaming catch); the usage and
+ * advisory writes never carry a token.
  *
  * @param options - The injected argument vector, environment, streams, directories, and seams. See {@link RunHblogOptions}.
  *
@@ -513,7 +599,13 @@ export async function runHblog(options: RunHblogOptions): Promise<number> {
 
     connection = resolveConnection({ env: environmentSlice(env), file, flags: connectionFlags(flags) });
     credentials = deriveCredentials(connection);
-    request = deriveRequest(flags);
+
+    // Evaluate the wall-clock seam EXACTLY ONCE so both time-range bounds resolve against a single instant (no cross-flag drift), then derive the window and the request.
+    // The window's bounds are consumed only here (to build the request); the engine's `window` channel owns the time-bounded selection, so nothing downstream re-filters.
+    const now = (options.now ?? systemClock.now)();
+    const windowBounds = deriveWindow(flags, now);
+
+    request = deriveRequest(flags, windowBounds);
 
     const levels = deriveLevels(flags.level);
 
@@ -646,6 +738,8 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
 
     await using stream = client.tail(request, { signal: controller.signal });
 
+    // Stream the selected channel's records directly. Time-bounded selection lives in the engine's `window` channel (it alone holds the merged seed/download instant the
+    // coverage gate and the snapshot horizon need); the CLI owns only the content filtering below.
     for await (const record of stream) {
 
       // A formatted log line (one with a plugin prefix) that parses to a null level is the unambiguous signal that the server's log is color-stripped - a colored line
@@ -671,8 +765,9 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
         continue;
       }
 
-      // Write the formatted record. A `false` return means the stream is buffering (backpressure); we do not await drain here because the live tail is low-volume and the
-      // OS buffer absorbs it, and a broken pipe surfaces via the `error` listener rather than the write return.
+      // Write the formatted record. A `false` return means the stream is buffering (backpressure); we intentionally do not handle backpressure here, even for the
+      // whole-file `--all`/`-n` download. This is a short-lived CLI process that exits once the stream is fully written, and a broken pipe surfaces via the `error`
+      // listener rather than the write return.
       stdout.write(formatRecord(record, flags.json, color));
     }
 

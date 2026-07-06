@@ -46,7 +46,25 @@ export const RECONNECT_CAP_MS = 5000;
 // stampede the server in lockstep after a shared outage; 0.5 means up to a 50% upward perturbation of each delay.
 export const JITTER_FRACTION = 0.5;
 
-// The additional headroom, in milliseconds, added to the server's advertised ping interval when sizing the liveness watchdog window. The server pings on a fixed
-// cadence; the watchdog must allow for one ping interval plus scheduling slack before concluding the connection has gone silent, so this margin is added to the
-// advertised interval to avoid a premature fire on a momentarily late ping.
+// The additional headroom, in milliseconds, added on top of the server's advertised ping interval plus its ping timeout when sizing the liveness watchdog window. The
+// server pings on a fixed cadence; the watchdog must allow for one ping interval plus the server's ping timeout plus scheduling slack before concluding the connection
+// has gone silent, so this margin is added to that window to avoid a premature fire on a momentarily late ping.
 export const MARGIN_MS = 5000;
+
+// The idle gap, in milliseconds, after which a seed-served one-shot window is considered quiescent. When a `--since` (one-shot) window is served from the socket seed the
+// source is the never-ending live socket, so the channel needs an explicit terminator: a re-armable quiescence watchdog re-armed on every source line. Once this much
+// time elapses with no further source line (and the settle floor below has passed), the seed burst is judged complete and the one-shot ends. Kept small so a quiet log's
+// one-shot exits promptly after its seed has drained.
+export const SEED_QUIESCENCE_MS = 250;
+
+// The settle floor, in milliseconds, before a seed-served one-shot window may terminate, measured from the snapshot horizon captured at channel entry. The ~500-line seed
+// arrives as a fast burst, but a momentary intra-burst stall shorter than this floor must not be mistaken for the end of the burst and truncate the window. Holding the
+// quiescence terminator off until the floor has passed guarantees the whole seed burst is given time to arrive before the one-shot can end, so a quiet log terminates at
+// roughly this floor rather than at the much later hard cap.
+export const SEED_SETTLE_MS = 1000;
+
+// The hard cap, in milliseconds, on a seed-served one-shot window, measured from the snapshot horizon. A perpetually-chatty log keeps producing source lines, which keeps
+// re-arming the quiescence terminator indefinitely, so this cap guarantees the one-shot terminates regardless. Because the seed burst is fast (the recent tail, not the
+// multi-second whole-file download), the cap is comfortably longer than any legitimate seed burst and so never truncates one - it bounds only the busy-log case where
+// post-horizon live lines (filtered out of the window) would otherwise keep the channel open forever.
+export const SEED_WINDOW_MAX_MS = 5000;

@@ -146,6 +146,8 @@ function makeOptions(overrides: Partial<RunHblogOptions> & { argv: readonly stri
     env: {},
     homedir: "/home/dev",
     readFile: missingFileReadFile,
+    // 0o100600 is a regular file (S_IFREG) with owner-only (0600) permissions, picked so the config loader's group/world-readable permissions warning stays silent for
+    // any test that overrides `readFile` with a real config.
     stat: async (): Promise<{ readonly mode: number }> => ({ mode: 0o100600 }),
     stderr,
     stdout,
@@ -528,5 +530,209 @@ describe("runHblog - failures, EPIPE, and signals", () => {
     const code = await run;
 
     assert.equal(code, 0, "a SIGTERM-terminated follow must exit 0");
+  });
+});
+
+// Build a `fetch` seam whose REST log-download resolves only when the returned `resolveHistory` is invoked, mirroring client.test.ts. The deferred history lets a
+// follow-history test buffer the socket's full seed before history finishes, making the socket-first stitch ordering deterministic rather than timing-dependent.
+function deferredFetch(historyLines: readonly string[]): { fetch: typeof fetch; resolveHistory: () => void } {
+
+  const gate: PromiseWithResolvers<void> = Promise.withResolvers();
+
+  const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
+
+    const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
+
+    if(url.includes("/log/download")) {
+
+      await gate.promise;
+
+      return new Response(historyLines.map((line) => line + "\n").join(""), { status: 200 });
+    }
+
+    // An auth endpoint: answer with a token. Bracket-notation keys keep the snake_case wire names from tripping the camelcase lint rule in test source.
+    const body: Record<string, unknown> = {};
+
+    body["access_token"] = "fresh.jwt";
+    body["token_type"] = "Bearer";
+
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as typeof fetch;
+
+  return { fetch: fetchImpl, resolveHistory: (): void => gate.resolve() };
+}
+
+describe("runHblog - time range", () => {
+
+  test("--help lists the Time range section with --since and --until", async () => {
+
+    const { options, stdout } = makeOptions({ argv: ["--help"] });
+    const code = await runHblog(options);
+
+    assert.equal(code, 0, "--help must exit 0");
+    assert.match(stdout.text, /Time range:/, "the help must include the Time range section");
+    assert.match(stdout.text, /--since <when>/, "the help must document --since");
+    assert.match(stdout.text, /--until <when>/, "the help must document --until");
+  });
+
+  test("a one-shot --since filters history to the window, carries continuations, and honors the injected now", async (t) => {
+
+    // The engine's `window` channel now owns the time-bounded selection, and a one-shot's upper bound is `Date.now()` (the snapshot horizon). We pin BOTH clocks to
+    // 2026-06-29 13:00 local: `mock.timers` fixes `Date.now()` (the engine horizon) while the same epoch is injected as the CLI `now` (which resolves `--since 1h` to
+    // 12:00). The window is therefore `[12:00, 13:00]`: the 10:00 line and its null-timestamp continuation are dropped; the 12:30 line and its continuation are kept (the
+    // continuation inherits its in-window parent's instant). An empty socket (no seed) lets the immediate download win the gate, so the one-shot serves the filtered
+    // download and ends.
+    const now = new Date(2026, 5, 29, 13, 0, 0).getTime();
+
+    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now });
+
+    const lines = [
+
+      "[6/29/2026, 10:00:00 AM] [P] before-window",
+      "    cont-before",
+      "[6/29/2026, 12:30:00 PM] [P] after-window",
+      "    cont-after"
+    ];
+
+    const { fetch } = fakeFetch({ lines });
+    const { options, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1h" ], fetch, now: () => now, socketFactory: new TestLogSocketFactory() });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 0, "a one-shot windowed history retrieval must exit 0");
+
+    const text = stdout.text;
+
+    assert.ok(text.includes("after-window"), "a line at or after --since must be kept");
+    assert.ok(text.includes("cont-after"), "a continuation of an in-window line must be carried through");
+    assert.ok(!text.includes("before-window"), "a line before --since must be dropped");
+    assert.ok(!text.includes("cont-before"), "a continuation of an out-of-window line must be dropped");
+  });
+
+  test("a bare --since keeps until null and never raises a since-after-until error for a future --since (no implicit until = now)", async (t) => {
+
+    // The regression guard for the implicit-`until = now` hazard. With `now` pinned to 2026-06-29 03:00, `--since 7am` resolves to 07:00 - in the FUTURE relative to now.
+    // A bare `--since` must keep `until: null` (NOT an implicit `until = now`), so this is NOT a `since > until` usage error; it is a valid one-shot whose engine horizon
+    // (03:00) is below `since` (07:00), yielding empty output and a clean exit 0 rather than exit 2.
+    const now = new Date(2026, 5, 29, 3, 0, 0).getTime();
+
+    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now });
+
+    const lines = [ "[6/29/2026, 1:00:00 AM] [P] one", "[6/29/2026, 2:00:00 AM] [P] two" ];
+    const { fetch } = fakeFetch({ lines });
+    const { options, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "7am" ], fetch, now: () => now, socketFactory: new TestLogSocketFactory() });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 0, "a future bare --since must be a valid (empty) one-shot, not a since-after-until usage error");
+    assert.equal(stdout.text, "", "no line is at or after a future --since, so the output is empty");
+  });
+
+  test("--since with --follow seeds a follow-history window and keeps a later live line", async () => {
+
+    // `--since` with `--follow` maps to the window channel (`mode: "window"`, `follow: true`): the socket connects for its seed-plus-live while the REST history
+    // downloads, the two are stitched, and the window wraps the stitched stream. The socket here delivers its seed then ENDS (modeling a socket that closed after the
+    // seed), so the run terminates naturally after history resolves - no signal-propagation timing is needed. History's 10:00 line is dropped by the window; the 12:30
+    // overlap line and the genuinely-new 12:45 live line both survive. That hist-old (history-only, pre-window) is fetched-then-filtered while live-new (socket-only)
+    // survives demonstrates both channels ran and were stitched under the window.
+    const now = new Date(2026, 5, 29, 13, 0, 0).getTime();
+    const history = [ "[6/29/2026, 10:00:00 AM] [P] hist-old", "[6/29/2026, 12:30:00 PM] [P] hist-recent" ];
+    const seed = [ "[6/29/2026, 12:30:00 PM] [P] hist-recent", "[6/29/2026, 12:45:00 PM] [P] live-new" ];
+
+    const controller = new AbortController();
+    let created = 0;
+
+    const socket: LogSocketLike = {
+
+      abort: (reason?: unknown): void => controller.abort(reason ?? new Error("aborted")),
+      aborted: false,
+      droppedLines: 0,
+      signal: controller.signal,
+      stdout: async function *(): AsyncGenerator<string> {
+
+        for(const line of seed) {
+
+          yield line;
+        }
+      },
+      [Symbol.asyncDispose]: async (): Promise<void> => controller.abort(new Error("disposed"))
+    };
+
+    const socketFactory: LogSocketFactory = { create: (): LogSocketLike => {
+
+      created++;
+
+      return socket;
+    } };
+
+    const { fetch, resolveHistory } = deferredFetch(history);
+    const stdout = new CaptureStream();
+    const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1h", "--follow" ], fetch, now: () => now, socketFactory, stdout });
+
+    const run = runHblog(options);
+
+    // Let the socket buffer its full seed before history resolves, so the stitch overlaps at the shared 12:30 line rather than carrying the seed into the continuation.
+    await tick(10);
+    resolveHistory();
+
+    const code = await run;
+
+    assert.equal(code, 0, "a --since --follow run whose socket ends must exit 0");
+    assert.equal(created, 1, "follow-history must construct exactly one socket");
+
+    const text = stdout.text;
+
+    assert.ok(text.includes("hist-recent"), "the in-window history seed line must be kept");
+    assert.ok(text.includes("live-new"), "the later, genuinely-new live line must be kept");
+    assert.ok(!text.includes("hist-old"), "a history line before --since must be filtered out of the window");
+  });
+});
+
+describe("runHblog - time-range usage errors", () => {
+
+  test("an invalid --since is a usage error naming --since (exit 2)", async () => {
+
+    const { options, stderr } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "lol" ] });
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "an unparseable --since must be a usage error");
+    assert.match(stderr.text, /--since value "lol"/, "the error must name the --since flag and the offending value");
+    assert.match(stderr.text, /Usage: hblog/, "a usage error must print the usage banner");
+  });
+
+  test("an invalid --until is a usage error naming --until (exit 2)", async () => {
+
+    const { options, stderr } = makeOptions({ argv: [ "--token", "abc.jwt", "--until", "nope" ] });
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "an unparseable --until must be a usage error");
+    assert.match(stderr.text, /--until value "nope"/, "the error must name the --until flag and the offending value");
+  });
+
+  test("--since later than --until is a usage error (exit 2)", async () => {
+
+    const { options, stderr } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "2026-06-29", "--until", "2026-06-28" ] });
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "an inverted window must be a usage error");
+    assert.match(stderr.text, /earlier than/, "the error must explain the ordering requirement");
+  });
+
+  test("-n combined with a time range is a usage error (exit 2)", async () => {
+
+    const { options, stderr } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1d", "-n", "5" ] });
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "combining -n with a time range must be a usage error");
+    assert.match(stderr.text, /not both/, "the error must explain -n and a time range are mutually exclusive");
+  });
+
+  test("--until combined with --follow is a usage error (exit 2)", async () => {
+
+    const { options, stderr } = makeOptions({ argv: [ "--token", "abc.jwt", "--until", "now", "--follow" ] });
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "--until with --follow must be a usage error");
+    assert.match(stderr.text, /--until bounds a closed window/, "the error must explain --until cannot combine with --follow");
   });
 });

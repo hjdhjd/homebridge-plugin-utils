@@ -55,7 +55,7 @@ export interface LogRecord {
 /**
  * The credentials used to authenticate against the homebridge-config-ui-x API, modeled as a discriminated union so invalid combinations are unrepresentable.
  *
- * The three arms correspond to the three authentication paths the server exposes: a pre-acquired bearer token (`token`), an interactive username/password login with an
+ * The arms correspond to the authentication paths the server exposes: a pre-acquired bearer token (`token`), an interactive username/password login with an
  * optional one-time passcode (`password`), and the no-authentication path (`noauth`) available only when the web UI is configured with `auth: "none"`. Expressing this
  * as a DU rather than a bag of optional fields means password-without-username, token-plus-password, and other nonsensical mixes cannot be constructed, and the `otp`
  * field has exactly one home where it is meaningful.
@@ -79,13 +79,21 @@ export type LogQuantity = number | "all";
 /**
  * A request describing which log content to deliver and over which channel, modeled as a discriminated union on `mode`.
  *
- * The three modes map to the cost model: `follow` is a pure live tail over the socket (cheap, incremental); `history` is a one-shot retrieval of `quantity` past lines
- * (paid via the REST whole-file download when the quantity is deep); and `follow-history` seeds `quantity` past lines and then continues live, stitching the two so the
- * boundary neither drops nor (beyond a bounded overlap) duplicates lines. Carrying `quantity` only on the arms that need it keeps a bare `follow` from having to invent
- * a meaningless count.
+ * The modes map to the cost model: `follow` is a pure live tail over the socket (cheap, incremental); `history` is a one-shot retrieval of `quantity` past lines
+ * (paid via the REST whole-file download when the quantity is deep); `follow-history` seeds `quantity` past lines and then continues live, stitching the two so the
+ * boundary neither drops nor (beyond a bounded overlap) duplicates lines; and `window` is a time-bounded `[since, until]` query that the engine serves from the socket
+ * seed when the seed strictly covers the window, hedged against a parallel abortable whole-file download that wins when it cannot. Carrying `quantity` only on
+ * the arms that need it keeps a bare `follow` from having to invent a meaningless count.
+ *
+ * The `window` arm carries `follow` as a field rather than splitting into two modes because both the one-shot (`follow: false`) and the live (`follow: true`) windowed
+ * cases share the ENTIRE gate / seed / hedge cost model and differ only in termination: a one-shot terminates when the window's content has been served (a wall-clock
+ * quiescence terminator for the seed-served path, the finite download's natural end for the fallback path), while a `follow` window continues live indefinitely. `since`
+ * is the inclusive lower bound (`null` for an unbounded-below `--until`-only window, which the seed can never cover); `until` is the user's EXPLICIT upper bound (`null`
+ * for a bare `--since`, where the engine fills in the one-shot snapshot horizon itself rather than the request carrying an implicit "now").
  *
  * @category Log Client
  */
 export type TailRequest = { readonly mode: "follow" } |
   { readonly mode: "follow-history"; readonly quantity: LogQuantity } |
-  { readonly mode: "history"; readonly quantity: LogQuantity };
+  { readonly mode: "history"; readonly quantity: LogQuantity } |
+  { readonly follow: boolean; readonly mode: "window"; readonly since: Nullable<number>; readonly until: Nullable<number> };

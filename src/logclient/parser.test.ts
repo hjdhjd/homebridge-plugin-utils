@@ -2,7 +2,7 @@
  *
  * logclient/parser.test.ts: Unit tests for the incremental line splitter and the per-line log parser.
  */
-import { LogLineSplitter, parseLogLine } from "./parser.ts";
+import { LogLineSplitter, normalizeClock, parseLogLine, parseLogTimestamp } from "./parser.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -53,8 +53,8 @@ describe("LogLineSplitter", () => {
 
   test("recognizes all four newline conventions as single breaks", () => {
 
-    // `\n`, `\r`, `\r\n`, and `\n\r` each delimit exactly one line; a correct splitter yields four lines, not the larger count an over-eager splitter would produce by
-    // treating the two-character pairs as two breaks.
+    // `\n`, `\r`, and `\r\n` (the last appearing twice) each delimit exactly one line; a correct splitter yields five lines, not the larger count an over-eager splitter
+    // would produce by treating the two-character `\r\n` pairs as two breaks.
     assert.deepEqual(splitAll(["a\nb\rc\r\nd\r\ne"]), [ "a", "b", "c", "d", "e" ]);
   });
 
@@ -222,7 +222,7 @@ describe("parseLogLine", () => {
 
   test("does not absorb message brackets into the prefix", () => {
 
-    // The non-greedy prefix match stops at the first two bracket groups; a third bracketed token belongs to the message.
+    // The negated-class prefix match cannot cross a `]`, so it stops at the first two bracket groups; a third bracketed token belongs to the message.
     const record = parseLogLine("[ts] [Plug] [not-a-plugin] body");
 
     assert.equal(record.timestamp, "ts");
@@ -240,5 +240,109 @@ describe("parseLogLine", () => {
 
     assert.equal(record.raw, raw, "a stray/partial escape must not corrupt the preserved raw line");
     assert.equal(typeof record.message, "string", "a stray/partial escape must still yield a string message rather than throwing");
+  });
+});
+
+describe("parseLogTimestamp", () => {
+
+  test("parses a 12-hour en-US timestamp to its local epoch", () => {
+
+    // The expected epoch is constructed via the SAME local `new Date(...)` the parser uses, so the assertion holds regardless of the machine's timezone.
+    assert.equal(parseLogTimestamp("6/29/2026, 7:00:00 AM"), new Date(2026, 5, 29, 7, 0, 0).getTime());
+  });
+
+  test("parses a 24-hour en-US timestamp (meridiem absent) to its local epoch", () => {
+
+    assert.equal(parseLogTimestamp("6/29/2026, 19:30:15"), new Date(2026, 5, 29, 19, 30, 15).getTime());
+  });
+
+  test("maps 12am to midnight and 12pm to noon", () => {
+
+    assert.equal(parseLogTimestamp("1/2/2026, 12:00:00 AM"), new Date(2026, 0, 2, 0, 0, 0).getTime(), "12am is midnight (hour 0)");
+    assert.equal(parseLogTimestamp("1/2/2026, 12:00:00 PM"), new Date(2026, 0, 2, 12, 0, 0).getTime(), "12pm is noon (hour 12)");
+  });
+
+  test("accepts a lower-case meridiem", () => {
+
+    assert.equal(parseLogTimestamp("6/29/2026, 7:00:00 am"), new Date(2026, 5, 29, 7, 0, 0).getTime());
+  });
+
+  test("returns null for an unrecognized format", () => {
+
+    assert.equal(parseLogTimestamp("2026-06-29T07:00:00Z"), null, "an ISO timestamp is not the en-US default and must not parse");
+    assert.equal(parseLogTimestamp("not a timestamp"), null);
+  });
+
+  test("returns null for a well-formed but impossible calendar date", () => {
+
+    // 2/30/2026 passes the regex but names a day that does not exist; the calendar round-trip rejects it rather than silently rolling forward into March.
+    assert.equal(parseLogTimestamp("2/30/2026, 9:00:00 AM"), null);
+  });
+
+  test("returns null for an out-of-range clock component", () => {
+
+    assert.equal(parseLogTimestamp("6/29/2026, 13:00:00 PM"), null, "hour 13 with a meridiem is out of the 12-hour range");
+    assert.equal(parseLogTimestamp("6/29/2026, 24:00:00"), null, "hour 24 is out of the 24-hour range");
+  });
+
+  test("best-effort accepts a wall-clock time in the DST spring-forward gap (not null)", () => {
+
+    // In America/New_York, 2026-03-08 02:30 does not exist (clocks jump 02:00 -> 03:00). Because only the CALENDAR fields are round-tripped, the constructed instant
+    // (which the platform rolls to 03:30) is accepted rather than rejected. We pin the timezone so the gap is real regardless of the CI machine's zone, and restore it.
+    const savedTz = process.env["TZ"];
+
+    process.env["TZ"] = "America/New_York";
+
+    try {
+
+      assert.notEqual(parseLogTimestamp("3/8/2026, 2:30:00 AM"), null, "a DST-gap wall-clock time must be best-effort accepted, not rejected");
+    } finally {
+
+      // Restore the prior timezone so later tests in this process are unaffected.
+      if(savedTz === undefined) {
+
+        delete process.env["TZ"];
+      } else {
+
+        process.env["TZ"] = savedTz;
+      }
+    }
+  });
+});
+
+describe("normalizeClock", () => {
+
+  test("rejects an out-of-range component on each arm", () => {
+
+    const cases: readonly (readonly [ string, { hour: number; meridiem?: string; minute: number; second: number } ])[] = [
+
+      [ "minute 60", { hour: 10, minute: 60, second: 0 } ],
+      [ "second 60", { hour: 10, minute: 0, second: 60 } ],
+      [ "24-hour hour 24", { hour: 24, minute: 0, second: 0 } ],
+      [ "12-hour hour 13", { hour: 13, meridiem: "PM", minute: 0, second: 0 } ]
+    ];
+
+    for(const [ label, parts ] of cases) {
+
+      assert.equal(normalizeClock(parts), null, label + " must normalize to null");
+    }
+  });
+
+  test("converts 12am to hour 0 and 12pm to hour 12", () => {
+
+    assert.deepEqual(normalizeClock({ hour: 12, meridiem: "AM", minute: 0, second: 0 }), { hour: 0, minute: 0, second: 0 });
+    assert.deepEqual(normalizeClock({ hour: 12, meridiem: "PM", minute: 0, second: 0 }), { hour: 12, minute: 0, second: 0 });
+  });
+
+  test("adds 12 to a PM hour and leaves an AM hour unchanged", () => {
+
+    assert.deepEqual(normalizeClock({ hour: 3, meridiem: "pm", minute: 15, second: 30 }), { hour: 15, minute: 15, second: 30 });
+    assert.deepEqual(normalizeClock({ hour: 3, meridiem: "am", minute: 15, second: 30 }), { hour: 3, minute: 15, second: 30 });
+  });
+
+  test("passes a valid 24-hour reading through unchanged", () => {
+
+    assert.deepEqual(normalizeClock({ hour: 23, minute: 59, second: 59 }), { hour: 23, minute: 59, second: 59 });
+    assert.deepEqual(normalizeClock({ hour: 0, minute: 0, second: 0 }), { hour: 0, minute: 0, second: 0 });
   });
 });

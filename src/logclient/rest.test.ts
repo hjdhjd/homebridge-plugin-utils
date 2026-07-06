@@ -5,6 +5,7 @@
 import { describe, test } from "node:test";
 import type { DownloadLogOptions } from "./rest.ts";
 import assert from "node:assert/strict";
+import { assertNoUnhandledRejections } from "../testing.helpers.ts";
 import { downloadLog } from "./rest.ts";
 
 // The connection target plus token every test reuses. The download flow builds `http://localhost:8581/api/platform-tools/hb-service/log/download?colour=yes`.
@@ -68,6 +69,65 @@ async function collect(options: DownloadLogOptions): Promise<string[]> {
   }
 
   return lines;
+}
+
+// The captured surface of an abort-observing `fetch` double.
+//
+// @property fetch        - The `fetch` seam to inject.
+// @property signalSeen   - The `signal` the download forwarded to `fetch`, captured on the call. `undefined` until `fetch` is invoked, or when no signal was forwarded.
+// @property wasCancelled - Whether the response body's underlying-source `cancel()` has run - i.e., `readLines` cancelled the still-open reader in its `finally` because
+//                          the call was aborted. Proves the body was torn down rather than drained to EOF.
+interface AbortObservingFetch {
+
+  fetch: typeof fetch;
+  signalSeen: () => AbortSignal | undefined;
+  wasCancelled: () => boolean;
+}
+
+// Build an abort-observing `fetch` double. Unlike `streamingResponse` above, the body it returns deliberately does NOT auto-close: it enqueues the supplied lines and
+// stays open, so a consumer that stops before its (never-arriving) end can only have stopped because the download was aborted. The double captures the `signal` the
+// download forwarded to `fetch` and records when the body's reader is cancelled, so a test can prove an aborted download both forwarded its signal and released the body
+// reader. A pre-aborted signal is rejected synchronously, mirroring how the platform `fetch` short-circuits before issuing a request.
+function abortObservingFetch(lines: readonly string[]): AbortObservingFetch {
+
+  const encoder = new TextEncoder();
+  let cancelled = false;
+  let seen: AbortSignal | undefined;
+
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+
+    seen = init?.signal ?? undefined;
+
+    // A pre-aborted signal short-circuits exactly as the platform `fetch` does - reject before any body is produced - so `downloadLog` never begins streaming.
+    if(init?.signal?.aborted === true) {
+
+      throw init.signal.reason;
+    }
+
+    const body = new ReadableStream<Uint8Array>({
+
+      // `readLines` cancels the reader in its `finally` when the call was aborted; an open-stream cancel surfaces here (synchronously, inside `reader.cancel()`), so a
+      // test asserts the body was torn down early rather than drained to EOF.
+      cancel(): void {
+
+        cancelled = true;
+      },
+
+      // Enqueue the seed lines but deliberately do NOT close: the body stays open past them, so a consumer that stops before EOF can only have stopped because of the
+      // abort.
+      start(controller): void {
+
+        for(const line of lines) {
+
+          controller.enqueue(encoder.encode(line + "\n"));
+        }
+      }
+    });
+
+    return new Response(body, { status: 200 });
+  }) as typeof fetch;
+
+  return { fetch: fetchImpl, signalSeen: (): AbortSignal | undefined => seen, wasCancelled: (): boolean => cancelled };
 }
 
 describe("downloadLog - request shape", () => {
@@ -207,5 +267,103 @@ describe("downloadLog - error mapping", () => {
 
       return true;
     });
+  });
+});
+
+describe("downloadLog - abort", () => {
+
+  test("forwards the abort signal to fetch and cancels the body reader on an aborted teardown", async () => {
+
+    const controller = new AbortController();
+    const { fetch, signalSeen, wasCancelled } = abortObservingFetch([ "one", "two", "three" ]);
+
+    const iterator = downloadLog({ ...TARGET, fetch, signal: controller.signal })[Symbol.asyncIterator]();
+
+    // Read the first line; the body stays open (the double never closes it), so the download is still in flight and "two"/"three" have not surfaced.
+    const first = await iterator.next();
+
+    assert.equal(first.value, "one", "the first line must stream before the abort");
+
+    // Supersede the download: abort the signal, then cease iterating. `readLines`' finally must cancel the still-open reader because the signal is now aborted, releasing
+    // the connection rather than leaving it to drain in the background.
+    controller.abort(new Error("superseded"));
+
+    await iterator.return?.();
+
+    assert.equal(signalSeen()?.aborted, true, "the download must forward its abort signal to fetch");
+    assert.equal(wasCancelled(), true, "an aborted teardown must cancel the body reader rather than leaving the connection draining");
+  });
+
+  test("does not cancel the body reader on a normal (un-aborted) early break", async () => {
+
+    // The cancel-on-teardown is gated on `signal?.aborted`: a consumer that simply stops iterating without an abort must release the lock but NOT issue a body cancel.
+    const { fetch, wasCancelled } = abortObservingFetch([ "one", "two" ]);
+
+    const iterator = downloadLog({ ...TARGET, fetch })[Symbol.asyncIterator]();
+
+    await iterator.next();
+    await iterator.return?.();
+
+    assert.equal(wasCancelled(), false, "an un-aborted early break must not cancel the body reader");
+  });
+
+  test("swallows the body-cancel rejection when the stream is already errored on an aborted teardown", async () => {
+
+    // Mirror undici tearing the connection down on abort: the body is errored from the producer side while the call signal is aborted, so the next read rejects and
+    // `readLines`' finally cancels an ALREADY-errored reader. That cancel rejects with the stored stream error; it must be swallowed rather than escaping as an unhandled
+    // rejection, while the original stream error still propagates to the caller.
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+    const fetchImpl = (async (): Promise<Response> => {
+
+      const body = new ReadableStream<Uint8Array>({
+
+        // Enqueue a chunk whose newline is not chunk-final ("one\nx"), so the splitter yields "one" on the first read rather than withholding it pending a cross-chunk
+        // pair.
+        start(c): void {
+
+          streamController = c;
+          c.enqueue(encoder.encode("one\nx"));
+        }
+      });
+
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+
+    await assertNoUnhandledRejections(async () => {
+
+      const iterator = downloadLog({ ...TARGET, fetch: fetchImpl, signal: controller.signal })[Symbol.asyncIterator]();
+      const first = await iterator.next();
+
+      assert.equal(first.value, "one", "the first line must stream before the teardown");
+
+      controller.abort(new Error("superseded"));
+      streamController?.error(new Error("connection reset"));
+
+      await assert.rejects(iterator.next(), /connection reset/, "the original stream error must propagate to the caller");
+    });
+  });
+
+  test("a pre-aborted signal short-circuits before any line is streamed", async () => {
+
+    const controller = new AbortController();
+
+    controller.abort(new Error("already gone"));
+
+    const { fetch, signalSeen } = abortObservingFetch([ "one", "two" ]);
+    const lines: string[] = [];
+
+    await assert.rejects((async (): Promise<void> => {
+
+      for await (const line of downloadLog({ ...TARGET, fetch, signal: controller.signal })) {
+
+        lines.push(line);
+      }
+    })());
+
+    assert.deepEqual(lines, [], "a pre-aborted signal must short-circuit before any line is yielded");
+    assert.equal(signalSeen()?.aborted, true, "fetch must have received the pre-aborted signal");
   });
 });

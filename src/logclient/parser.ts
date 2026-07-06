@@ -13,6 +13,10 @@
  * - {@link parseLogLine} - a per-line parser that extracts the timestamp/plugin brackets and the ANSI-color-derived severity level, producing a {@link LogRecord} whose
  *   `message` is ANSI-stripped and whose `raw` preserves the original escapes.
  *
+ * A third pure function, {@link parseLogTimestamp} (with its shared {@link normalizeClock} clock-rule helper), interprets a {@link LogRecord.timestamp} string as an
+ * epoch instant on demand. It is deliberately separate from {@link parseLogLine}, which leaves the timestamp as text: the epoch is a cold, cheaply-derivable value that
+ * only the time-range query path needs, so it is computed by this one shared function when required rather than eagerly materialized on every parsed line.
+ *
  * This module is the single owner of the ANSI escape regex and the SGR-code-to-{@link LogLevel} map - they live beside the parser that uses them, not in `settings.ts`
  * (which holds only scalars). The design mirrors the library's per-consumer incremental-assembly pattern (`process.ts`, `mp4-assembler.ts`): rather than sharing a
  * splitter core with `process.ts`, this splitter is purpose-built, because the two have opposite control-character requirements - `process.ts` strips non-printable
@@ -21,18 +25,19 @@
  * @module
  */
 import type { LogLevel, LogRecord } from "./types.ts";
+import type { Nullable } from "../util.ts";
 
 // The ANSI escape-sequence regex. Matches CSI sequences (ESC `[` ... final byte) - which covers the SGR color sequences the log stream uses - so they can be stripped
-// when building the human-readable `message`. Compiled once at module scope since it runs on every parsed line on the parse hot path. The character class spans the
-// parameter and intermediate bytes; the trailing class is the final byte that terminates the sequence.
+// when building the human-readable `message`. Compiled once at module scope since it runs on every parsed line on the parse hot path. Two character classes cover the
+// parameter bytes and then the intermediate bytes; the trailing class is the final byte that terminates the sequence.
 // eslint-disable-next-line no-control-regex
 const ANSI_PATTERN = /\[[0-9;?]*[ -/]*[@-~]/g;
 
 // The SGR (Select Graphic Rendition) foreground color codes homebridge-config-ui-x uses to convey severity, mapped to the corresponding {@link LogLevel}. The server
 // colors the MESSAGE portion of a line - not the whole line - by wrapping it in a single SGR sequence: 31 (red) error, 33 (yellow) warn, 90 (bright black) debug, 32
-// (green) success. An info line carries no message color, so 39/info is intentionally absent from this map and resolves to a null level. The timestamp (37/white) and
-// plugin (36/cyan) colors are deliberately absent too - they prefix the message and must never be mistaken for severity. Frozen so the shared module-scope table cannot
-// be mutated by a consumer.
+// (green) success. An info line carries no message color, so the SGR code 39 is intentionally absent from this map (`readLevel` yields null for it); `parseLogLine` then
+// promotes a colored line with no severity color to "info", reserving null for a color-stripped line. The timestamp (37/white) and plugin (36/cyan) colors are
+// deliberately absent too - they prefix the message and must never be mistaken for severity. Frozen so the shared module-scope table cannot be mutated by a consumer.
 const SGR_LEVEL: Readonly<Record<string, LogLevel>> = Object.freeze({
 
   "31": "error",
@@ -49,8 +54,13 @@ const SGR_PATTERN = /\[([0-9;]*)m/g;
 
 // Match the conventional `[timestamp] [Plugin Name] ` prefix at the start of an ANSI-stripped line, capturing the timestamp and plugin text. The two bracketed fields
 // are the timestamp (rendered white) and the plugin name (rendered cyan); the remainder after the second bracket and its trailing space is the message body. Both
-// captures are non-greedy so a message that itself contains brackets does not get absorbed into the prefix.
+// captures use a negated character class (`[^\]]*`) that cannot cross a `]`, so a message containing brackets is not absorbed into the prefix.
 const BRACKET_PREFIX_PATTERN = /^\[([^\]]*)\] \[([^\]]*)\] /;
+
+// Recognize the Homebridge en-US default timestamp in both renderings the server emits: the 12-hour `M/D/YYYY, h:mm:ss AM` and the 24-hour `M/D/YYYY, HH:mm:ss` (meridiem
+// absent). One module-scope regex serves both - the meridiem group is optional - mirroring the other compiled-once patterns above. The capture groups are, in order:
+// month, day, four-digit year, hour, minute, second, and the optional AM/PM token.
+const LOG_TIMESTAMP_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),\s+(\d{1,2}):(\d{2}):(\d{2})(?:\s*([AaPp][Mm]))?$/;
 
 // Strip every ANSI escape sequence from a string, leaving only the printable text. Used to derive the human-readable `message` from a raw line; the raw line itself
 // retains the escapes so a `--raw` consumer can reproduce the server's coloring.
@@ -184,9 +194,10 @@ export class LogLineSplitter {
  * The `[timestamp] [Plugin Name] ` prefix is extracted from the ANSI-stripped text, and the remainder becomes the human-readable `message`. The severity level is read
  * from the SGR color sequence that the server wraps around the MESSAGE - which means it appears AFTER the timestamp/plugin brackets, not at the start of the line: the
  * timestamp (white) and plugin (cyan) carry their own colors, so reading the line's first color would always misclassify them as severity. We therefore scan for the
- * severity color starting just past the plugin bracket. The original line is preserved verbatim in `raw`. A line with no recognizable severity color resolves to
- * `level: null`; a line with no bracketed prefix resolves to `timestamp: null` / `plugin: null`, a `message` equal to the full stripped line, and a level read from any
- * severity color present anywhere in the (prefix-less) line.
+ * severity color starting just past the plugin bracket. The original line is preserved verbatim in `raw`. A colored line that carries no severity color resolves to
+ * `level: "info"` (Homebridge's info convention), while a fully color-stripped line resolves to `level: null` because severity is genuinely unknown; a line with no
+ * bracketed prefix resolves to `timestamp: null` / `plugin: null`, a `message` equal to the full stripped line, and a level read from any severity color present
+ * anywhere in the (prefix-less) line.
  *
  * @param raw - A single raw log line (escapes intact, terminator already removed by {@link LogLineSplitter}).
  *
@@ -222,8 +233,8 @@ export function parseLogLine(raw: string): LogRecord {
 }
 
 // Locate, in the RAW (still-escaped) line, the index just past the second `]` - the plugin bracket's close - so the severity-color scan starts at the message portion
-// and never sees the timestamp's or plugin's own color. The brackets are literal characters that ANSI sequences never contain, so scanning the raw line for them is
-// unambiguous. Returns 0 when fewer than two `]` are present (no recognizable prefix), letting the caller scan from the start.
+// and never sees the timestamp's or plugin's own color. The closing bracket `]` never appears inside the SGR sequences the server emits, so scanning the raw line for it
+// is unambiguous. Returns 0 when fewer than two `]` are present (no recognizable prefix), letting the caller scan from the start.
 function messageColorStart(raw: string): number {
 
   const firstClose = raw.indexOf("]");
@@ -265,4 +276,118 @@ function readLevel(raw: string, from: number): LogRecord["level"] {
   }
 
   return null;
+}
+
+/**
+ * Parse a Homebridge log timestamp into epoch milliseconds, or `null` when the text is not a recognized timestamp.
+ *
+ * The Homebridge UI renders the first bracketed field as the host's locale/clock string. This recognizes the en-US default in both its renderings - the 12-hour
+ * `M/D/YYYY, h:mm:ss AM` and the 24-hour `M/D/YYYY, HH:mm:ss` - via a single regex, constructs the instant in LOCAL time (matching how the server formats it in the
+ * host's own timezone), and returns its epoch milliseconds. The shared {@link normalizeClock} helper owns the meridiem-to-24-hour conversion and the clock-component
+ * range check, so that rule lives in exactly one place.
+ *
+ * Two deliberate limitations, in the same register as the rest of the client: only the en-US 12h/24h default is recognized, so a server running another locale yields
+ * `null` (the time-window stage carries forward the most recent parsed instant, so a null-epoch line is kept iff its parent record is in-window, never dropped merely for
+ * lacking a parseable epoch); and the interpretation is LOCAL time, so a client whose timezone differs from the server's skews the absolute values. A well-formed but
+ * impossible calendar date (for example `2/30`) returns `null`; a wall-clock time that falls in the client's DST spring-forward gap is best-effort accepted rather than
+ * rejected, because only the calendar fields are round-trip-validated.
+ *
+ * @param text - The raw timestamp text from a {@link LogRecord.timestamp} (the first bracketed field), for example `"6/29/2026, 7:00:00 AM"`.
+ *
+ * @returns The instant as epoch milliseconds, or `null` when the text is not a recognized en-US timestamp or names an impossible calendar date.
+ *
+ * @category Log Client
+ */
+export function parseLogTimestamp(text: string): Nullable<number> {
+
+  const match = LOG_TIMESTAMP_PATTERN.exec(text);
+
+  if(match === null) {
+
+    return null;
+  }
+
+  // The six numeric groups are guaranteed present by a successful match; the meridiem (group 7) is undefined for a 24-hour rendering. We parse the calendar fields here
+  // and delegate the clock fields to `normalizeClock`, which owns the range check and the 12-hour-to-24-hour conversion.
+  const month = Number.parseInt(match[1] ?? "", 10);
+  const day = Number.parseInt(match[2] ?? "", 10);
+  const year = Number.parseInt(match[3] ?? "", 10);
+  const clock = normalizeClock({ hour: Number.parseInt(match[4] ?? "", 10), meridiem: match[7], minute: Number.parseInt(match[5] ?? "", 10),
+    second: Number.parseInt(match[6] ?? "", 10) });
+
+  // An out-of-range clock component (an impossible hour/minute/second) invalidates the whole timestamp.
+  if(clock === null) {
+
+    return null;
+  }
+
+  // Construct the instant in LOCAL time, then round-trip the CALENDAR fields only. The round-trip rejects a well-formed-but-impossible date (the Date constructor rolls
+  // `2/30` forward into March, so the day/month no longer match); we intentionally do NOT round-trip the hour/minute/second, so a wall-clock time in the DST spring-
+  // forward gap survives rather than being rejected. Because both the clock and the calendar are validated, the result is total and needs no `NaN` guard.
+  const date = new Date(year, month - 1, day, clock.hour, clock.minute, clock.second);
+
+  if((date.getFullYear() !== year) || (date.getMonth() !== (month - 1)) || (date.getDate() !== day)) {
+
+    return null;
+  }
+
+  return date.getTime();
+}
+
+/**
+ * Normalize a raw clock reading - the captured hour/minute/second plus an optional meridiem token - into a 24-hour `{ hour, minute, second }`, or `null` when any
+ * component is out of range. This is the SINGLE source of truth for the meridiem-to-24-hour conversion and the clock-component range check, shared by
+ * {@link parseLogTimestamp} and the CLI-layer time-expression parser so neither re-implements the rule. It is a named export for those consumers and its own test, but it
+ * is intentionally not part of the package barrel.
+ *
+ * Range rules: minute and second are 0-59 in every rendering; when a meridiem is present the hour is a 12-hour value (1-12), and without one it is a 24-hour value
+ * (0-23). An out-of-range component yields `null`. The conversion maps `12am` to 0 and `12pm` to 12, adds 12 to any other PM hour, and leaves any other AM hour and every
+ * 24-hour reading unchanged.
+ *
+ * @param parts          - The raw clock components.
+ * @param parts.hour     - The hour as written (1-12 with a meridiem, 0-23 without).
+ * @param parts.meridiem - The matched `AM`/`PM` token (any case) when the source carried one, or `undefined` for a 24-hour rendering.
+ * @param parts.minute   - The minute (0-59).
+ * @param parts.second   - The second (0-59).
+ *
+ * @returns The normalized 24-hour `{ hour, minute, second }`, or `null` when any component is out of range.
+ *
+ * @category Log Client
+ */
+export function normalizeClock(parts: { hour: number; meridiem?: string; minute: number; second: number }): Nullable<{ hour: number; minute: number; second: number }> {
+
+  const { hour, meridiem, minute, second } = parts;
+
+  // Minute and second are 0-59 regardless of rendering; an out-of-range component invalidates the reading.
+  if((minute < 0) || (minute > 59) || (second < 0) || (second > 59)) {
+
+    return null;
+  }
+
+  // No meridiem means a 24-hour reading (0-23) that is already normalized; validate the range and pass it through verbatim.
+  if(meridiem === undefined) {
+
+    if((hour < 0) || (hour > 23)) {
+
+      return null;
+    }
+
+    return { hour, minute, second };
+  }
+
+  // A meridiem is present, so the hour is a 12-hour value (1-12).
+  if((hour < 1) || (hour > 12)) {
+
+    return null;
+  }
+
+  // Convert to 24-hour: `12am` is midnight (0) and `12pm` is noon (12); any other PM hour is `+12` and any other AM hour is unchanged.
+  const isPm = meridiem.charAt(0).toLowerCase() === "p";
+
+  if(hour === 12) {
+
+    return { hour: isPm ? 12 : 0, minute, second };
+  }
+
+  return { hour: isPm ? hour + 12 : hour, minute, second };
 }

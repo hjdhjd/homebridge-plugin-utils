@@ -13,6 +13,9 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 
+// Seed a CSS stylesheet matching Bootstrap's `.d-none { display: none }` so the theme component's #waitForBootstrap probe completes immediately rather than
+// timing out after 2 seconds. The `.btn-warning` rule gives the connection-error view's retry button realistic Bootstrap coloring instead of the browser's
+// unstyled default. Every show()-invoking test must call this after createTestDom so the theme's init() finishes promptly.
 function seedBootstrapProbeShim() {
 
   const sheet = new CSSStyleSheet();
@@ -21,6 +24,8 @@ function seedBootstrapProbeShim() {
   document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
 }
 
+// Yield enough event-loop turns for the orchestrator's async show() chain (homebridge.getPluginConfig + /getOptions request + theme probe) to settle. The
+// connection-error tests in this file assert on synchronous DOM state after show() resolves, so a single 10ms tick is plenty of headroom.
 async function flush() {
 
   await delay(10);
@@ -80,7 +85,8 @@ describe("webUiFeatureOptions - connection-error view", () => {
       "the remote /getErrorMessage response must surface verbatim in the error display");
 
     // The connection-error view owns the header reveal: it reveals #headerInfo itself when it renders the error block, so the error is visible without the orchestrator
-    // running its success-path revealRegions(). Every other region stays hidden - the user has no devices to navigate to, and the views no longer self-reveal on mount.
+    // running its success-path revealRegions(). Every other region stays hidden - the user has no devices to navigate to, and views never self-reveal on mount; only
+    // the orchestrator's revealRegions() call does that.
     assert.equal(skeleton.headerInfo.style.display, "", "the connection-error view must reveal the header so the error display is visible");
     assert.equal(skeleton.sidebar.style.display, "none", "sidebar must be hidden during connection-error display");
     assert.equal(skeleton.search.style.display, "none", "the search panel must stay hidden during connection-error display - the view no longer self-reveals");
@@ -151,10 +157,11 @@ describe("webUiFeatureOptions - connection-error view", () => {
     }
   });
 
-  test("clicking the enabled retry button runs cleanup() and re-fetches controllers via show()", async () => {
+  test("clicking the enabled retry button re-fetches controllers via show()", async () => {
 
-    // The full retry flow ends in cleanup() + show(). We verify the loop by counting getControllers calls: show() invokes the callback during its initial render
-    // pass, the click triggers a fresh show() which invokes it again. A second-pass invocation proves the click landed.
+    // The retry flow calls show() alone; show()'s internal await this.hide() flushes and tears down the prior cycle before re-rendering, so no explicit cleanup()
+    // is needed. We verify the loop by counting getControllers calls: show() invokes the callback during its initial render pass, the click triggers a fresh show()
+    // which invokes it again. A second-pass invocation proves the click landed.
     using _dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();

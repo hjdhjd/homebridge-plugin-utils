@@ -6,9 +6,10 @@
 /**
  * Single source of truth for the `"ipv4"` / `"ipv6"` -> `node:dgram` translations the FFmpeg subsystem needs.
  *
- * Every call site that previously hand-rolled `ipFamily === "ipv6" ? "udp6" : "udp4"` or `isIPv6 ? "::1" : "127.0.0.1"` now routes through the table lookups
- * exported here. Keeping the mapping centralized means a future addition (dual-stack socket types, SO_REUSEADDR flags, alternative loopback addresses in constrained
- * test environments) has exactly one file to update, and consumers - production or test - share the same vocabulary.
+ * Every call site in the FFmpeg subsystem that needs the ipFamily -> node:dgram translation routes through the table lookups exported here, rather than
+ * hand-rolling `ipFamily === "ipv6" ? "udp6" : "udp4"` or `isIPv6 ? "::1" : "127.0.0.1"` inline. Keeping the mapping centralized means a future addition
+ * (dual-stack socket types, SO_REUSEADDR flags, alternative loopback addresses in constrained test environments) has exactly one file to update, and
+ * consumers - production or test - share the same vocabulary.
  *
  * @module
  */

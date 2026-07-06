@@ -28,8 +28,8 @@ import { effect } from "../store.mjs";
  *      checkbox).
  *   7. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
  *
- * The per-device DOM cache is preserved from the pre-refactor architecture: navigating from device A to device B and back returns to A's previously-rendered DOM
- * without re-running the projection or rebuilding the category shells. The cache map's lifetime is the view's lifetime; aborting the signal releases it.
+ * The per-device DOM cache lets navigating from device A to device B and back return to A's previously-rendered DOM without re-running the projection or
+ * rebuilding the category shells. The cache map's lifetime is the view's lifetime; aborting the signal releases it.
  *
  * @param {Object} args
  * @param {HTMLElement} args.configTable - The `#configTable` element.
@@ -39,7 +39,7 @@ import { effect } from "../store.mjs";
  */
 export const mountOptionsView = ({ configTable, platform, signal, store }) => {
 
-  // Per-device DOM cache. Detached DOM lives here while another device's view is mounted; re-mounting restores from cache when possible.
+  // Per-view DOM cache, keyed by {@link scopeCacheKey}. Detached DOM lives here while another view is mounted; re-mounting restores from cache when possible.
   const cache = new Map();
   let mountedKey;
 
@@ -121,8 +121,9 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
 
       mountedKey = newKey;
 
-      // Restore the incoming view's persisted category state, transparently migrating any data written under the legacy (pre-reactive-store) key shape on first
-      // hit. After a view has been visited once post-upgrade, its data lives entirely under the new shape and no further legacy lookup is needed.
+      // Restore the incoming view's persisted category state, transparently migrating any data still stored under the legacy key shape (see
+      // {@link legacyContextKey}) to the current {@link scopeCacheKey} shape on first read. After a view has been migrated once, its data lives entirely under
+      // the current shape and no further legacy lookup is needed.
       const savedStates = restoreLegacyMigrated({ categoryState, newKey, scope: store.state.scope });
 
       if(savedStates) {
@@ -458,8 +459,9 @@ const applyProjectionToDom = ({ configTable, state }) => {
   }
 };
 
-// Escape a string for use inside a CSS attribute selector. We use querySelector against the rows container to find rows by their id (`row-<expandedName>`); option
-// names like `Audio.Volume` contain dots that would be interpreted as class selectors without escaping. CSS.escape is the platform-native answer.
+// Escape a string for use inside a CSS ID selector. We use querySelector against the rows container to find rows by their id (`row-<expandedName>`); option
+// names like `Audio.Volume` contain dots that would be interpreted as class selectors without escaping. CSS.escape is the platform-native answer; it is
+// unavailable in some DOM environments (including the test harness), so a manual regex fallback covers those cases.
 const cssEscape = (value) => ((typeof CSS !== "undefined") && CSS.escape) ? CSS.escape(value) : value.replace(/[^\w-]/g, "\\$&");
 
 // Handle a change event on the config table. Checkboxes get the tri-state transition; text inputs re-fire as a checkbox change so the same path handles both.

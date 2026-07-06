@@ -98,9 +98,10 @@ export class FeatureOptionsCategoryState {
       const stored = window.localStorage.getItem(this.#storageKey);
       const parsed = stored ? JSON.parse(stored) : null;
 
-      // Plain-object guard. `JSON.parse` happily returns `null`, arrays, and primitives - any of which would wedge the in-memory map on a non-indexable value
-      // and crash the first downstream get/set. The shape check matches the catch-block's graceful-degrade contract: any deviation from "this is a plain
-      // object" resets the cache to an empty map and lets the UI continue. The valid-shape branch copies the parsed entries into a null-prototype container so
+      // Plain-object guard. `JSON.parse` happily returns `null`, arrays, and primitives. Null and non-object primitives would crash the first downstream
+      // get/set on a non-indexable value, while an array is indexable but would round-trip incorrectly through JSON.stringify and lose its array semantics
+      // on the next reconstruction. The shape check matches the catch-block's graceful-degrade contract: any deviation from "this is a plain object"
+      // resets the cache to an empty map and lets the UI continue. The valid-shape branch copies the parsed entries into a null-prototype container so
       // prototype names cannot leak in via `JSON.parse`'s regular-Object output.
       if((parsed !== null) && (typeof parsed === "object") && !Array.isArray(parsed)) {
 

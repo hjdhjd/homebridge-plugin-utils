@@ -89,12 +89,12 @@ const buildTokenCss = () => [
   "  --fo-elevated-bg: var(--bs-gray-100, #f8f9fa);",
 
   // Borders.
-  "  --fo-border-strong: var(--bs-border-color, #dee2e6);",
-  "  --fo-border-subtle: rgba(0, 0, 0, 0.1);",
   // Accent-derived container border - the probed theme accent at reduced opacity, shared by every outer container frame. One declaration for both themes: the
   // accent is theme-probed, not light/dark-specific, so it needs no `:root.fo-dark` redeclaration. Kept a step lighter than the full-accent per-category frame so
   // the two read as the same family at different weights.
   "  --fo-border-accent: color-mix(in srgb, var(--fo-accent-bg) 50%, transparent);",
+  "  --fo-border-strong: var(--bs-border-color, #dee2e6);",
+  "  --fo-border-subtle: rgba(0, 0, 0, 0.1);",
 
   // Text.
   "  --fo-text-muted: var(--bs-gray-600, #6c757d);",

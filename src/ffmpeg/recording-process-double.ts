@@ -93,9 +93,10 @@ export class TestRecordingProcess implements RecordingProcess {
     this.#segments = init.segments ?? [];
     this.#stderrLog = init.stderrLog ?? [];
 
-    // A genuine recording sink that records each chunk and immediately acknowledges the write. It is intentionally independent of the abort path: `abort()` never ends
-    // or destroys it, so it stays `writable` and a consumer's writes land regardless of abort ordering - the real `FfmpegProcess.stdin` likewise stays writable until
-    // the child's own teardown, and a recording consumer must be able to flush its in-flight segment feed even as teardown races in.
+    // A genuine recording sink that records each chunk and immediately acknowledges the write. It is intentionally independent of the abort path: `abort()` never ends or
+    // destroys it, so it stays `writable` and a consumer's writes land regardless of abort ordering. This is a deliberate divergence from the real `FfmpegProcess.stdin`,
+    // which Node destroys as soon as the abort signal fires and the kill signal takes effect; the double stays open indefinitely so a recording consumer can flush its
+    // in-flight segment feed and assert on it without racing the abort-triggered teardown the real stream would otherwise undergo.
     this.stdin = new Writable({
 
       write: (chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void => {

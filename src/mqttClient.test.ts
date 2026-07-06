@@ -770,8 +770,8 @@ describe("MqttClient - subscribeSet log policy", () => {
   test("setter times out (signal-aware cancellation): logs at warn with the cancellation message", async () => {
 
     // Policy: a setter that observes its abort signal and rethrows signal.reason routes to log.warn("set handler for %s was cancelled before completion.", type). This
-    // is the third leg of the three-way log routing; `runWithAbort` returns null when its composed signal fires, which the wrapper distinguishes from the success
-    // case via the `SUBSCRIBE_SET_OK` sentinel.
+    // is one leg of the log routing documented on MqttSetHandler; `runWithAbort` returns null when its composed signal fires, which the wrapper distinguishes from
+    // the success case via the `SUBSCRIBE_SET_OK` sentinel.
     await using broker = await startTestBroker();
     const log = capturingLog();
 

@@ -40,8 +40,8 @@ describe("expectAt", () => {
 
   test("narrows readonly arrays the same way as mutable ones", () => {
 
-    // Type-level confirmation that the readonly-array overload behaves identically. The runtime path is the same; this test pins the type contract for
-    // `readonly T[]` callers (e.g., test bodies that walk a `readonly` snapshot of accumulator state).
+    // Type-level confirmation that the single readonly T[] parameter accepts a readonly array the same way it accepts a mutable one. The runtime path is the
+    // same; this test pins the type contract for `readonly T[]` callers (e.g., test bodies that walk a `readonly` snapshot of accumulator state).
     const items: readonly string[] = ["alpha"];
 
     assert.equal(expectAt(items, 0, "alpha slot"), "alpha", "readonly arrays must narrow through expectAt the same as mutable ones");
@@ -52,8 +52,8 @@ describe("silentLog", () => {
 
   test("returns an object with debug/error/info/warn methods that do nothing", () => {
 
-    // Trivial factory, but the test pins the entire surface (4 method names) so a future addition to the HomebridgePluginLogging interface that adds a new method
-    // without updating silentLog would cause silent test failures elsewhere - this test surfaces the gap directly.
+    // Trivial factory, but the test pins the entire surface so a future addition to the HomebridgePluginLogging interface that adds a new method without
+    // updating silentLog would cause silent test failures elsewhere - this test surfaces the gap directly.
     const log = silentLog();
 
     assert.equal(typeof log.debug, "function", "silentLog must expose a .debug method");

@@ -123,7 +123,8 @@ describe("TestLogSocket", () => {
 
         collected.push(line);
 
-        // Once both configured lines have arrived, mark that the generator is about to park (it parks after exhausting the configured lines), then abort to release it.
+        // Once both configured lines have arrived, record that and abort synchronously. The generator's next resumption then finds the configured lines exhausted and
+        // the signal already aborted, so it returns via the guard immediately after the line loop - it never actually reaches the parking await in this test.
         if(collected.length === 2) {
 
           parked = true;

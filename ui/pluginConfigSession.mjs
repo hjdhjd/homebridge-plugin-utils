@@ -14,9 +14,9 @@
  * copy the session reasons about.
  *
  * The host config is the ultimate source of truth; this class is not a second source but the one correct accessor to the first, holding a replica that is coherent
- * as of its last reference-advancing operation. The held replica advances by exactly two operations: {@link sync} (the read-direction advance, re-reading the host
- * config) and {@link commit} (the write-direction advance, persisting an edit). Routing, the first-run hooks, and the feature-options page all receive their config
- * from here, and nothing else calls the host config endpoints.
+ * as of its last reference-advancing operation. The held replica advances only through {@link sync} (the read-direction advance, re-reading the host config) and
+ * {@link commit} (the write-direction advance, persisting an edit). Routing, the first-run hooks, and the feature-options page all receive their config from here, and
+ * nothing else calls the host config endpoints.
  *
  * Because the host config can change underneath the session while the page is hidden (the Settings tab edits the same in-memory model), the replica is not assumed
  * frozen. The feature-options page re-syncs on every entry ({@link sync} at its `show()` chokepoint), so the replica is re-read against any external Settings-tab
@@ -96,7 +96,7 @@ export class PluginConfigSession {
 
   /**
    * Merge a patch into the primary platform entry and persist the whole array (sibling entries preserved), advancing the held reference only after the host write
-   * resolves. One of two reference-advancing operations; the write-direction peer of {@link sync}.
+   * resolves. Every configuration write funnels through this method; it is the write-direction counterpart of {@link sync}.
    *
    * Transactional by construction: the next array is built and written before it replaces the held reference, so a rejected write throws without moving the session
    * off its last-good state. Callers that need to surface the failure (the persist effect's rollback path) catch the rejection; the session itself stays consistent
@@ -115,7 +115,8 @@ export class PluginConfigSession {
   }
 
   /**
-   * Re-read the host config into the replica and seed the minimum shape. One of two reference-advancing operations; the read-direction peer of {@link commit}.
+   * Re-read the host config into the replica and seed the minimum shape. Every configuration read funnels through this method, pairing with {@link commit} as the
+   * read-direction half.
    *
    * Called on every page entry so the replica re-reads against any external Settings-tab edit before the page renders against it. An empty host result yields a
    * single bare entry; in both cases we ensure the primary entry carries the platform name so a later commit persists a well-formed block. The seed is held only -
@@ -123,8 +124,8 @@ export class PluginConfigSession {
    * name alongside actual data.
    *
    * Built like {@link commit} for symmetry and clarity: the read happens into a local, the local is seeded, and a single trailing assignment advances the held
-   * reference. (The build-then-assign is not load-bearing against a torn write here - the only I/O is the first statement - but it keeps the two reference-advancing
-   * operations the same shape.)
+   * reference. (The build-then-assign is not load-bearing against a torn write here - the only I/O is the first statement - but it keeps this method's shape
+   * consistent with {@link commit}.)
    *
    * @returns {Promise<void>}
    */

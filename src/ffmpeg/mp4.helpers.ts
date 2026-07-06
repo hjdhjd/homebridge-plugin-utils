@@ -9,7 +9,7 @@
  * Co-located with the modules under test so changes to the construction surface land next to the code that depends on them. Files matching `*.helpers.ts` are excluded
  * from the build emit (see `tsconfig.build.json`) so nothing from this module ships in the published package.
  *
- * Three construction layers:
+ * Construction layers, from primitive to fullbox builders:
  *
  * - {@link makeBox} - the primitive: header + payload. Every higher helper composes against this.
  * - {@link makeContainer} - a convenience wrapper that concatenates nested box bytes into a parent container (e.g., `makeContainer("moov", [ trak1, trak2 ])`).

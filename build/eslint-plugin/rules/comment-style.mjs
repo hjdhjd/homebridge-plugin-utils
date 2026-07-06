@@ -108,7 +108,7 @@ function findCommentContentsViolation(comment) {
   return { message, newSource };
 }
 
-// Enforce ASCII-first comment style. The rule visits every comment in a single `Program` walk and reports three classes of drift.
+// Enforce ASCII-first comment style. The rule visits every comment in a single `Program` walk and reports the following classes of drift.
 //
 // Cases covered:
 //  * Substitutable Unicode glyphs with direct ASCII equivalents - arrows (U+2192, U+2190, U+2194), comparison operators (U+2264, U+2265), plus-minus

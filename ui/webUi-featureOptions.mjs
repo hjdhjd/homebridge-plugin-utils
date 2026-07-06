@@ -40,8 +40,8 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
 /**
  * @typedef {Object} Controller
  * @property {string} address - The network address of the controller.
- * @property {string} serialNumber - The unique serial number of the controller.
  * @property {string} name - The display name of the controller.
+ * @property {string} serialNumber - The unique serial number of the controller.
  */
 
 /**
@@ -70,8 +70,8 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  * `cleanup()` is immediate destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default
  * device source. Plugins consuming the library see no change to this surface.
  *
- * Internally, the orchestrator does no state management of its own - the store owns state, effects own side effects, views own DOM. The orchestrator is the
- * lifecycle seam: it boots, it tears down. Everything else flows through the store.
+ * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle seam that boots and tears them down. The one
+ * piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the store.
  *
  * @example
  *
@@ -108,9 +108,9 @@ export class webUiFeatureOptions {
   // edits through it. Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(), and re-used across show() cycles.
   #session;
 
-  // The reactive state container. Created in show() with the loaded catalog + configured options; a fresh instance replaces the prior one on every show() call.
-  // Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(). The orchestrator never reaches into store state for state
-  // management - all reads/writes go through dispatched actions and subscribed events.
+  // The reactive state container. Created in show() with empty placeholder state; the loaded catalog and configured options arrive via the model:loaded dispatch, and
+  // a fresh instance replaces the prior one on every show() call. Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(). The
+  // orchestrator never reaches into store state for state management - all reads/writes go through dispatched actions and subscribed events.
   #store;
 
   // The configuredOptions array captured at the FIRST show()'s `model:loaded`. Survives subsequent cleanup() / show() cycles so a re-show that loads a set-equal
@@ -265,8 +265,9 @@ export class webUiFeatureOptions {
     registerKeyboardEffect({ signal, store: this.#store });
 
     // Best-effort browser-exit flush. When the tab is backgrounded or closing while the page is still alive, drain any pending edit so it reaches the host's config
-    // model. This is fire-and-forget (the page is hidden/closing with no user present, so a failure there surfaces no toast) and page-signal-keyed so it tears down
-    // with the cycle. The instant-hard-close residual (an async write cannot be guaranteed to complete during an immediate unload) is documented and accepted.
+    // model. This is fire-and-forget (the page is hidden/closing with no user present to see it, so an error toast the persist drain may raise on a failed final
+    // write lands unseen) and page-signal-keyed so it tears down with the cycle. The instant-hard-close residual (an async write cannot be guaranteed to complete
+    // during an immediate unload) is documented and accepted.
     document.addEventListener("visibilitychange", () => {
 
       if(document.visibilityState === "hidden") {
@@ -484,6 +485,9 @@ export class webUiFeatureOptions {
   /**
    * Default method for retrieving the device list from the Homebridge accessory cache. Plugins override via the constructor's `getDevices` option.
    *
+   * Used as the default `getDevices`, it is extracted unbound and later invoked with `#config` as the receiver, so its body must never reference `this` - it reads only
+   * the global `homebridge` object. A future edit that needs instance state must bind it explicitly (or stop using it as the bare default).
+   *
    * @returns {Promise<Device[]>} The list of devices sorted alphabetically by name.
    * @public
    */
@@ -643,7 +647,7 @@ const revealRegions = () => {
 };
 
 // Set-wise equality on two string arrays. Used to decide whether a re-loaded options array represents a genuine save (different set) or a no-op reorder (same set).
-// O(n) via Set.symmetricDifference; duplicate-insensitive matches the catalog-builder's first-write-wins index semantics.
+// O(n) via Set.symmetricDifference; duplicate-insensitive matches buildConfigIndex's first-write-wins semantics for the configured-options array it operates over.
 const sameOptionsSet = (a, b) => {
 
   if(a === b) {

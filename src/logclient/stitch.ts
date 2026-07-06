@@ -56,7 +56,7 @@ export interface StitchOptions {
 }
 
 // Test whether the last `k` records of `history` equal the first `k` records of `live`, comparing by normalized `raw`. This is the overlap predicate the join searches
-// over; it reads the two windows back-to-front from their respective anchor points (history's end, live's start) so the comparison aligns the seam correctly.
+// over; it walks both windows forward from their respective anchor points (history's trailing-window start, live's head) so the comparison aligns the seam correctly.
 function overlapsAt(history: readonly LogRecord[], live: readonly LogRecord[], k: number): boolean {
 
   const base = history.length - k;

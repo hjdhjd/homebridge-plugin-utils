@@ -1,10 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * cli/index.test.ts: Unit tests for the CLI module. Three test surfaces: the pure {@link prepareUi} transform (content-hashed mirror semantics, manifest shape,
- * stale-build cleanup, preservation of non-version entries, source-side validation), the {@link runCli} dispatcher (argument routing, exit codes, usage banner),
- * and the entry-point execution invoked through a symlink (the real bin invocation path that a direct-path test never exercises). The first two run against
- * AsyncDisposable tmpdir scratch roots and `process.stderr` capture helpers; the third spawns the CLI as a subprocess through a symlink. No test touches a real
- * install or modifies the working tree.
+ * cli/index.test.ts: Unit tests for the CLI module. Four test surfaces: the pure {@link prepareUi} transform (content-hashed mirror semantics, manifest shape,
+ * stale-build cleanup, preservation of non-version entries, source-side validation), the pure {@link prepareDocs} transform (catalog validation, scope-hook
+ * forwarding, atomic-write marker splicing), the {@link runCli} dispatcher (argument routing, exit codes, usage banner), and the entry-point execution invoked
+ * through a symlink (the real bin invocation path that a direct-path test never exercises). Every surface but the last runs against AsyncDisposable tmpdir
+ * scratch roots and `process.stderr` capture helpers; the entry-point test alone spawns the CLI as a subprocess through a symlink. No test touches a real install
+ * or modifies the working tree.
  */
 import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference, spliceMarkedRegion } from "../featureOptions-docs.ts";
 import { USAGE, prepareDocs, prepareUi, runCli } from "./index.ts";

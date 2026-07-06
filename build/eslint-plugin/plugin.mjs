@@ -16,7 +16,7 @@ import ruleSplitTypeImports from "./rules/split-type-imports.mjs";
  * Register the plugin in a flat config under the `plugins` property, then reference its rules by their fully qualified name:
  *
  * ```js
- * import { plugin } from "homebridge-plugin-utils/build/eslint-plugin/index.mjs";
+ * import { plugin } from "homebridge-plugin-utils/eslint";
  * export default [{
  *   plugins: { "@hjdhjd": plugin },
  *   rules: { "@hjdhjd/split-type-imports": "warn" }

@@ -4,7 +4,9 @@
  */
 
 // The Node.js built-in modules that must be referenced via the `node:` protocol. Subpath imports (e.g., `timers/promises`) are matched by comparing the
-// top-level segment before the first `/`, so adding a new builtin here covers both bare and subpath references in one shot.
+// top-level segment before the first `/`, so adding a new builtin here covers both bare and subpath references in one shot. This list is hand-maintained
+// rather than sourced from `node:module`'s `builtinModules` array so the rule's behavior stays fixed and version-independent across whatever Node runtime
+// ESLint happens to execute under, instead of silently drifting as builtins are added or removed between Node releases.
 const NODE_BUILTIN_MODULES = new Set([
   "assert", "async_hooks", "buffer", "child_process", "cluster", "console", "crypto", "dgram", "diagnostics_channel", "dns", "domain", "events", "fs", "http", "http2",
   "https", "inspector", "module", "net", "os", "path", "perf_hooks", "process", "punycode", "querystring", "readline", "repl", "stream", "string_decoder", "sys",
@@ -14,7 +16,8 @@ const NODE_BUILTIN_MODULES = new Set([
 // Find the source literal that should be rewritten with a `node:` prefix, or null when the reference is not a built-in or already correctly prefixed. We
 // look at the top-level module name (split on first `/`) so subpath references match too. For every supported visitor - Import / Export declarations
 // and `ImportExpression` (dynamic `import("x")`) - the typescript-eslint AST places the source literal at `node.source`. A null result means either the
-// value isn't a string, the module isn't a builtin, or the declaration carries no source clause (e.g., `export { foo };`).
+// value isn't a string (which also covers a declaration with no source clause at all, e.g. `export { foo };`, since `node.source` is then undefined) or
+// the module isn't a builtin.
 function findBuiltinSourceToPrefix(node, value) {
 
   if(typeof value !== "string") {

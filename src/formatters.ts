@@ -2,14 +2,16 @@
  *
  * formatters.ts: Browser-safe magnitude and percentage formatters shared between the server-side `util.ts` surface and the browser-shipped `featureOptions.ts`
  * model.
- *
+ */
+
+/**
  * **Why this file exists.** `featureOptions.ts` ships into `dist/ui/` for the browser to load (via the `copyFeatureOptions` build step). The catalog's built-in
  * formatter registry needs `formatBps`, `formatBytes`, `formatMs`, `formatPercent`, and `formatSeconds` at runtime - and pulling them from `util.ts` would drag in
  * `util.ts`'s `node:timers/promises` import, which the browser cannot resolve. This module is the SSOT for the magnitude-rendering policy. It has zero runtime
  * imports of any kind, so shipping it alongside `featureOptions.js` is safe in any runtime that can execute ES2024+ JavaScript.
  *
  * **Precision policy.** Whole numbers render without a trailing decimal place ("5" not "5.0"); fractional numbers render to one decimal place. Centralizing the
- * precision policy in {@link formatMagnitude} means tightening it later - more precision, a thousands separator, locale-aware formatting - is a single-line change
+ * precision policy in `formatMagnitude` means tightening it later - more precision, a thousands separator, locale-aware formatting - is a single-line change
  * rather than a sweep across every format helper.
  *
  * **Consumers.** `util.ts` re-exports these for the server-side surface; `featureOptions.ts` imports directly from here to keep its browser-runnable dependency

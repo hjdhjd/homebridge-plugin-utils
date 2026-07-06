@@ -119,7 +119,7 @@ describe("FfmpegExec - abort cancellation", () => {
 
     // Stderr ready line, then idle indefinitely. Only abort drives termination. The script deliberately writes nothing to stdout: this test asserts the lifetime
     // channels (stdoutBuffer settles, signal.reason carries the cause, exited reports the kill), not byte content. Mixing a partial stdout write into the script
-    // would tempt a content assertion that the redesign explicitly does not guarantee - `stdoutBuffer` is the data channel, not a disposition sentinel.
+    // would tempt a content assertion that stdoutBuffer's contract does not guarantee - `stdoutBuffer` is the data channel, not a disposition sentinel.
     const script = [ "-e", "process.stderr.write(\"ready\\n\"); setInterval(() => {}, 100000);" ];
 
     await using exec = new FfmpegExec(makeOptions(), { args: script });
@@ -132,8 +132,8 @@ describe("FfmpegExec - abort cancellation", () => {
     const stdout = await exec.stdoutBuffer;
     const exit = await exec.exited;
 
-    // Three load-bearing invariants of the abort path. None of them concern the byte content of `stdout` - that is incidental to disposition under the redesign and
-    // would be racy to assert against.
+    // Load-bearing invariants of the abort path, none of which concern the byte content of `stdout` - that is incidental to disposition and would be racy to
+    // assert against.
 
     // 1. `stdoutBuffer` always settles to a Buffer, never rejects, never hangs. Callers may `await` it without a try/catch on every code path.
     assert.ok(Buffer.isBuffer(stdout), "stdoutBuffer must settle to a Buffer instance regardless of how the run ended");

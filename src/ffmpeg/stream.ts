@@ -218,7 +218,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
     // because the watchdog must not police startup or establishment. Those are separate concerns owned elsewhere: "did the child process start" is the base-class
     // optional `startupTimeout` (documented in process.ts), and "did the return stream ever go live" is the consumer's - the HomeKit session lifecycle and the
     // consumer's establishment gate - which is the only thing that bounds a stream that never delivers a first packet. We do not fold that bound in here, and on the
-    // one-way live-view path it remains an external bound exactly as it was before this watchdog ever existed. Arming on `ready` was wrong precisely because a
+    // one-way live-view path that bound stays external to this class, owned by the consumer rather than this watchdog. Arming on `ready` was wrong precisely because a
     // ready-armed clock starts before any media has round-tripped: on a cold start the first return packet cannot arrive within the window (prime, transcode, SRTP
     // egress, client decode, client RTCP back all have to complete first), so the clock counts down through that legitimate first-packet latency and false-positives
     // on a perfectly healthy stream. Arming on the packet itself is immune by construction. Note the message handler arms regardless of `ready`: any datagram that

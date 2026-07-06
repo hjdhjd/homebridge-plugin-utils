@@ -32,7 +32,7 @@ import { realpathSync } from "node:fs";
 // Semver-shaped subdir names that {@link prepareUi} owns. Only entries matching this pattern are candidates for the stale-build sweep; anything else in the
 // destination is left alone. Pattern matches `MAJOR.MINOR.PATCH` plus the optional pre-release (`-...`) and build-metadata (`+...`) segments semver permits, so a
 // plugin author who happens to name a subdir `assets` or `i18n` is never at risk of having it removed. The hash-suffixed shape this CLI writes (e.g.,
-// `2.0.0-abc1234567890def0`) falls into the pre-release segment, so the same pattern catches stale released-version directories from prior tooling and stale
+// `2.0.0-abc1234567890def`) falls into the pre-release segment, so the same pattern catches stale released-version directories from prior tooling and stale
 // hash-suffixed directories from prior runs alike.
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/;
 
@@ -102,8 +102,8 @@ async function computeContentHash(root: string): Promise<string> {
 }
 
 /**
- * Mirror HBPU's compiled browser-side webUI into a plugin's homebridge-ui/public directory under a content-hashed, version-named subdirectory. The subdir name
- * combines the package's semver version with a short content hash of `dist/ui/` (e.g., `2.0.0-abc1234567890def0`), so the browser's HTTP cache invalidates
+ * Mirror HBPU's compiled browser-side webUI into a plugin's homebridge-ui/public/lib directory under a content-hashed, version-named subdirectory. The subdir name
+ * combines the package's semver version with a short content hash of `dist/ui/` (e.g., `2.0.0-abc1234567890def`), so the browser's HTTP cache invalidates
  * structurally on any content change rather than via per-file query-string hacks: the plugin's `index.html` reads the small manifest written alongside, then
  * injects a trailing-slash importmap entry that prefixes every `./lib/` import with the hashed-versioned path. Transitive imports inherit the prefix through
  * relative-URL resolution, so cache-busting reaches files the importmap never names.
@@ -180,10 +180,10 @@ export async function prepareUi({ dest, sourceRoot }: { dest: string; sourceRoot
   await cp(sourceUiDir, versionedDest, { recursive: true });
 
   // Destination manifest sits at the top of `dest`, NOT inside the versioned subdir. The plugin's `index.html` reads it (with `cache: "no-store"`) to discover
-  // which subdir to load from. Three fields all serve a purpose: `version` for human-readable identification, `hash` for change-detection, `subdir` for the
-  // canonical "where to load from" answer that consumers reference directly without reconstructing the join. The join convention stays here in the producer; if we
-  // ever change it (different delimiter, different segment order), no consumer breaks. Pretty-printed JSON because the file is human-read often enough to matter
-  // (debugging sessions, README screenshots, support requests).
+  // which subdir to load from. Every manifest field serves a distinct purpose: `version` for human-readable identification, `hash` for change-detection, `subdir`
+  // for the canonical "where to load from" answer that consumers reference directly without reconstructing the join. The join convention stays here in the
+  // producer; if we ever change it (different delimiter, different segment order), no consumer breaks. Pretty-printed JSON because the file is human-read often
+  // enough to matter (debugging sessions, README screenshots, support requests).
   await writeFile(join(absDest, "manifest.json"), JSON.stringify({ hash, subdir, version }, null, 2) + "\n");
 
   // Sweep stale versioned subdirs from prior runs. The semver-shape filter is the discipline that keeps the sweep narrow: anything in the destination that doesn't
@@ -198,16 +198,16 @@ export async function prepareUi({ dest, sourceRoot }: { dest: string; sourceRoot
 
 /**
  * Regenerate a plugin's Feature Options reference by projecting its live catalog through HBPU's shared renderer and splicing the result into the plugin's doc, in
- * place between the shared `FEATURE OPTIONS:BEGIN` / `END` markers. This centralizes the read/splice/atomic-write orchestration that every plugin used to hand-roll
- * in a near-identical `*-gendocs.ts` shim; the per-plugin shim is now just a `build-docs` script line invoking this subcommand.
+ * place between the shared `FEATURE OPTIONS:BEGIN` / `END` markers. This centralizes the read/splice/atomic-write orchestration so a plugin's `build-docs` script
+ * only needs a single line invoking this subcommand instead of a bespoke `*-gendocs.ts` shim.
  *
  * Pure-by-injection on `render` and `splice`: the renderer and the splice helper are passed in rather than imported statically, so this function is unit-testable
  * against the real `featureOptions-docs.ts` exports without a built `dist/`, and the CLI's single-file no-static-relative-import discipline is preserved (the dispatch
  * site reaches the renderer through a computed dynamic import). The catalog is loaded by dynamic import of its absolute path resolved to a `file:` URL, since a bare
- * absolute path is not a valid ESM specifier on every platform. The module's two required exports are validated up front so a mis-shaped catalog fails with a
+ * absolute path is not a valid ESM specifier on every platform. The module's required exports are validated up front so a mis-shaped catalog fails with a
  * diagnostic naming the offending module and export rather than a downstream type error inside the renderer.
  *
- * The same catalog module may OPTIONALLY export two scope hooks - `describeCategoryScope` and `describeOptionScope` - that the renderer threads through to contribute
+ * The same catalog module may OPTIONALLY export scope hooks - `describeCategoryScope` and `describeOptionScope` - that the renderer threads through to contribute
  * plugin-private scope prose (a device-scope line under a category heading, a suffix on an option's description cell). These are the annotated-plugin extension point
  * (Protect/Access); a zero-config plugin (ratgdo) exports neither and documents every option unconditionally. Each hook is validated INDEPENDENTLY: if a module exports
  * one under either name it MUST be a function, else this throws a framed diagnostic naming the module and the offending export; an absent hook is simply omitted, and
@@ -238,7 +238,7 @@ export async function prepareDocs({ catalogModulePath, docPath, render, splice }
 
   // Load the catalog by dynamic import. A bare absolute filesystem path is not a portable ESM specifier (Windows drive letters in particular are mis-parsed), so we
   // convert it to a `file:` URL first - the same indirection the `hblog` bin uses to reach its sibling library from a single-file launcher. The namespace is typed with
-  // the two required catalog exports plus the two OPTIONAL scope hooks, each `unknown` until validated below - the same honest-until-checked shape the catalog arrays
+  // the required catalog exports plus the OPTIONAL scope hooks, each `unknown` until validated below - the same honest-until-checked shape the catalog arrays
   // carry, so nothing reaches the renderer as a mis-typed value.
   const catalog = await import(pathToFileURL(catalogModulePath).href) as {
     describeCategoryScope?: unknown;
@@ -247,7 +247,7 @@ export async function prepareDocs({ catalogModulePath, docPath, render, splice }
     featureOptions?: unknown;
   };
 
-  // Validate the catalog's two required exports before rendering so a mis-built or wrong-module path fails with a diagnostic that names what is wrong and where,
+  // Validate the catalog's required exports before rendering so a mis-built or wrong-module path fails with a diagnostic that names what is wrong and where,
   // rather than surfacing as an opaque type error deep inside the renderer's traversal.
   if(!Array.isArray(catalog.featureOptionCategories)) {
 
@@ -259,7 +259,7 @@ export async function prepareDocs({ catalogModulePath, docPath, render, splice }
     throw new Error("Catalog module " + catalogModulePath + " does not export a `featureOptions` object.");
   }
 
-  // Validate the two OPTIONAL scope hooks independently. Each is present-but-must-be-a-function or absent: a present non-function is a mis-shaped catalog and fails
+  // Validate every OPTIONAL scope hook independently. Each is present-but-must-be-a-function or absent: a present non-function is a mis-shaped catalog and fails
   // with a diagnostic naming the module and the offending export (the same framing the required exports use), while an absent hook stays `undefined` and is inert -
   // the renderer treats a missing hook as "omit cleanly", so the zero-hook path (ratgdo) is unchanged. We check before casting so the cast to the renderer's hook
   // parameter type only happens once the value is known to be callable, mirroring how the catalog arrays are cast only after their shape guard.
@@ -273,9 +273,9 @@ export async function prepareDocs({ catalogModulePath, docPath, render, splice }
     throw new Error("Catalog module " + catalogModulePath + " exports a non-function `describeOptionScope`.");
   }
 
-  // Render the live catalog into the markdown fragment. The two optional scope hooks are forwarded through alongside the catalog; an `undefined` hook is inert, so a
-  // zero-hook catalog renders exactly as before. The renderer is the single source of truth for the index and per-category tables - and now for the scope prose those
-  // hooks contribute - while this function only wires the catalog and its hooks to it. Each hook is cast to the renderer's parameter type only after its function
+  // Render the live catalog into the markdown fragment. The optional scope hooks are forwarded through alongside the catalog; an `undefined` hook is inert, so a
+  // zero-hook catalog renders cleanly. The renderer is the single source of truth for the index, the per-category tables, and the scope prose the optional hooks
+  // contribute, while this function only wires the catalog and its hooks to it. Each hook is cast to the renderer's parameter type only after its function
   // guard above, the same discipline the catalog arrays follow.
   const reference = render({ categories: catalog.featureOptionCategories as Parameters<typeof render>[0]["categories"],
     describeCategoryScope: catalog.describeCategoryScope as Parameters<typeof render>[0]["describeCategoryScope"],
@@ -409,8 +409,8 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
  * The realpath normalization is the load-bearing detail. npm exposes a bin as a symlink in `node_modules/.bin`, so under default Node the launch path is the
  * symlink while `import.meta.url` is the resolved target - a raw string comparison never matches and the CLI silently does nothing. Canonicalizing both sides
  * collapses that indirection (and any `file:`-dependency, copied-package, or `--preserve-symlinks` layout) to a single real path, so the check holds however the
- * launcher reached this file. We use this rather than `import.meta.main` because the latter is `undefined` on Node 22.0-22.17 (it landed in 22.18); relying on it
- * would reintroduce the silent no-op on the lower end of the package's `>=22` support range.
+ * launcher reached this file. We keep this explicit realpath comparison rather than deferring to `import.meta.main`: the symlink and copied-package indirection is the
+ * load-bearing concern the entry-point check exists to handle, and resolving it explicitly keeps that handling visible at the call site.
  *
  * @returns `true` when invoked as the program entry, `false` when imported or when the launch path cannot be resolved.
  */

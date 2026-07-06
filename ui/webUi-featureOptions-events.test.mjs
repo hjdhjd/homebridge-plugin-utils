@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-featureOptions-events.test.mjs: Tests for the event delegation that now lives in the views (options / search / nav) and the keyboard effect rather than
- * in the orchestrator. Companion to webUi-featureOptions.test.mjs - that file pins the show/hide/render/nav lifecycle, this one pins the click / change / input /
+ * ui/webUi-featureOptions-events.test.mjs: Tests for the event delegation that lives in the views (options / search / nav) and the keyboard effect, not in
+ * the orchestrator. Companion to webUi-featureOptions.test.mjs - that file pins the show/hide/render/nav lifecycle, this one pins the click / change / input /
  * keydown routes that dispatch user actions into the store, which the reducer and the persistence effect then consume. Tests synthesize DOM events on the live
  * orchestrator instance after show() so the full delegation path runs end-to-end.
  */
@@ -254,7 +254,9 @@ describe("webUiFeatureOptions event delegation - change handler", () => {
     searchInput.value = "Detect";
     searchInput.dispatchEvent(new Event("input", { bubbles: true }));
     await flush();
-    await delay(310); // wait past the search component's 300ms debounce
+
+    // Wait past the search component's 300ms debounce.
+    await delay(310);
 
     const volumeRow = harness.skeleton.configTable.querySelector("[id='row-Audio.Volume']");
 
@@ -277,9 +279,8 @@ describe("webUiFeatureOptions event delegation - change handler", () => {
 describe("webUiFeatureOptions event delegation - keydown handler", () => {
 
   // The Enter/Space-on-category-header behavior is owned natively by `<details>`/`<summary>` - the browser handles the keyboard activation and toggles
-  // `details.open` without any handler in this library. Tests for those keystrokes would be testing the user-agent's behavior, not ours; they were removed
-  // when the library migrated off the table-based category construct and onto the native disclosure widget. The keydown handler this section covers now only
-  // handles Escape on the search input and the Ctrl+F / Cmd+F search-focus shortcut.
+  // `details.open` without any handler in this library. Tests for those keystrokes would be testing the user-agent's behavior, not ours, so they are not
+  // covered here. The keydown handler this section covers only handles Escape on the search input and the Ctrl+F / Cmd+F search-focus shortcut.
 
   test("Escape on the search input clears the query and re-fires the input event", async () => {
 
@@ -352,7 +353,7 @@ describe("webUiFeatureOptions event delegation - keydown handler", () => {
 
 describe("webUiFeatureOptions event delegation - click forwarding via nav links", () => {
 
-  // Sidebar nav-link clicks dispatch to global / controller / device handlers based on the data-navigation attribute. The events test pins each of the three routes
+  // Sidebar nav-link clicks dispatch to global / controller / device handlers based on the data-navigation attribute. The events test pins each of these routes
   // by clicking a synthesized nav-link and asserting that the orchestrator's view shifted accordingly.
 
   test("clicking a controller nav-link dispatches scope:changed for that controller", async () => {
@@ -430,8 +431,8 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
     await flush();
 
     // The non-controller device's nav-link is the second device link in the container - the first slot is the controller itself, which is also rendered as a
-    // device link by the orchestrator's convention. We address by position rather than by name attribute because happy-dom doesn't always reflect the `name`
-    // property to the attribute on anchor elements.
+    // device link by the orchestrator's convention. We locate it by its rendered link text ("Cam") rather than by a name attribute, because happy-dom doesn't
+    // always reflect the `name` property to the attribute on anchor elements.
     const deviceLinks = skeleton.devicesContainer.querySelectorAll("a[data-navigation='device']");
     const deviceLink = [...deviceLinks].find((link) => link.textContent === "Cam");
 

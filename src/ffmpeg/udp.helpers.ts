@@ -6,7 +6,7 @@
 /**
  * Shared test helpers for UDP-driven tests.
  *
- * Five primitives cover every loopback socket flow in `src/ffmpeg/`:
+ * The following primitives cover every loopback socket flow in `src/ffmpeg/`:
  *
  * - {@link reserveEphemeralPort} - bind port 0 on the loopback interface, read the kernel-assigned port back, deterministically release the socket, return the port.
  * - {@link probePortAvailable} - attempt to bind to a specific port on the loopback interface; resolve when the bind succeeds and the socket has been released, or

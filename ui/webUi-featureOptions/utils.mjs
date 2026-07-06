@@ -25,8 +25,8 @@ export function delay(ms, signal) {
 
   const { promise, resolve, reject } = Promise.withResolvers();
 
-  // `onAbort` references `timer` lexically; the const is initialized before any addEventListener fires it, so the TDZ is never touched at call time. We declare
-  // `onAbort` first so the timer callback can remove it on resolve.
+  // `onAbort` references `timer` lexically; the const is initialized before any addEventListener fires it, so the TDZ is never touched at call time. Both
+  // closures only run later, after both consts are initialized, so `onAbort` is declared first purely for readability - either declaration order is safe.
   const onAbort = () => {
 
     clearTimeout(timer);
@@ -163,7 +163,7 @@ export function setCategoryExpanded(details, expanded) {
 }
 
 /**
- * Show a transient success toast below the status bar.
+ * Show a transient toast below the status bar (success styling by default; pass a variant for other alert types).
  *
  * The toast auto-dismisses after 3 seconds with a fade-out transition. Uses Bootstrap's alert component for consistent styling.
  *

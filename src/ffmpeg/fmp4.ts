@@ -98,7 +98,9 @@ export interface FMp4Box {
  * Locates the first ISO BMFF box of a given type within a byte range.
  *
  * Walks the standard box headers (4-byte big-endian size + 4-byte ASCII type) starting at `start` and ending at `end`. Returns the offset and size of the first
- * matching box, or `null` if no match is found. Does not handle extended-size boxes (64-bit size field) as these are uncommon in fMP4 livestream contexts.
+ * matching box. Returns `null` when no box of the requested type is found in range, and also when the walk encounters a box whose declared size is invalid - below
+ * the header size, extending past the search range, or an extended/open-ended size (64-bit size field, uncommon in fMP4 livestream contexts and unsupported here) -
+ * since a malformed size makes it unsafe to keep walking; the two cases are indistinguishable from the return value alone.
  *
  * @param buffer       - The buffer containing ISO BMFF box data.
  * @param type         - The 4-character ASCII box type to search for (e.g. "moof", "traf", "trun"). Must be exactly 4 characters.

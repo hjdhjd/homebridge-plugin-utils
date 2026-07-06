@@ -6,9 +6,9 @@
 /**
  * Single authority for constructing the URLs the log client connects to.
  *
- * Every transport (`auth.ts`, `rest.ts`, `socket.ts`) needs to derive the same scheme + host + port from the same configuration; routing that derivation through one
- * module keeps the TLS-to-scheme mapping and the authority assembly in exactly one place, so a change to how URLs are built propagates everywhere rather than being
- * re-derived (and potentially diverging) at each call site. The functions are pure string builders with no I/O.
+ * Every transport (`auth.ts`, `rest.ts`, `socket.ts`) applies the same TLS-to-scheme mapping (http/https for REST and auth, ws/wss for the socket) and authority assembly
+ * over the same host + port. Routing that derivation through one module keeps the mapping and assembly in exactly one place, so a change to how URLs are built propagates
+ * everywhere rather than being re-derived (and potentially diverging) at each call site. The functions are pure string builders with no I/O.
  *
  * @module
  */
@@ -29,7 +29,8 @@ function formatHost(host: string): string {
 
 // Build the scheme + authority origin for a target under a given scheme. We assemble the authority string by hand (bracketing IPv6) and construct a `URL` from the
 // complete string so the platform validates and normalizes it in one pass - rather than mutating an empty `URL`'s `hostname`, whose setter silently rejects a bare IPv6
-// literal. The `URL.origin` is the scheme + authority with no trailing slash, exactly what callers append a leading-slash path to.
+// literal. The `URL.origin` is the scheme + authority with no trailing slash; `httpBaseUrl` exposes that origin string for downstream path concatenation, while
+// `socketUrl` keeps the `URL` object and configures it further via `pathname`/`searchParams`.
 function originFor(scheme: string, target: EndpointTarget): URL {
 
   return new URL(scheme + "://" + formatHost(target.host) + ":" + target.port.toString());
@@ -55,7 +56,8 @@ export interface EndpointTarget {
  * Build the HTTP(S) base URL (scheme + authority, no trailing slash) for the REST and auth endpoints.
  *
  * The returned string is the origin only - callers append the specific API path. We construct it through the platform `URL` so host and port are normalized and
- * encoded consistently, then strip the trailing slash `URL` appends to a bare origin so callers can concatenate a leading-slash path without producing a double slash.
+ * encoded consistently, then read `URL.origin`, which yields the scheme + authority with no trailing slash, so callers can concatenate a leading-slash path without
+ * producing a double slash.
  *
  * @param target - The connection target. See {@link EndpointTarget}.
  *

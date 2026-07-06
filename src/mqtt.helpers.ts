@@ -96,8 +96,8 @@ export async function startTestBroker(): Promise<TestBroker> {
     [Symbol.asyncDispose]: async (): Promise<void> => {
 
       // Close the aedes broker first so it disconnects any still-live clients cleanly through the protocol layer (CONNACK-tracked sessions get a proper close), then
-      // close the underlying TCP server so the listening socket is released. The two stages are sequential rather than parallel because aedes drives close events on
-      // the connections it owns, and those events need the server's IO surface to flush before the server itself is torn down.
+      // close the underlying TCP server so the listening socket is released. Each teardown step runs sequentially rather than in parallel because aedes drives close
+      // events on the connections it owns, and those events need the server's IO surface to flush before the server itself is torn down.
       await new Promise<void>((resolve) => aedes.close(() => resolve()));
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

@@ -24,11 +24,12 @@ function configRules(configs, name) {
 
 /**
  * The ESLint plugin namespace map used by the composed configuration: `@hjdhjd` (this package's rules), `@stylistic` (the official stylistic-rules
- * plugin), and `@typescript-eslint`. Drop this object into the `plugins` slot of a flat config block to register all three at once.
+ * plugin), and `@typescript-eslint`. Drop this object into the `plugins` slot of a flat config block to register every plugin namespace this preset
+ * composes at once.
  *
  * The type annotation is deliberately loose since consumers that read the named `plugins` export do their own narrowing before touching rule entries.
- * It's annotated explicitly so the emitted type stays portable - the raw inference picks up typescript-eslint's package-private `CompatiblePlugin`
- * shape and TypeDoc (TS2742) refuses to serialize it into the `.d.ts` without citing a deep module path.
+ * It's annotated explicitly so the emitted type stays portable - the raw inference picks up typescript-eslint's exported `CompatiblePlugin` shape,
+ * and the `tsconfig.eslint-plugin.json` declaration-only build (TS2742) refuses to serialize it into the `.d.ts` without citing a deep module path.
  *
  * @type {Record<string, { meta?: { name: string; version?: string }; rules?: Record<string, unknown> }>}
  */
@@ -90,14 +91,18 @@ const tsRules = {
 const jsRules = {
 
   ...ts.configs.disableTypeChecked.rules,
+
+  // Restates the "off" value that `disableTypeChecked` already assigns to this rule.
   "@typescript-eslint/no-floating-promises": "off",
   "no-unused-vars": [ "warn", { "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_", "varsIgnorePattern": "^_" } ]
 };
 
 /**
- * Rule preset applied to every linted file regardless of language. Composes the ESLint-recommended baseline from `typescript-eslint` with the full
- * `@hjdhjd/*` rule set, the `@stylistic/*` whitespace and formatting rules, and the project's opinionated `sort-imports` / `sort-keys` / `quotes` /
- * `eqeqeq` / `curly` constraints.
+ * Rule preset applied to every linted file regardless of language. Disables the base ESLint rules that are redundant once TypeScript's own compiler
+ * and syntax already catch the same errors, mirroring the `typescript-eslint` compatibility overlay it spreads in; the enabled ESLint-recommended
+ * baseline itself comes from the separate `eslintJs.configs.recommended` block pushed in {@link config}. Layers on top of that the full `@hjdhjd/*`
+ * rule set, the `@stylistic/*` whitespace and formatting rules, and the project's opinionated `sort-imports` / `sort-keys` / `quotes` / `eqeqeq` /
+ * `curly` constraints.
  *
  * Spread into the `rules:` slot of the all-files block of a flat config.
  */

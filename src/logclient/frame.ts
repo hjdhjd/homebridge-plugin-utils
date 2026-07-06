@@ -9,7 +9,7 @@
  * The log client speaks raw Engine.IO over a single WebSocket: each WebSocket message is exactly one Engine.IO packet (no `\x1e` payload batching, since batching is an
  * HTTP-long-polling concern, not a WebSocket one), and a Socket.IO packet is layered inside an Engine.IO `message` packet. This module is the single source of truth for
  * that two-layer framing - the Engine.IO packet-type digits (`0` open, `2` ping, `3` pong, `4` message), the Socket.IO packet-type digits inside a message (`0` CONNECT,
- * `2` EVENT, `4` CONNECT_ERROR), and the `/log,` namespace prefix. It is deliberately pure and stateful-free, mirroring the `mp4-parser.ts` / `rtp-parser.ts` pure-parser
+ * `2` EVENT, `4` CONNECT_ERROR), and the `/log,` namespace prefix. It is deliberately pure and stateless, mirroring the `mp4-parser.ts` / `rtp-parser.ts` pure-parser
  * precedent: it turns wire text into a {@link ProtocolEvent} discriminated union and back, and leaves all I/O, liveness, and lifecycle to the composing socket.
  *
  * `allowEIO3` interop: the server is started with `allowEIO3: true`, so a downgraded EIO3 client would see the Socket.IO CONNECT acknowledgement as a bare `40` with no
@@ -47,9 +47,9 @@ const SOCKET_CONNECT_ERROR = "4";
  * A decoded protocol event, discriminated on `kind`.
  *
  * The union collapses the two-layer Engine.IO/Socket.IO wire format into the handful of events the log client actually reacts to: the Engine.IO handshake (`open`) and
- * heartbeat (`ping`/`pong`), and the Socket.IO namespace lifecycle (`namespaceConnect`/`namespaceError`) and payload delivery (`message`). Anything the codec does not
- * recognize - including binary frames, which our text protocol never uses - decodes to `unknown` carrying the original text, so a consumer can log it without the codec
- * having to model every Engine.IO/Socket.IO packet type that the log stream never exercises.
+ * heartbeat (`ping`/`pong`), and the Socket.IO namespace lifecycle (`namespaceConnect`/`namespaceError`) and payload delivery (`message`). Any unrecognized string
+ * frame the codec does not model - an empty frame, an unknown Engine.IO digit, or an unhandled Socket.IO packet type - decodes to `unknown` carrying the original text,
+ * so a consumer can log it without the codec having to model every Engine.IO/Socket.IO packet type that the log stream never exercises.
  *
  * @category Log Client
  */
@@ -64,9 +64,10 @@ export type ProtocolEvent = { readonly kind: "message"; readonly event: string; 
 /**
  * An outbound protocol event to serialize, discriminated on `kind`.
  *
- * The client only ever needs to send three frame shapes: a namespace connect (`connect`), a namespace event with a JSON payload (`event` - this is how `tail-log` is
- * requested), and a heartbeat pong (`pong`). Modeling the outbound set as its own narrow union keeps {@link encodeFrame} total over exactly what the client sends, rather
- * than re-using the wider inbound {@link ProtocolEvent} and leaving unserializable arms.
+ * The OutboundEvent union models three frame shapes: a namespace connect (`connect`), a namespace event with a JSON payload (`event` - this is how `tail-log` is
+ * requested), and a heartbeat pong (`pong`). A fourth outbound frame, the namespace DISCONNECT, is hand-assembled separately (see {@link LOG_NAMESPACE_PATH}) because its
+ * fixed, argument-free shape needs no serialization through this codec. Modeling the outbound set as its own narrow union keeps {@link encodeFrame} total over exactly
+ * what it models, rather than re-using the wider inbound {@link ProtocolEvent} and leaving unserializable arms.
  *
  * @category Log Client
  */
@@ -123,7 +124,8 @@ export function encodeFrame(event: OutboundEvent): string {
 
     default: {
 
-      // The union is exhausted above; this satisfies the compiler's exhaustiveness check and guards against a future arm being added without a handler.
+      // Every OutboundEvent arm above returns, so this `default` is an unreachable fallback that yields an empty string; it provides no compile-time exhaustiveness
+      // guard, so a future arm added without its own case would silently fall through to this empty frame rather than failing to compile.
       return "";
     }
   }
@@ -175,8 +177,9 @@ function decodeSocketMessage(body: string): ProtocolEvent {
 
     case SOCKET_EVENT: {
 
-      // A namespace EVENT carrying `[eventName, ...args]`. Peel an optional numeric ack id that may precede the JSON array (the server does not request acks on the log
-      // stream, but the format permits one, so we skip leading digits before the `[`). The first array element is the event name; the second is the payload we forward.
+      // A namespace EVENT carrying `[eventName, ...args]`. Peel an optional numeric ack id that may precede the JSON payload (the server does not request acks on the
+      // log stream, but the format permits one, so we skip leading digits before the first JSON-value start character: `[`, `{`, or `"`). The first array element is
+      // the event name; the second is the payload we forward.
       const jsonStart = rest.search(/[[{"]/);
       const json = jsonStart === -1 ? rest : rest.slice(jsonStart);
       const parsed = safeJsonParse(json);
@@ -221,8 +224,9 @@ function safeJsonParse(text: string): unknown {
  * Decode a single inbound WebSocket frame into a {@link ProtocolEvent}.
  *
  * The decoder peels the leading Engine.IO packet-type digit and dispatches: `0` is the handshake open (whose JSON carries the ping interval/timeout), `2`/`3` are the
- * heartbeat, and `4` is a message whose remaining text is a Socket.IO packet decoded by the inner namespace/event parser. Anything else - including a non-string (binary)
- * frame, which our text protocol never produces - decodes to `unknown` carrying the original text.
+ * heartbeat, and `4` is a message whose remaining text is a Socket.IO packet decoded by the inner namespace/event parser. Its input is typed `string` - the composing
+ * socket drops binary frames before they reach the decoder - so any unrecognized STRING frame (an empty frame, an unknown Engine.IO digit, or an unhandled Socket.IO
+ * packet type) decodes to `unknown` carrying the original text.
  *
  * @param frame - The raw WebSocket message text.
  *

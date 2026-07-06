@@ -226,9 +226,9 @@ describe("webUiFeatureOptions.show - global options render", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // After a successful show(), revealRegions() is the sole gate that reveals the five region containers - content is built and scoped first, then revealed in one
-    // coordinated pass. This pins the orchestrator-owns-reveal contract end-to-end: dropping any region from revealRegions (or leaving one hidden) fails here, and it
-    // complements the per-view "does not self-reveal" tests that guard the other direction (a view revealing prematurely).
+    // After a successful show(), revealRegions() is the sole gate that reveals every region container it lists - content is built and scoped first, then revealed
+    // in one coordinated pass. This pins the orchestrator-owns-reveal contract end-to-end: dropping any region from revealRegions (or leaving one hidden) fails
+    // here, and it complements the per-view "does not self-reveal" tests that guard the other direction (a view revealing prematurely).
     for(const id of [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ]) {
 
       assert.equal(document.getElementById(id).style.display, "", id + " must be revealed after a successful show()");
@@ -817,9 +817,9 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
     resetDefaults.click();
     await settlePersist();
 
-    // The flow mutates the model, re-renders, and schedules a persist of the empty options array via the drain. The visible UI change (configTable cleared) is
-    // the user's confirmation; reset/revert no longer emit a separate success toast (the previous toast could lie under coalescing - claim "done" before the
-    // persist confirmed - so the architecture now lets the UI change be the only feedback). Failure surfaces via the drain's runDetached toast.
+    // The flow mutates the model, re-renders, and schedules a persist of the empty options array via the drain. Reset/revert emit no separate success toast: a
+    // toast could claim "done" before the persist confirms under coalescing, so the visible UI change (configTable cleared) is the user's sole confirmation.
+    // Failure surfaces via the drain's runDetached toast.
     const lastUpdate = fake.observed.updatedConfigs.at(-1);
 
     assert.ok(lastUpdate, "reset-defaults must produce at least one updatePluginConfig call");
@@ -1914,8 +1914,8 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
   // Scope-aware cache invalidation: the orchestrator drops cache entries only for views whose inherited state could have changed. A device-scope mutation only
   // touches the current view; other devices' detached DOM remains identity-stable across the mutation. A controller-scope mutation invalidates all devices under
-  // that controller. A global mutation invalidates everything. The previous "drop everything" policy was correct but coarse; the new policy preserves device-to-
-  // device navigation warmth when the user is editing at the device scope.
+  // that controller. A global mutation invalidates everything. This scoping preserves device-to-device navigation warmth when the user is editing at the device
+  // scope.
   test("a device-scope mutation preserves other devices' cached DOM (cache stays identity-stable across the mutation)", async () => {
 
     using _dom = createTestDom();

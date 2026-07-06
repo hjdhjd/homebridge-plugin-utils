@@ -7,14 +7,14 @@
 /**
  * Register the global keyboard shortcuts for the feature options webUI.
  *
- * Two shortcuts:
+ * The registered shortcuts:
  *
  *   - **Cmd/Ctrl + F** focuses the search input. Preempts the browser's native find behavior so users can search the feature options rather than the page's raw
  *     text. Only acts when the search panel is mounted and visible - otherwise falls through to the browser's default handling.
  *   - **Escape on the search input** clears the search query. Dispatches `filter:changed` with an empty query so subscribers (the search view, projection,
  *     status bar) re-derive from the unfiltered state.
  *
- * Both listeners are bound to the supplied AbortSignal; aborting cleanly removes them.
+ * Both shortcuts are handled by a single keydown listener bound to the supplied AbortSignal; aborting cleanly removes it.
  *
  * @param {Object} args
  * @param {AbortSignal} args.signal - Lifecycle signal. Aborting removes the listeners.

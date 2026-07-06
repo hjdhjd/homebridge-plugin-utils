@@ -5,9 +5,9 @@
  * flows), and encoder options are exercised without spawning any processes.
  *
  * The class under test only consumes a narrow slice of `FfmpegCodecs` - three capability predicates (`hasDecoder`, `hasEncoder`, `hasHwAccel`), the `ffmpegAtLeast`
- * version-comparison method, and five readonly scalars (`cpuGeneration`, `ffmpegMajorVersion`, `ffmpegVersion`, `gpuMem`, `hostSystem`). Those are what the fixture
- * builder supplies; the real probe / spawn infrastructure is out of scope for this file and covered separately by `codecs.test.ts` plus the integration suite at the
- * bottom of this file, which auto-enables when an FFmpeg binary is discoverable on PATH. See `integration.helpers.ts` for the full gate semantics.
+ * version-comparison method, and three readonly scalars (`cpuGeneration`, `gpuMem`, `hostSystem`). Those are what the fixture builder supplies; the real probe / spawn
+ * infrastructure is out of scope for this file and covered separately by `codecs.test.ts` plus the integration suite at the bottom of this file, which auto-enables
+ * when an FFmpeg binary is discoverable on PATH. See `integration.helpers.ts` for the full gate semantics.
  */
 import type { FfmpegOptionsConfig, VideoEncoderOptions } from "./options.ts";
 import type { H264Level as H264LevelEnum, H264Profile as H264ProfileEnum } from "homebridge";
@@ -1147,10 +1147,10 @@ describe("FfmpegOptions - maxSourcePixels", () => {
     assertHasArg(args, "-codec:v", "libx264");
   });
 
-  // Per-call-downgrade regression test. This is the one live production cell - record.ts:446 passes a per-call hardwareTranscoding flag - that no existing test covers.
-  // On a non-raspbian hardware-capable host, recordEncoder consults the CLASS predicate (hardware) and delegates to streamEncoder, which then re-resolves the per-call
-  // flag to software. Pinning that the per-call downgrade still wins protects the invariant the whole behavior-neutrality proof rests on: the predicate only gates the
-  // short-circuit, never the final encoder choice.
+  // Per-call-downgrade regression test, protecting the per-call downgrade path that production code exercises (record.ts passes a per-call hardwareTranscoding flag into
+  // recordEncoder). On a non-raspbian hardware-capable host, recordEncoder consults the CLASS predicate (hardware) and delegates to streamEncoder, which then re-resolves
+  // the per-call flag to software. Pinning that the per-call downgrade still wins protects the invariant the whole behavior-neutrality proof rests on: the predicate
+  // only gates the short-circuit, never the final encoder choice.
   test("honors a per-call hardwareTranscoding:false downgrade on a non-raspbian hardware host (emits the software encoder)", () => {
 
     const { options } = makeOptions(VIDEOTOOLBOX_CODECS, HW_FULL);
@@ -1642,7 +1642,7 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
   // Each test probes the host's real capabilities first, then skips cases the host cannot exercise (e.g., VideoToolbox on Linux, QSV on macOS). This keeps the test
   // meaningful-or-skipped rather than uniformly-broken on heterogeneous CI.
 
-  // Synthesized silent-black input source. Produces a deterministic 1-second, 1920x1080, 30fps RGB stream that FFmpeg can feed into any encoder under test without
+  // Synthesized silent-black input source. Produces a deterministic 1-second, 1920x1080, 30fps yuv420p stream that FFmpeg can feed into any encoder under test without
   // depending on an external test asset.
   const INPUT_ARGS = [ "-hide_banner", "-nostats", "-f", "lavfi", "-i", "color=black:s=1920x1080:r=30", "-t", "1" ];
 
@@ -1690,6 +1690,8 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
       return { exitCode: 0, stderr };
     } catch(error) {
 
+      // Node's execFile rejection is an ExecException-shaped error carrying stdout/stderr/code beyond the generic Error type that util.promisify exposes; the cast
+      // makes that additional shape explicit for the fields this helper actually reads.
       const execError = error as { code?: number; stderr?: string };
 
       return { exitCode: execError.code ?? -1, stderr: execError.stderr ?? "" };

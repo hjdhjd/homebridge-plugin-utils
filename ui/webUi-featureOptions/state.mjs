@@ -24,7 +24,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * Names use a `domain:event` shape so they group naturally and read as natural language at dispatch sites.
  *
  *   - `model:loaded` - first load: catalog, configuredOptions, controllers, mode are populated; status transitions to ready.
- *   - `controllers:loaded` - controllers list refreshed (retry / re-sync); does not re-load the model.
+ *   - `controllers:loaded` - controllers-only refresh (reducer + nav subscriber wired) that no code currently dispatches; the retry path re-runs the full `model:loaded`.
  *   - `devices:loaded` - devices list updated when the active controller changes or device-only mode resolves the accessory cache.
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
@@ -81,8 +81,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {Readonly<Record<string, readonly import("../featureOptions.js").FeatureOptionEntry[]>>} options
  * @property {Readonly<Record<string, (value: string) => string>>} renderers
  * @property {readonly string[]} sortedValueOptionNames
- * @property {Readonly<Record<string, number | string | undefined>>} valueOptions
  * @property {Validators} validators
+ * @property {Readonly<Record<string, number | string | undefined>>} valueOptions
  */
 
 /**
@@ -211,7 +211,7 @@ export const reducer = (state, action) => {
 
     case "controllers:loaded": {
 
-      // Controllers list refreshed without re-loading the model. The retry flow uses this to rebuild the sidebar after the controller hierarchy comes back online.
+      // Controllers list refreshed without re-loading the model - a controllers-only refresh hook that no code currently dispatches (nav rebuilds the sidebar on it).
       return { ...state, controllers: action.controllers };
     }
 

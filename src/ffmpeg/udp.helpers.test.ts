@@ -1,10 +1,10 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/udp.helpers.test.ts: Unit tests for the UDP loopback helpers in udp.helpers.ts. The four primitives exercised here (reserveEphemeralPort, probePortAvailable,
- * holdPort, sendDatagram), together with bindReceiver (covered by the rtp suite), compose every UDP-driven test in the FFmpeg subsystem; a regression in their
- * bind/release semantics or in the await-on-completion contract would
- * cascade into the rtp and stream test suites as race-condition flakiness. Tests pin: the kernel-port-assignment contract, the deterministic release semantics
- * (probe-after-release works), the disposal contract (holdPort releases on dispose), and the round-trip datagram delivery.
+ * ffmpeg/udp.helpers.test.ts: Unit tests for the UDP loopback helpers exercised here (reserveEphemeralPort, probePortAvailable, holdPort, sendDatagram), together
+ * with bindReceiver (covered by the rtp suite), compose every test that needs the udp.helpers loopback abstraction (dgram-util.test.ts exercises the lower-level
+ * socket primitives directly and is intentionally out of scope); a regression in their bind/release semantics or in the await-on-completion contract would cascade
+ * into the rtp and stream test suites as race-condition flakiness. Tests pin: the kernel-port-assignment contract, the deterministic release semantics (probe-after-
+ * release works), the disposal contract (holdPort releases on dispose), and the round-trip datagram delivery.
  */
 import { describe, test } from "node:test";
 import { holdPort, probePortAvailable, reserveEphemeralPort, sendDatagram } from "./udp.helpers.ts";

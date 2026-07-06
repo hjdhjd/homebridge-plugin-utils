@@ -15,7 +15,8 @@ function isComparison(node) {
   return !!node && (node.type === "BinaryExpression") && COMPARISON_OPERATORS.has(node.operator);
 }
 
-// Test whether a node is already parenthesized in source. Prefers ESLint's helper when available; falls back to a token check for older ESLint shapes.
+// Test whether a node is already parenthesized in source. Duck-types a sourceCode.isParenthesized method for environments that may expose one,
+// falling back to inspecting the tokens immediately surrounding the node when it is absent.
 function isParenthesized(sourceCode, node) {
 
   if(typeof sourceCode.isParenthesized === "function") {
@@ -32,7 +33,7 @@ function isParenthesized(sourceCode, node) {
 // Require parentheses around any comparison operand that is a direct child of a compound logical expression.
 //
 // Cases covered:
-//  * `a === b && c === d`               is flagged; autofix produces `(a === b) && (c === d)`.
+//  * `a === b && c === d`               both operands are flagged independently; autofix produces `(a === b) && (c === d)`.
 //  * `(a === b) && (c === d)`           is canonical; ignored.
 //  * `a && b && c`                       has no comparison operands and is ignored.
 //  * `(a && b) === (c && d)`             is a comparison containing logicals (not a logical containing comparisons); ignored at this level.

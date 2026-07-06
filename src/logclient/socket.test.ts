@@ -516,6 +516,8 @@ describe("LogSocket - streaming-phase faults", () => {
 
     const factory = new TestWebSocketFactory();
 
+    // A large backoff so the reconnect loop stays parked in its (real) backoff wait after the handshake error instead of immediately constructing a second
+    // WebSocket, keeping ws0 the only socket in play for the closeCodes assertion and the manual abort/dispose that follow.
     const socket = new LogSocket(makeInit(factory, { backoff: () => 60000 }));
 
     await tick();
@@ -648,10 +650,9 @@ describe("LogSocket - teardown and abort", () => {
 
     const ws1 = factory.sockets[1];
 
-    if(ws1 !== undefined) {
+    assert.ok(ws1 !== undefined, "the reconnect loop must have opened a fresh socket after the peer close");
 
-      assert.ok(ws1.closeCodes.includes(1000), "teardown must always issue close(1000) on the live socket");
-    }
+    assert.ok(ws1.closeCodes.includes(1000), "teardown must always issue close(1000) on the live socket");
 
     await socket[Symbol.asyncDispose]();
   });

@@ -26,7 +26,7 @@ async function clean(paths) {
 }
 
 // Ensure dist/ui exists and copy the browser-side UI assets into it. Runs during the clean and build-ui phases, before tsc emits the compiled featureOptions.js,
-// so the directory has to exist up front and the featureOptions copy step runs separately after tsc. We filter to shippable artifacts by excluding the four
+// so the directory has to exist up front and the featureOptions copy step runs separately after tsc. We filter to shippable artifacts by excluding the
 // test-only file shapes: `*.test.mjs` (suite files), `*.fixtures.mjs` (shared test data), `*.helpers.mjs` (shared test code), and `test-*.mjs` (test infrastructure,
 // currently the `registerHooks` module-resolution loader). Suffix matches are centralized in `TEST_ONLY_SUFFIXES` so adding a new test-file shape is a one-line edit
 // rather than a chain of `&& !entry.endsWith(...)` clauses. The resulting dist/ui/ contains only the browser runtime files consumers execute.
@@ -98,8 +98,8 @@ async function makeBinExecutable() {
   await Promise.all(binPaths.map((binPath) => chmod(binPath, 0o755)));
 }
 
-// Post-tsc finalization: ready the emitted dist/ for shipping and local consumption. The two concerns - placing the browser-runtime modules alongside the webUI
-// and marking the CLI bin executable - are independent, so they run concurrently. This is the single tail-of-build step the `build` script invokes after tsc.
+// Post-tsc finalization: ready the emitted dist/ for shipping and local consumption. Placing the browser-runtime modules alongside the webUI and marking the
+// CLI bin executable are independent concerns, so they run concurrently. This is the single tail-of-build step the `build` script invokes after tsc.
 async function finalize() {
 
   await Promise.all([ copyFeatureOptions(), makeBinExecutable() ]);

@@ -62,8 +62,8 @@ export const selectedDeviceId = (state) => {
 };
 
 /**
- * Map a {@link Scope} to a string key that uniquely identifies the view. Pure derivation from the discriminated union - one switch, three outputs, every input
- * produces a distinct output and no two distinct inputs share an output.
+ * Map a {@link Scope} to a string key that uniquely identifies the view. Pure derivation from the discriminated union - every Scope variant maps to a distinct
+ * key and no two variants collide.
  *
  * Used as the SSOT identifier for "which view is this" wherever a view's identity matters across mutations or navigations: the in-memory DOM cache keys its
  * entries by this, and the category-state localStorage projection uses the same key as its context identifier. Sharing one identifier across the two consumers
@@ -204,7 +204,7 @@ export const selectedController = memoize({
  * @typedef {Object} ProjectionCounts
  * @property {number} grouped - Active options that declare a `group` (subordinate to a parent).
  * @property {number} modified - Active options with an explicit configured entry at any scope.
- * @property {number} total - Active options across every visible category.
+ * @property {number} total - Active options across every active (validator-passed) category, regardless of per-entry visibility.
  * @property {number} visible - Active options currently visible under the search query, filter mode, and dependency state.
  */
 
@@ -219,7 +219,7 @@ export const selectedController = memoize({
  * visibility, per-row dependency-badge state, and per-row resolved value for value-centric options. Memoized on `(catalog, configuredOptions, scope, filter,
  * devices)` so any dispatch that does not touch those slices returns the cached projection.
  *
- * Visibility rules (matching the established semantics from the pre-refactor search component):
+ * Visibility rules (the three-way cascade below is authoritative for what a row shows):
  *
  *   - The `modified` filter excludes unmodified options unconditionally.
  *   - A non-empty search query excludes options whose description does not contain the query (case-insensitive).

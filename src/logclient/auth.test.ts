@@ -243,8 +243,8 @@ describe("acquireToken - actionable, token-safe errors", () => {
 
   test("never leaks a pre-acquired token into an error path", async () => {
 
-    // The token arm never performs a network call, so there is no error path that could carry the token; this asserts the contract by exercising the token arm and a
-    // separate failing password arm whose error must not contain any token-like material.
+    // The token arm never performs a network call, so there is no error path that could carry the token; this asserts the no-leak contract on the failing password arm,
+    // whose error must not contain any token-like material.
     const { fetch } = fakeFetch(() => jsonResponse({ message: "Unauthorized" }, 401));
     const credentials: LogClientCredentials = { kind: "password", password: "super-secret-password", username: "admin" };
 

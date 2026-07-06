@@ -1,8 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-featureOptions/utils.test.mjs: Unit tests for the shared DOM-manipulation helpers `createElement`, `setCategoryExpanded`, and `showToast`. These are the
- * foundation every other feature-options component composes against, so drift in their behavior would cascade across the webUI suite. Tests run against a Happy-DOM
- * window installed by `ui.helpers.mjs`.
+ * ui/webUi-featureOptions/utils.test.mjs: Unit tests for the shared DOM and utility helpers in utils.mjs. These are the foundation every other feature-options
+ * component composes against, so drift in their behavior would cascade across the webUI suite. Tests run against a Happy-DOM window installed by `ui.helpers.mjs`.
  */
 "use strict";
 
@@ -126,9 +125,10 @@ describe("createElement - attribute vs. property routing", () => {
 
   test("non-hyphenated keys are set as properties (href, role, name, innerHTML)", () => {
 
-    // Non-hyphenated keys become properties so the caller can set things like `href` (which has a JS property equivalent) directly without having to know which path
-    // the helper uses internally. `innerHTML` is a special case that writes through to the DOM-parsed representation. `name` is read back via the DOM property rather
-    // than `getAttribute` because the nav code's identity-matching logic (`entry.name === selectedName`) reads the property.
+    // Non-hyphenated keys are set as element properties (the createElement else-branch) so the caller can set things like `href` (which has a matching DOM
+    // property) directly without having to know which path the helper uses internally. `innerHTML` is a special case that writes through to the DOM-parsed
+    // representation. `name` carries no data-* prefix and is not the `for` reserved-word special case, so it also takes the property-assignment path; it is
+    // read back here via the DOM property rather than `getAttribute` to confirm that path actually ran.
     using _dom = createTestDom();
 
     const el = createElement("a", { href: "#", innerHTML: "<strong>Test</strong>", name: "Global Options", role: "button" });

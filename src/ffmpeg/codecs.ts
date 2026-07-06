@@ -754,9 +754,8 @@ Promise<Record<string, { decoders: Set<string>; encoders: Set<string> }> | null>
 }
 
 // Probe the FFmpeg hardware-accelerator inventory via `ffmpeg -hide_banner -hwaccels`, then validate each advertised accel by running a one-second synthetic transcode
-// that initializes the hardware-acceleration context. The validation catches the case where a build advertises an accel the host hardware cannot actually use; discarding
-// those accelerators here means callers
-// don't have to re-validate downstream.
+// that initializes the hardware-acceleration context. The validation catches the case where a build advertises an accel the host hardware cannot actually use;
+// discarding those accelerators here means callers don't have to re-validate downstream.
 async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, log: Logger, signal?: AbortSignal): Promise<Set<string> | null> {
 
   const hwAccels = new Set<string>();
@@ -778,6 +777,10 @@ async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, log: Lo
   // macOS builds but unusable on Intel Macs running a pre-VT OS). A quick synthetic transcode against each accel tells us which ones actually work on this host.
   for(const accel of hwAccels) {
 
+    // Validate one accel at a time rather than in parallel: each synthetic transcode initializes the same underlying hardware-acceleration context (GPU or codec
+    // engine), so concurrent probes would contend for that shared resource and risk a false negative - an accel reported as unusable because of contention with a
+    // sibling probe rather than a genuine host incapability. This is a one-time startup probe, not a throughput-sensitive workload, so serializing it here costs nothing
+    // that matters.
     // eslint-disable-next-line no-await-in-loop
     const accelOk = await probeCmd(ffmpegExec, [
 
@@ -812,9 +815,10 @@ async function probeRpiGpuMem(log: Logger, signal?: AbortSignal): Promise<number
   return gpuMem;
 }
 
-// Utility to run a probe subcommand under a composed signal (caller's signal + a per-probe watchdog timeout). The caller's processOutput handler receives the stdout
-// on success; a returned `true` indicates the command completed and the output was handed off. Error paths log unless `quietRunErrors` is set - that flag exists for
-// the per-accel validation loop where failures are expected and logged at a higher level.
+// Utility to run a probe subcommand under a composed signal (caller's signal + a per-probe watchdog timeout). The caller's processOutput handler receives the stdout on
+// success; a returned `true` indicates the command completed and the output was handed off. An ENOENT failure (the binary could not be found) always logs regardless of
+// `quietRunErrors`, since a missing binary is worth surfacing no matter the caller's intent; other failures log unless `quietRunErrors` is set - that flag exists for
+// the per-accel validation loop where failures are expected and logged at a higher level by the caller.
 async function probeCmd(command: string, commandLineArgs: string[], processOutput: (output: string) => void,
   options: { log: Logger; quietRunErrors?: boolean; signal?: AbortSignal }): Promise<boolean> {
 

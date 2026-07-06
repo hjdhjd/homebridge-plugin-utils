@@ -196,9 +196,8 @@ describe("Mp4SegmentAssembler - signal-aware termination", () => {
 
   test("per-call signal aborts the generator while the initSegment wait is still pending", async () => {
 
-    // Regression guard for the pre-refactor gap: `segments({ signal })` composed the caller signal only AFTER awaiting `initSegment`, so a caller abort during the
-    // init-wait window was ignored until the assembler's own signal settled init. Post-refactor, `waitWithSignal` races the init promise against the composed signal
-    // so the caller signal terminates the wait directly.
+    // Guards the init-first contract's cancellation semantics: `waitWithSignal` races the init promise against the composed signal, so a per-call abort during the
+    // init-wait window terminates the iterator immediately rather than waiting for the assembler's own signal to settle init.
     const source = new PassThrough();
 
     await using assembler = new Mp4SegmentAssembler(source);

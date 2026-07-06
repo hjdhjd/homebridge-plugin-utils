@@ -202,15 +202,20 @@ export interface VideoEncoderOptions {
   width: number;
 }
 
-// The two hardware-transcode contexts whose source-pixel ceiling can differ on a given host. Live streaming and HKSV recording both transcode, but a host may admit one
-// to its hardware encoder and not the other (today: Raspberry Pi runs live transcoding on h264_v4l2m2m but falls HKSV recording back to libx264). Consumed by
-// maxSourcePixels and the recordEncoder software-fallback so both derive the same per-context hardware-capability answer from one predicate.
+/**
+ * Every hardware-transcode context this module distinguishes, each with a source-pixel ceiling that can differ on a given host. Live streaming and HKSV recording
+ * both transcode, but a host may admit one context to its hardware encoder and not the other (today: Raspberry Pi runs live transcoding on h264_v4l2m2m but falls
+ * HKSV recording back to libx264). Consumed by `maxSourcePixels` and the `recordEncoder` software-fallback so both derive the same per-context hardware-capability
+ * answer from one predicate.
+ *
+ * @category FFmpeg
+ */
 export type EncoderContext = "record" | "stream";
 
-// `VideoEncoderOptions` after `resolveEncoderOptions` has filled in defaults and clamped the hardware flags against the resolved class config. The three fields that
-// the resolver guarantees to set are narrowed to `Required` so downstream handlers can read `resolved.hardwareDecoding` / `resolved.hardwareTranscoding` /
-// `resolved.smartQuality` as definite booleans rather than `boolean | undefined`. The type exists purely to carry that invariant through the dispatch chain -
-// internal only, not part of the module's public export surface.
+// `VideoEncoderOptions` after `resolveEncoderOptions` has filled in defaults and clamped the hardware flags against the resolved class config. The resolver-guaranteed
+// fields are narrowed to `Required` so downstream handlers can read `resolved.hardwareDecoding` / `resolved.hardwareTranscoding` / `resolved.smartQuality` as definite
+// booleans rather than `boolean | undefined`. The type exists purely to carry that invariant through the dispatch chain - internal only, not part of the module's
+// public export surface.
 type ResolvedVideoEncoderOptions = VideoEncoderOptions & Required<Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "smartQuality">>;
 
 // Shared pre-computed state threaded from `streamEncoder`'s dispatcher into each per-platform handler. Private to the module because every field is an implementation
@@ -287,10 +292,10 @@ const QSV_DECODER_BY_CODEC: Readonly<Record<SupportedDecodeCodec, string>> = Obj
   "hevc": "hevc_qsv"
 });
 
-// Minimal view of the encoder options that the hardware-transfer and hardware-device-init helpers actually need. `Required<Pick<...>>` so both flags are definite
-// booleans at the type level: every caller either passes a `ResolvedVideoEncoderOptions` (where the resolver guarantees the fields) or an inline object literal with
-// concrete booleans, so the weaker `boolean | undefined` optional view has no caller behavior to represent. Defined as a dedicated type so those helpers can be
-// called with either shape without casts - the typed counterpart to "pass only what you read."
+// Minimal view of the encoder options that the hardware-transfer and hardware-device-init helpers actually need. `Required<Pick<...>>` so every flag this view exposes
+// is a definite boolean at the type level: every caller either passes a `ResolvedVideoEncoderOptions` (where the resolver guarantees the fields) or an inline object
+// literal with concrete booleans, so the weaker `boolean | undefined` optional view has no caller behavior to represent. Defined as a dedicated type so those helpers
+// can be called with either shape without casts - the typed counterpart to "pass only what you read."
 type HardwareStateView = Required<Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding">>;
 
 /**
@@ -334,9 +339,9 @@ type HardwareStateView = Required<Pick<VideoEncoderOptions, "hardwareDecoding" |
 export class FfmpegOptions {
 
   /**
-   * The configuration options used to initialize this instance. This is the single stored state on `FfmpegOptions`: every other public field on this class is a
-   * getter that forwards to `this.config`, so external callers have exactly one canonical path to each value and internal code never has to keep a parallel field in
-   * sync with `config` at construction time.
+   * The configuration options used to initialize this instance. This is the single stored state on `FfmpegOptions`: every other public field on this class is either
+   * a getter that forwards to `this.config`, or a fixed constant independent of it (`audioDecoder`), so external callers have exactly one canonical path to each
+   * config-backed value and internal code never has to keep a parallel field in sync with `config` at construction time.
    */
   public readonly config: FfmpegOptionsConfig;
 
@@ -485,10 +490,11 @@ export class FfmpegOptions {
   /**
    * Configure hardware acceleration for Raspberry Pi.
    *
-   * GPU memory is the umbrella gate: if the advertised GPU-memory allocation is below `RPI4_GPU_MINIMUM`, both decoding and transcoding are disabled with an info-level
-   * diagnostic (the Pi's hardware codec driver won't perform reliably below that threshold). When memory is sufficient, hardware decoding is still force-disabled
-   * because of an unresolved FFmpeg 7 regression in the `h264_v4l2m2m` decoder, which fails to initialize on Raspberry Pi with current FFmpeg builds. Hardware
-   * transcoding is validated against the `h264_v4l2m2m` encoder.
+   * GPU memory is the umbrella gate, but only when hardware decoding is requested: if the advertised GPU-memory allocation is below `RPI4_GPU_MINIMUM`, both decoding
+   * and transcoding are disabled with an info-level diagnostic (the Pi's hardware codec driver won't perform reliably below that threshold). A transcoding-only
+   * request bypasses this check by design and does not consult GPU memory at all. When memory is sufficient, hardware decoding is still force-disabled because of an
+   * unresolved FFmpeg 7 regression in the `h264_v4l2m2m` decoder, which fails to initialize on Raspberry Pi with current FFmpeg builds. Hardware transcoding is
+   * validated against the `h264_v4l2m2m` encoder.
    *
    * @returns A descriptive label for the "enabled" log line when hardware transcoding was requested, noting that HKSV recordings still use software transcoding even
    *          when livestream transcoding runs on the hardware encoder. Empty string otherwise.
@@ -620,7 +626,7 @@ export class FfmpegOptions {
    * provide the appropriate FFmpeg filters to handle that transfer efficiently.
    *
    * @param options - The hardware-state view with the decoding and transcoding flags. Callers pass either a full `VideoEncoderOptions` (structurally assignable) or a
-   *                  purpose-built two-field object - whichever is natural at the call site.
+   *                  purpose-built object exposing the same flags - whichever is natural at the call site.
    * @returns Array of filter strings for hardware upload or download operations.
    */
   #getHardwareTransferFilters(options: HardwareStateView): string[] {
@@ -711,8 +717,8 @@ export class FfmpegOptions {
    * When we're using hardware encoding without hardware decoding, we need to initialize the hardware device context explicitly. This method provides the
    * platform-specific initialization arguments required by FFmpeg.
    *
-   * @param options - The hardware-state view with the decoding and transcoding flags. Only those two flags are read, so the helper accepts either a full
-   *                  `VideoEncoderOptions` or a purpose-built two-field object.
+   * @param options - The hardware-state view with the decoding and transcoding flags. Only those flags are read, so the helper accepts either a full
+   *                  `VideoEncoderOptions` or a purpose-built object exposing the same flags.
    * @returns Array of FFmpeg arguments for hardware device initialization.
    */
   #getHardwareDeviceInit(options: HardwareStateView): string[] {
@@ -866,7 +872,8 @@ export class FfmpegOptions {
   /**
    * Returns the video decoder arguments to use for decoding video.
    *
-   * @param codec            - Optional. Codec to decode (`"av1"`, `"h264"` (default), or `"hevc"`).
+   * @param codec            - Optional. Codec to decode (`"av1"`, `"h264"` (default), or `"hevc"`; `"h265"` is accepted as an
+   *                           alias for `"hevc"`, and codec matching is case-insensitive).
    * @returns Array of FFmpeg command-line arguments for video decoding or an empty array if the codec isn't supported.
    *
    * @example
@@ -1297,7 +1304,7 @@ export class FfmpegOptions {
 
   /**
    * Pre-compute the shared state every hardware-stream encoder path consumes. Having this in a dedicated helper keeps each per-platform handler a pure function of
-   * `(options, context)` and puts the shared computation in exactly one place - no more "every branch opens with the same three lines of setup."
+   * `(options, context)`, with the shared computation centralized in exactly one place rather than duplicated inline at the start of every branch.
    *
    * - `bufsize`, `gop`, `maxrate` are the pre-formatted rate-control strings every hardware handler splices directly into its `-bufsize` / `-g:v` / `-maxrate` args.
    *   Sourced from the module-scope `bufsizeArg` / `gopArg` / `maxrateArg` helpers so the software and hardware paths share one derivation of each.
@@ -1452,10 +1459,10 @@ export class FfmpegOptions {
 
   // The single source of truth for "does this transcode context run on the hardware encoder on THIS host, in the resolved class config?". Live streaming uses the
   // hardware encoder whenever transcoding is enabled; HKSV recording additionally excludes Raspberry Pi, whose h264_v4l2m2m encoder is unreliable for event recording
-  // (the FFmpeg-7+ regression noted in #configureRaspbianHwAccel). Both recordEncoder and maxSourcePixels consult this, so the encoder choice and the source ceiling can
-  // never disagree - when the upstream regression is fixed, relaxing the raspbian exclusion here (gated on a validated encoder) flips both together with no consumer
-  // change. Reads the resolved class config (set in the constructor by #configureHwAccel, before any encoder method is callable), matching the class-level decision
-  // recordEncoder has always made.
+  // for reasons separate from the FFmpeg-7+ h264_v4l2m2m decoder regression noted in #configureRaspbianHwAccel, which affects decoding only. Both recordEncoder and
+  // maxSourcePixels consult this, so the encoder choice and the source ceiling can never disagree - if the encoder is ever validated as reliable for event recording,
+  // relaxing the raspbian exclusion here flips both together with no consumer change. Reads the resolved class config (set in the constructor by #configureHwAccel,
+  // before any encoder method is callable), matching the class-level decision recordEncoder has always made.
   #hardwareEncodes(context: EncoderContext): boolean {
 
     if(!this.config.hardwareTranscoding) {

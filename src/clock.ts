@@ -6,9 +6,9 @@
 /**
  * An injectable wall-clock time seam.
  *
- * Time-dependent code reads exactly two primitives from the platform: the current epoch time (`Date.now()`) and a delay that can be cancelled (`node:timers/promises`
+ * Time-dependent code reads the platform time primitives it needs: the current epoch time (`Date.now()`) and a delay that can be cancelled (`node:timers/promises`
  * `setTimeout`). Calling those directly bakes real wall-clock time into the code, so a test cannot exercise a pacing or timeout path without multi-second real waits, and
- * `node:test`'s mock timers do not patch the `node:timers/promises` primitives. Holding a {@link Clock} instead - the abstraction over those two primitives - inverts the
+ * `node:test`'s mock timers do not patch the `node:timers/promises` primitives. Holding a {@link Clock} instead - the abstraction over those primitives - inverts the
  * dependency: production wires {@link systemClock}, whose `now()` IS `Date.now()` and whose `delay()` IS `node:timers/promises` `setTimeout`, so routing through the seam
  * is behavior-neutral; a test wires a `TestClock` (see `clock-double.ts`) that advances virtual time explicitly, so the consumer's time-dependent path runs
  * deterministically and instantly.
@@ -20,7 +20,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 /**
- * The injectable wall-clock contract: the two time primitives time-dependent code reads. A consumer holds a `Clock` rather than calling `Date.now()` /
+ * The injectable wall-clock contract: the platform time primitives time-dependent code reads. A consumer holds a `Clock` rather than calling `Date.now()` /
  * `node:timers/promises` `setTimeout` directly, so a test can substitute a controllable double (`TestClock`) and drive time deterministically while production behavior
  * stays unchanged through {@link systemClock}.
  *

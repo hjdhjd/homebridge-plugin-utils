@@ -44,8 +44,8 @@ export const mountDeviceInfoView = ({ infoPanel = defaultInfoPanel, root, signal
 };
 
 /**
- * Default device-info renderer. Builds a four-column grid (Firmware / Serial Number / Model / Manufacturer) with each cell carrying a small uppercase label above
- * the value. Clears the container entirely when no device is in scope.
+ * Default device-info renderer. Renders a labeled grid of device identity fields (firmware / serial number / model / manufacturer), each cell carrying a small
+ * uppercase label above the value. Clears the container entirely when no device is in scope.
  *
  * Untrusted device fields flow through `textContent` (via createElement's text-node path) so any markup-shaped fragments surface as literal text rather than
  * rendered HTML. Container is rebuilt on every call - replaceChildren handles both the initial render and any subsequent device switch.

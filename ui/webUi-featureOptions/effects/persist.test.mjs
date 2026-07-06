@@ -30,8 +30,8 @@ const PLATFORM = { name: "MyPlugin Platform", platform: "MyPlugin" };
 
 // Helper: build a store seeded with the canonical "ready" state and register the persist effect against a config session backed by a fake host. The fake host's
 // `updatePluginConfig` records every payload and lets each test choose to resolve immediately, defer, or reject; its `getPluginConfig` seeds the session with the
-// canonical platform entry, so the session's commit rebuilds the same `[{ ...PLATFORM, options }]` payload the persist effect used to build inline. Tests get an
-// inspection surface for both the dispatched store events and the host calls. Async because opening the session reads the host config once.
+// canonical platform entry, so the session's commit rebuilds the same `[{ ...PLATFORM, options }]` payload from the options delta the persist effect hands it. Tests
+// get an inspection surface for both the dispatched store events and the host calls. Async because opening the session reads the host config once.
 const setup = async ({ behavior = "resolve", configuredOptions = [] } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
@@ -357,8 +357,8 @@ describe("registerPersistEffect - lifecycle", () => {
 describe("registerPersistEffect - flush (navigate-away drain)", () => {
 
   // flush() is the navigate-away drain: it drives any debounced-but-unwritten edit to disk NOW, skipping the debounce wait, while preserving single-writer
-  // serialization and coalescing. These tests pin the corrected single-writer mechanism (loop on pending || flushing, in-loop dirty check, flushing reset in every
-  // drain finally) against the four failure modes the pre-mortem enumerates.
+  // serialization and coalescing. These tests pin the single-writer mechanism (loop on pending || flushing, in-loop dirty check, flushing reset in every drain
+  // finally) against the failure modes the pre-mortem enumerates.
 
   test("flush() within the debounce window persists the pending edit exactly once (no 300ms wait)", async () => {
 

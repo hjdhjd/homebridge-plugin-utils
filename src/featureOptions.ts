@@ -17,7 +17,7 @@
  *
  *   - **Imperative class façade.** {@link FeatureOptions} bundles a {@link CatalogIndex}, a configured-options array, and a {@link ConfigIndex} into one object whose
  *     mutating methods (`setOption` / `clearOption` / the setters) delegate to the pure transforms internally. This is the legacy-friendly surface used by every
- *     plugin's Node-side code; the public API is byte-for-byte stable across the pure-core extraction.
+ *     plugin's Node-side code; the class's public API surface is identical to the pure-function core it delegates to.
  *
  * Two surfaces, one set of semantics. The class is a convenience over the pure functions, not a parallel implementation.
  *
@@ -120,8 +120,8 @@ export interface FeatureOptionEntry<TMeta = unknown> {
  * Entry describing a feature option category.
  *
  * @property description     - Description of the category.
- * @property meta            - Optional. An opaque, plugin-private annotation channel the core never interprets, mirroring {@link FeatureOptionEntry.meta}. This is the
- *                             typed extension path the category side previously lacked; the documentation renderer forwards it to the category-scope closure, and the
+ * @property meta            - Optional. An opaque, plugin-private annotation channel the core never interprets, mirroring {@link FeatureOptionEntry.meta} so the
+ *                             category side carries the same typed extension path; the documentation renderer forwards it to the category-scope closure, and the
  *                             core treats it as `unknown` throughout.
  * @property name            - Name of the category.
  *
@@ -719,8 +719,9 @@ export function isDependencyMet({ catalog, configIndex, controller, defaultRetur
   return resolveScope({ catalog, configIndex, controller, defaultReturnValue, device, option: parent }).enabled;
 }
 
-// Utility function to parse and return a numeric configuration parameter. Preserves the (null, undefined, parsed-number, undefined-on-NaN) discrimination so
-// callers can distinguish "disabled" from "unset" from "set but unparseable" without a second probe of the model.
+// Utility function to parse and return a numeric configuration parameter. Distinguishes exactly two outcomes: null when the option is explicitly disabled, and
+// undefined-or-a-parsed-number for everything else - unset, set but unparseable, or successfully parsed - matching the public getInteger/getFloat contract, which
+// likewise groups "doesn't exist" and "couldn't be parsed" under a single undefined outcome.
 function parseOptionNumeric(option: Nullable<string | undefined>, convert: (value: string) => number): Nullable<number | undefined> {
 
   // If the option is disabled (null) or we don't have it configured (undefined), preserve that distinction in the return value so callers can tell the two apart.
@@ -949,7 +950,7 @@ export class FeatureOptions {
    * place. If the convention ever evolves, every call site picks up the change without any source modification.
    *
    * Polymorphic over option type, mirroring how {@link FeatureOptions.test} and {@link FeatureOptions.value} already dispatch on whether the option is value-centric.
-   * The five distinct emitted-line shapes, across these state combinations:
+   * The distinct emitted-line shapes, across these state combinations:
    *
    * | Option type      | User state vs. default                                  | Emitted line                       |
    * |------------------|---------------------------------------------------------|------------------------------------|
@@ -960,6 +961,10 @@ export class FeatureOptions {
    * | Value-centric    | default on, disabled                                    | `<label> disabled.`                |
    * | Value-centric    | default off, enabled (value matches or differs)         | `<label> enabled at <value>.`      |
    * | Value-centric    | default on, enabled, value differs from declared default | `<label> set to <value>.`          |
+   *
+   * A value-centric option enabled with no resolvable value anywhere - no catalog-declared default and no explicit value at any scope - collapses to the plain
+   * `<label> enabled.` line above rather than the `enabled at <value>` form, since there is nothing meaningful to render after "at" (see the defensive fallback in
+   * the implementation below).
    *
    * Value rendering consults the catalog-declared {@link FeatureOptionEntry.render} when present; otherwise the raw string returned by {@link FeatureOptions.value}
    * is used. The renderer may be either a {@link FeatureOptionFormatter} string naming a built-in formatter from the shared registry (preferred when the format exists
@@ -1172,7 +1177,8 @@ export class FeatureOptions {
       return null;
     }
 
-    // If we found an explicit value in the index, return it.
+    // If we found a non-empty explicit value in the index, return it. An empty string is deliberately treated as unspecified - from the user's perspective an empty value
+    // is the same as not setting one - so it falls through to the default or "enabled, no value" resolution below rather than being returned verbatim.
     if(resolved.optionValue) {
 
       return resolved.optionValue;
@@ -1256,6 +1262,8 @@ export class FeatureOptions {
    */
   public get groups(): Record<string, string[]> {
 
+    // Same readonly-to-mutable cast rationale as the categories getter above: this is the same object identity held internally, so a caller mutating it would be
+    // mutating the catalog regardless of the return type. The readonly annotation is the discipline, not a runtime enforcement.
     return this.#catalog.groups as Record<string, string[]>;
   }
 
@@ -1266,6 +1274,8 @@ export class FeatureOptions {
    */
   public get options(): Record<string, FeatureOptionEntry[]> {
 
+    // Same readonly-to-mutable cast rationale as the categories getter above: this is the same object identity held internally, so a caller mutating it would be
+    // mutating the catalog regardless of the return type. The readonly annotation is the discipline, not a runtime enforcement.
     return this.#catalog.options as Record<string, FeatureOptionEntry[]>;
   }
 

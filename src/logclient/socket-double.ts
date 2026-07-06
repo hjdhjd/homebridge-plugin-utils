@@ -391,8 +391,8 @@ export class TestLogSocket implements LogSocketLike {
       yield line;
     }
 
-    // Park until aborted. A single resolver settled by `onAbort` lets the generator suspend without a busy loop; the pre-aborted path runs the handler inline so an
-    // already-aborted socket returns immediately rather than hanging.
+    // Park until aborted. A single resolver settled by `onAbort` lets the generator suspend without a busy loop; the explicit aborted guard below returns immediately
+    // for an already-aborted socket, while `onAbort` settles the parked waiter when an abort arrives after parking has begun.
     if(this.#controller.signal.aborted) {
 
       return;

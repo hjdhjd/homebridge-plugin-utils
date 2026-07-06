@@ -60,7 +60,7 @@ function isExitInfoShape(value: unknown): value is { exitCode: Nullable<number>;
   return exitCodeOk && exitSignalOk;
 }
 
-// Render a `"failed"` abort reason's `cause` for human consumption. Three shapes are recognized:
+// Render a `"failed"` abort reason's `cause` for human consumption. Recognized cause shapes, in dispatch order:
 //
 //   - `FfmpegProcessExitInfo`: produced by `#onExit` for natural non-zero exits. Rendered as "exit code N" and/or "signal S".
 //   - `Error`: produced by `#onSpawnError` from Node's ENOENT/EACCES/etc. Rendered as the error's message.
@@ -646,9 +646,10 @@ export class FfmpegProcess implements AsyncDisposable {
     return this.options.name() + ": FFmpeg process ended";
   }
 
-  // Private forwarders to the three codec-support scalars this class reads during spawn and teardown. The class reads them in three places (constructor log line,
-  // `spawn()` call, teardown log line); routing each through a named accessor keeps the long `this.options.config.codecSupport.X` path out of the call sites and
-  // makes it obvious at a glance which config values the class actually depends on. No stored state - each getter is a one-line forward through the config chain.
+  // Private forwarders to the codec-support scalars this class reads during spawn and teardown; routing each through a named accessor keeps the long
+  // `this.options.config.codecSupport.X` path out of the call sites and makes it obvious at a glance which config values the class actually depends on. The class
+  // reads these scalars from a handful of call sites across construction, spawn, and teardown. No stored state - each getter is a one-line forward through the
+  // config chain.
   get #ffmpegExec(): string {
 
     return this.options.config.codecSupport.ffmpegExec;

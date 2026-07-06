@@ -14,9 +14,9 @@ import assert from "node:assert/strict";
 import { setImmediate as flushPending } from "node:timers/promises";
 import { webUi } from "./webUi.mjs";
 
-// Build a webUi instance against the skeleton DOM with featureOptions.show / featureOptions.hide stubbed to record calls. The harness packages the four
-// disposables every test needs (DOM globals, homebridge install, the orchestrator instance, and the inner stubs' call records) so test bodies stay focused on
-// the behavior they are pinning. Every disposable is returned via the `using` channel; tests bind them with `using` so cleanup runs even on failure.
+// Build a webUi instance against the skeleton DOM with featureOptions.show / featureOptions.hide stubbed to record calls. The harness bundles the two real
+// disposables every test needs (the DOM globals and the homebridge install) alongside two plain data properties (the orchestrator instance and the inner
+// stubs' call records) returned for assertions, all wrapped in a single object that tests bind with `using` so cleanup runs even on failure.
 function makeWebUiHarness({ name = "TestPlatform", config = [], firstRun, requestResponses, featureOptions, accessories = [], unstubbed = false } = {}) {
 
   const dom = createTestDom();
@@ -89,8 +89,8 @@ describe("webUi.constructor", () => {
     using _dom = createTestDom();
     createSkeletonFeatureOptionsDom();
 
-    // The contract: any options bag passed under `featureOptions` is the inner constructor's argument. We verify by constructing with a sidebar override and
-    // observing that the inner instance honored it (the inner constructor merges the provided sidebar into its defaults).
+    // The contract: any options bag passed under `featureOptions` is forwarded verbatim as the inner constructor's argument. We verify by constructing with a
+    // sidebar override and confirming construction succeeds when a featureOptions bag is supplied.
     const ui = new webUi({ featureOptions: { sidebar: { hideUuid: true } } });
 
     // featureOptions is the inner instance; it must be defined and constructed (sidebar merging is tested in the inner suite, here we only verify forwarding).
@@ -163,8 +163,8 @@ describe("webUi.show - first-run routing", () => {
 
     await harness.ui.show();
 
-    // Empty config + a required first-run: the session seeds the platform name in memory so a later submit persists a well-formed block, but the orchestrator no
-    // longer writes that bare seed eagerly - nothing reaches the host until the user actually submits credentials. The first-run page is shown and the save button
+    // Empty config + a required first-run: the session seeds the platform name in memory so a later submit persists a well-formed block, but the orchestrator
+    // does not eagerly persist that seed - nothing reaches the host until the user actually submits credentials. The first-run page is shown and the save button
     // is disabled until the flow completes.
     assert.equal(harness.fake.observed.updatedConfigs.length, 0, "the held seed must not be eagerly persisted before the user submits");
     assert.equal(harness.skeleton.pageFirstRun.style.display, "block", "the first-run page must be visible after the orchestrator routes to first-run");
@@ -182,8 +182,9 @@ describe("webUi.show - first-run routing", () => {
 
     await harness.ui.show();
 
-    // The two conditions for the feature-options route are non-empty config AND isRequired returning false. With isRequired returning true, the orchestrator must
-    // still flow to first-run; the inner feature-options.show() must NOT be invoked from this route.
+    // The feature-options route is taken whenever isRequired returns false, regardless of config emptiness - a plugin's own isRequired implementation may choose
+    // to inspect config, but the orchestrator itself imposes no such gate. With isRequired returning true here, the orchestrator must still flow to first-run;
+    // the inner feature-options.show() must NOT be invoked from this route.
     assert.equal(harness.skeleton.pageFirstRun.style.display, "block", "first-run page must be shown when isRequired returns true");
     assert.deepEqual(harness.featureOptionsCalls, [], "featureOptions.show must NOT be invoked on the first-run route");
   });
@@ -216,8 +217,9 @@ describe("webUi.show - first-run routing", () => {
     await harness.ui.show();
 
     // Drive the click-then-await cycle by invoking the firstRun button's click handler. The handler is registered via addEventListener as an async function and the
-    // dispatcher does not await it, so the click body runs as an unsupervised promise chain. The handler chains three awaits (#processHandler, the page-swap, then
-    // featureOptions.show); a single setImmediate flushes past every microtask the chain enqueues, which is the deterministic alternative to counting awaits by hand.
+    // dispatcher does not await it, so the click body runs as an unsupervised promise chain. The handler awaits #processHandler, synchronously swaps the page
+    // display, then awaits featureOptions.show; a single setImmediate flushes past every microtask the chain enqueues, which is the deterministic alternative to
+    // counting awaits by hand.
     harness.skeleton.firstRun.click();
     await flushPending();
 
@@ -243,7 +245,7 @@ describe("webUi.show - first-run routing", () => {
     await flushPending();
 
     // Negative-path verification: a falsy onSubmit return must NOT advance the user past first-run. The save button must remain disabled (set false during
-    // setup), the menu must stay hidden, and the inner feature-options view must not have been invoked from the click handler.
+    // setup), and the inner feature-options view must not have been invoked from the click handler.
     assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "save button must remain disabled when onSubmit rejects the submission");
     assert.deepEqual(harness.featureOptionsCalls, [], "featureOptions.show must NOT be invoked when onSubmit returns false");
   });
@@ -322,10 +324,10 @@ describe("webUi.show - menu wiring", () => {
 
 describe("webUi - tab-switch reconciliation ordering (real feature-options pipeline)", () => {
 
-  // These two tests drive the REAL inner feature-options pipeline (the harness `unstubbed` mode) so an actual sync()/persist drain runs. They pin the two orderings
+  // These tests drive the REAL inner feature-options pipeline (the harness `unstubbed` mode) so an actual sync()/persist drain runs. They pin the orderings
   // the reconciliation depends on, observed through the host call log: the page re-reads the config before rendering (sync-before-show), and a pending edit is
-  // flushed to the host before the Settings schema form renders (flush-before-schemaform). A stub's call record cannot express either ordering, so the real pipeline
-  // is required here.
+  // flushed to the host before the Settings schema form renders (flush-before-schemaform). A stub's call record cannot express these orderings, so the real
+  // pipeline is required here.
 
   // The /getOptions catalog the real show() pulls. One toggleable Motion option is enough to stage a pending edit.
   const FEATURES = {

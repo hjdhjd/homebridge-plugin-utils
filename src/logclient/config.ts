@@ -7,7 +7,8 @@
  * CLI-layer configuration for the `hblog` tool: loading the optional `~/.hblog.json` file and the pure merge of file / environment / flags into a connection.
  *
  * This module lives at the CLI layer on purpose: the engine ({@link logclient/client!HomebridgeLogClient | HomebridgeLogClient} and its transports) never reads the
- * user's home directory or any config file - all file I/O stays here, behind injectable seams, so the engine is portable and side-effect-free. Three pieces are exported:
+ * user's home directory or any config file - all file I/O stays here, behind injectable seams, so the engine is portable and side-effect-free. This module exports the
+ * following pieces:
  *
  * - {@link resolveConfigPath} - resolve the absolute config-file path, honoring the `HBLOG_CONFIG` environment override over the home-directory default
  *   ({@link DEFAULT_CONFIG_FILENAME}).
@@ -15,8 +16,8 @@
  *   a clear, actionable error; unknown keys are ignored; and a file whose permissions are group/other-readable triggers a single one-line warning recommending `chmod
  *   600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`, and `warn` seams are injected so the loader is unit-tested
  *   without touching the real filesystem.
- * - {@link resolveConnection} - a PURE merge of the three configuration sources into one resolved connection, applying the precedence flags > environment > file >
- *   defaults. It performs no I/O of its own; the caller supplies the already-loaded file, the environment slice, and the parsed flags.
+ * - {@link resolveConnection} - a PURE merge of the configuration sources into one resolved connection, applying the precedence flags > environment > file > defaults.
+ *   It performs no I/O of its own; the caller supplies the already-loaded file, the environment slice, and the parsed flags.
  *
  * @module
  */
@@ -356,6 +357,7 @@ export function resolveConnection(sources: { env: HblogEnv; file: HblogConfigFil
   return {
 
     host: flags.host ?? env.host ?? file?.host ?? DEFAULT_HOST,
+    // A one-time passcode is single-use and time-bound, so the config file deliberately never persists one; the file source here is intentionally `undefined`.
     otp: pickString(flags.otp, env.otp, undefined),
     password: pickString(flags.password, env.password, file?.password),
     port: flags.port ?? (envPortValid ? envPort : undefined) ?? file?.port ?? DEFAULT_PORT,

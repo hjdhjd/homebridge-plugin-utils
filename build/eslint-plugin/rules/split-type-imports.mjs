@@ -72,7 +72,7 @@ function declarationIndent(sourceCode, node) {
 
 // Derive the kind-discriminant strings for a declaration in one place. The rule branches on whether the node is an `ImportDeclaration` or an
 // `ExportNamedDeclaration` to pick the message wording, the declaration head keyword, and the kind keyword used by the value-side renderer; centralizing
-// the three derivations keeps them from drifting and gives every downstream consumer one object to read from instead of three ternaries to evaluate.
+// the discriminant derivations keeps them from drifting and gives every downstream consumer one object to read from instead of separate ternaries to evaluate.
 function declarationFlavor(node) {
 
   const isImport = node.type === "ImportDeclaration";
@@ -85,7 +85,7 @@ function declarationFlavor(node) {
   };
 }
 
-// Classify a declaration's specifiers into the three buckets the rule cares about: inline-`type`-marked named specifiers, unmarked named (value) specifiers,
+// Classify a declaration's specifiers into the buckets the rule cares about: inline-`type`-marked named specifiers, unmarked named (value) specifiers,
 // and a single default specifier (imports only). Pure - takes the raw specifiers array and returns a structured object, with no dependency on `sourceCode`
 // or `context`. Used by the rule's per-declaration check to drive the decision tree (skip vs split vs collapse) and by the render helpers downstream.
 // Namespace specifiers (`* as ns`) fall through the switch unclassified: per the ECMAScript `ImportClause` grammar they never appear alongside named
@@ -126,8 +126,8 @@ function classifySpecifiers(specifiers) {
   return { defaultSpec, typeSpecs, valueSpecs };
 }
 
-// Test whether a comment that sits inside the declaration's range falls inside one of the autofix's preservable subregions. Two regions are safe: any
-// specifier's own range (carried along by range-based slicing) and the post-source tail range (carried verbatim into both emitted declarations).
+// Test whether a comment that sits inside the declaration's range falls inside one of the regions the autofix preserves: any specifier's own range
+// (carried along by range-based slicing) and the post-source tail range (carried verbatim into both emitted declarations).
 function isCommentPreservable(sourceCode, comment, node) {
 
   for(const specifier of node.specifiers) {

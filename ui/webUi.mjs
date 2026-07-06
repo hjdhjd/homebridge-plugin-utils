@@ -47,9 +47,10 @@ export class webUi {
    *
    * Constructs the composed {@link webUiFeatureOptions} instance immediately so the feature-options page is ready to render the moment the user navigates to it.
    * Caller-supplied first-run hooks are merged in a single spread over the default no-op handlers, so partial overrides work naturally - a caller can supply only
-   * `onSubmit` and the other two slots stay at the defaults that keep the flow driveable.
+   * `onSubmit` and the unspecified slots stay at the defaults that keep the flow driveable.
    *
-   * @param {WebUiConfig} [options] - Configuration options for the webUI. All fields are optional and fall back to no-op handlers.
+   * @param {WebUiConfig} [options] - Configuration options for the webUI. All fields are optional; firstRun's hooks fall back to no-op handlers, and
+   * featureOptions/name simply default to undefined.
    */
   constructor({ featureOptions, firstRun = {}, name } = {}) {
 
@@ -145,7 +146,7 @@ export class webUi {
   /**
    * Show the main plugin configuration tab.
    *
-   * Hides the feature-options view, swaps the menu button states (home and feature-options become elegant; settings becomes primary to indicate the active tab),
+   * Hides the feature-options view, swaps the menu button states (home and feature-options become primary; settings becomes elegant to indicate the active tab),
    * and asks Homebridge to render its built-in schema-driven settings form. The spinner brackets the swap so transient layout shifts are not visible to the user.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the schema form so any debounced-but-unwritten option edit is flushed into Homebridge's in-memory config model
@@ -180,8 +181,8 @@ export class webUi {
   /**
    * Show the support tab.
    *
-   * Hides the feature-options view and the schema form, swaps the menu button states (home becomes primary as the active tab; feature-options and settings revert
-   * to elegant), and reveals the static support page. Spinner brackets the swap to mask transient layout shifts.
+   * Hides the feature-options view and the schema form, swaps the menu button states (home becomes elegant as the active tab; feature-options and settings revert
+   * to primary), and reveals the static support page. Spinner brackets the swap to mask transient layout shifts.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the support page so any debounced-but-unwritten option edit is flushed first, matching the Settings path. The
    * try/finally guarantees the spinner comes down and the tab reveals even if the drain rejects (the drain's own failure path already toasts via `persist:failed`).
@@ -229,7 +230,7 @@ export class webUi {
 
     // Menu click listeners use a uniform shape: an arrow expression that calls the handler and returns its result. addEventListener discards the return value, so an
     // async handler's promise is dropped either way; wrapping `featureOptions.show()` in `async () => await ...` would add a microtask hop and break the visual
-    // symmetry across the three sibling registrations for no behavioral benefit. All three handlers are now async (show() syncs; #showSettings / #showSupport await
+    // symmetry across the three sibling registrations for no behavioral benefit. All three handlers are async (show() syncs; #showSettings / #showSupport await
     // the navigate-away flush before revealing the next tab), and the dropped promise is a deliberate fire-and-forget: each handler's own try/finally reveals the tab
     // and drains the spinner on every path, and the flush drain's failure surfaces internally via persist:failed's toast - so there is no unobserved rejection here.
     document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
@@ -276,7 +277,7 @@ export class webUi {
    * Swap one Bootstrap button class for another on a DOM element.
    *
    * The menu uses the Bootstrap (Material Design for Bootstrap) `btn-primary` / `btn-elegant` pair to encode active vs inactive tabs. Tab-switch handlers call this
-   * helper three times - once per menu button - so the exact class swap each tab needs lives at the call site rather than embedded in this helper.
+   * helper once per menu button, so the exact class swap each tab needs lives at the call site rather than embedded in this helper.
    *
    * @param {string} id          - The element ID to update.
    * @param {string} removeClass - The class to remove.

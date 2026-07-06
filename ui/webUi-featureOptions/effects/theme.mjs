@@ -188,8 +188,8 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
     return false;
   }
 
-  // .d-none is a Bootstrap-defined utility class, not a native CSS keyword; its display: none effect on this off-DOM probe element only appears once Bootstrap's
-  // stylesheet has actually applied, making it a reliable readiness signal.
+  // .d-none is a Bootstrap-defined utility class, not a native CSS keyword; its display: none effect on this briefly-attached probe element only appears once
+  // Bootstrap's stylesheet has actually applied, making it a reliable readiness signal.
   const isBootstrapApplied = () => {
 
     const testElem = document.createElement("div");

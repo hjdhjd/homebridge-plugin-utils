@@ -38,8 +38,9 @@ export const mountHeaderView = ({ root, signal, store }) => {
         return;
       }
 
-      // Yield to the no-controllers helper text path - the orchestrator handles that state by writing a plain message into the header before the store transitions
-      // out of loading. We do not race against that write here.
+      // Defensive guard against a "loading" status at mount time. In the current call order this branch is unreachable: the no-controllers path returns from
+      // show() before any views mount, and the success path dispatches model:loaded - which sets status to ready - before mountHeaderView runs. The check stays
+      // in place as a safeguard against a future reordering that mounts views before model:loaded fires.
       if(status.kind === "loading") {
 
         return;

@@ -26,7 +26,8 @@ import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
 import util from "node:util";
 
-// Default reconnect interval, in seconds. Matches the prior library default so existing callers who do not override this value see the same wire-level cadence.
+// Default reconnect interval, in seconds. A one-minute cadence gives a typical LAN broker (a mosquitto instance restarting or a brief network blip) time to come
+// back without hammering it with reconnect attempts, while still recovering well within the timescale a user would notice as "the plugin is broken."
 const MQTT_DEFAULT_RECONNECT_INTERVAL = 60;
 
 // Module-scope success sentinel for `subscribeSet` handler invocations. `runWithAbort` returns `null` when its composed signal fires, so we use a sentinel to
@@ -67,9 +68,10 @@ export type MqttGetHandler = () => string;
  *
  * - **Return normally** (work completed successfully) - logs INFO `"MQTT: set message received for X: value."`.
  * - **Throw a non-abort error** (work failed for a reason unrelated to cancellation) - logs ERROR `"MQTT: error setting X to value: message."`.
- * - **Throw `signal.reason`** after observing the abort (graceful cancellation surfaced as failure) - logs WARN `"MQTT: set handler for X was cancelled before
- *   completion."`. A setter that catches its own abort and returns normally is indistinguishable to the wrapper from a successful completion, which is why a
- *   signal-aware setter that wants cancellation reflected in the log stream should rethrow `signal.reason` rather than swallow it.
+ * - **Throw while the composed signal is already aborted** (the connection-level abort or the per-invocation timeout, whichever fired first) - logs WARN
+ *   `"MQTT: set handler for X was cancelled before completion."`, regardless of what value is thrown. A setter that catches its own abort and returns normally
+ *   is indistinguishable to the wrapper from a successful completion, which is why a signal-aware setter that wants cancellation reflected in the log stream
+ *   should rethrow once it observes the signal has aborted, rather than swallow it.
  *
  * @category Utilities
  */
@@ -127,7 +129,7 @@ export interface MqttBrokerErrorResult {
  * mqtt.js handles, no closure over the live client. The wiring layer in {@link MqttClient} forwards every `client.on("error", ...)` invocation through here and acts
  * on the returned `endTransport` flag.
  *
- * The four routing paths mirror the four transport-error categories HBPU has historically distinguished:
+ * The routing paths mirror the transport-error categories HBPU distinguishes:
  *
  * - `ECONNREFUSED` - the broker host is up but no listener accepts the connection. Recoverable; auto-reconnect handles it.
  * - `ECONNRESET`   - the broker accepted then dropped the connection. Recoverable; auto-reconnect handles it.
@@ -612,9 +614,10 @@ export class MqttClient implements AsyncDisposable {
         return;
       }
 
-      // Snapshot the handler set before iterating. A handler may remove itself (via per-subscription signal abort) during dispatch; iterating the live Set would
-      // skip the newly-vacated slot's successor on some engines and is awkward to reason about across Node versions. The snapshot cost is O(n) in handlers per
-      // topic, same as the dispatch itself, so the overhead is negligible. Sync handlers run inline so their effects are observable on the calling turn (matching
+      // Snapshot the handler set before iterating so a handler that removes itself (or a sibling) mid-dispatch cannot alter which handlers this dispatch pass
+      // invokes. Iterating the live Set directly would still be spec-correct - Set iteration order and hole-skipping on delete are well-defined - but it would make
+      // the invocation set implicit and mutation-order-dependent. The snapshot cost is O(n) in handlers per topic, same as the dispatch itself, so the overhead is
+      // negligible. Sync handlers run inline so their effects are observable on the calling turn (matching
       // EventEmitter's dispatch model and the public contract these tests assert); only the per-handler error handling is split between the sync and async legs,
       // both of which route through the same `logHandlerError` so the log surface is single-source-of-truth. One bad handler logs but does not destabilize the
       // connection or skip its siblings.

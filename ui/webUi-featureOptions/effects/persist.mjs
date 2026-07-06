@@ -55,7 +55,7 @@ const DEBOUNCE_MS = 300;
  */
 export const registerPersistEffect = ({ host, session, signal, store }) => {
 
-  // The four drain-state variables encode the irreducible coordination this pattern requires:
+  // The drain-state variables below encode the irreducible coordination this pattern requires:
   //
   //   - `inFlight`: the in-flight drain promise. When non-null, the drain loop is active; subsequent mutations only set `pending` and return.
   //   - `pending`: the dirty flag. Set by every subscribed mutation; cleared by the drain loop at the top of each iteration. Setting it during an in-flight persist
@@ -180,8 +180,8 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
       // Single-writer drain start-site (mutation path). The macrotask-ordering invariant the serialization rests on: every subscribed store mutation
       // (option:set / option:cleared / options:reset / model:reverted) and every flush() caller (hide() / the visibilitychange handler) originates from a DOM-event
       // macrotask, so none can preempt the queued `inFlight.finally` microtask and strand a `pending` edit in the gap between the drain returning and its `finally`
-      // clearing `inFlight`. (Forward-safety: if a future caller ever dispatches one of those four actions from a microtask continuation, this invariant must be
-      // re-checked.) Reset `flushing` here too so it never outlives the drain it belongs to.
+      // clearing `inFlight`. (Forward-safety: if a future caller ever dispatches one of those subscribed actions from a microtask continuation, this invariant
+      // must be re-checked.) Reset `flushing` here too so it never outlives the drain it belongs to.
       inFlight = drain().finally(() => {
 
         inFlight = null;

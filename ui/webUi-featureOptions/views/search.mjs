@@ -13,7 +13,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 /**
  * Mount the search panel view.
  *
- * The panel hosts five interactive surfaces:
+ * The panel hosts the following interactive surfaces:
  *
  *   - **Search input** - debounced 300ms; dispatches `filter:changed` with the trimmed query.
  *   - **Filter pills** (All / Modified) - dispatch `filter:changed` with the mode.
@@ -126,7 +126,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
     }
   }, { capture: true, signal });
 
-  // Debounce helper - declared after refs so it can close over them. setTimeout is intentional here over the abort-driven equivalent: clearTimeout is the simplest
+  // Debounce helper; closes over `debounceTimer` and `store`. setTimeout is intentional here over the abort-driven equivalent: clearTimeout is the simplest
   // expression of "cancel the previous timer," with no abort-controller allocation per keystroke.
   function scheduleSearchDispatch(query) {
 
@@ -138,7 +138,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
   }
 };
 
-// Build the panel DOM and fill the `refs` record with element pointers update functions consult later. One-time call; idempotent only insofar as it reassigns
+// Build the panel DOM and fill the `refs` record with element pointers that update functions consult later. One-time call; idempotent only insofar as it reassigns
 // `refs` fields (the panel itself is rebuilt fresh, replacing any prior content).
 const buildPanel = ({ refs, root }) => {
 
@@ -319,8 +319,8 @@ const updateFilterPillState = ({ filterAll, filterModified, mode }) => {
   filterModified.classList.add("btn", "btn-xs", ...modClasses);
 };
 
-// Handle a click on the search panel. Resolves the click target's data-action and dispatches accordingly. Reset and revert buttons collapse the action set back to
-// "Reset..." after dispatching; the reset-toggle button reveals the action set without dispatching.
+// Handle a click on the search panel. Dispatches by comparing the click target's identity against the ref-held elements. Reset and revert buttons collapse the
+// action set back to "Reset..." after dispatching; the reset-toggle button reveals the action set without dispatching.
 const handleClick = ({ configTable, event, refs, store }) => {
 
   const target = event.target;

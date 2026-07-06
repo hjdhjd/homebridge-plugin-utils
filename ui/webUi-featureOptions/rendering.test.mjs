@@ -13,7 +13,8 @@ import { createTestDom } from "../ui.helpers.mjs";
 import { projection } from "./selectors.mjs";
 
 // Catalog fixture: covers the row archetypes (boolean, grouped boolean, and value-centric options with and without an explicit inputSize) plus a controller-detectable
-// device fixture for upstream tests. Post-unification inputSize feeds only the field width, not the layout, so both value options exercise the same stacked structure.
+// device fixture for upstream tests. inputSize feeds only the field width, not the layout, so both value options exercise the same stacked structure regardless of
+// whether inputSize is declared.
 const CATEGORIES = [
 
   { description: "Motion Options", name: "Motion" },
@@ -156,8 +157,8 @@ describe("optionRow - basic structure", () => {
 
     const state = loadedState();
 
-    // Volume declares inputSize: 3; Bandwidth declares none. Pre-unification these took divergent layouts (inline flex vs three-column grid); now both stack identically
-    // and inputSize feeds only the field width. The legacy inline classes must no longer appear on any row.
+    // Volume and Bandwidth (with and without an explicit inputSize) render through the identical stacked structure; no row carries an inline-flex or three-column class
+    // regardless of whether inputSize is declared.
     const withSize = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Volume"), scopeKind: "global" });
     const withoutSize = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Bandwidth"), scopeKind: "global" });
 

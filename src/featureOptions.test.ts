@@ -792,9 +792,9 @@ describe("FeatureOptions - groups", () => {
 
 describe("FeatureOptions.isDependencyMet (SSOT predicate for dependency-hidden state)", () => {
 
-  // Single source of truth for "is this grouped option's parent enabled at the current scope?" Replaces parent-path reconstruction at three independent call sites
-  // (renderer's category-shell visibility, renderer's option-row dependency-hide, search's row-level + model-iteration dependency checks). The model owns the
-  // reverse index it builds at catalog rebuild and is the only place that should derive a child option's parent.
+  // Single source of truth for "is this grouped option's parent enabled at the current scope?" Replaces ad hoc parent-path reconstruction at every call site that
+  // needs to know whether a grouped option's row is currently usable. The model owns the reverse index it builds at catalog rebuild and is the only place that
+  // should derive a child option's parent.
 
   test("returns true for options that have no `group` declaration (no dependency to fail)", () => {
 

@@ -95,7 +95,7 @@ describe("createLogFilter", () => {
 
     const filter = createLogFilter({ grep: /boom/, levels: ["error"], plugins: ["Plug"] });
 
-    // All three satisfied.
+    // Grep, level, and plugin all satisfied.
     assert.equal(filter(record({ level: "error", message: "boom happened", plugin: "Plug" })), true);
     // Grep fails.
     assert.equal(filter(record({ level: "error", message: "quiet", plugin: "Plug" })), false);

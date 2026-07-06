@@ -86,9 +86,10 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
     await proc.ready;
 
     // The watchdog arms only on the first inbound packet, never on `ready` or at construction. With no datagram ever sent, the inactivity clock never starts, so the
-    // process must stay alive through any wait - this is the cold-start case where the first return packet has not yet round-tripped. 80ms is the window we would have
-    // tripped under the old ready-armed behavior; we wait 250ms (well past it) to prove the watchdog truly never armed. We deliberately do NOT `await proc.exited`
-    // here: with no packet the watchdog never fires and `stderrThenIdle()` idles forever, so the process never exits on its own - awaiting it would hang the run.
+    // process must stay alive through any wait - this is the cold-start case where the first return packet has not yet round-tripped. 80ms is comfortably inside the
+    // window a ready-armed watchdog would have tripped on a cold start; we wait 250ms (well past it) to prove the first-packet-armed watchdog truly never arms without
+    // a packet. We deliberately do NOT `await proc.exited` here: with no packet the watchdog never fires and `stderrThenIdle()` idles forever, so the process never
+    // exits on its own - awaiting it would hang the run.
     await delay(250);
 
     assert.equal(proc.isTimedOut, false, "with no inbound packet the watchdog must never arm, so a cold-start stream must not be aborted with a timeout reason");

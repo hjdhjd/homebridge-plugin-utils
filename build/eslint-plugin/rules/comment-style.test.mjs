@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * comment-style.test.mjs: Unit tests for the comment-style rule covering its four enforcement groups (Unicode-glyph substitution, em-dash substitution,
+ * comment-style.test.mjs: Unit tests for the comment-style rule covering its enforcement groups (Unicode-glyph substitution, em-dash substitution,
  * decorative-banner-line removal, and box-drawing-character stripping) along with the negative cases that prove comment scoping works (string literals
  * are never touched).
  */
@@ -178,7 +178,7 @@ ruleTester.run("comment-style", rule, {
     // Block comment using the structured `/* * */` continuation marker convention is fine - the asterisks are inside the body but not banner-shaped runs.
     "/* Header.\n *\n * Body line.\n */",
 
-    // Unicode in string literals is never touched. These four cases are the load-bearing proof of the comment-only scope.
+    // Unicode in string literals is never touched. The following cases are the load-bearing proof of the comment-only scope.
     "const s = \"→\";",
     "const s = \"—\";",
     "const s = \"─\";",

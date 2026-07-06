@@ -82,8 +82,8 @@ describe("mountHeaderView", () => {
 
     document.body.appendChild(root);
 
-    // The orchestrator hides every region before populating it and reveals them together at the end of show(); a view must never reveal its own region on mount. This
-    // pins the FIX that removed the premature self-reveal: re-adding `root.style.display = ""` to the view would fail here.
+    // A view must never reveal its own region on mount; the orchestrator alone reveals regions, together, at the end of show(). Re-adding
+    // `root.style.display = ""` here would violate that invariant and fail this assertion.
     root.style.display = "none";
     store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "controller-based", type: "model:loaded" });
     mountHeaderView({ root, signal: controller.signal, store });

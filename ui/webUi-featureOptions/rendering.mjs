@@ -68,10 +68,10 @@ export const categoryShell = ({ category, scopeKind }) => {
  *   - **Boolean options**: the content cell holds only the `<label>`.
  *   - **Value-centric options**: the content cell stacks the `<label>` and an `<input type="text">` directly beneath it. The label always reads at full width and the
  *     field sits below at the width declared by the option's `inputSize` (5 ch when unspecified). The field never occupies a shared grid column, so its width cannot
- *     crush its own label or widen sibling rows. `inputSize` controls the field width and nothing else - it is no longer a layout switch.
+ *     crush its own label or widen sibling rows. `inputSize` controls only the field's declared width.
  *
- * The single uniform shape replaces the former boolean / inline / three-column split: one row structure, one stacked content cell, so a long descriptive label and a
- * compact value render through exactly the same path and differ only in the field's declared width.
+ * The row structure is uniform regardless of option kind: one row, one stacked content cell, so a long descriptive label and a compact value render through exactly
+ * the same path and differ only in the field's declared width.
  *
  * The element factories ({@link createCheckbox}, {@link createLabel}, {@link createValueInput}) build only the bare, state-independent shape. Every state-dependent
  * attribute - the checkbox tri-state, the value-input's value / disabled state, the label color, row visibility, the dependency badge - is set by {@link applyRowState}
@@ -240,7 +240,7 @@ export const triStateTransition = ({ catalog, checkbox, configIndex, controllerI
   return { action: writeAction({ deviceId, enabled: true, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
 };
 
-// Map a view scope kind to the suffix label rendered on category headers. Three values; switch on the discriminator.
+// Map a view scope kind to the suffix label rendered on category headers. Switch on the discriminator; every scope kind maps to its own label.
 const scopeLabel = (scopeKind) => {
 
   switch(scopeKind) {
@@ -264,7 +264,8 @@ const scopeLabel = (scopeKind) => {
 };
 
 // Decide whether the entry is "inherited from above" relative to the current view. The view is at viewKind; the entry resolved at resolvedScope. An entry is
-// inherited when the resolved scope is strictly higher than the view scope. The discriminated-union form gives us an exhaustive switch.
+// inherited when the resolved scope is strictly higher than the view scope. The switch covers the three current scope kinds; an unrecognized kind silently resolves to
+// "not inheriting" rather than throwing.
 const isInheritingView = (viewKind, resolvedScope) => {
 
   switch(viewKind) {
@@ -303,6 +304,8 @@ const createCheckbox = ({ deviceId, expandedName, option }) => {
     value: expandedName + (deviceId ? ("." + deviceId) : "")
   });
 
+  // Record the option's default-on/off as the checkbox's default state, kept separate from the live `.checked` tri-state that applyRowState owns. Nothing reads this
+  // default today - there is no form reset, clone, or `:default` rule - but it keeps the element honest for any future consumer that relies on default-state semantics.
   checkbox.defaultChecked = option.default;
 
   return checkbox;
@@ -316,7 +319,7 @@ const createLabel = ({ entry, expandedName }) => createElement("label", {
   for: expandedName
 }, [entry.description]);
 
-// Apply the label's scope-color class, replacing any color previously applied. The four color classes are mutually exclusive, so we strip all of them before adding
+// Apply the label's scope-color class, replacing any color previously applied. The color classes are mutually exclusive, so we strip every one of them before adding
 // the current one - this makes the function idempotent and safe to re-run on every projection change, which is what lets a toggle re-color a modified option's label
 // in place. The construction path and the per-mutation update path share this one writer, so the initial color and every subsequent color come from the same map.
 const applyLabelColor = ({ entry, inheriting, label }) => {
@@ -332,8 +335,8 @@ const applyLabelColor = ({ entry, inheriting, label }) => {
 //   - **Explicit at this scope or below** (not inheriting): the entry IS set at the current view's scope (or unset entirely). When the explicit state differs
 //     from the catalog default, mark it text-info as a "this row has been modified" cue. Default-matching unset rows render text-body.
 //
-// The webUI's sole scope-to-class mapping. It reads the projection's inheriting flag rather than recomputing scope at render time - the projection has already
-// resolved the scope walk, so the rendering layer just maps to the right color class.
+// The webUI's sole scope-to-class mapping. It consumes the `inheriting` boolean that {@link applyRowState} derives via {@link isInheritingView} from the view's
+// scopeKind and the projection's `entry.scope`, rather than re-deriving that boolean itself; the switch below still reads `entry.scope` directly to pick the color.
 const scopeColorClass = ({ entry, inheriting }) => {
 
   if(inheriting) {

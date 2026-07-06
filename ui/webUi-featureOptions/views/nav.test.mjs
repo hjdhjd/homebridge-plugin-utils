@@ -126,8 +126,8 @@ describe("mountNavView - devices container", () => {
 
     using _dom = createTestDom();
 
-    // Every device carries a sidebarGroup, so the ungrouped section is empty. The device-label header must be suppressed - it would otherwise label nothing. This is
-    // the regression guard for the stray "DEVICES" sidebar header: a label is only emitted when it heads a non-empty section.
+    // Every device carries a sidebarGroup, so the ungrouped section is empty; the device-label header must be suppressed since a label is only ever emitted when it
+    // heads a non-empty section.
     const grouped = [
 
       { ...DEVICES[0], sidebarGroup: "Cameras" },

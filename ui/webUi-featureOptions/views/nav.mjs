@@ -23,7 +23,7 @@ import { effect } from "../store.mjs";
  *
  * Subscribes to:
  *
- *   - `controllers:loaded` - rebuild the controllers container.
+ *   - `controllers:loaded` - rebuild the controllers container (a controllers-only refresh hook not currently dispatched).
  *   - `devices:loaded` - rebuild the devices container.
  *   - `scope:changed` - update active-link highlighting without rebuilding.
  *   - `model:loaded` - initial build (controllers + global link + mode-aware structure).
@@ -46,7 +46,7 @@ import { effect } from "../store.mjs";
  */
 export const mountNavView = ({ getDevices, host, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
 
-  // Controllers container rebuilds on model:loaded (initial mode/controllers) and controllers:loaded (refresh/retry).
+  // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - a controllers-only refresh hook not currently dispatched.
   effect({
 
     events: [ "controllers:loaded", "model:loaded" ],

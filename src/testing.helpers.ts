@@ -104,7 +104,7 @@ export type CapturingLog = HomebridgePluginLogging & { readonly entries: readonl
  * against that array to verify the class under test emitted the expected log lines at the expected severities.
  *
  * Hoisted into the shared testing-helpers module for the same reason as {@link silentLog}: the shape is identical across every test file that asserts on log output,
- * and repeating the four arrow-function bodies per test file is pure duplication. The `entries` view is `readonly` so tests cannot accidentally corrupt captured
+ * and repeating the logger's arrow-function bodies per test file is pure duplication. The `entries` view is `readonly` so tests cannot accidentally corrupt captured
  * state mid-run; the factory itself closes over the underlying mutable array so the logger methods can still push.
  *
  * @returns A logger that records every emission for later assertion.

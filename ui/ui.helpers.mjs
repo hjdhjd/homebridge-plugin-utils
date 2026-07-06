@@ -115,8 +115,9 @@ export function createTestDom() {
  * Seed the current `document` with the skeleton DOM layout the `webUi` and `webUiFeatureOptions` orchestrators expect. Call after `createTestDom` has installed the
  * globals.
  *
- * The skeleton mirrors the Homebridge config-ui template: page containers for the first-run, feature-options, support, and settings views; the menu wrapper with its
- * three tab buttons; the feature-options sub-layout (sidebar + main content + search panel + config table + info header + stats grid + status info).
+ * The skeleton mirrors the Homebridge config-ui template: page containers for the first-run, feature-options, and support views; the menu wrapper with its three
+ * tab buttons (menuHome, menuFeatureOptions, and menuSettings, the last of which has no corresponding page container in this skeleton); the feature-options
+ * sub-layout (sidebar + main content + search panel + config table + info header + stats grid + status info).
  *
  * Returns the important element references as a record so tests that need to insert additional content (seeded options, category tables, etc.) have a typed grip on
  * the skeleton's mount points.
@@ -403,10 +404,9 @@ export function installHomebridge(fake) {
 }
 
 /**
- * Simulate a user clicking a category disclosure's header. Happy-DOM honors the native `<details>`/`<summary>` toggle behavior (verified against 20.x): clicking
- * the summary mutates `details.open` AND fires the `toggle` event the orchestrator's capture-phase delegated handler listens for. This helper is the single
- * idiom for "drive a category toggle from a test," shared across every webUI test file so the contract under exercise is uniform regardless of which suite the
- * test lives in.
+ * Simulate a user clicking a category disclosure's header. Happy-DOM implements the native `<details>`/`<summary>` toggle contract: clicking the summary mutates
+ * `details.open` AND fires the `toggle` event the orchestrator's capture-phase delegated handler listens for. This helper is the single idiom for "drive a category
+ * toggle from a test," shared across every webUI test file so the contract under exercise is uniform regardless of which suite the test lives in.
  *
  * @param {HTMLDetailsElement} details - The category `<details>` element.
  */

@@ -6,10 +6,10 @@
 /**
  * Token acquisition for the Homebridge UI log client.
  *
- * {@link acquireToken} turns a {@link LogClientCredentials} discriminated union into a raw bearer token by talking to the homebridge-config-ui-x authentication API. The
- * three credential arms map to the server's three authentication paths: a pre-acquired `token` is returned verbatim with no network call, a `password` arm posts to
- * `POST /api/auth/login` (carrying an optional one-time passcode), and `noauth` posts to `POST /api/auth/noauth`, which the server honors only when its UI is configured
- * with `auth: "none"`.
+ * {@link acquireToken} turns a {@link LogClientCredentials} discriminated union into a raw bearer token by talking to the homebridge-config-ui-x authentication API. Each
+ * credential arm maps to one of the server's authentication paths: a pre-acquired `token` is returned verbatim with no network call, a `password` arm posts to `POST
+ * /api/auth/login` (carrying an optional one-time passcode), and `noauth` posts to `POST /api/auth/noauth`, which the server honors only when its UI is configured with
+ * `auth: "none"`.
  *
  * The module's load-bearing concern beyond "get a token" is failure classification. The socket's reconnect loop re-authenticates on every reconnect, so it must be able
  * to tell a transient fault (the server is briefly down or returned a 5xx) from a permanent one (the credentials are wrong, an OTP is required, or noauth is disabled).
@@ -144,7 +144,8 @@ async function readAccessToken(response: Response, pathLabel: string): Promise<s
   return token;
 }
 
-// Narrow an unknown value to a plain record so a single property can be read without unsafe member access. Used to read `access_token` off the parsed JSON body.
+// Narrow an unknown value to a plain record so a single top-level string property (such as `access_token` or `message`) can be read off a parsed JSON body without unsafe
+// member access.
 function isRecord(value: unknown): value is Record<string, unknown> {
 
   return (typeof value === "object") && (value !== null);
@@ -293,9 +294,10 @@ export async function acquireToken(credentials: LogClientCredentials, options: A
 // supplied (the login path); the noauth path posts with no body. Network rejections are transient; non-2xx statuses are classified by `throwForStatus`.
 async function postForToken(fetchImpl: typeof fetch, url: string, body: Record<string, string> | undefined, pathLabel: string, permanentHint: string): Promise<string> {
 
-  // The JSON content-type header is a claim that a JSON body follows, so the two are derived together from a single condition: a request that carries a body declares
-  // `application/json` and serializes it, and a bodyless request (the no-auth path) sends neither. This coupling is the single source of truth that keeps every auth POST
-  // well-formed - declaring `application/json` with no body is incoherent, and Fastify (homebridge-config-ui-x 5.x) rejects it outright as an empty body.
+  // The JSON content-type header is a claim that a JSON body follows, so the two are derived together from a single condition: a request that carries a body
+  // declares `application/json` and serializes it, and a bodyless request (the no-auth path) sends neither. This coupling is the single source of truth that keeps
+  // every auth POST well-formed - declaring `application/json` with no body is incoherent, and Fastify (the homebridge-config-ui-x HTTP server) rejects a
+  // declared-JSON body that is empty.
   const init: RequestInit = (body !== undefined) ?
     { body: JSON.stringify(body), headers: { "Content-Type": "application/json" }, method: "POST" } :
     { method: "POST" };

@@ -791,8 +791,9 @@ export async function takeLast<T>(source: AsyncIterable<T>, n: number): Promise<
 /**
  * Compose one or more optional {@link AbortSignal} sources into a single signal that aborts when any input aborts.
  *
- * Collapses the recurring `parent ? AbortSignal.any([ parent, internal ]) : internal` pattern that every resource class in this library used to hand-roll. Filters out
- * `undefined` inputs, returns the sole defined signal unchanged (no unnecessary `any()` wrapper), and composes two or more defined signals with `AbortSignal.any()`.
+ * Collapses the recurring `parent ? AbortSignal.any([ parent, internal ]) : internal` pattern into a single call, used by every resource class in this library to
+ * compose its lifetime signal. Filters out `undefined` inputs, returns the sole defined signal unchanged (no unnecessary `any()` wrapper), and composes two or more
+ * defined signals with `AbortSignal.any()`.
  * Throws a {@link TypeError} when every input is `undefined`, because a class whose lifetime is defined by a signal must always have at least one concrete signal to
  * compose against.
  *
@@ -1046,9 +1047,8 @@ export interface WatchdogInit {
 /**
  * Re-armable inactivity watchdog.
  *
- * The watchdog captures the shared "abort if no activity within window" pattern used by every long-lived resource class in this library that cares about liveness: an
- * FFmpeg stream's return-port UDP socket, the fMP4 segment assembler's inter-segment pacing, the RTP demuxer's inbound-packet cadence. Each of those used to carry its
- * own bespoke `setTimeout` / `clearTimeout` dance paired with an `aborted` guard. They now compose a single `Watchdog` instance instead.
+ * Every long-lived resource class in this library that cares about liveness - an FFmpeg stream's return-port UDP socket, the fMP4 segment assembler's inter-segment
+ * pacing, the RTP demuxer's inbound-packet cadence - composes a single `Watchdog` instance to implement the shared "abort if no activity within window" pattern.
  *
  * The semantics are minimal on purpose:
  *

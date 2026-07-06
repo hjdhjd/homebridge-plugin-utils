@@ -8,7 +8,7 @@
 /**
  * Signal-driven RTP/RTCP demultiplexing, FFmpeg keepalive heartbeat, and UDP port reservation for FFmpeg-based HomeKit livestreaming.
  *
- * This module exposes three cooperating surfaces:
+ * This module exposes the following cooperating surfaces:
  *
  *   - {@link RtpDemuxer} - an {@link AsyncDisposable} that owns one bound UDP socket. Inbound datagrams are classified as RTP or RTCP per RFC 5761 and forwarded to the
  *     respective destination ports through the same socket so the outbound source endpoint equals the bound input port - a property downstream consumers can leverage

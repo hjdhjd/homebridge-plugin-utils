@@ -130,8 +130,7 @@ describe("FfmpegProcess - construction and readiness", () => {
 
     await using proc = new FfmpegProcess(makeOptions(logger), { args });
 
-    // Mutating the caller's array after construction would previously bleed into the stored `args` and surface in teardown logging. Freezing a copy at assignment
-    // breaks that channel.
+    // Freezing a copy of the caller's args at assignment means later caller-side mutation cannot leak into the stored `args` or into teardown logging.
     args.push("SHOULD-NEVER-APPEAR");
 
     await proc.exited;
@@ -407,7 +406,7 @@ describe("FfmpegProcess - spawn failure", () => {
 
     assert.equal(proc.hasError, true);
 
-    // The spawn-error path logs the "unable to find" diagnostic at error level.
+    // The spawn-error path logs the generic "FFmpeg failed to start" diagnostic at error level.
     const errorLogs = logger.entries.filter((e) => e.level === "error");
 
     assert.ok(errorLogs.some((entry) => entry.message.includes("FFmpeg failed to start")), "ENOENT should log an error-level diagnostic");
@@ -533,7 +532,7 @@ describe("FfmpegProcess - teardown logging", () => {
 
   test("null cause does not crash teardown", async () => {
 
-    // Regression test: externally-supplied `cause: null` previously crashed the teardown logger via `"in" on null`. The fix is the isExitInfoShape type guard.
+    // A null cause must not crash the teardown logger; isExitInfoShape's object/null guard keeps the "in" check from throwing on a null cause.
     const errorEntries = await failWithCause(null);
     const fragments = errorEntries.flatMap((entry) => entry.params).filter((param) => typeof param === "string");
 

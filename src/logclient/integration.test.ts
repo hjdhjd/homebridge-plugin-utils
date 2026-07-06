@@ -42,7 +42,8 @@ class CapturedStream implements CliStream {
 }
 
 // Poll a captured stream until it has received at least one chunk or the time budget is exhausted. This is real network I/O, so a microtask flush is not enough - we
-// await a real timer between polls. Used by the follow tests to know the live tail has produced output before we send the SIGINT that tears it down.
+// await a real timer between polls. Used by the follow tests to know the live tail has produced output before we send the SIGINT that tears it down. An exhausted
+// budget returns silently without signaling a timeout; a stalled live server surfaces instead as a caller's downstream assertion failing on the empty output.
 async function waitForOutput(stream: CapturedStream, attempts = 100, intervalMs = 100): Promise<void> {
 
   for(let attempt = 0; attempt < attempts; attempt++) {
@@ -57,8 +58,8 @@ async function waitForOutput(stream: CapturedStream, attempts = 100, intervalMs 
   }
 }
 
-// Build the live RunHblogOptions for a given argument vector. We deliberately leave `fetch`, `socketFactory`, `readFile`, and `stat` at their real defaults so the run
-// uses the actual `~/.hblog.json`, the real environment, and the real homebridge-config-ui-x server - this suite's whole purpose is to exercise the production
+// Build the live RunHblogOptions for a given argument vector. We deliberately leave `fetch`, `socketFactory`, `readFile`, `stat`, and `now` at their real defaults so the
+// run uses the actual `~/.hblog.json`, the real environment, and the real homebridge-config-ui-x server - this suite's whole purpose is to exercise the production
 // transports, config resolution, and credential derivation that the unit fakes cannot model. Only the streams are captured so assertions can inspect what was emitted.
 function liveOptions(argv: readonly string[]): { options: RunHblogOptions; stderr: CapturedStream; stdout: CapturedStream } {
 

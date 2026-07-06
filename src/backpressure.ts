@@ -314,8 +314,8 @@ export class BackpressureWriter implements AsyncDisposable {
         try {
 
           // `stream.write()` returns `false` when the high-water mark has been breached; the write is still queued by Node, but we must wait for `drain` before
-          // pushing more bytes or we risk unbounded memory growth at the kernel level. `events.once` with `{ signal }` ties the wait to the writer's lifetime so an
-          // abort during drain rejects the wait with the signal's reason rather than hanging.
+          // pushing more bytes or we risk unbounded growth of Node's internal write buffer in process memory. `events.once` with `{ signal }` ties the wait to the
+          // writer's lifetime so an abort during drain rejects the wait with the signal's reason rather than hanging.
           if(!stream.write(entry.chunk)) {
 
             // eslint-disable-next-line no-await-in-loop

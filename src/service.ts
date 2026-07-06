@@ -60,7 +60,8 @@ function initServiceUUIDSets(service: Service): void {
   // `!serviceRequires(...) && serviceHas(...)` to detect the optional-but-supported case.
   hasConfiguredNameUUIDs = new Set([
 
-    "AccessoryInformation", "ContactSensor", "InputSource", "Lightbulb", "MotionSensor", "OccupancySensor", "SmartSpeaker", "Switch", "Television", "Valve", "WiFiRouter"
+    "AccessoryInformation", "ContactSensor", "InputSource", "Lightbulb", "MotionSensor", "OccupancySensor", "SmartSpeaker", "StatelessProgrammableSwitch", "Switch",
+    "Television", "Valve", "WiFiRouter"
   ].map(uuidOf));
 
   requiresNameUUIDs = new Set([ "AccessoryInformation", "Assistant", "InputSource" ].map(uuidOf));
@@ -84,7 +85,8 @@ function initServiceUUIDSets(service: Service): void {
  * - `new (displayName?: string, subtype?: string) => T` - the actual runtime constructor signature every Service subclass exposes; supersedes the BASE Service
  *   class's `(displayName, UUID, subtype?)` signature that the wider `WithUUID<typeof Service>` would otherwise surface.
  *
- * Intersecting both shapes lets the function invoke `new serviceType(name, subtype)` against an honest type-checked signature without any cast or non-null assertion.
+ * Intersecting both shapes lets the function invoke `new serviceType(sanitized, subtype)` against an honest type-checked signature without any cast or non-null
+ * assertion.
  *
  * @typeParam T - The concrete Service subclass produced by the constructor. Inferred from the call site so callers receive the specific subclass type back.
  *
@@ -105,7 +107,7 @@ export type AcquireServiceTarget<T extends Service = Service> = WithUUID<typeof 
  * @param subtype         - Optional service subtype to uniquely identify the service.
  * @param onServiceCreate - Optional callback invoked only when a new service is created, receiving the new service as its argument.
  *
- * @returns Returns the created or retrieved service, or `null` if service creation failed.
+ * @returns Returns the created or retrieved service. Construction failures throw rather than returning `null`.
  *
  * @remarks
  * This method ensures that the service's display name and available name characteristics are updated to the specified name. If `onServiceCreate` is provided,
@@ -147,20 +149,21 @@ export function acquireService<T extends Service>(accessory: PlatformAccessory, 
 
   if(!service) {
 
-    // The narrow constructor signature in `AcquireServiceTarget<T>` lets us invoke `new serviceType(name, subtype)` directly - no cast, no non-null assertion. The
-    // type system expresses what the runtime requires: callers pass a Service subclass with the standard `(displayName?, subtype?)` constructor.
+    // The narrow constructor signature in `AcquireServiceTarget<T>` lets us invoke `new serviceType(sanitized, subtype)` directly - no cast, no non-null assertion.
+    // The type system expresses what the runtime requires: callers pass a Service subclass with the standard `(displayName?, subtype?)` constructor.
     service = new serviceType(sanitized, subtype);
 
     const characteristic = getCharacteristicConstructor(service);
 
-    // Add the Configured Name characteristic if we don't already have it and it's available to us.
+    // HAP can pre-populate ConfiguredName in a freshly-constructed service's default optional set, so this guard prevents adding it a second time within this single
+    // construction. Re-acquisition of an already-existing service is a separate case, already gated by the `!service` check above.
     if(!serviceRequiresConfiguredName(service) && serviceHasConfiguredName(service) &&
       !service.optionalCharacteristics.some(x => (x.UUID === characteristic.ConfiguredName.UUID))) {
 
       service.addOptionalCharacteristic(characteristic.ConfiguredName);
     }
 
-    // Add the Name characteristic if we don't already have it and it's available to us.
+    // Same duplicate-guard rationale as the ConfiguredName check above, applied to the Name characteristic.
     if(!serviceRequiresName(service) && serviceHasName(service) && !service.optionalCharacteristics.some(x => (x.UUID === characteristic.Name.UUID))) {
 
       service.addOptionalCharacteristic(characteristic.Name);

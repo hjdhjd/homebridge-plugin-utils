@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * service.test.ts: Unit tests for the HomeKit service helper utilities in service.ts - acquireService, validService, getServiceName, setServiceName.
+ * service.test.ts: Unit tests for the HomeKit service helper utilities in service.ts - acquireService, validService, capabilityGate, getServiceName, setServiceName.
  *
  * The fixture side uses real `@homebridge/hap-nodejs` primitives (Accessory, Service, Characteristic), declared as an explicit devDependency so the test-side
  * Accessory/Service/Characteristic identities match the same HAP package `homebridge` re-exports from its public type surface. The methods we exercise on the
@@ -177,6 +177,20 @@ describe("acquireService - name characteristic management", () => {
     assert.ok(service, "acquireService(Switch) must succeed before we inspect characteristic management");
     assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Kitchen Switch");
     assert.equal(readNamedCharacteristic(service, "Name"), "Kitchen Switch");
+    assert.equal(optionalIncludes(service, "ConfiguredName"), true, "ConfiguredName must be listed among the optional characteristics after acquisition");
+  });
+
+  test("sets ConfiguredName on a StatelessProgrammableSwitch so a grouped remote button carries a HomeKit-honored name", () => {
+
+    // A StatelessProgrammableSwitch grouped under a ServiceLabel is labeled by the Home app from its ServiceLabelIndex ("Button 1", "Button 2", ...) unless it carries a
+    // ConfiguredName, which the Home app honors as the button's name. StatelessProgrammableSwitch is in the hasConfiguredName catalog for exactly this reason, so a
+    // multi-button remote (a fob, a scene controller) surfaces its button names rather than generic numeric indices.
+    const accessory = makeAccessory();
+    const service = acquireService(accessory, hap.Service.StatelessProgrammableSwitch, "Panic");
+
+    assert.ok(service, "acquireService(StatelessProgrammableSwitch) must succeed before we inspect characteristic management");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Panic", "the Home app shows the ConfiguredName instead of the ServiceLabelIndex label");
+    assert.equal(readNamedCharacteristic(service, "Name"), "Panic");
     assert.equal(optionalIncludes(service, "ConfiguredName"), true, "ConfiguredName must be listed among the optional characteristics after acquisition");
   });
 

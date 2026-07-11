@@ -7,7 +7,7 @@ import { DEFAULT_HOST, DEFAULT_PORT, JITTER_FRACTION, LOG_NAMESPACE, MARGIN_MS, 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-// These constants are protocol- and behavior-load-bearing values consumed across the transports; a silent drift in any of them changes how the client talks to the
+// These constants govern both protocol and behavior across the transports; a silent drift in any of them changes how the client talks to the
 // server (port, namespace, mount path) or how it reconnects (base delay, jitter). The tests pin each value so an accidental edit is caught loudly rather than shipping a
 // subtly mis-configured client.
 describe("logclient settings", () => {

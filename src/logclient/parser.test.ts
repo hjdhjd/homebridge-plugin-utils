@@ -103,7 +103,7 @@ describe("LogLineSplitter", () => {
     assert.deepEqual(splitAll(["only\n"]), ["only"]);
   });
 
-  test("flush is idempotent after the carry is drained", () => {
+  test("flush is a no-op on repeat after the carry is drained", () => {
 
     const splitter = new LogLineSplitter();
 

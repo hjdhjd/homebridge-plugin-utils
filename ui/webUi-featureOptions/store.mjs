@@ -24,7 +24,7 @@ const ModuleCustomEvent = CustomEvent;
  *     cleanup follows the caller's {@link AbortSignal} automatically, no `destroy()` ceremony required. The signal-keyed lifecycle is the same primitive every
  *     other part of the webUI already uses for its DOM listeners, so the store's subscription model integrates without a new lifecycle concept.
  *   - **Read-then-dispatch ordering.** The reducer applies before the event fires, so a subscriber reading `store.state` from inside its handler always sees the
- *     post-dispatch state. The ordering is load-bearing: views that re-derive their DOM in response to an event must see the new state, not the pre-mutation
+ *     post-dispatch state. The ordering matters: views that re-derive their DOM in response to an event must see the new state, not the pre-mutation
  *     state that triggered the dispatch.
  *
  * The store carries no domain logic itself - the reducer (passed at construction) and the action vocabulary (consumed by subscribers) are the application-specific

@@ -85,7 +85,7 @@ describe("isHbpuAbortError", () => {
 
   test("returns false for a platform AbortController abort reason", () => {
 
-    // AbortController.abort() without an explicit reason produces a platform DOMException AbortError. It is not one of ours - we discriminate by constructor, not by
+    // AbortController.abort() without an explicit reason produces a platform DOMException AbortError. It is not one of ours - we distinguish by constructor, not by
     // convention.
     const controller = new AbortController();
 
@@ -140,7 +140,7 @@ describe("isHbpuAbortReason", () => {
   test("returns false for the platform TimeoutError from AbortSignal.timeout()", async () => {
 
     // AbortSignal.timeout() aborts with a DOMException whose name is "TimeoutError". It interoperates with the HBPU taxonomy by .name convention, but it is not an
-    // HbpuAbortError - so this predicate returns false. Callers who want to match either HBPU or the platform discriminate on .name directly.
+    // HbpuAbortError - so this predicate returns false. Callers who want to match either HBPU or the platform branch on .name directly.
     const signal = AbortSignal.timeout(1);
 
     await once(signal, "abort");
@@ -187,7 +187,7 @@ describe("isTimeoutReason", () => {
   test("returns true for the platform TimeoutError from AbortSignal.timeout()", async () => {
 
     // `AbortSignal.timeout()` aborts with a DOMException whose `.name === "TimeoutError"`. This is the secondary match the predicate was built for - it lets consumers
-    // discriminate timeouts uniformly whether the origin is a project watchdog or the platform's own timeout.
+    // distinguish timeouts uniformly whether the origin is a project watchdog or the platform's own timeout.
     const signal = AbortSignal.timeout(1);
 
     await once(signal, "abort");
@@ -208,7 +208,7 @@ describe("isTimeoutReason", () => {
   test("returns true for any Error whose .name is \"TimeoutError\"", () => {
 
     // The `instanceof Error` branch excludes non-error values from matching; it does NOT require a specific Error subclass. Any Error subclass or plain Error whose
-    // `.name === "TimeoutError"` qualifies. This matches the project's pattern of discriminating timeouts by `.name` rather than by constructor identity, so
+    // `.name === "TimeoutError"` qualifies. This matches the project's pattern of distinguishing timeouts by `.name` rather than by constructor identity, so
     // framework-emitted TimeoutError shapes other than DOMException interoperate without special-casing.
     const error = new Error("stall");
 
@@ -279,7 +279,7 @@ describe("onAbort", () => {
   test("fires at most once even when abort is called repeatedly", () => {
 
     // AbortController only fires the "abort" event once, so this is belt-and-suspenders: combined with `{ once: true }` on the underlying listener, duplicate aborts
-    // cannot drive the handler more than once. Pins the invariant so a future refactor that breaks either side shows up loudly.
+    // cannot drive the handler more than once. Pins the rule so a future refactor that breaks either side shows up loudly.
     const controller = new AbortController();
     let fireCount = 0;
 
@@ -319,7 +319,7 @@ describe("onAbort", () => {
   test("returns a Disposable whose [Symbol.dispose] removes the listener before it fires", () => {
 
     // The scope-bound use case: a transient observer captures the returned handle, disposes it when its scope ends, and the handler never fires on the subsequent
-    // signal abort. This is the invariant `waitWithSignal` relies on to prevent listener accumulation on long-lived signals that see many short waits.
+    // signal abort. This is the guarantee `waitWithSignal` relies on to prevent listener accumulation on long-lived signals that see many short waits.
     const controller = new AbortController();
     let fired = false;
 
@@ -334,9 +334,9 @@ describe("onAbort", () => {
     assert.equal(fired, false, "handler must not fire on abort once the returned disposer has been invoked");
   });
 
-  test("[Symbol.dispose] is idempotent", () => {
+  test("[Symbol.dispose] is safe to call more than once", () => {
 
-    // `removeEventListener` is spec-idempotent for already-removed listeners, so disposing twice must be a safe no-op. Pins the contract so a caller that both
+    // `removeEventListener` is a no-op for already-removed listeners per spec, so disposing twice must be a safe no-op. Pins the contract so a caller that both
     // manually disposes AND relies on `using`'s scope-exit dispatch (or disposes in response to two separate signals) cannot accidentally throw.
     const controller = new AbortController();
 
@@ -348,7 +348,7 @@ describe("onAbort", () => {
 
   test("[Symbol.dispose] is a safe no-op after the listener has already fired", () => {
 
-    // `{ once: true }` auto-removes the listener on fire. Disposing afterwards must not throw - the backing `removeEventListener` is idempotent, so callers that
+    // `{ once: true }` auto-removes the listener on fire. Disposing afterwards must not throw - the backing `removeEventListener` is a no-op here, so callers that
     // combine `using` (scope-exit dispose) with a natural signal abort inside the scope do not have to guard against double-cleanup.
     const controller = new AbortController();
     let fireCount = 0;
@@ -1113,7 +1113,7 @@ describe("loopFaultReporter", () => {
 
     const log = capturingLog();
 
-    // A bare string ending in a period is the discriminating case: formatErrorMessage strips the trailing period, whereas a re-inlined String(error) would keep it.
+    // A bare string ending in a period is the distinguishing case: formatErrorMessage strips the trailing period, whereas a re-inlined String(error) would keep it.
     // Asserting the rendered param equals formatErrorMessage's own output proves the factory single-sources its formatting through it instead of re-deriving it here.
     const thrown = "device went offline.";
 
@@ -1188,7 +1188,7 @@ describe("Watchdog - arming and firing", () => {
 
   test("does not fire if no arm was scheduled", async () => {
 
-    // This test covers the dormancy invariant: constructing a Watchdog without calling `arm()` schedules nothing and fires nothing. Disposal is not the subject here -
+    // This test covers the dormancy rule: constructing a Watchdog without calling `arm()` schedules nothing and fires nothing. Disposal is not the subject here -
     // a `using` binding would pull `[Symbol.dispose]` into the test's observable surface, which is the domain of the dispose-specific tests further down. Using `void`
     // on the construction expression (rather than binding it to `_watchdog` or similar) keeps the test's focus on the side-effect count, not the handle lifetime.
     const controller = new AbortController();
@@ -1268,7 +1268,7 @@ describe("Watchdog - signal-driven termination", () => {
 
     watchdog.arm();
 
-    // Abort just before the timer fires. The setTimeout callback's aborted-guard is the load-bearing check for this race, independent of the self-clean listener.
+    // Abort just before the timer fires. The setTimeout callback's aborted-guard is what closes this race, independent of the self-clean listener.
     mock.timers.tick(20);
     controller.abort(new HbpuAbortError("replaced"));
     mock.timers.tick(40);
@@ -1298,7 +1298,7 @@ describe("Watchdog - clear (re-armable)", () => {
     assert.equal(controller.signal.aborted, false, "clear() must not touch the observed signal");
   });
 
-  test("clear() is idempotent", () => {
+  test("clear() is safe to call more than once", () => {
 
     const controller = new AbortController();
     const watchdog = new Watchdog({ onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });
@@ -1368,7 +1368,7 @@ describe("Watchdog - dispose (permanently inert)", () => {
   test("arm() between dispose() calls still cannot resurrect the watchdog", async () => {
 
     // Hardening: cycle dispose -> arm -> dispose several times. Each arm must remain a no-op. This guards against a hypothetical regression where someone adds a
-    // `#disposed = false` reset to dispose (breaking idempotency) or to arm (breaking the contract).
+    // `#disposed = false` reset to dispose (so repeat disposal stops being a no-op) or to arm (breaking the contract).
     const controller = new AbortController();
     let fired = 0;
     const watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 20 });
@@ -1384,7 +1384,7 @@ describe("Watchdog - dispose (permanently inert)", () => {
     assert.equal(fired, 0, "repeated dispose/arm cycles must never resurrect the watchdog");
   });
 
-  test("[Symbol.dispose] is idempotent", () => {
+  test("[Symbol.dispose] is safe to call more than once", () => {
 
     const controller = new AbortController();
     const watchdog = new Watchdog({ onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });

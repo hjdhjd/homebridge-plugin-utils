@@ -199,7 +199,7 @@ describe("FfmpegStreamingProcess - pre-aborted-signal short circuit", () => {
 
   test("pre-aborted parent signal does NOT bind the return-port socket (no leak)", async () => {
 
-    // The load-bearing invariant documented on `#startHealthMonitor`: when the composed signal is already aborted at the moment the health monitor would bind its
+    // The guarantee documented on `#startHealthMonitor`: when the composed signal is already aborted at the moment the health monitor would bind its
     // socket, the function must short-circuit. Without that guard, the abort listener attached to an already-aborted signal would never fire, leaking the socket for
     // the life of the process.
     //
@@ -207,7 +207,7 @@ describe("FfmpegStreamingProcess - pre-aborted-signal short circuit", () => {
     //
     //   1. INSIDE the holder's lifetime: assert the composed signal still carries the parent's reason. If the short-circuit failed, the process's bind would collide
     //      with the holder; even though the socket-error handler's `if(!this.aborted)` guard suppresses an aborted-with-failed in that case, the assertion still pins
-    //      the documented invariant - the short-circuit must execute before any allocation happens.
+    //      the documented rule - the short-circuit must execute before any allocation happens.
     //   2. AFTER the holder releases: probe the same port. The proc is disposed via `await using` at try-block exit, the holder is released explicitly in the finally
     //      block - so the only way the probe could fail with `EADDRINUSE` is if the proc allocated and bound a health socket that wasn't properly closed. That's the
     //      exact "no leak" mode the test name promises, surfaced as a probe failure rather than a signal-reason mismatch.

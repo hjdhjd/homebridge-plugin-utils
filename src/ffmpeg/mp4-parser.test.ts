@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/mp4-parser.test.ts: Unit tests for the Mp4BoxParser - byte-to-record parsing across chunk boundaries, type-code discrimination, corruption handling.
+ * ffmpeg/mp4-parser.test.ts: Unit tests for the Mp4BoxParser - byte-to-record parsing across chunk boundaries, type-code classification, corruption handling.
  */
 import { BOX_TYPE_FTYP, BOX_TYPE_MDAT, BOX_TYPE_MOOF, BOX_TYPE_MOOV, Mp4BoxParser } from "./mp4-parser.ts";
 import { describe, test } from "node:test";

@@ -245,7 +245,7 @@ describe("BackpressureWriter - abort and teardown", () => {
     assert.equal(isHbpuAbortReason(writer.signal.reason, "shutdown"), true);
   });
 
-  test("abort is idempotent", async () => {
+  test("abort is safe to call more than once", async () => {
 
     const writer = new BackpressureWriter(() => null);
     const first = new HbpuAbortError("shutdown");
@@ -310,9 +310,9 @@ describe("BackpressureWriter - abort and teardown", () => {
 
   test("stream-error escalation rejects every queued resolver, not just the in-flight one", async () => {
 
-    // Pins the invariant that when a stream error escalates (drain catch shifts the in-flight entry, then calls `controller.abort()`), `#teardown` rejects all of the
+    // Pins the rule that when a stream error escalates (drain catch shifts the in-flight entry, then calls `controller.abort()`), `#teardown` rejects all of the
     // remaining queued entries - not just entries past index 0. The drain loop and teardown can both try to reject the same in-flight resolver under overlapping
-    // abort paths; promise resolvers are idempotent after first settlement, so the double-settle is intentional and harmless.
+    // abort paths; promise resolvers are inert after first settlement, so the double-settle is intentional and harmless.
     const streamError = new Error("boom");
     let writeCount = 0;
 

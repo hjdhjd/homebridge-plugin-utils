@@ -13,7 +13,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * and derives its view via selectors. Discriminated unions encode the variant types the UI moves through, each listed below:
  *
  *   - {@link Scope} - `{kind: "global"}` | `{kind: "controller", controllerId}` | `{kind: "device", controllerId, deviceId}`. The selection pointer. Discriminated
- *     because each kind carries different data; merging them into a flat record would smear the invariants across two fields and force consumers to recover the
+ *     because each kind carries different data; merging them into a flat record would smear the guarantees across two fields and force consumers to recover the
  *     kind via predicates.
  *   - {@link LifecycleStatus} - `loading` | `ready` | `persisting` | `persist-error` | `connection-error`. The page-state pointer. Discriminated because the
  *     variants carry different per-state payloads (a snapshot when persisting, an error when failed, a message when the connection broke).
@@ -63,7 +63,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
 
 /**
  * @typedef {Object} Validators
- * @property {(device: Device) => boolean} isController - Predicate for "is this device a controller-as-device" (drives controller-vs-device scope discrimination).
+ * @property {(device: Device) => boolean} isController - Predicate for "is this device a controller-as-device" (drives controller-vs-device scope distinction).
  * @property {(device: Device | undefined, option: Object) => boolean} validOption - Predicate for "should this option render for this device."
  * @property {(device: Device | undefined, category: Object) => boolean} validOptionCategory - Predicate for "should this category render for this device."
  */
@@ -116,7 +116,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {string | null} devicesControllerId - Serial of the controller whose `devices` are loaded, or null (device-only / none yet). Preserves the
  *   device-to-controller association that `scope` drops once the selection goes global, so a loaded device's parent controller stays resolvable after the
  *   selection leaves controller scope.
- * @property {{mode: "all" | "modified", query: string}} filter - Search and filter state. Two-field record because the dimensions are orthogonal (every combination
+ * @property {{mode: "all" | "modified", query: string}} filter - Search and filter state. Two-field record because the dimensions are independent (every combination
  *                                                                is valid and meaningful).
  * @property {readonly string[]} initialOptions - The at-show() snapshot for "Revert to Saved." Stable across the session except when re-show() loads an option
  *                                                 set that is not set-equal to the prior snapshot, in which case the snapshot is replaced.
@@ -157,7 +157,7 @@ export const initialState = () => {
 
   // Share a single empty-array reference across every array-typed option field so the persist effect's "are we dirty?" check (configuredOptions === persistedAnchor)
   // returns true at registration time and does not trigger a spurious initial persist. After model:loaded, each field is set to the loaded array's reference; the
-  // invariant is preserved.
+  // guarantee is preserved.
   const empty = [];
 
   return {

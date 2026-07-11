@@ -154,7 +154,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
   }
 
   // Bind a UDP socket to the return port and enforce a re-armed inactivity watchdog. Called from the constructor when a return-port descriptor is provided. The
-  // pre-aborted-signal guard is load-bearing: if the caller passed an already-aborted parent signal, the base class's teardown runs synchronously during `super()` and
+  // pre-aborted-signal guard is required: if the caller passed an already-aborted parent signal, the base class's teardown runs synchronously during `super()` and
   // `this.signal` is aborted by the time we get here. Registering an `"abort"` listener on an already-aborted signal does NOT re-dispatch, so the socket and watchdog
   // timer would leak if we proceeded. Short-circuiting leaves no resources allocated.
   #startHealthMonitor(returnPort: FfmpegStreamingReturnPort, timeoutMs: number): void {

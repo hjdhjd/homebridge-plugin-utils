@@ -44,7 +44,7 @@ export const HDLR_TYPE_VIDE = 0x76696465;
  * remainder is the supplied payload. Each test file wants the same construction helper to exercise different stream shapes; keeping it in one place eliminates drift
  * between the parser and assembler test suites.
  *
- * @param type     - The 4-character ASCII box type (`"ftyp"`, `"moov"`, `"moof"`, `"mdat"`, ...). Any other length fails the invariant.
+ * @param type     - The 4-character ASCII box type (`"ftyp"`, `"moov"`, `"moof"`, `"mdat"`, ...). Any other length fails the check.
  * @param payload  - Optional opaque payload bytes. Defaults to an empty buffer.
  *
  * @returns A complete box (header + payload) suitable for feeding to the parser or writing to an in-memory Readable fixture.

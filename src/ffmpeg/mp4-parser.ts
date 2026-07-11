@@ -19,7 +19,7 @@
 import { BOX_HEADER_SIZE } from "./fmp4.ts";
 
 /**
- * ISO BMFF box type code for the `ftyp` (file type) box, encoded as a 32-bit big-endian integer. Useful for discriminating on {@link Mp4Box.type} without re-encoding
+ * ISO BMFF box type code for the `ftyp` (file type) box, encoded as a 32-bit big-endian integer. Useful for branching on {@link Mp4Box.type} without re-encoding
  * the 4-character ASCII tag on every comparison.
  *
  * @category FFmpeg

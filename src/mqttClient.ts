@@ -301,7 +301,7 @@ export class MqttClient implements AsyncDisposable {
    * broker URL) surfaces as an `Error` wrapping the underlying cause, so a misconfigured plugin fails loudly instead of living in a zombie state. Network-level
    * failures (an unreachable broker reachable by a valid URL) do not throw - they surface asynchronously through the client's `error` event, are logged, and trigger
    * mqtt.js's built-in auto-reconnect until {@link MqttClient.abort} or a parent signal ends the client for good. A pre-aborted parent signal still constructs
-   * a client (so `#mqtt` remains a class invariant) and then immediately runs the regular teardown path.
+   * a client (so `#mqtt` stays non-null) and then immediately runs the regular teardown path.
    *
    * @param config - Static broker / topic configuration. See {@link MqttConfig}.
    * @param init   - Optional init options. See {@link MqttClientInit}.
@@ -321,7 +321,7 @@ export class MqttClient implements AsyncDisposable {
     this.signal = composeSignals(init.signal, this.#controller.signal);
 
     // Establish the underlying MQTT.js connection unconditionally so `#mqtt` is always a live reference by the time the constructor returns. A synchronous failure
-    // (typically URL parsing) is wrapped in an Error whose `cause` carries the original error, so callers discriminate via `error.cause` rather than matching on
+    // (typically URL parsing) is wrapped in an Error whose `cause` carries the original error, so callers distinguish via `error.cause` rather than matching on
     // mqtt.js's internal message text.
     try {
 
@@ -690,7 +690,7 @@ export class MqttClient implements AsyncDisposable {
   // on the way out, then ends the MQTT.js connection with `force = true` so any in-flight publish / subscribe packets are dropped rather than awaited - the client is
   // unambiguously done, and the underlying library's reconnect logic exits permanently. The `#mqtt` reference is not nulled: callers never reach `#mqtt` accesses
   // when the signal is aborted (every public method short-circuits on `signal.aborted`), and keeping the reference preserves the `readonly #mqtt: MqttJsClient`
-  // invariant that lets TypeScript drop every non-null assertion in the live paths.
+  // guarantee that lets TypeScript drop every non-null assertion in the live paths.
   #teardown(): void {
 
     this.#subscriptions.clear();

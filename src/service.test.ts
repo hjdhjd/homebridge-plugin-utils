@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 // `service.updateCharacteristic` accepts and the type whose `UUID` powers identity-matching against `service.characteristics` / `service.optionalCharacteristics`.
 type CharacteristicCtor = WithUUID<new () => Characteristic>;
 
-// The two HAP name slots this test file discriminates on. Kept narrow so the reflection helper cannot be called with an arbitrary string and silently return undefined
+// The two HAP name slots this test file distinguishes. Kept narrow so the reflection helper cannot be called with an arbitrary string and silently return undefined
 // for a real-world slot that simply happens not to match the map. Adding more slots is a one-line change if future behavior requires it.
 type NamedCharacteristicSlot = "ConfiguredName" | "Name";
 
@@ -424,7 +424,7 @@ describe("getServiceName", () => {
     assert.equal(getServiceName(service), "Primary", "ConfiguredName must win when both are populated");
   });
 
-  test("does not lazily create characteristics on a read (read-only invariant)", () => {
+  test("does not lazily create characteristics on a read (read-only guarantee)", () => {
 
     // A name lookup must never mutate the accessory. A Fan supports Name but not ConfiguredName, so reading its name exercises the absent-ConfiguredName path. HAP's
     // `getCharacteristic` would lazily attach the missing ConfiguredName (and log an "Adding anyway." warning); `getServiceName` gates reads behind `testCharacteristic`,

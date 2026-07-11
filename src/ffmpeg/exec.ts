@@ -110,7 +110,7 @@ export class FfmpegExec extends FfmpegProcess {
    * path does not normally produce a stream error, so an aborted run yields whatever bytes happened to arrive before the kill landed - which may be all of them, some
    * of them, or none of them.
    *
-   * This promise is the data channel only. To discriminate "the child wrote nothing" from "the run was aborted before the child could write anything," consult
+   * This promise is the data channel only. To distinguish "the child wrote nothing" from "the run was aborted before the child could write anything," consult
    * {@link FfmpegExec.exited} (`exitCode` / `exitSignal`) and {@link FfmpegProcess.signal} (`signal.reason`). Those are the single source of truth for process
    * disposition; an empty buffer carries no disposition meaning on its own.
    */
@@ -161,7 +161,7 @@ export class FfmpegExec extends FfmpegProcess {
    * Await the process to completion and return the bundled result.
    *
    * Resolves once both the stdout collector and the base class's `exited` promise settle. Rejects with the same reason `exited` would reject with (today, only when
-   * the child never spawned - e.g., ENOENT). On any normal exit, including non-zero exit codes, this method resolves; callers discriminate outcomes by inspecting
+   * the child never spawned - e.g., ENOENT). On any normal exit, including non-zero exit codes, this method resolves; callers distinguish outcomes by inspecting
    * `exitCode` and `exitSignal` in the result, or the derived `hasError` getter on the instance.
    *
    * @returns A promise resolving to an {@link ExecResult} bundling stdout, exit code, exit signal, and the accumulated stderr log.

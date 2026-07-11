@@ -214,7 +214,7 @@ export type EncoderContext = "record" | "stream";
 
 // `VideoEncoderOptions` after `resolveEncoderOptions` has filled in defaults and clamped the hardware flags against the resolved class config. The resolver-guaranteed
 // fields are narrowed to `Required` so downstream handlers can read `resolved.hardwareDecoding` / `resolved.hardwareTranscoding` / `resolved.smartQuality` as definite
-// booleans rather than `boolean | undefined`. The type exists purely to carry that invariant through the dispatch chain - internal only, not part of the module's
+// booleans rather than `boolean | undefined`. The type exists purely to carry that guarantee through the dispatch chain - internal only, not part of the module's
 // public export surface.
 type ResolvedVideoEncoderOptions = VideoEncoderOptions & Required<Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "smartQuality">>;
 
@@ -1122,10 +1122,10 @@ export class FfmpegOptions {
     //                                   frame rates aren't already identical.
     const fpsFilter = ["fps=" + options.fps.toString()];
 
-    // Build our pixel-level filter chain. The universal invariant across every encoder path in this class is that `crop` is a CPU-side filter and must operate on
+    // Build our pixel-level filter chain. The universal rule across every encoder path in this class is that `crop` is a CPU-side filter and must operate on
     // frames in system memory. On this software-encode path the only transfer that ever appears is a download (GPU->CPU, when hardware decoding is paired with
     // software encoding), so crop sits *after* the transfer - immediately on the CPU side of the GPU boundary. The hardware-encode path in `streamEncoder` expresses
-    // the same invariant with the opposite ordering, since its transfer is always an upload (CPU->GPU) and crop must precede it.
+    // the same rule with the opposite ordering, since its transfer is always an upload (CPU->GPU) and crop must precede it.
     //
     // hwdownload / format=nv12         Optional hardware transfer (emitted only when hardware decoding is paired with software encoding on FFmpeg 8.x macOS, or
     //                                   when downloading from a GPU accelerator on a generic QSV-like host). Brings GPU-resident frames into system memory so the
@@ -1275,7 +1275,7 @@ export class FfmpegOptions {
   /**
    * Merge the caller's encoder options with our defaults and clamp the hardware flags against the resolved class config. This is the single source of truth for "what
    * hardware state does this call run in" - every public encoder method flows its input through here before dispatching, so no downstream handler ever sees unresolved
-   * or unclamped values. The helper is idempotent under repeat application: a resolved options object passed back through this helper produces an identical result,
+   * or unclamped values. The helper is stable under repeat application: a resolved options object passed back through this helper produces an identical result,
    * which makes safe the `recordEncoder` -> `streamEncoder` delegation chain.
    *
    * Each resolver-guaranteed field is computed with one formula:

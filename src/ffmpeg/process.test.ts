@@ -236,7 +236,7 @@ describe("FfmpegProcess - abort paths", () => {
     await assert.rejects(proc.ready, (error: unknown) => error === parentReason);
   });
 
-  test("abort() is idempotent - the first reason wins and subsequent calls are no-ops", async () => {
+  test("abort() is safe to call more than once - the first reason wins and subsequent calls are no-ops", async () => {
 
     await using proc = new FfmpegProcess(makeOptions(), { args: stderrThenIdle() });
 
@@ -381,7 +381,7 @@ describe("FfmpegProcess - asyncDispose", () => {
 
     // The explicit `[Symbol.asyncDispose]()` call below is the line under test - we want to verify the dispose method works when invoked directly. `await using` is
     // a belt-and-suspenders safety net so a future regression that lets `proc.ready` reject (e.g., a startup timeout, an ENOENT path) does not leak the proc. When
-    // dispose has already run by the time the block exits, the auto-dispose is a no-op because abort is idempotent and `exited` has already settled.
+    // dispose has already run by the time the block exits, the auto-dispose is a no-op because a repeat abort does nothing and `exited` has already settled.
     await using proc = new FfmpegProcess(makeOptions(), { args: stderrThenIdle() });
 
     await proc.ready;

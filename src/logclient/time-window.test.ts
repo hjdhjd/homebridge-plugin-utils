@@ -20,7 +20,7 @@ function stamp(hour: number, minute: number, second: number): string {
   return "6/29/2026, " + hour.toString() + ":" + pad(minute) + ":" + pad(second);
 }
 
-// The local epoch of the same 2026-06-29 wall-clock time, constructed the SAME way the parser does, so bounds and assertions are timezone-invariant.
+// The local epoch of the same 2026-06-29 wall-clock time, constructed the SAME way the parser does, so bounds and assertions are timezone-independent.
 function epoch(hour: number, minute: number, second: number): number {
 
   return new Date(2026, 5, 29, hour, minute, second).getTime();

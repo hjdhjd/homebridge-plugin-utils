@@ -201,7 +201,7 @@ export function createSkeletonFeatureOptionsDom() {
  *
  * Inspection surface - nested under `observed` on the returned bridge, reachable from tests as `fake.observed.*`:
  *
- *   - `observed.calls` - an ordered log of the host calls whose relative order is load-bearing for the reconciliation tests (`getPluginConfig`, `updatePluginConfig`,
+ *   - `observed.calls` - an ordered log of the host calls whose relative order matters for the reconciliation tests (`getPluginConfig`, `updatePluginConfig`,
  *     `showSchemaForm`), each appending its tag as it runs. Read this to assert sync-before-show and flush-before-schemaform orderings.
  *   - `observed.updatedConfigs` - every `updatePluginConfig` call's payload.
  *   - `observed.toasts` - every `.toast.*` call's record.
@@ -226,7 +226,7 @@ export function createFakeHomebridge(init = {}) {
   const toasts = [];
   const state = { saveButtonEnabled: true, schemaFormVisible: true, spinnerCount: 0 };
 
-  // An ordered log of the host calls whose RELATIVE order is load-bearing for the reconciliation tests: each config read (getPluginConfig), each config write
+  // An ordered log of the host calls whose RELATIVE order matters for the reconciliation tests: each config read (getPluginConfig), each config write
   // (updatePluginConfig), and each schema-form reveal (showSchemaForm) appends its tag. Tests read `observed.calls` to assert orderings like "the page re-read the
   // config before rendering" (sync-before-show) and "the pending edit was written before the Settings form rendered" (flush-before-schemaform).
   const calls = [];
@@ -331,7 +331,7 @@ export function openTestSession(name = "Plugin") {
  * element to exist" can grab it in the same expression. Throws when the timeout elapses, with the optional `message` describing what was being waited on.
  *
  * The pattern this implements - the one Testing Library popularized as `waitFor` - has two virtues over a fixed-cycle drain. Tests express WHAT they wait for as
- * an invariant rather than HOW MUCH async work to drain, so a deeper async chain doesn't silently miss the window. And successful waits resolve as soon as the
+ * a condition rather than HOW MUCH async work to drain, so a deeper async chain doesn't silently miss the window. And successful waits resolve as soon as the
  * predicate becomes true, with no fixed per-call overhead; only failures pay the wall-clock cost (capped by `timeout`).
  *
  * Use `waitFor` for "I clicked / dispatched X, now wait for the resulting UI state to materialize." Continue to use a bounded `flush()` (or equivalent) for "I

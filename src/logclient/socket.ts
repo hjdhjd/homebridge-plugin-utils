@@ -27,7 +27,7 @@
  * - A Socket.IO CONNECT_ERROR (`44/log,`) on the namespace is surfaced as a connect-phase failure - transient and retried for a refreshable credential (password/noauth),
  *   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
  *
- * Teardown is idempotent and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, clears the
+ * Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, clears the
  * watchdog, and settles the parked stdout waiter exactly once. The class introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a
  * near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
  *
@@ -184,7 +184,7 @@ export function reconnectBackoff(attempt: number, random: () => number = Math.ra
 // A single connected session: the live WebSocket, the per-session controller whose signal ends the streaming phase, the ping cadence the Engine.IO open handshake
 // advertised (used to size the liveness watchdog), and a one-shot `closed` latch. The controller is composed under the socket's lifetime signal, so a socket-level abort
 // ends the session too; a session-level abort (close, error, watchdog) ends only this session and lets the outer loop reconnect. The `closed` latch makes the WebSocket
-// teardown idempotent: both the streaming phase's post-end cleanup and the socket-level teardown can race to close the same session, and the latch ensures the
+// teardown safe to run twice: both the streaming phase's post-end cleanup and the socket-level teardown can race to close the same session, and the latch ensures the
 // DISCONNECT-and-close sequence runs exactly once rather than twice.
 interface Session {
 
@@ -428,7 +428,7 @@ export class LogSocket implements LogSocketLike {
     for(;;) {
 
       // Swap-drain the queue: take whatever the producer has staged, leave a fresh empty array for it to push into, then yield the snapshot. Draining unconditionally
-      // before the abort check preserves the "no staged line lost on teardown" invariant.
+      // before the abort check preserves the "no staged line lost on teardown" guarantee.
       while(this.#stdoutQueue.length > 0) {
 
         const drained = this.#stdoutQueue;
@@ -690,7 +690,7 @@ export class LogSocket implements LogSocketLike {
     await ended;
 
     // Flush the splitter on session end so the final line - withheld by the splitter when the last chunk ended on a lone line-feed pending a possible cross-chunk pair -
-    // surfaces rather than stranding. This is the load-bearing flush the wiring note calls for; mid-stream the next chunk drains the carry, but at session close no next
+    // surfaces rather than stranding. This is the flush the wiring note calls for; mid-stream the next chunk drains the carry, but at session close no next
     // chunk arrives.
     for(const line of splitter.flush()) {
 
@@ -788,10 +788,10 @@ export class LogSocket implements LogSocketLike {
     return new Error("WebSocket connection error.");
   }
 
-  // Close a session's WebSocket cleanly: send the namespace DISCONNECT (`41/log,`) only when the connection is still OPEN, then ALWAYS issue `close(1000)`. Idempotent
+  // Close a session's WebSocket cleanly: send the namespace DISCONNECT (`41/log,`) only when the connection is still OPEN, then ALWAYS issue `close(1000)`. Repeatable
   // via the session's one-shot `closed` latch - both the streaming phase's post-end cleanup and the socket-level teardown can reach the same live session, and the latch
   // ensures the DISCONNECT-and-close sequence runs exactly once. The readyState gate avoids a send on a half-closed connection; the unconditional close is the teardown
-  // invariant.
+  // guarantee.
   #closeSession(session: Session): void {
 
     if(session.closed) {

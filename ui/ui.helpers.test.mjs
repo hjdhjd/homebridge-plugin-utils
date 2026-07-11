@@ -224,7 +224,7 @@ describe("createFakeHomebridge - toasts", () => {
       { message: "ok msg", title: "Success Title", variant: "success" },
       { message: "info msg", title: "Info Title", variant: "info" },
       { message: "warn msg", title: "Warn Title", variant: "warning" }
-    ], "every toast channel must record its calls with the channel-discriminator");
+    ], "every toast channel must record its calls with the channel tag");
   });
 
   test("toasts called without a title argument record undefined for title", () => {
@@ -335,7 +335,7 @@ describe("installHomebridge", () => {
 
 describe("waitFor", () => {
 
-  // Coverage scope for the predicate-based wait primitive: every branch of its control flow. The helper is a load-bearing test infrastructure piece - it
+  // Coverage scope for the predicate-based wait primitive: every branch of its control flow. The helper underpins the test infrastructure - it
   // replaces fixed-cycle drains in every controller-mode test - so a regression here would cascade into silent flake across the suite. Per the testing-conventions
   // helper coverage rule, every branch of this helper gets exercised: already-truthy fast path, eventual-success after polling, timeout with custom message,
   // timeout with default message, custom timeout respected, predicate-throw propagation.

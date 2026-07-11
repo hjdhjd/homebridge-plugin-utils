@@ -404,7 +404,7 @@ export class FfmpegProcess implements AsyncDisposable {
 
   /**
    * `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` and the platform `TimeoutError` emitted by
-   * `AbortSignal.timeout()`. The discrimination lives in {@link isTimeoutReason} so this getter stays a one-line delegation and every resource class in the library
+   * `AbortSignal.timeout()`. The branching lives in {@link isTimeoutReason} so this getter stays a one-line delegation and every resource class in the library
    * shares one definition of "timeout."
    */
   public get isTimedOut(): boolean {
@@ -426,7 +426,7 @@ export class FfmpegProcess implements AsyncDisposable {
   // else Node might attach) lands on a live child whose `"exit"` event is the canonical settlement - the exit listener will resolve `exited` with real exit info, and
   // re-aborting from here would only overwrite a meaningful signal reason with a derived one.
   //
-  // The pid check is the discriminator. `.pid` is assigned synchronously by libuv when fork+exec succeeds, so checking it here is a reliable "did the kernel run our
+  // The pid check is the deciding test. `.pid` is assigned synchronously by libuv when fork+exec succeeds, so checking it here is a reliable "did the kernel run our
   // child?" test that does not depend on event-ordering between `"spawn"` and `"error"`. When pid is set the child is alive (or was alive); when pid is undefined, the
   // spawn syscall failed before assigning one and this handler owns the diagnostic + settlement.
   #onSpawnError(error: NodeJS.ErrnoException): void {
@@ -475,7 +475,7 @@ export class FfmpegProcess implements AsyncDisposable {
       return;
     }
 
-    // Natural exit. Code 0 is the closed case; anything else is a failure. The cause shape is the single invariant either way; only the reason name varies. The
+    // Natural exit. Code 0 is the closed case; anything else is a failure. The cause shape is the single constant either way; only the reason name varies. The
     // `satisfies` operator pins production to the strict `FfmpegProcessExitInfo` type so `exited`'s callers get the `NodeJS.Signals` narrowing; the read-side guard
     // (`isExitInfoShape`) verifies what the runtime can actually check. Both sides share this literal shape, so a future rename of either field breaks both ends.
     const reasonName: HbpuAbortReason = (exitCode === 0) ? "closed" : "failed";
@@ -540,7 +540,7 @@ export class FfmpegProcess implements AsyncDisposable {
   // listener is the single source of truth for that promise, so that callers always read the real exit info when one is available.
   #teardown(): void {
 
-    // Reject ready if still pending. If it already resolved because we saw first stderr, this call is a no-op (promise resolvers are idempotent after first settlement).
+    // Reject ready if still pending. If it already resolved because we saw first stderr, this call is a no-op (promise resolvers are inert after first settlement).
     this.#readyResolvers.reject(this.signal.reason);
 
     // Apply the reason-based teardown log policy.

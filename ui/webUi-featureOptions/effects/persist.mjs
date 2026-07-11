@@ -177,10 +177,10 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
         return;
       }
 
-      // Single-writer drain start-site (mutation path). The macrotask-ordering invariant the serialization rests on: every subscribed store mutation
+      // Single-writer drain start-site (mutation path). The macrotask-ordering rule the serialization rests on: every subscribed store mutation
       // (option:set / option:cleared / options:reset / model:reverted) and every flush() caller (hide() / the visibilitychange handler) originates from a DOM-event
       // macrotask, so none can preempt the queued `inFlight.finally` microtask and strand a `pending` edit in the gap between the drain returning and its `finally`
-      // clearing `inFlight`. (Forward-safety: if a future caller ever dispatches one of those subscribed actions from a microtask continuation, this invariant
+      // clearing `inFlight`. (Forward-safety: if a future caller ever dispatches one of those subscribed actions from a microtask continuation, this rule
       // must be re-checked.) Reset `flushing` here too so it never outlives the drain it belongs to.
       inFlight = drain().finally(() => {
 

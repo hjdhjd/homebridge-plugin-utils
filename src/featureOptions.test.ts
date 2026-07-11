@@ -975,7 +975,7 @@ describe("FeatureOptions.setOption - encoded entry composition", () => {
 
   test("a prior entry at a different scope is preserved when setOption writes a different scope", () => {
 
-    // The scope discriminator is part of the addressing - setting ABC123 must not affect XYZ789.
+    // The scope tag is part of the addressing - setting ABC123 must not affect XYZ789.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Motion.Detect.XYZ789"]);
 
     fo.setOption({ enabled: false, id: "ABC123", option: "Motion.Detect" });
@@ -1152,7 +1152,7 @@ describe("FeatureOptions - shared parser correctness", () => {
   test("the index rebuild on a config-only mutation does not touch the catalog-derived state", () => {
 
     // Behavioral assertion that buildConfigIndex is the only thing that runs on setOption/clearOption/configuredOptions setter - the catalog (defaults, groups,
-    // value options) is invariant. We assert this indirectly by mutating a deep object the catalog rebuild would replace, then verifying it survives a config
+    // value options) does not change. We assert this indirectly by mutating a deep object the catalog rebuild would replace, then verifying it survives a config
     // mutation.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS);
     const groupsBefore = fo.groups;

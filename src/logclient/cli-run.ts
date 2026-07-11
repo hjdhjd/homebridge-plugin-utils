@@ -863,7 +863,7 @@ function registerSignalHandlers(onSignal: () => void): () => void {
 
 // Wait until the output stream can accept more data (its `drain` event) or the run aborts - whichever comes first. This is the seam-adapted twin of the
 // `events.once(stream, "drain", { signal })` idiom the BackpressureWriter uses: the narrow `CliStream` is not a full `EventEmitter`, so we race the stream's `drain`
-// against the controller's `abort` over the seam's `on`/`off` hooks by hand. Tying the wait to the signal is load-bearing, not decorative - a broken pipe (or a SIGINT)
+// against the controller's `abort` over the seam's `on`/`off` hooks by hand. Tying the wait to the signal is required, not decorative - a broken pipe (or a SIGINT)
 // during backpressure aborts the controller, and without the race the run would block forever on a `drain` that a closed pipe never emits. A seam that reports
 // backpressure but exposes no event hooks (a capturing test sink) cannot signal drain, so we resolve at once and let the loop proceed.
 function awaitWritable(stream: CliStream, signal: AbortSignal): Promise<void> {
@@ -880,7 +880,7 @@ function awaitWritable(stream: CliStream, signal: AbortSignal): Promise<void> {
 
     // The single settlement point, shared by the drain and the abort path so listener teardown lives in one place: it removes the drain listener, disposes the abort
     // registration (which removes the abort listener, so a bulk download's many drain cycles never accumulate handlers on the signal), and resolves. Each removal is
-    // idempotent, so whichever event fires second is a safe no-op.
+    // harmless to repeat, so whichever event fires second is a safe no-op.
     const finish = (): void => {
 
       stream.off?.("drain", finish);

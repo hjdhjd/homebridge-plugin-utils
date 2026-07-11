@@ -21,7 +21,7 @@ import { once } from "node:events";
  * Thrown synchronously by {@link BackpressureWriter.write} when the pending queue is already at the configured {@link BackpressureWriterInit.highWaterMark} and
  * accepting the new chunk would push it over.
  *
- * Separate from the "writer has aborted" and "underlying stream is dead" failure modes so callers can discriminate backpressure-overflow (back off and retry later)
+ * Separate from the "writer has aborted" and "underlying stream is dead" failure modes so callers can distinguish backpressure-overflow (back off and retry later)
  * from terminal failures (give up or escalate) by type rather than by inspecting error message text.
  *
  * @category Utilities
@@ -158,7 +158,7 @@ export class BackpressureWriter implements AsyncDisposable {
     // Single teardown convergence point. `onAbort` registers the one-shot teardown handler AND handles the pre-aborted-signal edge case where `addEventListener`
     // would otherwise skip the handler. Rejects every pending entry - including the in-flight entry when the drain loop is parked on
     // `events.once(stream, "drain", { signal })`. The drain loop's catch branch may also reject the in-flight resolver under the same abort; promise resolvers are
-    // idempotent after first settlement, so the second call is a no-op. Rejecting from here unconditionally is load-bearing in the stream-error escalation path,
+    // inert after first settlement, so the second call is a no-op. Rejecting from here unconditionally is required in the stream-error escalation path,
     // where the drain loop shifts the in-flight entry before calling `this.#controller.abort(...)` - by the time the listener runs, only the queued entries remain
     // in the queue, and leaving any of them unrejected would orphan the caller's promise.
     onAbort(this.signal, () => this.#teardown());
@@ -182,7 +182,7 @@ export class BackpressureWriter implements AsyncDisposable {
   public async write(chunk: Buffer): Promise<void> {
 
     // Pre-aborted short-circuit: a write issued after teardown has nothing live to attach to. Rejecting with the signal's reason keeps semantics uniform with the
-    // mid-write abort path - callers discriminate on `signal.reason` / `isHbpuAbortReason` in either case.
+    // mid-write abort path - callers branch on `signal.reason` / `isHbpuAbortReason` in either case.
     if(this.signal.aborted) {
 
       throw this.signal.reason;
@@ -351,7 +351,7 @@ export class BackpressureWriter implements AsyncDisposable {
   }
 
   // Teardown convergence point, fired exactly once when `this.signal` aborts. Rejects every pending entry with the signal's reason, regardless of whether the drain
-  // loop is currently processing. Promise resolvers are idempotent after first settlement, so if the drain loop's catch branch also rejects the in-flight resolver
+  // loop is currently processing. Promise resolvers are inert after first settlement, so if the drain loop's catch branch also rejects the in-flight resolver
   // (e.g., when `events.once(..., { signal })` rejects on the same abort), the second call is a no-op. Draining the queue unconditionally here prevents the
   // stream-error escalation path from orphaning queued resolvers - `#drain`'s catch shifts the in-flight entry and then calls `this.#controller.abort(...)`, which
   // fires this listener synchronously while the remaining queued entries are still in the queue.

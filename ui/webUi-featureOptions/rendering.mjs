@@ -240,7 +240,7 @@ export const triStateTransition = ({ catalog, checkbox, configIndex, controllerI
   return { action: writeAction({ deviceId, enabled: true, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
 };
 
-// Map a view scope kind to the suffix label rendered on category headers. Switch on the discriminator; every scope kind maps to its own label.
+// Map a view scope kind to the suffix label rendered on category headers. Switch on the tag; every scope kind maps to its own label.
 const scopeLabel = (scopeKind) => {
 
   switch(scopeKind) {
@@ -320,7 +320,7 @@ const createLabel = ({ entry, expandedName }) => createElement("label", {
 }, [entry.description]);
 
 // Apply the label's scope-color class, replacing any color previously applied. The color classes are mutually exclusive, so we strip every one of them before adding
-// the current one - this makes the function idempotent and safe to re-run on every projection change, which is what lets a toggle re-color a modified option's label
+// the current one - this makes the function safe to re-run on every projection change, which is what lets a toggle re-color a modified option's label
 // in place. The construction path and the per-mutation update path share this one writer, so the initial color and every subsequent color come from the same map.
 const applyLabelColor = ({ entry, inheriting, label }) => {
 

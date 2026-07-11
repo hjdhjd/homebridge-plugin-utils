@@ -9,7 +9,7 @@
  * font scale, spacing scale, radii, motion, accent colors, surfaces, borders, text, form controls, interactive states, specific colors). Cleanup is automatic via
  * the supplied AbortSignal - aborting removes the stylesheet from `document.adoptedStyleSheets`.
  *
- * Stylistic invariants the tokens encode:
+ * Stylistic rules the tokens encode:
  *
  *   1. **Tokens declare, theme overrides.** Accent tokens default to the CSS-standard `AccentColor` / `AccentColorText` keywords; the theme effect overrides them at
  *      runtime via `documentElement.style.setProperty` after probing Bootstrap's `.btn-primary`. The declared defaults remain in effect until (and if) the probe

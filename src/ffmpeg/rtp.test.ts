@@ -180,7 +180,7 @@ describe("RtpDemuxer - forwarding and source-port symmetry", () => {
 
   test("preserves source-port symmetry: outbound source.port equals demuxer.inputPort", async () => {
 
-    // The load-bearing security property of single-socket forwarding: the kernel auto-fills outbound source = bound socket's port, and the demuxer holds an
+    // The security property single-socket forwarding provides: the kernel auto-fills outbound source = bound socket's port, and the demuxer holds an
     // exclusive bind on that port. Downstream consumers (typically FFmpeg) can therefore filter by source = `loopback:inputPort` to reject locally-spoofed
     // injections, because no other non-root process can spoof that source endpoint while the demuxer holds the bind. This test guards the property directly: the
     // receiver's `rinfo.port` on a forwarded datagram must equal the demuxer's bound `inputPort` value.
@@ -311,7 +311,7 @@ describe("RtpDemuxer - heartbeat (always-on RTCP replay)", () => {
 
   // Heartbeat tests are unavoidably slow: the cadence is fixed at the canonical {@link RTCP_HEARTBEAT_INTERVAL} (3000 ms) because the constant is the demuxer's own
   // always-on keepalive cadence (not an FFmpeg timeout), so the tests must run at that real cadence. The tests below run sequentially and wait additively, collectively
-  // costing roughly three and a half to four heartbeat windows of wall-clock time - acceptable for catching the heartbeat-related correctness invariants of an always-on
+  // costing roughly three and a half to four heartbeat windows of wall-clock time - acceptable for catching the heartbeat-related correctness guarantees of an always-on
   // contract that no production consumer can opt out of.
 
   test("fires after RTCP_HEARTBEAT_INTERVAL of inbound-RTCP quiet, replaying the most-recently-observed RTCP to rtpPort", async () => {
@@ -380,7 +380,7 @@ describe("RtpDemuxer - heartbeat (always-on RTCP replay)", () => {
     // No RTCP ever arrives. The heartbeat watchdog must stay dormant - it is armed only by RTCP arrival, because the heartbeat replays the last observed RTCP and
     // there is nothing meaningful to replay before the first RTCP. A regression that arms the heartbeat at construction would surface as a no-op fire every
     // cadence (`#lastRtcp === undefined` -> skip the send -> re-arm), still leaving rtpReceiver empty - but that path is correct-by-accident; this test guards the
-    // dormant-construction invariant by asserting demuxer.aborted stays false through the window, confirming no other lifecycle assumption was violated.
+    // dormant-construction rule by asserting demuxer.aborted stays false through the window, confirming no other lifecycle assumption was violated.
     await delay(RTCP_HEARTBEAT_INTERVAL + 500);
 
     assert.equal(demuxer.aborted, false, "no inactivityTimeout means no abort on stall - the demuxer must remain live");
@@ -484,7 +484,7 @@ describe("RtpDemuxer - socket errors", () => {
 
 describe("RtpDemuxer - signal-driven teardown", () => {
 
-  test("external abort preserves signal.reason and is idempotent", async () => {
+  test("external abort preserves signal.reason and is safe to call more than once", async () => {
 
     await using rtpReceiver = await bindReceiver();
     await using rtcpReceiver = await bindReceiver();
@@ -599,7 +599,7 @@ describe("RtpPortAllocator - single-port reservations", () => {
 
   test("concurrent reservations get distinct ports and track correctly in the pool", async () => {
 
-    // Ten concurrent reservations; the ephemeral-port pool is large enough for this on any reasonable host. We verify two invariants: every reservation holds a
+    // Ten concurrent reservations; the ephemeral-port pool is large enough for this on any reasonable host. We verify two guarantees: every reservation holds a
     // distinct port (no double-allocation race), and `reservedCount` tracks the pool size exactly across the acquire-all / release-all cycle.
     const allocator = new RtpPortAllocator();
     const reservations = await Promise.all(Array.from({ length: 10 }, async () => allocator.reserve()));
@@ -622,7 +622,7 @@ describe("RtpPortAllocator - single-port reservations", () => {
 
   test("disposing a reservation releases the port back to the pool", async () => {
 
-    // Direct invariant: reserve adds to #inUse, dispose removes from #inUse. The `reservedCount` accessor exposes the pool size as a first-class observable so the
+    // Direct guarantee: reserve adds to #inUse, dispose removes from #inUse. The `reservedCount` accessor exposes the pool size as a first-class observable so the
     // test can assert the state transition directly rather than inferring it from follow-on reserve() behavior.
     const allocator = new RtpPortAllocator();
 
@@ -695,12 +695,12 @@ describe("RtpPortAllocator - signal handling", () => {
 
   test("reservedCount is stable across every reachable reserve() failure mode", async () => {
 
-    // Two-phase-commit invariant: any reserve() call that does NOT return a live reservation must leave the allocator's pool unchanged. This covers the ports-leak
+    // Two-phase-commit rule: any reserve() call that does NOT return a live reservation must leave the allocator's pool unchanged. This covers the ports-leak
     // bug class structurally - the `DisposableStack.move()` commit point transfers ownership only on success, so every non-success exit path runs scope-bound
     // disposal on whatever was tentatively acquired. We exercise every failure mode black-box testing can reach: a pre-aborted signal, RangeError on invalid count,
     // and a microtask-timed abort that lands during the first #acquirePort's await. The specific "abort lands between the two acquires" race window is structurally
     // unreachable from outside the class (no async boundary between the two awaits in the fixed implementation), so we cannot target it deterministically. Code
-    // review plus the self-documenting `DisposableStack` pattern guard that specific path; the invariant this test asserts guards the pool integrity across
+    // review plus the self-documenting `DisposableStack` pattern guard that specific path; the guarantee this test asserts guards the pool integrity across
     // everything we CAN reach.
     const allocator = new RtpPortAllocator();
     const baseline = allocator.reservedCount;
@@ -737,7 +737,7 @@ describe("RtpPortAllocator - signal handling", () => {
 
     // The `DisposableStack.move()` pattern's failure mode is loud: if a future maintainer forgets to call `stack.move()` before returning a reservation, the
     // scope-bound disposer fires on return and releases the ports. The returned reservation would then refer to ports not actually held by the pool - a correctness
-    // bug callers would see immediately. This test catches that regression by asserting the positive invariant: after a successful reserve(), the claimed ports
+    // bug callers would see immediately. This test catches that regression by asserting the positive guarantee: after a successful reserve(), the claimed ports
     // ARE in the pool.
     const allocator = new RtpPortAllocator();
 
@@ -767,9 +767,9 @@ describe("PortReservation - disposal", () => {
 
   test("double-dispose is a safe no-op", async () => {
 
-    // Idempotency guard: the second disposal must not double-delete from `#inUse`. A naive implementation that unconditionally removes ports on every dispose would
+    // Repeat-safety guard: the second disposal must not double-delete from `#inUse`. A naive implementation that unconditionally removes ports on every dispose would
     // silently break if a future caller re-reserved the same port between the two disposes - the second dispose would release someone else's port. `reservedCount`
-    // gives us a direct invariant to assert: after the first disposal the pool is at zero, and the second disposal must not change that.
+    // gives us a direct guarantee to assert: after the first disposal the pool is at zero, and the second disposal must not change that.
     const allocator = new RtpPortAllocator();
     const reservation: PortReservation = await allocator.reserve();
 
@@ -809,8 +809,8 @@ describe("RtpPortAllocator - retry and collision paths", () => {
   //   - Bind failure on a specific port. Requires an external process to hold `firstPort + 1` AND the kernel to randomly hand us that exact firstPort.
   //   - Max-attempts exhaustion. Requires 10 consecutive null returns; cumulative probability is essentially zero without seeding `#inUse` to densities that
   //     would consume the entire ephemeral range.
-  //   - Socket-error idempotent guard. Requires a socket `"error"` event after the demuxer aborts; closing a UDP socket does not normally emit errors, and
-  //     `AbortController.abort()` is already idempotent so the guard's real purpose is suppressing a misleading log line during teardown rather than protecting
+  //   - Socket-error re-entry guard. Requires a socket `"error"` event after the demuxer aborts; closing a UDP socket does not normally emit errors, and
+  //     `AbortController.abort()` is already a no-op on a repeat so the guard's real purpose is suppressing a misleading log line during teardown rather than protecting
   //     the signal reason. The intent is clearly documented in the source comment.
   test("dense pool exercises the secondPort retry and #inUse collision paths", async () => {
 

@@ -2,7 +2,7 @@
  *
  * ui/webUi-featureOptions.test.mjs: Integration-level tests for the webUiFeatureOptions orchestrator. These exercise high-value end-to-end flows (show / hide /
  * cleanup, global-options render, device navigation, config round-trip, category-state persistence) against a Happy-DOM window with the full skeleton template and
- * a fake homebridge bridge. Per-component invariants live in the Tier 1-3 test files; this file pins the orchestration wiring.
+ * a fake homebridge bridge. Per-component guarantees live in the Tier 1-3 test files; this file pins the orchestration wiring.
  */
 "use strict";
 
@@ -283,7 +283,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
 describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO reconciliation)", () => {
 
   // show() is the single entry chokepoint, so it re-reads the host config through the session before rendering. These tests pin that "every show is fresh"
-  // invariant: an edit made in the Settings tab while the page was hidden is reflected on the next show() rather than rendering against a frozen open()-time snapshot.
+  // guarantee: an edit made in the Settings tab while the page was hidden is reflected on the next show() rather than rendering against a frozen open()-time snapshot.
 
   test("re-reads the host config on every show() so getControllers and the options render reflect an external edit made while hidden", async () => {
 
@@ -507,7 +507,7 @@ describe("webUiFeatureOptions.cleanup", () => {
     assert.doesNotThrow(() => orchestrator.cleanup());
   });
 
-  test("cleanup() is idempotent - repeated calls are safe", async () => {
+  test("cleanup() is a no-op on repeat - repeated calls are safe", async () => {
 
     using _dom = createTestDom();
 
@@ -1626,7 +1626,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
   // Build a controller-mode harness around the orchestrator. Implements the documented convention that `getDevices(controller)` returns `[controllerAsDevice,
   // ...managedDevices]` with the controller as index 0 (so controller-scope options can be edited from the controller's row), and that `isController` is the
-  // discriminator the nav uses to label controllers vs. devices. The harness owns the homebridge install and the orchestrator's cleanup, exposing them via the
+  // tag the nav uses to label controllers vs. devices. The harness owns the homebridge install and the orchestrator's cleanup, exposing them via the
   // Disposable interface so tests bind it with `using` for automatic teardown at scope exit.
   function makeControllerHarness({ options = [] } = {}) {
 
@@ -1688,7 +1688,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
   }
 
   // Click a sidebar nav link by CSS selector. The nav module uses `data-device-serial` as the SSOT identifier for both controller and device links, and
-  // `data-navigation` to discriminate link kind, so attribute selectors like `.nav-link[data-device-serial='CTRL-001']` or `.nav-link[data-navigation='global']`
+  // `data-navigation` to distinguish link kind, so attribute selectors like `.nav-link[data-device-serial='CTRL-001']` or `.nav-link[data-navigation='global']`
   // identify the target precisely. The click itself is synchronous; callers follow with `waitFor` on the specific post-navigation UI state they care about - the
   // predicate captures the test's intent ("wait until the device row renders") rather than coupling to the orchestrator's internal async-chain depth, and a
   // hung navigation surfaces as a clearly-named timeout failure instead of an inscrutable assertion mismatch on stale DOM.
@@ -1887,7 +1887,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     await waitFor(() => document.querySelector(".nav-link[data-navigation='device'][data-device-serial='" + DEVICE_A_SERIAL + "']"),
       { message: "device list must repopulate after navigating back through the controller" });
 
-    // Step 5: navigate back to the device and verify the device-level Disable is still reflected. This is the load-bearing assertion: the model write from
+    // Step 5: navigate back to the device and verify the device-level Disable is still reflected. This is the assertion that matters: the model write from
     // step 2 must survive all the navigations, and the renderer must read it fresh on re-render rather than carry any stale DOM state from the original render.
     clickNav(".nav-link[data-device-serial='" + DEVICE_A_SERIAL + "']");
     await waitFor(

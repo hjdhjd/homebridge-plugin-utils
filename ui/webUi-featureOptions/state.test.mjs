@@ -119,7 +119,7 @@ describe("reducer - devices:loaded", () => {
 
 describe("reducer - scope:changed", () => {
 
-  test("replaces the scope discriminator atomically", () => {
+  test("replaces the scope tag atomically", () => {
 
     const next = reducer(initialState(), { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 

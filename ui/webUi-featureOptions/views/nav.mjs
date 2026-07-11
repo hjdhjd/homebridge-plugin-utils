@@ -122,7 +122,7 @@ const sectionHeader = (label) => createElement("h6", {
 }, [label]);
 
 // Append a labeled section to a container: an optional header followed by one rendered node per item. The header renders only when the section has at least one item,
-// so a section that heads nothing emits no header. This is the single enforcement point for the "a header labels a non-empty section" invariant - it makes an orphan
+// so a section that heads nothing emits no header. This is the single enforcement point for the "a header labels a non-empty section" rule - it makes an orphan
 // header (a label with no items beneath it) unrepresentable regardless of which list a caller renders, which is what keeps a fully-grouped device set from showing a
 // standalone top-level header that labels nothing.
 const appendSection = ({ items, label, render, root }) => {
@@ -164,7 +164,7 @@ const buildControllersList = ({ controllerLabel, mode, root, state }) => {
 
   // The controllers section. In controller-based mode there is always at least one controller by the time the sidebar builds (the orchestrator shows the
   // no-controllers message and never mounts the nav otherwise), so the non-empty guard is belt-and-suspenders here - but routing through appendSection keeps every
-  // section under one invariant rather than special-casing this one.
+  // section under one rule rather than special-casing this one.
   appendSection({
 
     items: state.controllers,
@@ -175,7 +175,7 @@ const buildControllersList = ({ controllerLabel, mode, root, state }) => {
 };
 
 // Build the devices container. The ungrouped devices form the top-level section under the device label; each sidebarGroup forms its own section in alphabetical order.
-// Because the device-label header renders only when there is at least one ungrouped device (the appendSection invariant), a fully-grouped device set - every device
+// Because the device-label header renders only when there is at least one ungrouped device (the appendSection rule), a fully-grouped device set - every device
 // carrying a sidebarGroup - shows its group headers alone, with no orphan top-level device header. Controllers are excluded from group derivation (their link lives in
 // the controllers container above); the reserved "hidden" group excludes devices from the sidebar entirely.
 const buildDevicesList = ({ catalog, deviceLabel, devices, root }) => {

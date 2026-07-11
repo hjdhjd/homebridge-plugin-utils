@@ -90,7 +90,7 @@ describe("mountSearchView - panel build", () => {
     document.body.append(root, configTable);
 
     // The orchestrator hides the search region before populating it; the view must build its panel without revealing the region itself. This test pins
-    // the invariant that region visibility remains the orchestrator's responsibility, so the search box cannot flash in before the rest of the page is ready.
+    // the rule that region visibility remains the orchestrator's responsibility, so the search box cannot flash in before the rest of the page is ready.
     root.style.display = "none";
     store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
     mountSearchView({ configTable, root, signal: controller.signal, store });

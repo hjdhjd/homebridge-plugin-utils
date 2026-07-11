@@ -83,7 +83,7 @@ describe("mountHeaderView", () => {
     document.body.appendChild(root);
 
     // A view must never reveal its own region on mount; the orchestrator alone reveals regions, together, at the end of show(). Re-adding
-    // `root.style.display = ""` here would violate that invariant and fail this assertion.
+    // `root.style.display = ""` here would violate that rule and fail this assertion.
     root.style.display = "none";
     store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "controller-based", type: "model:loaded" });
     mountHeaderView({ root, signal: controller.signal, store });

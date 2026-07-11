@@ -123,7 +123,7 @@ describe("MqttClient - construction", () => {
     assert.equal(client.aborted, true);
     assert.equal(client.signal.reason, reason);
 
-    // The constructor still invokes mqtt.js's `connect()` so `#mqtt` is a non-nullable invariant; the pre-aborted signal triggers `#teardown()` inline immediately
+    // The constructor still invokes mqtt.js's `connect()` so `#mqtt` is guaranteed non-null; the pre-aborted signal triggers `#teardown()` inline immediately
     // afterwards, which calls `mqtt.end(true)` and drops the in-flight connection attempt before any network work completes. Subsequent publishes reject with the
     // parent's reason - no broker round trip to race against.
     await assert.rejects(client.publish("topic", "msg"), (error: unknown) => error === reason);
@@ -164,7 +164,7 @@ describe("MqttClient - abort and teardown", () => {
     assert.equal(client.signal.reason, reason);
   });
 
-  test("abort is idempotent", async () => {
+  test("abort is safe to call more than once", async () => {
 
     const client = makeClient();
     const first = new HbpuAbortError("shutdown");
@@ -262,7 +262,7 @@ describe("MqttClient - subscribe semantics", () => {
 
     client.abort();
 
-    // Expected pattern: calls after teardown do not throw, they simply do nothing. Callers unwinding concurrently with teardown expect quiet idempotence.
+    // Expected pattern: calls after teardown do not throw, they simply do nothing. Callers unwinding concurrently with teardown expect quiet no-ops.
     client.subscribe("topic", () => { /* handler */ });
 
     assert.equal(client.aborted, true);
@@ -868,7 +868,7 @@ describe("MqttClient - multi-handler topic dispatch", () => {
 
   test("per-subscription signal abort removes only the aborted handler; siblings keep receiving", async () => {
 
-    // The critical invariant: multiple subscribers to the same topic are independent. Aborting one handler's signal must NOT unsubscribe the topic at the wire level
+    // The rule here: multiple subscribers to the same topic are independent. Aborting one handler's signal must NOT unsubscribe the topic at the wire level
     // (other handlers are still live) and must NOT stop dispatch to the surviving handlers.
     await using broker = await startTestBroker();
     const unsubscribed = recordWireUnsubscribes(broker);
@@ -957,7 +957,7 @@ describe("MqttClient - multi-handler topic dispatch", () => {
 
     // The message handler iterates a snapshot of the handler set, so a handler that calls back into the client (e.g., via a per-subscription signal it controls) can
     // abort itself during dispatch without affecting the delivery to siblings already queued for invocation. This is the subtle "do not iterate the live Set during
-    // dispatch" invariant documented in `#wireMqttEvents`.
+    // dispatch" rule documented in `#wireMqttEvents`.
     await using broker = await startTestBroker();
 
     await using client = makeClient({ brokerUrl: broker.url });
@@ -1199,7 +1199,7 @@ describe("MqttClient - connect / close edge flag", () => {
 
   test("close without a prior connect is silent (no disconnect spam during initial retry loop)", async () => {
 
-    // The edge-flag invariant: a close event only logs when we had previously connected. With the unreachable-broker URL, mqtt.js's connect attempt fails (logging
+    // The edge-flag rule: a close event only logs when we had previously connected. With the unreachable-broker URL, mqtt.js's connect attempt fails (logging
     // "Connection refused") and emits a close event without a preceding connect. HBPU's close handler must short-circuit on the close that follows. We use the
     // refused-log appearance as a deterministic synchronization point: it fires before the close event, so once it's observed we know the close-handler path has
     // also run - and we can then assert the silence we expect from the close path itself.
@@ -1236,7 +1236,7 @@ describe("MqttClient - connect / close edge flag", () => {
   test("connect logs the redacted broker URL (password-safe for status pages)", async () => {
 
     // Regex in the connect handler replaces `scheme://user:password@host` with `scheme://user:REDACTED@host` so a connected broker's URL never leaks credentials into
-    // log output. This is an operational-safety invariant; aedes accepts arbitrary credentials by default, so the real broker honors the URL as-is.
+    // log output. This is an operational-safety guarantee; aedes accepts arbitrary credentials by default, so the real broker honors the URL as-is.
     await using broker = await startTestBroker();
     const credentialedUrl = broker.url.replace("mqtt://", "mqtt://user:secretpass@");
     const log = capturingLog();

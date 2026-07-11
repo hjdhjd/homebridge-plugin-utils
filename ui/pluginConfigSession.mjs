@@ -124,7 +124,7 @@ export class PluginConfigSession {
    * name alongside actual data.
    *
    * Built like {@link commit} for symmetry and clarity: the read happens into a local, the local is seeded, and a single trailing assignment advances the held
-   * reference. (The build-then-assign is not load-bearing against a torn write here - the only I/O is the first statement - but it keeps this method's shape
+   * reference. (The build-then-assign does not guard against a torn write here - the only I/O is the first statement - but it keeps this method's shape
    * consistent with {@link commit}.)
    *
    * @returns {Promise<void>}

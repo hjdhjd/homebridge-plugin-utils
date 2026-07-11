@@ -29,7 +29,7 @@ import { noOpLog } from "./util.ts";
  * `assert.ok`/use pair on every access.
  *
  * Designed for `noUncheckedIndexedAccess`-strict codebases where `items[index]` is typed `T | undefined` even inside a `length`-checked block. Test helpers that walk
- * a collection and discriminate on specific indices (e.g., "the first emitted record should be ..." / "the second should be ...") are the primary use case.
+ * a collection and distinguish specific indices (e.g., "the first emitted record should be ..." / "the second should be ...") are the primary use case.
  *
  * @typeParam T      - The element type of `items`. Assumes `T` does not include `undefined`; if it does, the assertion cannot distinguish a valid `undefined` element
  *                     from an out-of-bounds index.

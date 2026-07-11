@@ -35,10 +35,10 @@ import type { runHblog } from "./cli-run.ts";
  * Decide whether this module is the program entry point (run as the `hblog` bin) versus imported as a library. Canonicalizes the real path of both the launch path
  * (`process.argv[1]`) and this module's own URL before comparing them.
  *
- * The realpath normalization is load-bearing, exactly as in `cli/index.ts`: npm exposes a bin as a symlink in `node_modules/.bin`, so under default Node the launch path
+ * The realpath normalization is required, exactly as in `cli/index.ts`: npm exposes a bin as a symlink in `node_modules/.bin`, so under default Node the launch path
  * is the symlink while `import.meta.url` is the resolved target - a raw string comparison never matches and the bin silently does nothing. Canonicalizing both sides
  * collapses that indirection (and any `file:`-dependency, copied-package, or `--preserve-symlinks` layout) to a single real path. We keep this explicit realpath
- * comparison rather than deferring to `import.meta.main`: the symlink and copied-package indirection above is the load-bearing concern the entry-point check exists to
+ * comparison rather than deferring to `import.meta.main`: the symlink and copied-package indirection above is the concern the entry-point check exists to
  * handle, and resolving it explicitly keeps that handling visible at the call site.
  *
  * @returns `true` when invoked as the program entry, `false` when imported or when the launch path cannot be resolved.

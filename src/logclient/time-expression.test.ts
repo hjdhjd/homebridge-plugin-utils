@@ -14,7 +14,7 @@ const MS_PER_HOUR = 3600000;
 const MS_PER_DAY = 86400000;
 
 // A fixed reference instant for every test: 2026-06-29 15:30:45 local. Built via `new Date(...)` so the epoch is the host's own local time, which keeps every assertion
-// timezone-invariant (both the expectation and the parser construct local instants).
+// timezone-independent (both the expectation and the parser construct local instants).
 const NOW = new Date(2026, 5, 29, 15, 30, 45, 0).getTime();
 
 describe("parseTimeExpression - named tokens", () => {

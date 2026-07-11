@@ -688,7 +688,7 @@ describe("FfmpegRecordingProcess - resolveBaseOptions hardware-decoding gate", (
   test("explicit init.recording.hardwareDecoding overrides the version gate", async () => {
 
     // When the caller explicitly provides `recording.hardwareDecoding`, the defaulting logic is skipped entirely - the gate only sets the default. This test pins the
-    // invariant that explicit caller input wins over version-based defaulting, so a plugin that knows better (e.g., has validated its own decoder availability) can
+    // rule that explicit caller input wins over version-based defaulting, so a plugin that knows better (e.g., has validated its own decoder availability) can
     // opt in on a 7.x host if it wants to.
     const spy = makeSpyingOptions("7.0", false);
 
@@ -707,7 +707,7 @@ describe("FfmpegRecordingProcess - resolveBaseOptions hardware-decoding gate", (
 describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
 
   // Build a stand-in script whose stdout emits a well-formed init + single media segment, then ENDS stdout (closing the pipe from the child's end), then exits with
-  // the supplied code after a short delay. This sequencing is load-bearing for the "closed" deferral test: the assembler sees source-end FIRST (its internal
+  // the supplied code after a short delay. This sequencing is what the "closed" deferral test depends on: the assembler sees source-end FIRST (its internal
   // controller aborts with "closed"), then the child exits with the specified code - which the process's own `#onExit` handler translates into either "closed"
   // (exitCode 0) or "failed" (nonzero).
   function buildStdoutEndThenExitScript(exitCode: number): string[] {
@@ -733,7 +733,7 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
 
   test("assembler \"closed\" does NOT pre-empt the process's own exit reason (nonzero exit stays \"failed\")", async () => {
 
-    // The bridge's load-bearing invariant: when the assembler's source ends naturally, the assembler aborts its signal with `HbpuAbortError("closed")`. If the bridge
+    // The guarantee the bridge must hold: when the assembler's source ends naturally, the assembler aborts its signal with `HbpuAbortError("closed")`. If the bridge
     // forwarded that reason to the process, a subsequent nonzero child exit would be silently reclassified as "closed" - hiding real errors. The bridge defers on
     // "closed" so the process's own `#onExit` handler is the authoritative source for the exit reason. We force a nonzero exit here to expose any regression in that
     // deferral: if the bridge propagated "closed" prematurely, the process's reason would be "closed"; with deferral, the process exits with code 2 and the reason is

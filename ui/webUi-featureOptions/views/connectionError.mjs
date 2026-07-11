@@ -13,7 +13,7 @@ import { effect } from "../store.mjs";
  * Subscribes to `connection:error` and `model:loaded`. On `model:loaded` this view yields - it aborts its retry window and stops rendering - and the shared
  * `#headerInfo` container is reclaimed by the header view; it does not itself clear the error display.
  *
- * Renders into the same `#headerInfo` container the priority-chain header uses. The two views coordinate via the `state.status` discriminator: header yields when
+ * Renders into the same `#headerInfo` container the priority-chain header uses. The two views coordinate via the `state.status` tag: header yields when
  * status is connection-error; this view yields when status is anything else.
  *
  * Renders:

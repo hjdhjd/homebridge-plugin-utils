@@ -132,13 +132,13 @@ describe("FfmpegExec - abort cancellation", () => {
     const stdout = await exec.stdoutBuffer;
     const exit = await exec.exited;
 
-    // Load-bearing invariants of the abort path, none of which concern the byte content of `stdout` - that is incidental to disposition and would be racy to
+    // The guarantees the abort path must hold, none of which concern the byte content of `stdout` - that is incidental to disposition and would be racy to
     // assert against.
 
     // 1. `stdoutBuffer` always settles to a Buffer, never rejects, never hangs. Callers may `await` it without a try/catch on every code path.
     assert.ok(Buffer.isBuffer(stdout), "stdoutBuffer must settle to a Buffer instance regardless of how the run ended");
 
-    // 2. The lifetime signal carries the caller's abort reason verbatim. This is the SSOT for "why did this end" - any caller that needs to discriminate disposition
+    // 2. The lifetime signal carries the caller's abort reason verbatim. This is the SSOT for "why did this end" - any caller that needs to distinguish disposition
     //    consults `signal.reason`, not the byte content of stdout.
     assert.equal(isHbpuAbortReason(exec.signal.reason, "shutdown"), true);
 
@@ -167,7 +167,7 @@ describe("FfmpegExec - stdoutBuffer abnormal-termination contract", () => {
 
   test("stdoutBuffer resolves with an empty buffer when the underlying stdout is destroyed with an error", async () => {
 
-    // The load-bearing invariant on `#collectStdout`: the try/catch around `node:stream/consumers buffer()` resolves to `Buffer.alloc(0)` when the stream errors or
+    // The guarantee `#collectStdout` must hold: the try/catch around `node:stream/consumers buffer()` resolves to `Buffer.alloc(0)` when the stream errors or
     // is destroyed mid-read. Callers reading `stdoutBuffer` always see a Buffer - never a rejection - and an empty payload signals "this run produced nothing
     // salvageable; route decisions through exitCode and exitSignal instead of through partial bytes."
     //
@@ -192,7 +192,7 @@ describe("FfmpegExec - stdoutBuffer abnormal-termination contract", () => {
     readable.destroy(new Error("synthetic stdout error"));
 
     // stdoutBuffer must resolve - never reject - with an empty buffer because the stream errored before completing. The contract is all-or-nothing: callers consult
-    // exitCode and exitSignal to discriminate "no output" from "the run was aborted." An empty result on an aborted run signals "nothing salvageable" rather than
+    // exitCode and exitSignal to distinguish "no output" from "the run was aborted." An empty result on an aborted run signals "nothing salvageable" rather than
     // "the child wrote nothing."
     const collected = await exec.stdoutBuffer;
 

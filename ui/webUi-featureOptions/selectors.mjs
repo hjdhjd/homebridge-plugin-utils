@@ -26,7 +26,7 @@ import { memoize } from "./store.mjs";
  */
 
 /**
- * Extract the controller serial from the scope discriminator, or null when no controller is in context. Pure helper - one-line discriminant read, not memoized.
+ * Extract the controller serial from the scope tag, or null when no controller is in context. Pure helper - one-line tag read, not memoized.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {string | null} The controller serial when the scope is controller-based, null otherwise.
@@ -50,7 +50,7 @@ export const selectedControllerId = (state) => {
 };
 
 /**
- * Extract the device serial from the scope discriminator, or null when the scope is global or controller-only. Pure helper - one-line discriminant read, not
+ * Extract the device serial from the scope tag, or null when the scope is global or controller-only. Pure helper - one-line tag read, not
  * memoized.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
@@ -83,7 +83,7 @@ export const selectedDeviceId = (state) => {
  * unrelated entries. If that assumption ever needs to weaken (e.g., a plugin starts surfacing user-chosen serials), encode the components with
  * `encodeURIComponent` at this seam before composing the key.
  *
- * @param {import("./state.mjs").Scope} scope - The scope discriminator.
+ * @param {import("./state.mjs").Scope} scope - The scope tag.
  * @returns {string} A stable string key identifying the view.
  */
 export const scopeCacheKey = (scope) => {

@@ -118,7 +118,7 @@ export class TestWebSocket implements WebSocketLike {
   }
 
   /**
-   * Close the socket. Records the close code and flips `readyState` to CLOSED. Idempotent in the sense the seam needs: a second close simply records a second code.
+   * Close the socket. Records the close code and flips `readyState` to CLOSED. Safe to repeat in the sense the seam needs: a second close simply records a second code.
    *
    * @param code - The close code. Defaults to 1000 (normal closure), matching the platform default.
    */

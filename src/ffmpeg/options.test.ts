@@ -90,7 +90,7 @@ const RASPBIAN_CODECS: CodecsInit = {
   hostSystem: "raspbian"
 };
 
-// Hardware-mode presets. Named combinations of the two plugin-level flags (`hardwareDecoding`, `hardwareTranscoding`) that the tests discriminate on. Software-only
+// Hardware-mode presets. Named combinations of the two plugin-level flags (`hardwareDecoding`, `hardwareTranscoding`) that the tests branch on. Software-only
 // mode is the default - `makeOptions(codecs)` with no second arg produces it - so it needs no preset. Per-test boolean sprawl migrates to these three names.
 const HW_FULL:      MakeOptionsFlags = { hardwareDecoding: true,  hardwareTranscoding: true  };
 const HW_TRANSCODE: MakeOptionsFlags = { hardwareDecoding: false, hardwareTranscoding: true  };
@@ -191,7 +191,7 @@ describe("FfmpegOptions - configureHwAccel", () => {
   test("disables hardware transcoding on macOS when the h264_videotoolbox encoder is missing", () => {
 
     // configureHwAccel's transcoding block runs validateEncoder("h264_videotoolbox") on macOS. When the encoder is not advertised by the codec support, the validator
-    // flips hardwareTranscoding to false. Decoding is independent - it runs its own validation against hwAccels and is orthogonal to the encoder check.
+    // flips hardwareTranscoding to false. Decoding is independent - it runs its own validation against hwAccels and is unrelated to the encoder check.
     const { config } = makeOptions({ hostSystem: "macOS.Apple", hwAccels: ["videotoolbox"] }, HW_FULL);
 
     assert.equal(config.hardwareTranscoding, false, "missing h264_videotoolbox encoder must disable hardware transcoding");
@@ -845,7 +845,7 @@ describe("FfmpegOptions - cropFilter", () => {
 
   test("QSV hardware path includes the crop filter when configured", () => {
 
-    // Per-platform crop coverage: same invariant for the generic QSV hardware path. FFmpeg's auto_scale handles the implicit hwdownload+hwupload bridge when no
+    // Per-platform crop coverage: same rule for the generic QSV hardware path. FFmpeg's auto_scale handles the implicit hwdownload+hwupload bridge when no
     // explicit transfer appears between the crop and vpp_qsv.
     const { options } = makeOptions(QSV_CODECS, { ...HW_TRANSCODE, crop: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } });
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
@@ -853,7 +853,7 @@ describe("FfmpegOptions - cropFilter", () => {
     assert.ok(chain.includes("crop=w=iw*0.5"), "QSV hardware-path filter chain must splice in the configured crop filter - got " + chain);
   });
 
-  // Crop ordering invariant: `crop` is a CPU-side filter and always sits on the CPU side of any transfer. Tests assert the exact ordering across the four crop
+  // Crop ordering rule: `crop` is a CPU-side filter and always sits on the CPU side of any transfer. Tests assert the exact ordering across the four crop
   // scenarios on a real transfer-direction matrix, so a future refactor cannot silently emit `[crop, hwdownload, scale]` (which would ask crop to operate on GPU
   // frames) or `[hwupload, crop, scale_vt]` (same problem after upload).
 
@@ -1003,7 +1003,7 @@ describe("FfmpegOptions - hardware transfer filter matrix (upload paths)", () =>
   test("raspbian emits format=yuv420p for software-decode + hardware-transcode", () => {
 
     // RPi's upload branch pushes `format=yuv420p` to prime the v4l2m2m encoder's expected input layout. Note that in a real RPi config, hardwareDecoding is always off
-    // (configureHwAccel force-disables it), so every RPi hardware-transcode path IS a software-decode-plus-hardware-transcode path - this assertion is load-bearing
+    // (configureHwAccel force-disables it), so every RPi hardware-transcode path IS a software-decode-plus-hardware-transcode path - this assertion matters
     // for the common-case RPi filter chain, not a corner case.
     const { options } = makeOptions(RASPBIAN_CODECS, HW_FULL);
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
@@ -1134,11 +1134,11 @@ describe("FfmpegOptions - maxSourcePixels", () => {
     assert.equal(options.maxSourcePixels("record"), Infinity);
   });
 
-  // Agreement invariant. The ceiling and the encoder choice both derive from #hardwareEncodes, so on a fully-hardware Pi the record context must report both an uncapped
+  // Agreement rule. The ceiling and the encoder choice both derive from #hardwareEncodes, so on a fully-hardware Pi the record context must report both an uncapped
   // source (Infinity) AND a software encoder (libx264, never h264_v4l2m2m). Pinning the pair co-located freezes the shared-predicate wiring: a future change that flips
-  // one without the other would fail here. This deliberately restates the libx264 fact from the recordEncoder block, kept to the single assertion pair the invariant
+  // one without the other would fail here. This deliberately restates the libx264 fact from the recordEncoder block, kept to the single assertion pair the rule
   // needs.
-  test("agreement invariant on raspbian: the record context is uncapped AND recordEncoder emits the software encoder", () => {
+  test("agreement rule on raspbian: the record context is uncapped AND recordEncoder emits the software encoder", () => {
 
     const { options } = makeOptions(RASPBIAN_CODECS, HW_FULL);
     const args = options.recordEncoder(BASE_ENCODER_OPTIONS);
@@ -1149,7 +1149,7 @@ describe("FfmpegOptions - maxSourcePixels", () => {
 
   // Per-call-downgrade regression test, protecting the per-call downgrade path that production code exercises (record.ts passes a per-call hardwareTranscoding flag into
   // recordEncoder). On a non-raspbian hardware-capable host, recordEncoder consults the CLASS predicate (hardware) and delegates to streamEncoder, which then re-resolves
-  // the per-call flag to software. Pinning that the per-call downgrade still wins protects the invariant the whole behavior-neutrality proof rests on: the predicate
+  // the per-call flag to software. Pinning that the per-call downgrade still wins protects the guarantee the whole behavior-neutrality proof rests on: the predicate
   // only gates the short-circuit, never the final encoder choice.
   test("honors a per-call hardwareTranscoding:false downgrade on a non-raspbian hardware host (emits the software encoder)", () => {
 
@@ -1248,7 +1248,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
 
   test("libx264 software encoder with crop configured", () => {
 
-    // Software-path filter-chain invariant: on the libx264 path, `crop=...` sits on the CPU side of the filter chain - between the hardware-transfer step (empty here,
+    // Software-path filter-chain rule: on the libx264 path, `crop=...` sits on the CPU side of the filter chain - between the hardware-transfer step (empty here,
     // since this is SW-decode + SW-encode) and the scale filter. Crop always operates on system-memory frames, and the scaler must see the cropped region so aspect
     // ratio math reflects the crop.
     const { options } = makeOptions({ hostSystem: "generic" }, { crop: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } });

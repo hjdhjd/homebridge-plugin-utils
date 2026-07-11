@@ -138,7 +138,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
   }
 };
 
-// Build the panel DOM and fill the `refs` record with element pointers that update functions consult later. One-time call; idempotent only insofar as it reassigns
+// Build the panel DOM and fill the `refs` record with element pointers that update functions consult later. One-time call; safe to repeat only insofar as it reassigns
 // `refs` fields (the panel itself is rebuilt fresh, replacing any prior content).
 const buildPanel = ({ refs, root }) => {
 
@@ -350,7 +350,7 @@ const handleClick = ({ configTable, event, refs, store }) => {
       // On bulk expand, synchronously drive the options view's capture-phase `toggle` handler so each category's rows materialize in the SAME layout pass as the open,
       // rather than the open reflowing first and the async native `toggle` task materializing in a second pass. Collapsing the opens and materializations into one
       // settled height change keeps the host's iframe-resize ResizeObserver from cascading ("ResizeObserver loop completed with undelivered notifications"). Row
-      // materialization is idempotent, so the native async toggle that follows is a no-op. Collapse needs no synthetic toggle - hiding rows is already one reflow.
+      // materialization only runs once, so the native async toggle that follows is a no-op. Collapse needs no synthetic toggle - hiding rows is already one reflow.
       if(shouldExpand) {
 
         details.dispatchEvent(new Event("toggle"));

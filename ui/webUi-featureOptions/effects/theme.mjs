@@ -47,7 +47,7 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
 
     // Restore the document to its pre-effect state, symmetric with every mutation the effect made to it: drop the adopted stylesheet, then the `color-scheme` and
     // `.fo-dark` class that applyColorScheme set on `:root` and the accent-token inline overrides the Bootstrap probe wrote there. The `color-scheme` removal is the
-    // load-bearing one - it is a native property, so a leftover `dark` value would tint default form-control and scrollbar rendering on whatever content occupies the
+    // one that matters - it is a native property, so a leftover `dark` value would tint default form-control and scrollbar rendering on whatever content occupies the
     // document after teardown (in a multi-page host, a sibling tab). The class and token overrides are inert once the stylesheet that reads them is gone, but are
     // cleared too so the effect leaves no trace on `:root`.
     document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== stylesheet);

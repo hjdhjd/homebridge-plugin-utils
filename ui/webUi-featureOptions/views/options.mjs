@@ -259,7 +259,7 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
 };
 
 // Scope-aware cache invalidation for a per-option mutation. The action's `args.id` field carries the mutation's scope marker (the persisted entry-string format
-// encodes scope by serial), so we discriminate by matching it against the controllers list:
+// encodes scope by serial), so we distinguish it by matching against the controllers list:
 //
 //   - `id` undefined - global-scope mutation. Every cached view inherits from global. Drop every entry.
 //   - `id` matches a controller's serial - controller-scope mutation. Every cached device-view under this controller inherits from it. Drop entries whose key
@@ -375,7 +375,7 @@ const buildCategoryShells = ({ configTable, state }) => {
   configTable.appendChild(fragment);
 };
 
-// Materialize the rows for a single category. Idempotent via dataset.rowsRendered - re-opening an already-built category is a no-op for materialization.
+// Materialize the rows for a single category. Guarded by dataset.rowsRendered - re-opening an already-built category is a no-op for materialization.
 const ensureRowsRendered = ({ details, state }) => {
 
   if(details.dataset.rowsRendered === "true") {

@@ -113,7 +113,7 @@ describe("createElement - attribute vs. property routing", () => {
   test("hyphenated keys are routed to setAttribute (for data-* / aria-* attributes)", () => {
 
     // The helper inspects the key for "-"; hyphenated keys become attributes because the corresponding DOM property name is different (e.g., data-navigation has no
-    // direct JS property equivalent). This is the mechanism every sidebar link uses to carry its discriminator.
+    // direct JS property equivalent). This is the mechanism every sidebar link uses to carry its tag.
     using _dom = createTestDom();
 
     const el = createElement("a", { "aria-expanded": "true", "data-navigation": "controller" });

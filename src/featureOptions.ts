@@ -33,7 +33,7 @@ import { formatBps, formatBytes, formatMs, formatPercent, formatSeconds } from "
  * available for bespoke needs that the registry does not cover.
  *
  * The set targets the unit categories that recur across plugin catalogs: bitrate (in either of the two common storage conventions), data size, percentages, and
- * durations. Extend the union when a new shared format becomes load-bearing across multiple plugins. Resist adding a formatter speculatively - the function escape
+ * durations. Extend the union when a new format is genuinely shared across multiple plugins. Resist adding a formatter speculatively - the function escape
  * hatch already covers one-off needs, and an unused formatter is dead surface that downstream plugins still see in their IDE autocomplete.
  *
  * @category Feature Options
@@ -91,7 +91,7 @@ function resolveBuiltInFormatter(name: string): ((value: string) => string) | un
  * @property meta            - Optional. An opaque, plugin-private annotation channel the core never interprets. HBPU's types deliberately cannot see inside `TMeta`;
  *                             the value is carried verbatim through the catalog and forwarded to the documentation renderer's closures (the only surface that knows its
  *                             concrete shape). This mirrors the OpenAPI `x-*` extension discipline, made type-safe: a plugin parameterizes the entry with its own
- *                             annotation type, the core treats it as `unknown`, and the round-trip stays structurally invariant rather than a naming convention.
+ *                             annotation type, the core treats it as `unknown`, and the round-trip stays structurally unchanged rather than a naming convention.
  * @property name            - Name of the feature option (used in option strings).
  * @property render          - Optional. Maps the raw stored value of a value-centric option to a display string. Either a {@link FeatureOptionFormatter} string naming
  *                             a built-in formatter (preferred when the format already exists in the registry, since this keeps the enclosing catalog JSON-serializable
@@ -160,7 +160,7 @@ export interface ResolvedOptionEntry {
  * Immutable derived index over the catalog inputs ({@link FeatureCategoryEntry}[] + the options map). Every field except `categories` / `options` is derived from
  * those two; the index bundles them with their derivations so a single value carries everything any caller needs to make catalog-level decisions in O(1).
  *
- * The index is built once per catalog at {@link buildCatalogIndex}; it is invariant across configured-options mutations, so a consumer that holds a stable
+ * The index is built once per catalog at {@link buildCatalogIndex}; it is unchanged across configured-options mutations, so a consumer that holds a stable
  * reference can rely on its query results until the catalog itself changes. The {@link FeatureOptions} class holds one internally; consumers driving reducers
  * directly hold it as state and reuse it across every dispatch that does not touch the catalog.
  *
@@ -380,7 +380,7 @@ function entryAddressesScope({ catalog, rawEntry, target }: { catalog: CatalogIn
  * name on a `render` declaration does not resolve, surfacing the misconfiguration at load time rather than silently degrading the log-emission path.
  *
  * The index is the catalog-side input to every other pure helper in this module. Build it once per catalog; reuse it across every configured-options mutation
- * because the catalog is invariant across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
+ * because the catalog is unchanged across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
  * future expansion before any option has migrated into it).
  *
  * @param categories - The raw category list.
@@ -1066,7 +1066,7 @@ export class FeatureOptions {
    *
    * Callers express intent ("forget any configuration for option X at scope Y") and the model owns the entry-format end-to-end. The match is value-aware: for
    * value-centric options it covers both the bare scoped entry and any entry carrying a single trailing value segment, so a subsequent {@link setOption} cleanly
-   * replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as an idempotent reset.
+   * replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
    *
    * @param args - The addressing intent: option key and optional scope id. See {@link ClearOptionArgs}.
    *
@@ -1090,7 +1090,7 @@ export class FeatureOptions {
 
     this.#configuredOptions = next as string[];
 
-    // Only the index depends on the configured-options array; the catalog-derived state is invariant across config mutations and need not be touched here.
+    // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
     this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
   }
 
@@ -1118,7 +1118,7 @@ export class FeatureOptions {
 
     this.#configuredOptions = applySetOption({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
 
-    // Only the index depends on the configured-options array; the catalog-derived state is invariant across config mutations and need not be touched here.
+    // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
     this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
   }
 
@@ -1201,7 +1201,7 @@ export class FeatureOptions {
    */
   public get categories(): FeatureCategoryEntry[] {
 
-    // The catalog stores the categories as readonly to encode the immutability invariant the pure functional core relies on. The public getter returns the
+    // The catalog stores the categories as readonly to encode the immutability guarantee the pure functional core relies on. The public getter returns the
     // historical mutable type for backward compatibility - the array is the same identity the caller passed at construction (or via the setter), so consumers
     // mutating it would be mutating the catalog regardless of the return type. The readonly annotation is the discipline, not a runtime enforcement.
     return this.#catalog.categories as FeatureCategoryEntry[];
@@ -1240,7 +1240,7 @@ export class FeatureOptions {
 
     this.#configuredOptions = options ?? [];
 
-    // The catalog-derived state is invariant across config mutations; only the lookup index needs rebuilding.
+    // The catalog-derived state is unchanged across config mutations; only the lookup index needs rebuilding.
     this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
   }
 

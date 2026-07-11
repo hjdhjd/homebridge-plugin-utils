@@ -400,7 +400,7 @@ describe("HomebridgeLogClient - leak-free teardown", () => {
 
     assert.equal(client.aborted, true, "disposing the client must abort its lifetime signal");
 
-    // Disposal is idempotent: a second disposal must not throw or change the settled reason.
+    // Disposal is safe to repeat: a second disposal must not throw or change the settled reason.
     await client[Symbol.asyncDispose]();
 
     assert.equal(client.aborted, true, "a second disposal must be a safe no-op");
@@ -641,7 +641,7 @@ class ScriptedSocket implements LogSocketLike {
 //
 // @property downloadAbortReason - The reason on the signal the download forwarded to `fetch`, or `undefined` if it has not aborted. A seed-covers supersession aborts the
 //                                 download's own child controller with `HbpuAbortError("replaced")` DURING the run, distinct from the `"shutdown"` the teardown later
-//                                 issues, so a test discriminates "superseded early" from "torn down at the end" by the reason rather than by mere aborted-ness.
+//                                 issues, so a test distinguishes "superseded early" from "torn down at the end" by the reason rather than by mere aborted-ness.
 // @property downloadStarted     - Whether the `/log/download` request was issued at all.
 // @property fetch               - The `fetch` seam to inject.
 interface WindowFetch {

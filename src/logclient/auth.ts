@@ -11,10 +11,10 @@
  * /api/auth/login` (carrying an optional one-time passcode), and `noauth` posts to `POST /api/auth/noauth`, which the server honors only when its UI is configured with
  * `auth: "none"`.
  *
- * The module's load-bearing concern beyond "get a token" is failure classification. The socket's reconnect loop re-authenticates on every reconnect, so it must be able
+ * The module's central concern beyond "get a token" is failure classification. The socket's reconnect loop re-authenticates on every reconnect, so it must be able
  * to tell a transient fault (the server is briefly down or returned a 5xx) from a permanent one (the credentials are wrong, an OTP is required, or noauth is disabled).
  * A transient fault should be retried with backoff; a permanent one must fail the reconnect fast so the user gets an actionable error rather than an endless retry loop
- * against credentials that will never work. {@link acquireToken} therefore rejects with a {@link LogAuthError} whose `kind` discriminates `"permanent"` from
+ * against credentials that will never work. {@link acquireToken} therefore rejects with a {@link LogAuthError} whose `kind` distinguishes `"permanent"` from
  * `"transient"`, and the reconnect's `shouldRetry` predicate vetoes a retry on the permanent kind via {@link isPermanentAuthError}.
  *
  * The `fetch` implementation is injected (defaulting to the global `fetch`) so the whole module is exercised in tests without a live server.
@@ -60,7 +60,7 @@ export interface LogAuthErrorOptions {
 /**
  * The error thrown by {@link acquireToken} when authentication fails.
  *
- * Carries a {@link LogAuthErrorKind} discriminator so a consumer (specifically the socket's reconnect `shouldRetry` predicate) can distinguish a permanent credential
+ * Carries a {@link LogAuthErrorKind} tag so a consumer (specifically the socket's reconnect `shouldRetry` predicate) can distinguish a permanent credential
  * problem from a transient network/server fault without parsing the message text. The message itself is already actionable - it names the failing path and the reason -
  * so it can be surfaced to the user directly.
  *
@@ -151,7 +151,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return (typeof value === "object") && (value !== null);
 }
 
-// Classify and throw for a non-2xx auth response. The status code is the discriminator: the codes in `CREDENTIAL_STATUS` describe a credential problem that will not
+// Classify and throw for a non-2xx auth response. The status code is what decides: the codes in `CREDENTIAL_STATUS` describe a credential problem that will not
 // clear on retry, so they raise a permanent failure with a path-specific, actionable message; a 400 is handled separately below as a permanent protocol error, and every
 // other status (notably 5xx and 429) is treated as transient so the reconnect loop retries with backoff. The body is read best-effort for context but never required - a
 // server returning an error status with no body still produces a clear message.

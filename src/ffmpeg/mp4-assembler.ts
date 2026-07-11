@@ -228,7 +228,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
 
   /**
    * `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` emitted by the inter-segment watchdog and the platform
-   * `TimeoutError` emitted by `AbortSignal.timeout()`. The discrimination lives in {@link isTimeoutReason} so this getter stays a one-line delegation and every
+   * `TimeoutError` emitted by `AbortSignal.timeout()`. The branching lives in {@link isTimeoutReason} so this getter stays a one-line delegation and every
    * resource class in the library shares one definition of "timeout."
    */
   public get isTimedOut(): boolean {
@@ -282,7 +282,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
 
       // Swap-drain the queue: hand ourselves whatever the producer has staged, leave a fresh empty array for the producer to push into, then yield the snapshot. The
       // outer for-loop re-enters on every yielded batch so segments pushed while the consumer awaited a previous yield are picked up on the next pass. Drain
-      // unconditionally before checking abort - "no bytes lost" is the invariant for segments already assembled before teardown.
+      // unconditionally before checking abort - "no bytes lost" is the rule for segments already assembled before teardown.
       while(this.#segmentQueue.length > 0) {
 
         const drained = this.#segmentQueue;
@@ -420,7 +420,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
   // exit surface and it wakes up via the resolved waiter.
   #teardown(): void {
 
-    // Promise resolvers are idempotent after first settlement, so calling reject on an already-resolved init promise is a safe no-op. This lets us keep the teardown
+    // Promise resolvers are inert after first settlement, so calling reject on an already-resolved init promise is a safe no-op. This lets us keep the teardown
     // path uniform regardless of whether init arrived before the abort or not.
     this.#initResolvers.reject(this.signal.reason);
 

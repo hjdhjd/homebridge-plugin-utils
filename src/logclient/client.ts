@@ -15,7 +15,7 @@
  * - {@link HomebridgeLogClient.tail} - a {@link TailRequest}-driven dispatcher that selects `history`, `follow`, the socket-first `follow-history` join, or the
  *   hedged-seed time-bounded `window` channel.
  *
- * The following design points are load-bearing:
+ * The following design points matter:
  *
  * - **Token lifecycle via a closure.** The client builds one {@link TokenProvider} closure over {@link acquireToken} and the stored credentials. The socket invokes it on
  *   every connect attempt, so a `password`/`noauth` credential re-authenticates from the stored credentials on each reconnect (surviving token expiry across a drop). A
@@ -722,7 +722,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
     } finally {
 
       // Clear BOTH wall-clock timers on every exit path - normal completion, the terminator firing, an early break, a thrown error, or call teardown - so no `setTimeout`
-      // survives to fire onto a torn-down channel. Disposal is idempotent, so a timer the terminator already cleared is harmless to clear again.
+      // survives to fire onto a torn-down channel. Disposal is safe to repeat, so a timer the terminator already cleared is harmless to clear again.
       if(capTimer !== undefined) {
 
         clearTimeout(capTimer);

@@ -25,7 +25,7 @@ const MARK_HANDLED_NOOP = (): void => { /* Intentionally empty. */ };
 
 // Shared no-op `Disposable` returned by {@link onAbort} on the pre-aborted branch (where no listener was registered and there is nothing to remove). Hoisted to
 // module scope so every pre-aborted call reuses one instance instead of allocating a fresh object + arrow pair - matching the established pattern for other shared
-// module-scope constants in this file (`NEVER_ABORTED_SIGNAL`, `MARK_HANDLED_NOOP`). Safe to share because the disposer is stateless, idempotent, and side-effect
+// module-scope constants in this file (`NEVER_ABORTED_SIGNAL`, `MARK_HANDLED_NOOP`). Safe to share because the disposer is stateless, repeatable, and side-effect
 // free: `[Symbol.dispose]()` can be invoked any number of times from any call site without interference.
 const NO_OP_DISPOSABLE: Disposable = { [Symbol.dispose]: (): void => { /* No listener was registered on the pre-aborted path - nothing to remove. */ } };
 
@@ -33,8 +33,8 @@ const NO_OP_DISPOSABLE: Disposable = { [Symbol.dispose]: (): void => { /* No lis
  * The canonical set of abort reasons used across `homebridge-plugin-utils`.
  *
  * Every long-lived resource class in the library exposes an {@link AbortSignal} whose abort reason is normally an {@link HbpuAbortError} carrying one of these names.
- * Consumers discriminate on the `.name` field. Platform errors produced by `AbortSignal.timeout()` and bare `controller.abort()` interoperate by matching names:
- * `TimeoutError` and `AbortError` from the platform both flow through the same discrimination paths unchanged.
+ * Consumers branch on the `.name` field. Platform errors produced by `AbortSignal.timeout()` and bare `controller.abort()` interoperate by matching names:
+ * `TimeoutError` and `AbortError` from the platform both flow through the same branching paths unchanged.
  *
  * @remarks When to use each reason:
  *
@@ -62,7 +62,7 @@ export interface HbpuAbortErrorOptions {
   cause?: unknown;
 
   /**
-   * Optional human-readable message. When omitted, the error's `message` defaults to the reason name, which is sufficient for discrimination-based handling.
+   * Optional human-readable message. When omitted, the error's `message` defaults to the reason name, which is sufficient for name-based handling.
    */
   message?: string;
 }
@@ -103,7 +103,7 @@ export interface HbpuAbortErrorOptions {
 export class HbpuAbortError extends Error {
 
   /**
-   * The discriminator. Matches one of {@link HbpuAbortReason}.
+   * The tag. Matches one of {@link HbpuAbortReason}.
    */
   public override readonly name: HbpuAbortReason;
 
@@ -123,7 +123,7 @@ export class HbpuAbortError extends Error {
 /**
  * Type guard: returns `true` if `error` is an {@link HbpuAbortError}.
  *
- * Use this to discriminate HBPU's canonical abort errors from arbitrary thrown values, without nesting `instanceof` checks.
+ * Use this to distinguish HBPU's canonical abort errors from arbitrary thrown values, without nesting `instanceof` checks.
  *
  * @param error - The value to test.
  *
@@ -141,7 +141,7 @@ export function isHbpuAbortError(error: unknown): error is HbpuAbortError {
  * `error.cause` and related fields without further casts.
  *
  * Collapses the common "is this an HBPU abort, and was it this specific reason?" question into a single call, avoiding the `instanceof` + `.name` nesting that appears
- * throughout consuming code. The generic parameter `R` preserves the specific reason string in the narrowed type so callers that discriminate further by name get the
+ * throughout consuming code. The generic parameter `R` preserves the specific reason string in the narrowed type so callers that distinguish further by name get the
  * literal narrowed form automatically.
  *
  * @typeParam R - The specific reason being matched. Defaulted by inference from `reason`.
@@ -160,7 +160,7 @@ export function isHbpuAbortReason<R extends HbpuAbortReason>(error: unknown, rea
 /**
  * Test whether an abort reason indicates a timeout. Matches both the canonical {@link HbpuAbortError} with `"timeout"` name - produced by project watchdogs
  * ({@link Watchdog}, the inactivity monitors on `FfmpegProcess` / `RtpDemuxer` / `Mp4SegmentAssembler`) - and the platform {@link DOMException}/`Error` whose
- * `.name === "TimeoutError"` - produced by `AbortSignal.timeout()`. Consumers discriminate on a single predicate regardless of which code path originated the timeout.
+ * `.name === "TimeoutError"` - produced by `AbortSignal.timeout()`. Consumers branch on a single predicate regardless of which code path originated the timeout.
  *
  * Exists because every long-lived resource class exposes an `isTimedOut` getter with identical branching logic; routing all of them through this single predicate
  * enforces one taxonomy and eliminates drift if the project ever needs to add, say, a third timeout shape (e.g., an upstream-framework cancellation).
@@ -238,7 +238,7 @@ export function isTimeoutReason(reason: unknown): boolean {
  *     // Abort-driven action goes here.
  *   });
  *
- *   // `return await promise` (not a bare `return promise`) is load-bearing inside an async function. `using` disposes when the enclosing function body finishes
+ *   // `return await promise` (not a bare `return promise`) is required inside an async function. `using` disposes when the enclosing function body finishes
  *   // executing, and without an `await` the body finishes synchronously at the `return` statement - even though the returned promise is still pending. The
  *   // listener would therefore be removed the instant the function returned, well before the promise settles. Adding `await` creates a suspension point that
  *   // keeps the `using` scope alive until the promise actually settles, which is what the "scope-bound registration" pattern relies on.
@@ -262,7 +262,7 @@ export function onAbort(signal: AbortSignal, handler: () => void): Disposable {
   signal.addEventListener("abort", handler, { once: true });
 
   // The returned handle lets scope-bound observers remove themselves deterministically when the scope exits, preventing listener accumulation on long-lived signals
-  // that serve many short-lived waits. `removeEventListener` is idempotent - calling it after the listener has already fired (and been auto-removed by `{ once: true }`)
+  // that serve many short-lived waits. `removeEventListener` does nothing - calling it after the listener has already fired (and been auto-removed by `{ once: true }`)
   // is a safe no-op.
   return { [Symbol.dispose]: (): void => signal.removeEventListener("abort", handler) };
 }
@@ -606,7 +606,7 @@ export async function retry<T>(operation: (signal: AbortSignal) => Promise<T>, o
 
   const { attempts = 3, backoff = defaultRetryBackoff, shouldRetry, signal } = options;
 
-  // Reject nonsensical attempt counts at the library boundary so the "attempts >= 1" invariant the loop relies on is enforced rather than latent.
+  // Reject nonsensical attempt counts at the library boundary so the "attempts >= 1" guarantee the loop relies on is enforced rather than latent.
   if(attempts < 1) {
 
     throw new Error("retry: `attempts` must be >= 1.");
@@ -845,9 +845,9 @@ export function composeSignals(...signals: (AbortSignal | undefined)[]): AbortSi
  * Supervise a detached, signal-bound async loop: run the loop, resolve quietly when it ends or its signal aborts, and route any genuine fault to a caller-supplied
  * handler exactly once.
  *
- * Resilient background loops - membership observers, reachability probes, telemetry firehoses - all share one subtle, correctness-critical invariant: a throw is a
+ * Resilient background loops - membership observers, reachability probes, telemetry firehoses - all share one subtle, correctness-critical rule: a throw is a
  * *fault* only when we did not cause it. When the bound signal is aborted, a throw is the orderly unwinding of a loop the caller already tore down, so it is swallowed
- * silently. Any other throw is a genuine fault and is handed to `onError` exactly once. Hand-copying that swallow-on-abort-versus-surface-once discrimination across
+ * silently. Any other throw is a genuine fault and is handed to `onError` exactly once. Hand-copying that swallow-on-abort-versus-surface-once distinction across
  * call sites that share no ancestor is how it drifts apart; owning it in one generic primitive is how it stays consistent.
  *
  * The home is here, beside {@link composeSignals}, because the envelope is fully generic - it carries no logging policy, no message wording, and makes no detachment
@@ -899,7 +899,7 @@ export async function superviseLoop(options: { loop: (signal: AbortSignal) => Pr
     await loop(signal);
   } catch(error: unknown) {
 
-    // The one invariant this primitive centralizes: discriminate orderly teardown from a genuine fault. An aborted signal means this throw is the loop unwinding in
+    // The one rule this primitive centralizes: distinguish orderly teardown from a genuine fault. An aborted signal means this throw is the loop unwinding in
     // response to a teardown we initiated, so it is expected and is swallowed silently. Otherwise the loop faulted on its own, and we surface it through `onError`
     // exactly once. Either branch resolves the returned promise rather than rejecting it, so a detached caller never produces an unhandled rejection.
     if(signal.aborted) {
@@ -1137,7 +1137,7 @@ export class Watchdog implements Disposable {
       this.#timer = undefined;
 
       // Lose a tight race against a concurrent abort cleanly: if the signal fired between timer scheduling and the callback running, the aborted state already
-      // expresses the outcome and `onFire` is redundant at best, double-teardown at worst. Disposal sets the same invariant through a different gate.
+      // expresses the outcome and `onFire` is redundant at best, double-teardown at worst. Disposal sets the same state through a different gate.
       if(this.#disposed || this.#signal.aborted) {
 
         return;
@@ -1149,7 +1149,7 @@ export class Watchdog implements Disposable {
 
   /**
    * Cancel any pending fire without aborting anything and without marking the watchdog as permanently dead. Subsequent `arm()` calls continue to work. Safe to call
-   * when no arm is pending - the method is idempotent.
+   * when no arm is pending - repeat calls are no-ops.
    */
   public clear(): void {
 
@@ -1162,7 +1162,7 @@ export class Watchdog implements Disposable {
 
   /**
    * `Disposable` implementation. Clears any pending fire AND permanently disables the watchdog: after this runs, `arm()` is a no-op and no further `onFire` calls can
-   * occur. This is the contract `using watchdog = new Watchdog(...)` relies on - the resource is dead when the block exits, not merely quiescent. Idempotent; repeated
+   * occur. This is the contract `using watchdog = new Watchdog(...)` relies on - the resource is dead when the block exits, not merely quiescent. Repeated
    * disposal is a no-op. Because the class does not own an abort controller, disposal does not signal anything to the rest of the system.
    */
   public [Symbol.dispose](): void {

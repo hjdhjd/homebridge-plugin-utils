@@ -36,7 +36,7 @@ interface ClockEntry {
  * Construct the rejection a {@link TestClock} `delay` produces when its signal aborts, matching `node:timers/promises` `setTimeout` exactly: a plain `Error` whose `name`
  * is `"AbortError"` and whose `code` is the STRING `"ABORT_ERR"`. The real primitive's rejection is a dedicated internal class (not a `DOMException`, whose `code` is the
  * numeric `20`, and there is no constructable `AbortError` global), so the double cannot match the constructor or prototype identity - it matches the observable `name`
- * and `code` a consumer discriminates on, which is the contract that matters.
+ * and `code` a consumer branches on, which is the contract that matters.
  *
  * @returns The `AbortError`-shaped rejection.
  */
@@ -184,7 +184,7 @@ export class TestClock implements Clock {
     return this.#pending.length;
   }
 
-  // Remove `entry` from `#pending` by identity. Idempotent: a guarded `indexOf` + `splice` makes a second removal (e.g. an abort that races a resolve) a safe no-op and
+  // Remove `entry` from `#pending` by identity. A guarded `indexOf` + `splice` makes a second removal (e.g. an abort that races a resolve) a safe no-op and
   // never removes the wrong entry, so `#pending` stays consistent across any resolve-and-abort interleaving.
   #remove(entry: ClockEntry): void {
 

@@ -5,8 +5,8 @@
  *
  * Coverage focuses on the contract that is hard to see from the code alone: the index/detail structure, the per-row deep-link anchors, the value/toggle distinction
  * signaled by the ".<value>" placeholder, the raw (never formatted) default cell with its empty-string -> "none" substitution proven non-mutating, the two scope
- * hooks (string inserted, `undefined` omitted cleanly), the category-level bare-key option, and the splice's happy path, idempotency, prose preservation, and
- * malformed-marker throws. The canonical worked example is reproduced verbatim as the load-bearing contract test.
+ * hooks (string inserted, `undefined` omitted cleanly), the category-level bare-key option, and the splice's happy path, repeatability, prose preservation, and
+ * malformed-marker throws. The canonical worked example is reproduced verbatim as the contract test.
  */
 import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference, spliceMarkedRegion } from "./featureOptions-docs.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
@@ -34,7 +34,7 @@ const WORKED_OPTIONS: Record<string, FeatureOptionEntry[]> = {
 // The canonical worked-example output, reproduced exactly as the renderer emits it. The printed whitespace here is illustrative only and the column padding is
 // cosmetic, not part of the semantic contract; the renderer's column math sizes each table to its own widest cell, so the Nvr table aligns consistently rather than
 // matching a hand-typed (and internally inconsistent) Nvr spacing. Every semantic line - the bullets, the anchors, the value/toggle key cells, the raw defaults -
-// is the load-bearing contract this fixture pins.
+// is the contract this fixture pins.
 const WORKED_OUTPUT = [
 
   " * [Audio](#audio): Audio",
@@ -461,7 +461,7 @@ describe("spliceMarkedRegion - replacement", () => {
     assert.ok(result.endsWith("\nFooter prose."));
   });
 
-  test("is idempotent: splicing the same content twice yields an identical document", () => {
+  test("is repeatable: splicing the same content twice yields an identical document", () => {
 
     const once = spliceMarkedRegion(document, "FRESH CONTENT");
     const twice = spliceMarkedRegion(once, "FRESH CONTENT");

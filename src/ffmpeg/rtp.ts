@@ -32,6 +32,7 @@
 import { HbpuAbortError, Watchdog, composeSignals, isTimeoutReason, markHandled, onAbort } from "../util.ts";
 import type { HomebridgePluginLogging, Nullable } from "../util.ts";
 import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
+import { DisposableStack } from "../disposable-stack.ts";
 import type { IpFamily } from "./dgram-util.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import { RtpPacketParser } from "./rtp-parser.ts";
@@ -80,7 +81,7 @@ export interface RtpDemuxerInit {
  *
  * The class owns one bound UDP socket. Inbound datagrams are classified by an internal {@link RtpPacketParser} and forwarded through the same socket to the configured
  * `rtpPort` (RTP-classified) or `rtcpPort` (RTCP-classified) on the loopback interface. Sharing the bound socket between receive and send gives the relay two
- * load-bearing properties:
+ * essential properties:
  *
  *   1. **Source-endpoint symmetry.** Every forwarded datagram leaves the bound socket with source = `loopback:inputPort`. Because the demuxer holds an exclusive
  *      kernel bind on that port, no other non-root process can spoof that source endpoint - downstream receivers (typically FFmpeg) can therefore enforce source
@@ -89,7 +90,7 @@ export interface RtpDemuxerInit {
  *      the duration of the session, expanding the attack surface and the kernel-resource count for no architectural benefit.
  *
  * A self-rearming {@link Watchdog} replays the last observed RTCP packet to `rtpPort` whenever the gap between inbound RTCP arrivals exceeds the configured
- * {@link RTCP_HEARTBEAT_INTERVAL}. The heartbeat is part of the demuxer's invariant contract - FFmpeg-bound two-way audio is the only use case that constructs this
+ * {@link RTCP_HEARTBEAT_INTERVAL}. The heartbeat is part of the demuxer's contract - FFmpeg-bound two-way audio is the only use case that constructs this
  * class, and that use case relies on the keepalive to keep inbound traffic arriving at FFmpeg's RTP input during legitimate quiet periods on the camera's audio
  * backchannel. No FFmpeg input-timeout flag (`-timeout` / `rw_timeout`) is configured anywhere - the keepalive is a defensive guard against any FFmpeg-side idle
  * handling of a quiet UDP/RTP input, not a timeout this code sets. The cadence is the single exported constant {@link RTCP_HEARTBEAT_INTERVAL}.
@@ -190,7 +191,7 @@ export class RtpDemuxer implements AsyncDisposable {
 
   /**
    * `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` emitted by the inactivity watchdog and the platform
-   * `TimeoutError` emitted by `AbortSignal.timeout()` - consumers discriminate on a single getter regardless of which code path produced the timeout. The discrimination
+   * `TimeoutError` emitted by `AbortSignal.timeout()` - consumers branch on a single getter regardless of which code path produced the timeout. The branching
    * logic lives in {@link isTimeoutReason} so this getter stays a one-line delegation and every resource class in the library shares one definition of "timeout."
    */
   public get isTimedOut(): boolean {
@@ -296,8 +297,8 @@ export class RtpDemuxer implements AsyncDisposable {
     // the port release, eliminating the rebind race a fire-and-forget close would carry.
     this.#socket.once("close", () => closedResolvers.resolve());
 
-    // Socket `"error"` handler. Bind failures (typically EADDRINUSE) and runtime socket errors both flow through here. Gating on `!this.aborted` keeps the abort
-    // idempotent when the socket error fires during a concurrent teardown (e.g., an ECONNRESET during an in-flight close). The error is preserved on `.cause` so
+    // Socket `"error"` handler. Bind failures (typically EADDRINUSE) and runtime socket errors both flow through here. Gating on `!this.aborted` keeps a repeat abort
+    // a no-op when the socket error fires during a concurrent teardown (e.g., an ECONNRESET during an in-flight close). The error is preserved on `.cause` so
     // downstream diagnostics see the original kernel error.
     this.#socket.on("error", (error: Error) => {
 
@@ -373,7 +374,7 @@ export class RtpDemuxer implements AsyncDisposable {
 
     // Single teardown convergence point. `onAbort` registers the one-shot close listener for the normal abort path AND handles the "pre-aborted signal" edge case
     // where `addEventListener("abort", ...)` would otherwise silently skip the handler (the AbortSignal spec does not re-dispatch historical events). Rejecting the
-    // milestone promises is idempotent - a milestone that already resolved is unaffected by the subsequent reject; a milestone still pending receives the signal's
+    // milestone promises is safe to repeat - a milestone that already resolved is unaffected by the subsequent reject; a milestone still pending receives the signal's
     // reason as its rejection. The socket close fires the `"close"` event which resolves `#closed`, ungating `[Symbol.asyncDispose]`.
     onAbort(this.signal, () => {
 
@@ -464,7 +465,7 @@ export interface PortReservationInit {
  * Ports are held exclusively against the {@link RtpPortAllocator}'s internal pool until `[Symbol.asyncDispose]` is invoked. Callers typically
  * manage the lifetime with `await using` for scope-bound reservations, or by storing the handle on a session entry and disposing explicitly when the session ends.
  *
- * Disposal is idempotent: the first call releases the ports back to the allocator; subsequent calls are no-ops. This guarantees `await using` combined with an
+ * Disposal is safe to repeat: the first call releases the ports back to the allocator; subsequent calls are no-ops. This guarantees `await using` combined with an
  * explicit dispose (for example, on an error path that releases early and then falls through the `using` block) does not double-release.
  *
  * @property count    - `1` or `2`. A two-port reservation guarantees `port` and `port + 1` are both reserved.

@@ -182,6 +182,42 @@ describe("FfmpegRecordingProcess - initialization segment and media segments", (
     }
   });
 
+  test("stream() yields one init item then a media item per fragment, delegating to the assembler", async () => {
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(), {
+
+      args: buildFMp4EmissionScript(2),
+      recordingConfig: makeRecordingConfig()
+    });
+
+    const kinds: string[] = [];
+    const mediaSegments: Buffer[] = [];
+    let initBytes: Buffer | undefined;
+
+    for await (const item of proc.stream()) {
+
+      kinds.push(item.kind);
+
+      if(item.kind === "init") {
+
+        initBytes = item.bytes;
+      } else {
+
+        mediaSegments.push(item.bytes);
+      }
+    }
+
+    // One leading init item, then one media item per emitted moof/mdat pair - the kind-tagged view delegated through to the assembler.
+    assert.deepEqual(kinds, [ "init", "media", "media" ], "the stream must yield one init item followed by a media item per fragment");
+    assert.ok(initBytes, "the init item must have been yielded");
+    assert.equal(initBytes.readUInt32BE(4), 0x66747970, "the init item must start with the ftyp box");
+
+    for(const bytes of mediaSegments) {
+
+      assert.equal(bytes.readUInt32BE(4), 0x6D6F6F66, "each media item must start with a moof box");
+    }
+  });
+
   test("aborting the process terminates segments() cleanly", async () => {
 
     await using proc = new FfmpegRecordingProcess(makeOptions(), {

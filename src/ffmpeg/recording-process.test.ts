@@ -63,6 +63,39 @@ describe("TestRecordingProcess - configured init and media segments", () => {
     assert.deepEqual(collected, segments, "segments() must yield exactly the configured buffers, in order");
   });
 
+  test("stream() yields one init item carrying the configured init buffer, then a media item per configured segment", async () => {
+
+    const initSegment = Buffer.from("init-bytes");
+    const segments = [ Buffer.from("seg-0"), Buffer.from("seg-1") ];
+    const proc = new TestRecordingProcess({ initSegment, segments });
+
+    const collected: { bytes: Buffer; kind: string }[] = [];
+
+    for await (const item of proc.stream()) {
+
+      collected.push({ bytes: item.bytes, kind: item.kind });
+    }
+
+    assert.deepEqual(collected, [ { bytes: initSegment, kind: "init" }, { bytes: Buffer.from("seg-0"), kind: "media" }, { bytes: Buffer.from("seg-1"), kind: "media" } ],
+      "stream() must yield the configured init buffer tagged init, then each configured media buffer tagged media, in order");
+  });
+
+  test("stream() yields nothing when the process is aborted before iteration", async () => {
+
+    const proc = new TestRecordingProcess({ initSegment: Buffer.from("init"), segments: [Buffer.from("seg-0")] });
+
+    proc.abort(new HbpuAbortError("shutdown"));
+
+    const collected: unknown[] = [];
+
+    for await (const item of proc.stream()) {
+
+      collected.push(item);
+    }
+
+    assert.equal(collected.length, 0, "an abort before iteration ends the stream with nothing yielded, mirroring the real assembler's pre-init behavior");
+  });
+
   test("bufferedSegments, isTimedOut, and stderrLog report the configured values", () => {
 
     const stderrLog = [ "line one", "line two" ];

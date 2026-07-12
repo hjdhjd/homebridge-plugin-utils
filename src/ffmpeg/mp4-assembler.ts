@@ -7,14 +7,17 @@
  * AsyncDisposable fMP4 segment assembler.
  *
  * The assembler composes a {@link Mp4BoxParser} against an arbitrary Node {@link Readable} source (typically an FFmpeg process's stdout, but any Readable of well-formed
- * fMP4 bytes works - including in-memory fixtures for tests) and exposes two views over the single-pass box pipeline:
+ * fMP4 bytes works - including in-memory fixtures for tests) and exposes complementary views over the single-pass box pipeline:
  *
  *   - `initSegment: Promise<Buffer>` - resolves once with the concatenated bytes of every box that appeared before the first `moof` (typically ftyp + moov).
  *   - `segments(): AsyncGenerator<Buffer>` - yields each subsequent `moof` / `mdat` pair concatenated into a single Buffer.
+ *   - `stream(): AsyncGenerator<Mp4Segment>` - yields the whole sequence tagged by kind: one `"init"` item carrying the initialization bytes, then a `"media"`
+ *     item per fragment, so a caller can forward init and media through one loop.
  *
  * One-shot artifacts (the init segment) are promises; continuous streams (media segments) are async generators. Lifetime is governed by
  * a composed {@link AbortSignal}: external abort, parent signal propagation, source error, source end, or an optional inter-segment watchdog timeout all converge on the
- * same signal. The class is single-consumer by design - `initSegment` and `segments()` are two views on one internal drain loop, not independent subscriptions.
+ * same signal. The class is single-consumer by design - these views share one internal drain loop, not independent subscriptions, so a caller uses `stream()` OR the
+ * `initSegment` / `segments()` pair, never both concurrently.
  *
  * @module
  */
@@ -39,6 +42,31 @@ export interface Mp4SegmentAssemblerInit {
 
   segmentTimeout?: number;
   signal?: AbortSignal;
+}
+
+/**
+ * The kind of a segment yielded by {@link Mp4SegmentAssembler.stream}. `"init"` is the one-shot initialization segment; `"media"` is a continuous media fragment. A
+ * consumer that paces or forwards every item uniformly can read {@link Mp4Segment.bytes} without branching; a consumer that must treat the init segment specially
+ * branches on this field.
+ *
+ * @category FFmpeg
+ */
+export type Mp4SegmentKind = "init" | "media";
+
+/**
+ * A single fMP4 segment yielded by {@link Mp4SegmentAssembler.stream}, tagged with its kind so a consumer can tell the one-shot initialization segment apart from the
+ * media fragments that follow it without relying on positional ordering.
+ *
+ * @property bytes  - The complete segment bytes: for `"init"`, the concatenated initialization boxes (typically `ftyp` + `moov`); for `"media"`, a concatenated
+ *                    `moof` + `mdat` pair.
+ * @property kind   - `"init"` for the single leading initialization segment, `"media"` for each subsequent media fragment.
+ *
+ * @category FFmpeg
+ */
+export interface Mp4Segment {
+
+  bytes: Buffer;
+  kind: Mp4SegmentKind;
 }
 
 /**
@@ -253,9 +281,9 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
    * ends, the assembler aborts, or the optional caller signal aborts; in every case the queue is drained before the generator returns, so a consumer never loses a
    * segment that was already assembled before teardown.
    *
-   * **Single-consumer only.** The internal parked-waiter slot is single-writer; calling `segments()` concurrently with another consumer on the same assembler is
-   * unsupported and will hang one of the consumers when the producer's wake-up resolves only the later parker. If fan-out is needed, tee at the consumer side by
-   * replicating each yielded Buffer into per-consumer queues external to the assembler.
+   * **Single-consumer only.** The internal parked-waiter slot is single-writer; calling `segments()` concurrently with another consumer on the same assembler - including
+   * the {@link Mp4SegmentAssembler.stream} view, which drives this generator internally - is unsupported and will hang one of the consumers when the producer's wake-up
+   * resolves only the later parker. If fan-out is needed, tee at the consumer side by replicating each yielded Buffer into per-consumer queues external to the assembler.
    *
    * @param init - Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler.
    *
@@ -319,6 +347,48 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
 
         this.#segmentWaiter = undefined;
       }
+    }
+  }
+
+  /**
+   * Async generator yielding the whole segment stream as a kind-tagged sequence: exactly one {@link Mp4Segment} of kind `"init"` carrying the initialization bytes,
+   * followed by one of kind `"media"` per completed media fragment. This is a third view over the same single-pass pipeline, composed from {@link initSegment} and
+   * {@link segments} - it lets a consumer forward the init segment and the media segments through a single loop without tracking which item is which by position.
+   *
+   * Terminates cleanly on the same conditions as {@link segments}: the source ends, the assembler aborts, or the optional caller signal aborts; queued media drains
+   * before the generator returns, so no assembled segment is lost. If the assembler is aborted before the initialization segment arrives, the generator returns without
+   * yielding anything.
+   *
+   * **Single-consumer only.** `stream()` drives {@link segments} internally, so it shares the one parked-waiter slot. Use `stream()` OR the {@link initSegment} /
+   * {@link segments} pair on a single assembler, never both concurrently - mixing them competes for the same drain and hangs one consumer.
+   *
+   * @param init - Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler.
+   *
+   * @returns An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+   */
+  public async *stream(init: { signal?: AbortSignal } = {}): AsyncGenerator<Mp4Segment> {
+
+    // Wait for the initialization segment first, racing the caller signal exactly as segments() does, so a caller abort during the init wait ends this stream at once
+    // rather than hanging until the assembler's own signal settles init. A rejection here (aborted before the first moof) ends the stream with nothing yielded.
+    const composed = composeSignals(this.signal, init.signal);
+
+    let initBytes: Buffer;
+
+    try {
+
+      initBytes = await waitWithSignal(this.initSegment, composed);
+    } catch {
+
+      return;
+    }
+
+    // The one init item, then every media segment relabeled. The media loop delegates to segments() so the swap-drain, the parked wait, and the no-bytes-lost teardown
+    // stay in exactly one place rather than being reimplemented here.
+    yield { bytes: initBytes, kind: "init" };
+
+    for await (const segment of this.segments(init)) {
+
+      yield { bytes: segment, kind: "media" };
     }
   }
 

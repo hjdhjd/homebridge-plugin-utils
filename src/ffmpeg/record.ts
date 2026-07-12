@@ -49,6 +49,7 @@ import type { CameraRecordingConfiguration } from "homebridge";
 import type { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessInit } from "./process.ts";
+import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Mp4SegmentAssembler } from "./mp4-assembler.ts";
 import type { Writable } from "node:stream";
 
@@ -662,6 +663,20 @@ export abstract class FfmpegFMp4Process extends FfmpegProcess {
 
     return this.#assembler.bufferedSegments;
   }
+
+  /**
+   * Async generator yielding the whole segment stream as a kind-tagged sequence: one {@link Mp4Segment} of kind `"init"` carrying the initialization bytes, then one of
+   * kind `"media"` per completed media fragment. Delegates to {@link Mp4SegmentAssembler.stream}; it is a third view over the same pipeline as
+   * {@link FfmpegFMp4Process.getInitSegment} / {@link FfmpegFMp4Process.segments} and shares their single-consumer contract - use one view or the other, never both.
+   *
+   * @param init - Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process.
+   *
+   * @returns An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+   */
+  public stream(init: { signal?: AbortSignal } = {}): AsyncGenerator<Mp4Segment> {
+
+    return this.#assembler.stream(init);
+  }
 }
 
 /**
@@ -669,7 +684,7 @@ export abstract class FfmpegFMp4Process extends FfmpegProcess {
  * delegate depends on this narrow interface rather than the concrete {@link FfmpegRecordingProcess}, so a test (or any alternative segment source) can substitute a
  * fake without dragging FFmpeg into the consumer's dependency graph. The interface is type-only, so importing it costs a consumer nothing at runtime.
  *
- * Every member here is defined on {@link FfmpegFMp4Process} (`getInitSegment`, `segments`, `bufferedSegments`) or inherited from {@link FfmpegProcess}
+ * Every member here is defined on {@link FfmpegFMp4Process} (`getInitSegment`, `segments`, `stream`, `bufferedSegments`) or inherited from {@link FfmpegProcess}
  * (`abort`, `isTimedOut`, `signal`, `stderrLog`, `stdin`), so the real {@link FfmpegRecordingProcess} satisfies it by inheritance and carries only an `implements`
  * annotation - zero runtime behavior change. This is deliberately the consumer's minimal surface, not the class's full surface: `ready`, `exited`, `stdout`,
  * `aborted`, `hasError`, and `[Symbol.asyncDispose]` are NOT here because the recording consumer does not read them.
@@ -731,6 +746,17 @@ export interface RecordingProcess {
    * Writable standard input stream the recording bytes are fed into.
    */
   readonly stdin: Writable;
+
+  /**
+   * Async generator yielding the whole segment stream as a kind-tagged sequence: one {@link Mp4Segment} of kind `"init"` carrying the initialization bytes, then one of
+   * kind `"media"` per completed media fragment. A third view over the same pipeline as {@link RecordingProcess.getInitSegment} / {@link RecordingProcess.segments} that
+   * shares their single-consumer contract - a consumer uses this view or that pair, never both.
+   *
+   * @param init - Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process.
+   *
+   * @returns An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+   */
+  stream(init?: { signal?: AbortSignal }): AsyncGenerator<Mp4Segment>;
 }
 
 /**

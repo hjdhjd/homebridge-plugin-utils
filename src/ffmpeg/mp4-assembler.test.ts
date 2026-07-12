@@ -5,6 +5,7 @@
  */
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
+import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Mp4SegmentAssembler } from "./mp4-assembler.ts";
 import { PassThrough } from "node:stream";
 import assert from "node:assert/strict";
@@ -22,12 +23,23 @@ async function nextSegment(iter: AsyncIterator<Buffer>, context: string): Promis
   return result.value;
 }
 
-// Advance the generator one step and assert it has terminated. Encapsulates the "no more segments" assertion so its intent reads clearly at the call site.
-async function assertDone(iter: AsyncIterator<Buffer>, context: string): Promise<void> {
+// Advance any generator one step and assert it has terminated. The value type is irrelevant here - only `done` is read - so the parameter is widened to `unknown` and the
+// same helper serves both the Buffer segments() iterator and the Mp4Segment stream() iterator. Encapsulates the "no more items" assertion so its intent reads clearly.
+async function assertDone(iter: AsyncIterator<unknown>, context: string): Promise<void> {
 
   const result = await iter.next();
 
   assert.equal(result.done, true, "expected the generator to be done but it yielded: " + context);
+}
+
+// Advance a stream() generator one step and return the Mp4Segment it yielded, mirroring nextSegment for the kind-tagged stream. Fails the test if the generator ended.
+async function nextStreamItem(iter: AsyncIterator<Mp4Segment>, context: string): Promise<Mp4Segment> {
+
+  const result = await iter.next();
+
+  assert.ok(!result.done, "expected a stream item but the generator returned: " + context);
+
+  return result.value;
 }
 
 describe("Mp4SegmentAssembler - init segment contract", () => {
@@ -374,5 +386,114 @@ describe("Mp4SegmentAssembler - source error absorber", () => {
     });
 
     assert.equal(isHbpuAbortReason(assembler.signal.reason, "failed"), true);
+  });
+});
+
+describe("Mp4SegmentAssembler - kind-tagged stream", () => {
+
+  test("stream() yields one init item carrying the initialization bytes, then a media item per fragment in order", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    const ftyp = makeBox("ftyp", Buffer.from("isomavc1"));
+    const moov = makeBox("moov", Buffer.from("movie-metadata"));
+    const pairA = Buffer.concat([ makeBox("moof", Buffer.from([0x01])), makeBox("mdat", Buffer.from([0x02])) ]);
+    const pairB = Buffer.concat([ makeBox("moof", Buffer.from([0x03])), makeBox("mdat", Buffer.from([ 0x04, 0x05 ])) ]);
+
+    source.write(ftyp);
+    source.write(moov);
+    source.write(pairA);
+    source.write(pairB);
+
+    const iter = assembler.stream();
+
+    // The first item is the init segment, tagged "init", carrying exactly the concatenated pre-moof bytes - the same bytes the initSegment promise resolves with.
+    const first = await nextStreamItem(iter, "the init item");
+
+    assert.equal(first.kind, "init", "the first item must be the initialization segment");
+    assert.deepEqual(first.bytes, Buffer.concat([ ftyp, moov ]), "the init item must carry the concatenated pre-moof bytes verbatim");
+    assert.deepEqual(first.bytes, await assembler.initSegment, "the init item bytes must equal what initSegment resolves with");
+
+    // Each subsequent item is a media fragment, tagged "media", in stream order.
+    const second = await nextStreamItem(iter, "media pair A");
+
+    assert.equal(second.kind, "media");
+    assert.deepEqual(second.bytes, pairA);
+
+    const third = await nextStreamItem(iter, "media pair B");
+
+    assert.equal(third.kind, "media");
+    assert.deepEqual(third.bytes, pairB);
+  });
+
+  test("stream() drains queued media after the source ends, then returns cleanly", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    const ftyp = makeBox("ftyp");
+    const moov = makeBox("moov");
+    const pair = Buffer.concat([ makeBox("moof"), makeBox("mdat", Buffer.from([0xAA])) ]);
+
+    source.write(ftyp);
+    source.write(moov);
+    source.write(pair);
+    source.end();
+
+    const collected: Mp4Segment[] = [];
+
+    for await (const item of assembler.stream()) {
+
+      collected.push({ bytes: item.bytes, kind: item.kind });
+    }
+
+    // Exactly one init item then the single queued media item, both surfaced before the generator returns on the natural source end - no assembled segment is lost.
+    assert.deepEqual(collected, [ { bytes: Buffer.concat([ ftyp, moov ]), kind: "init" }, { bytes: pair, kind: "media" } ]);
+    assert.equal(isHbpuAbortReason(assembler.signal.reason, "closed"), true, "natural source end aborts the assembler's signal with reason \"closed\"");
+  });
+
+  test("stream() returns cleanly when the assembler aborts mid-stream, without hanging on the parked waiter", async () => {
+
+    const source = new PassThrough();
+
+    const assembler = new Mp4SegmentAssembler(source);
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xAA])));
+
+    const iter = assembler.stream()[Symbol.asyncIterator]();
+
+    // Drain the init item and the single queued media item, leaving the generator parked awaiting the next fragment.
+    assert.equal((await nextStreamItem(iter, "the init item")).kind, "init");
+    assert.equal((await nextStreamItem(iter, "the queued media item")).kind, "media");
+
+    assembler.abort(new HbpuAbortError("shutdown"));
+
+    await assertDone(iter, "after abort");
+  });
+
+  test("stream() returns without yielding when aborted before the initialization segment arrives", async () => {
+
+    const source = new PassThrough();
+
+    const assembler = new Mp4SegmentAssembler(source);
+
+    // Feed only pre-moof boxes so init never resolves, then abort before requesting anything from the stream.
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+
+    await delay(10);
+
+    const iter = assembler.stream()[Symbol.asyncIterator]();
+
+    assembler.abort(new HbpuAbortError("replaced"));
+
+    // A pre-init abort ends the stream with nothing yielded, mirroring segments()'s return-on-init-reject behavior.
+    await assertDone(iter, "pre-init abort");
   });
 });

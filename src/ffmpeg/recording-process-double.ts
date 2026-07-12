@@ -20,6 +20,7 @@
 import type { FfmpegRecordingInit, RecordingProcess, RecordingProcessFactory } from "./record.ts";
 import { HbpuAbortError, composeSignals } from "../util.ts";
 import type { FfmpegOptions } from "./options.ts";
+import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Writable } from "node:stream";
 
 /**
@@ -195,6 +196,35 @@ export class TestRecordingProcess implements RecordingProcess {
   public get stderrLog(): readonly string[] {
 
     return this.#stderrLog;
+  }
+
+  /**
+   * Yield the whole segment stream as a kind-tagged sequence: one {@link Mp4Segment} of kind `"init"` carrying the configured init segment, then one of kind `"media"`
+   * per configured media segment, in order. Terminates on this process's own signal or the passed `init.signal` the same way {@link TestRecordingProcess.segments} does;
+   * an abort before the init item is yielded ends the stream with nothing yielded, mirroring the real `Mp4SegmentAssembler.stream` return-on-pre-init-abort behavior.
+   *
+   * @param init - Optional init options. `signal` composes with this process's own signal; aborting either terminates this generator call.
+   *
+   * @returns An async generator yielding one `"init"` segment followed by the configured `"media"` segments in order.
+   */
+  public async *stream(init: { signal?: AbortSignal } = {}): AsyncGenerator<Mp4Segment> {
+
+    // Compose the per-call signal with our own so one check governs both cancellation sources, mirroring the real assembler.
+    const composed = composeSignals(this.#controller.signal, init.signal);
+
+    // The init item leads, then each configured media segment, all tagged by kind. One abort check per item - before every yield - mirrors segments(): an abort before
+    // the init item ends the stream with nothing yielded, matching the real assembler's return-on-pre-init-abort behavior.
+    const items: Mp4Segment[] = [ { bytes: this.#initSegment, kind: "init" }, ...this.#segments.map((bytes): Mp4Segment => ({ bytes, kind: "media" })) ];
+
+    for(const item of items) {
+
+      if(composed.aborted) {
+
+        return;
+      }
+
+      yield item;
+    }
   }
 }
 

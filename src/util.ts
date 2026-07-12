@@ -954,6 +954,147 @@ export function loopFaultReporter(log: HomebridgePluginLogging, label: string): 
 }
 
 /**
+ * The minimal completion-callback shape {@link guardedDispatch} guards. HomeKit's camera-delegate callbacks (snapshot, prepare-stream, stream-request) each answer with
+ * an optional leading `Error` and, in some cases, an optional trailing payload; every one is structurally assignable to this error-first shape, so `guardedDispatch`
+ * serves them all without importing any HomeKit or hap-nodejs type. A richer callback that also carries a success payload is preserved through the generic parameter on
+ * {@link guardedDispatch}, which keeps the caller's exact signature while still guarding it.
+ *
+ * @category Utilities
+ */
+export type DispatchCallback = (error?: Error) => void;
+
+/**
+ * Run an async handler that HomeKit invokes without awaiting - a camera-delegate method whose interface return type is `void` - so a rejection can never float as an
+ * unhandled rejection and the delegate's completion callback is answered exactly once.
+ *
+ * HomeKit's camera-delegate methods (snapshot, prepare-stream, stream-request) are declared to return `void` yet are naturally written as `async`. Calling an async
+ * method in that position discards its promise: a rejection surfaces as a process-level unhandled rejection, and if the method faulted before answering its callback,
+ * HomeKit waits forever for a response that never comes. `guardedDispatch` closes both gaps. It owns a once-guard around the real callback and hands the guarded callback
+ * to `handler`, so however the handler behaves - answered then faulted, faulted before answering, or answered twice by mistake - the real callback fires exactly once:
+ * the first answer wins; a fault after an answer is logged and the earlier answer stands; a fault before any answer is delivered to HomeKit through the callback itself.
+ * The handler's promise is marked observed through {@link markHandled}, so nothing floats.
+ *
+ * @typeParam C          - The caller's exact callback signature. Constrained to {@link DispatchCallback} (error-first) so any HomeKit delegate callback fits, while
+ *                         preserving a richer signature - one that also passes a snapshot buffer or stream response - for the handler to answer with.
+ * @param options          - Dispatch inputs.
+ * @param options.callback - The real completion callback HomeKit supplied. It is wrapped in a once-guard and never invoked more than once.
+ * @param options.handler  - The async work, given the guarded callback to answer with. A rejection, or a synchronous throw, is caught: while the callback is still open
+ *                           it receives the error, otherwise the error is logged.
+ * @param options.label    - A short human-readable name for the operation (for example `"snapshot request"`), interpolated into the failure log line.
+ * @param options.log      - The logger a post-answer fault is reported through.
+ *
+ * @example
+ *
+ * ```ts
+ * import { guardedDispatch } from "homebridge-plugin-utils";
+ *
+ * // A snapshot delegate HomeKit calls without awaiting. The method itself returns void; the async work and its one-shot callback are handed to guardedDispatch.
+ * public handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
+ *
+ *   guardedDispatch({ callback, handler: (answer) => this.snapshot(request, answer), label: "snapshot request", log: this.log });
+ * }
+ * ```
+ *
+ * @category Utilities
+ */
+export function guardedDispatch<C extends DispatchCallback>(options: { callback: C; handler: (callback: C) => Promise<void>; label: string; log: Logger }): void;
+
+/**
+ * Run an async, callback-less handler that HomeKit (or any caller) invokes without awaiting, so a rejection can never float as an unhandled rejection. With no callback
+ * to carry a failure back, a fault is simply logged.
+ *
+ * @param options         - Dispatch inputs.
+ * @param options.handler - The async work to run. A rejection, or a synchronous throw, is caught and logged.
+ * @param options.label   - A short human-readable name for the operation (for example `"recording activation"`), interpolated into the failure log line.
+ * @param options.log     - The logger a fault is reported through.
+ *
+ * @example
+ *
+ * ```ts
+ * import { guardedDispatch } from "homebridge-plugin-utils";
+ *
+ * // A recording-state update HomeKit calls without awaiting. There is no callback, so a fault is logged rather than reported back to HomeKit.
+ * public updateRecordingActive(active: boolean): void {
+ *
+ *   guardedDispatch({ handler: () => this.applyRecordingActive(active), label: "recording activation", log: this.log });
+ * }
+ * ```
+ *
+ * @category Utilities
+ */
+export function guardedDispatch(options: { handler: () => Promise<void>; label: string; log: Logger }): void;
+
+export function guardedDispatch<C extends DispatchCallback>(options:
+  { callback: C; handler: (callback: C) => Promise<void>; label: string; log: Logger } |
+  { handler: () => Promise<void>; label: string; log: Logger }): void {
+
+  const { label, log } = options;
+
+  // The callback-less path: with no completion callback to carry a failure, run the handler and log any fault. A synchronous throw and an asynchronous rejection both
+  // surface through the same `await` inside the inner async function, matching the swallow-or-surface envelope `superviseLoop` uses. The `in` check tells the two arities
+  // apart: the callback-less member has no `callback` property at all, so it narrows here while the callback member falls through below.
+  if(!("callback" in options)) {
+
+    const { handler } = options;
+
+    void markHandled((async (): Promise<void> => {
+
+      try {
+
+        await handler();
+      } catch(error: unknown) {
+
+        log.error("The %s handler failed: %s.", label, formatErrorMessage(error));
+      }
+    })());
+
+    return;
+  }
+
+  // The callback path: wrap the real callback so it fires exactly once, forwarding whatever arguments the handler answers with. The `answered` flag is owned here, not by
+  // the handler, so a well-behaved answer, a double answer, and a post-answer fault all converge on a single delivery.
+  const { callback, handler } = options;
+
+  // The guarded callback's fire state lives on a mutable cell rather than a bare captured boolean so both the guard closure and the fault handler below read the same
+  // value. A bare `let` would flow-narrow to its `false` initializer at the read site - the only assignment to `true` is inside the closure - hiding the post-answer
+  // case we must distinguish; a property read resets that narrowing after the intervening call.
+  const callbackState = { answered: false };
+
+  // A fresh arrow cannot be inferred as the caller's opaque generic `C`, so the assertion restores that identity. The body honors `C`'s own parameters through
+  // `Parameters<C>`, so the guard forwards the handler's exact answer - an error, or an error plus a payload - to the real callback unchanged.
+  const answerOnce = ((...args: Parameters<C>): void => {
+
+    if(callbackState.answered) {
+
+      return;
+    }
+
+    callbackState.answered = true;
+    callback(...args);
+  }) as C;
+
+  void markHandled((async (): Promise<void> => {
+
+    try {
+
+      await handler(answerOnce);
+    } catch(error: unknown) {
+
+      // A fault after the callback already answered cannot change HomeKit's answer, so it is logged and the earlier answer stands. A fault before any answer is delivered
+      // to HomeKit through the still-open callback, the single most useful place for it to surface.
+      if(callbackState.answered) {
+
+        log.error("The %s handler failed after it had already responded to HomeKit: %s.", label, formatErrorMessage(error));
+
+        return;
+      }
+
+      answerOnce((error instanceof Error) ? error : new Error(formatErrorMessage(error)));
+    }
+  })());
+}
+
+/**
  * Options for {@link runWithAbort}. At least one of `signal` or `timeout` must be provided so there is always an abort mechanism. TypeScript enforces this at compile
  * time through a discriminated union - the "no abort mechanism" case is unrepresentable.
  *

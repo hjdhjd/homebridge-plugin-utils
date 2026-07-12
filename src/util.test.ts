@@ -5,8 +5,8 @@
  * (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds,
-  isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, retry, runWithAbort, sanitizeName, superviseLoop, takeLast, toStartCase,
-  validateName, waitWithSignal } from "./util.ts";
+  guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, retry, runWithAbort, sanitizeName, superviseLoop,
+  takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing.helpers.ts";
 import assert from "node:assert/strict";
@@ -1162,6 +1162,157 @@ describe("loopFaultReporter", () => {
     });
 
     assert.equal(log.entries.length, 0, "the envelope swallows an abort-driven throw before onError, so the reporter must not log");
+  });
+});
+
+describe("guardedDispatch", () => {
+
+  // The two canonical failure templates the wrapper emits. Pinning them here means a wording change is a deliberate test update rather than a silent drift, matching the
+  // loopFaultReporter suite's convention above.
+  const CALLBACK_LESS_MESSAGE = "The %s handler failed: %s.";
+  const POST_ANSWER_MESSAGE = "The %s handler failed after it had already responded to HomeKit: %s.";
+
+  test("callback-less: a throwing handler floats nothing and logs the fault exactly once", async () => {
+
+    const log = capturingLog();
+    const boom = new Error("the recording state could not be applied");
+
+    // The whole call happens under the unhandled-rejection monitor: a wrapper that let the handler's rejection float would fail here before any log assertion runs. The
+    // monitor also drains a full event-loop turn before returning, so the handler has settled and its fault has been logged by the time the outer assertions read it.
+    await assertNoUnhandledRejections(async () => {
+
+      guardedDispatch({ handler: async () => { throw boom; }, label: "recording activation", log });
+    });
+
+    assert.equal(log.entries.length, 1, "a callback-less fault has no callback to carry it, so it must be logged exactly once");
+
+    const entry = expectAt(log.entries, 0, "the logged fault");
+
+    assert.equal(entry.level, "error");
+    assert.equal(entry.message, CALLBACK_LESS_MESSAGE);
+    assert.deepEqual(entry.params, [ "recording activation", formatErrorMessage(boom) ]);
+  });
+
+  test("callback-less: a well-behaved handler runs and logs nothing", async () => {
+
+    const log = capturingLog();
+    let ran = false;
+
+    await assertNoUnhandledRejections(async () => {
+
+      guardedDispatch({ handler: async () => { ran = true; }, label: "recording activation", log });
+    });
+
+    assert.equal(ran, true, "the handler must have run to completion");
+    assert.equal(log.entries.length, 0, "a clean completion is not a fault, so nothing must be logged");
+  });
+
+  test("callback: a fault before any answer is delivered to the callback exactly once, and is not additionally logged", async () => {
+
+    const log = capturingLog();
+    const boom = new Error("the snapshot could not be produced");
+    const received: (Error | undefined)[] = [];
+    const callback = (error?: Error): void => { received.push(error); };
+
+    await assertNoUnhandledRejections(async () => {
+
+      // The handler faults before it ever answers, so the still-open callback is the single most useful place for the error to surface.
+      guardedDispatch({ callback, handler: async () => { throw boom; }, label: "snapshot request", log });
+    });
+
+    assert.deepEqual(received, [boom], "the still-open callback must receive the fault exactly once, unchanged");
+    assert.equal(log.entries.length, 0, "a before-answer fault is delivered through the callback, so it must not also be logged");
+  });
+
+  test("callback: an answer followed by a throw stands, the callback is not fired again, and the late fault is logged", async () => {
+
+    const log = capturingLog();
+    const boom = new Error("cleanup failed after the response was sent");
+    const received: (Error | undefined)[] = [];
+    const callback = (error?: Error): void => { received.push(error); };
+
+    await assertNoUnhandledRejections(async () => {
+
+      // The handler answers cleanly, then faults during its own teardown. The answer already went to HomeKit, so it must stand and the late fault is logged instead.
+      guardedDispatch({ callback, handler: async (answer) => { answer(); throw boom; }, label: "snapshot request", log });
+    });
+
+    assert.deepEqual(received, [undefined], "the original answer stands and the real callback fires exactly once");
+    assert.equal(log.entries.length, 1, "a fault after the answer cannot change HomeKit's answer, so it must be logged");
+
+    const entry = expectAt(log.entries, 0, "the logged post-answer fault");
+
+    assert.equal(entry.message, POST_ANSWER_MESSAGE);
+    assert.deepEqual(entry.params, [ "snapshot request", formatErrorMessage(boom) ]);
+  });
+
+  test("callback: a well-behaved handler answers exactly once and logs nothing", async () => {
+
+    const log = capturingLog();
+    const received: (Error | undefined)[] = [];
+    const callback = (error?: Error): void => { received.push(error); };
+
+    await assertNoUnhandledRejections(async () => {
+
+      guardedDispatch({ callback, handler: async (answer) => { answer(); }, label: "snapshot request", log });
+    });
+
+    assert.deepEqual(received, [undefined], "the callback must be answered exactly once with no error");
+    assert.equal(log.entries.length, 0, "a clean answer is not a fault");
+  });
+
+  test("callback: a handler that answers twice fires the real callback only once, and forwards the payload of the first answer", async () => {
+
+    const log = capturingLog();
+    const received: (string | undefined)[] = [];
+
+    // A richer callback shape carrying a success payload alongside the error slot; the guard must forward the handler's exact answer, not just the error.
+    const callback = (error?: Error, value?: string): void => { received.push(value); };
+
+    await assertNoUnhandledRejections(async () => {
+
+      guardedDispatch({ callback, handler: async (answer) => { answer(undefined, "first"); answer(undefined, "second"); }, label: "snapshot request", log });
+    });
+
+    assert.deepEqual(received, ["first"], "only the first answer, with its payload, may reach the real callback");
+    assert.equal(log.entries.length, 0, "answering twice is not a fault");
+  });
+
+  test("callback: a synchronous throw before answering is delivered to the callback, the same as a rejection", async () => {
+
+    const log = capturingLog();
+    const boom = new Error("threw before returning a promise");
+    const received: (Error | undefined)[] = [];
+    const callback = (error?: Error): void => { received.push(error); };
+
+    await assertNoUnhandledRejections(async () => {
+
+      // A handler that throws synchronously - before it ever returns a promise - is caught the same way, because it runs inside the try, not merely awaited there.
+      guardedDispatch({ callback, handler: () => { throw boom; }, label: "snapshot request", log });
+    });
+
+    assert.deepEqual(received, [boom], "a synchronous throw must route through the same before-answer delivery as a rejection");
+    assert.equal(log.entries.length, 0, "the fault reached the callback, so it must not also be logged");
+  });
+
+  test("callback: a non-Error throw before answering is coerced to an Error for the callback", async () => {
+
+    const log = capturingLog();
+    const received: (Error | undefined)[] = [];
+    const callback = (error?: Error): void => { received.push(error); };
+
+    // A thrown value that is not an Error, typed as `unknown` to model a handler that rejects with something other than an Error - the case the wrapper must coerce.
+    const thrown: unknown = "the socket reset.";
+
+    await assertNoUnhandledRejections(async () => {
+
+      guardedDispatch({ callback, handler: async () => { throw thrown; }, label: "snapshot request", log });
+    });
+
+    const delivered = expectAt(received, 0, "the delivered error");
+
+    assert.ok(delivered instanceof Error, "a non-Error throw must be coerced to an Error so the callback always receives an Error");
+    assert.equal(delivered.message, "the socket reset", "the coerced message is rendered through formatErrorMessage, which strips the trailing period");
   });
 });
 

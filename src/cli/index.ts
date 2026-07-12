@@ -5,8 +5,8 @@
  */
 
 /**
- * The homebridge-plugin-utils CLI, exposed to consumers via the `bin` field in `package.json`. A single cohesive module: the content-hash helper, the `prepareUi`
- * and `prepareDocs` transforms, the `runCli` dispatcher, and the entry-point execution all live here with no inter-file relative VALUE imports.
+ * The homebridge-plugin-utils CLI, exposed to consumers via the `bin` field in `package.json`. A single cohesive module: the content-hash helper, the `prepareUi`,
+ * `prepareDocs`, and `prepareChrome` transforms, the `runCli` dispatcher, and the entry-point execution all live here with no inter-file relative VALUE imports.
  *
  * That single-file shape is deliberate, not incidental. A bin is invoked through an `npm`-managed symlink in `node_modules/.bin`; if the entry imported a sibling
  * module by relative path AT LOAD TIME, that import would resolve against the symlink's directory under symlink-preserving or copied-package layouts and fail. With
@@ -15,12 +15,13 @@
  * so it carries the SSOT types without reintroducing a load-time relative dependency; when `prepareDocs` actually needs the renderer it reaches it through a computed
  * dynamic import the dispatch site supplies, the same indirection the `hblog` bin uses.
  *
- * The module is simultaneously the executable (run via the bin) and a side-effect-free library surface (`prepareUi` / `prepareDocs` / `runCli` / `USAGE`) that the
- * test suite imports. The entry block at the bottom only executes when this module is the program entry point, detected by comparing canonicalized real paths - see
- * its comment for why a raw path comparison is insufficient.
+ * The module is simultaneously the executable (run via the bin) and a side-effect-free library surface (`prepareUi` / `prepareDocs` / `prepareChrome` / `runCli` /
+ * `USAGE`) that the test suite imports. The entry block at the bottom only executes when this module is the program entry point, detected by comparing canonicalized
+ * real paths - see its comment for why a raw path comparison is insufficient.
  *
  * @module
  */
+import type { ProjectEntry, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } from "../docChrome.ts";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -48,7 +49,8 @@ const HASH_LENGTH = 16;
  */
 export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
-  "  prepare-docs <catalog-module> [--doc <path>]    Generate the Feature Options reference into the plugin's docs.\n";
+  "  prepare-docs <catalog-module> [--doc <path>]    Generate the Feature Options reference into the plugin's docs.\n" +
+  "  prepare-chrome <manifest> [--root <dir>]    Stamp the doc-chrome regions (masthead, nav, badges, projects) across the plugin's docs, README, and webUI.\n";
 
 /**
  * Compute a deterministic content hash over `root`'s file tree. Walks every file in lexicographic order of relative POSIX path so two runs against the same content
@@ -108,12 +110,12 @@ async function computeContentHash(root: string): Promise<string> {
  * injects a trailing-slash importmap entry that prefixes every `./lib/` import with the hashed-versioned path. Transitive imports inherit the prefix through
  * relative-URL resolution, so cache-busting reaches files the importmap never names.
  *
- * The content hash is the load-bearing piece for the maintainer-iteration use case. A semver-only subdir name would stay constant across the maintainer's
+ * The content hash is what makes the maintainer-iteration use case work. A semver-only subdir name would stay constant across the maintainer's
  * edit/rebuild/test cycle (version doesn't bump on every save), and the browser would happily serve cached copies of the stale URLs. Hashing the tree means any
  * source change produces a different subdir name, which produces different URLs, which forces fresh fetches. Same code path serves the published-release case: a
  * release ships with a fixed hash, and every consumer fetching it sees the same URL space and caches aggressively within it.
  *
- * Operates idempotently. A re-run against unchanged source content produces the same subdir name + same contents + same manifest. Stale prior-build subdirs are
+ * Operates repeatably. A re-run against unchanged source content produces the same subdir name + same contents + same manifest. Stale prior-build subdirs are
  * removed in the same pass; non-version-shaped entries in the destination are left untouched so a plugin's own files (assets, sibling tooling, README copies)
  * survive across runs.
  *
@@ -172,7 +174,7 @@ export async function prepareUi({ dest, sourceRoot }: { dest: string; sourceRoot
 
   const versionedDest = join(absDest, subdir);
 
-  // Idempotent reset of the versioned subdir. Wipe first so the copy step always starts from a known-empty target; the same-content idempotency property is upheld
+  // Repeatable reset of the versioned subdir. Wipe first so the copy step always starts from a known-empty target; the same-content stability is upheld
   // by the hash being a deterministic function of the source, so re-running with unchanged content produces the same subdir name + same contents + same manifest,
   // even though the implementation re-does the work. `force: true` swallows ENOENT so a first run against an empty destination doesn't surface the missing-target
   // as an error.
@@ -292,6 +294,286 @@ export async function prepareDocs({ catalogModulePath, docPath, render, splice }
   await rename(docPath + ".tmp", docPath);
 }
 
+// The diagnostic thrown when the manifest's `projects` field is neither an inline array nor a { file } / { url } reference. Named so the two guard clauses in
+// resolveProjects share one message rather than duplicating the string.
+const PROJECTS_SOURCE_ERROR = "The manifest `projects` field must be an array, a { file } reference, or a { url } reference.";
+
+// Parse JSON, re-throwing a parse failure as a framed error that names where the invalid JSON lives. Plain `JSON.parse` throws a bare `SyntaxError` with no source
+// attribution; wrapping it keeps a malformed manifest or project list reporting the same "names the source" quality as the shape validators.
+function parseJsonFramed(raw: string, describe: string): unknown {
+
+  try {
+
+    return JSON.parse(raw);
+  } catch(error) {
+
+    throw new Error(describe + " is not valid JSON: " + (error instanceof Error ? error.message : String(error)) + ".");
+  }
+}
+
+// Load a documentation-chrome manifest, dispatching on the path's extension: a `.json` file is read and parsed as data, while a `.js`/`.mjs` module is dynamically
+// imported and its `docChrome` (or default) export taken. Both paths converge on one in-memory value the caller validates, so a plugin may author its manifest as a
+// typed module or a static JSON file with no change to the mechanism. The dynamic import goes through a `file:` URL for the same portability reason `prepareDocs`
+// converts the catalog path.
+async function loadDocChromeManifest(manifestPath: string): Promise<unknown> {
+
+  if(manifestPath.endsWith(".json")) {
+
+    return parseJsonFramed(await readFile(manifestPath, "utf8"), "Doc-chrome manifest " + manifestPath);
+  }
+
+  const namespace = await import(pathToFileURL(manifestPath).href) as { default?: unknown; docChrome?: unknown };
+
+  return namespace.docChrome ?? namespace.default;
+}
+
+// Resolve the manifest's project source to an inline array of entries. The source may be omitted (no project region is stamped), an inline array, a local file relative
+// to the plugin root, or a remote URL fetched at stamp time. The remote form is what lets a family-wide project list live in one external file that every plugin's build
+// pulls from, keeping this library free of any plugin-specific data. The injected `parseEntries` validates the resolved entries and returns them typed, so every
+// manifest-shape check stays the single responsibility of `docChrome.ts`.
+async function resolveProjects(source: unknown, { fetchImpl, manifestPath, parseEntries, pluginRoot }: {
+  fetchImpl: typeof fetch;
+  manifestPath: string;
+  parseEntries: (value: unknown, origin: string) => readonly ProjectEntry[];
+  pluginRoot: string;
+}): Promise<readonly ProjectEntry[] | undefined> {
+
+  if(source === undefined) {
+
+    return undefined;
+  }
+
+  // An inline array is validated against the manifest path, since that is where it was authored.
+  if(Array.isArray(source)) {
+
+    return parseEntries(source, manifestPath);
+  }
+
+  if((typeof source !== "object") || (source === null)) {
+
+    throw new Error(PROJECTS_SOURCE_ERROR);
+  }
+
+  // A remote reference is fetched at stamp time; a non-OK response is a framed error naming the URL and status. We read the body as text and parse it ourselves so a
+  // malformed remote list reports through the same framed-JSON path as a local one.
+  if(("url" in source) && (typeof source.url === "string")) {
+
+    const response = await fetchImpl(source.url);
+
+    if(!response.ok) {
+
+      throw new Error("Failed to fetch the project list from " + source.url + ": HTTP " + String(response.status) + ".");
+    }
+
+    return parseEntries(parseJsonFramed(await response.text(), "The project list fetched from " + source.url), source.url);
+  }
+
+  // A local-file reference is read relative to the plugin root and parsed as JSON.
+  if(("file" in source) && (typeof source.file === "string")) {
+
+    const filePath = resolve(pluginRoot, source.file);
+
+    return parseEntries(parseJsonFramed(await readFile(filePath, "utf8"), "The project list at " + filePath), filePath);
+  }
+
+  throw new Error(PROJECTS_SOURCE_ERROR);
+}
+
+// The subset of the `docChrome` module the CLI reaches through a computed dynamic import at dispatch time: the marked-region marker strings, the manifest and project
+// validators, and the surface renderers. Declaring it as an interface built from the module's own export types keeps the injected namespace in lockstep with
+// `docChrome.ts` without a load-time value import that would fracture this symlink-safe bin.
+interface DocChromeModule {
+
+  readonly DEV_BADGES_BEGIN: string;
+  readonly DEV_BADGES_END: string;
+  readonly DOCUMENTATION_BEGIN: string;
+  readonly DOCUMENTATION_END: string;
+  readonly MASTHEAD_BEGIN: string;
+  readonly MASTHEAD_END: string;
+  readonly PROJECTS_BEGIN: string;
+  readonly PROJECTS_END: string;
+  readonly parseDocChromeManifest: typeof parseDocChromeManifest;
+  readonly parseProjectEntries: typeof parseProjectEntries;
+  readonly renderDevBadges: typeof renderDevBadges;
+  readonly renderDocIndex: typeof renderDocIndex;
+  readonly renderMasthead: typeof renderMasthead;
+  readonly renderProjects: typeof renderProjects;
+}
+
+/**
+ * Stamp a plugin's documentation-chrome regions - the masthead, the documentation index, the dashboard badges, and the project list - across its README, every content
+ * doc, and its webUI Support tab, from one per-plugin manifest. This is the multi-region, multi-file counterpart to {@link prepareDocs}: where that regenerates one
+ * feature-options region in one doc, this regenerates several named regions in many files, so a plugin's masthead and navigation cannot drift between the surfaces that
+ * repeat them.
+ *
+ * Pure-by-injection like {@link prepareDocs}: the `docChrome` renderers and validator arrive through the injected `chrome` namespace and the splice helper through
+ * `splice`, so this function is unit-testable against the real exports without a built `dist/`, and the CLI's single-file no-static-relative-import discipline is
+ * preserved. `fetchImpl` is injected (defaulting to the global `fetch`) so the remote project-source path is testable without network access.
+ *
+ * The manifest is loaded (a typed module or a static JSON file), validated with a field-naming diagnostic, and its optional project source resolved to inline data. The
+ * per-file edit plan is then built - the README carries the masthead, the documentation index, and the dashboard badges; each content doc carries the masthead (unless
+ * its entry opts out) and a self-omitting footer index; the webUI, when present, carries the documentation index and the project list. Every region is spliced against
+ * its own marker pair through the shared, ambiguity-rejecting splice primitive.
+ *
+ * The write is all-or-nothing across files in the realistic failure mode. Splicing happens entirely in memory first, so a missing or ambiguous marker in any file
+ * aborts the run before a single write. The writes then proceed in two phases - every file's new content is staged in a sibling `.tmp`, and only once all temps exist
+ * are they renamed over their targets - so a staging failure leaves every original untouched and each promotion is an atomic rename.
+ *
+ * @param args
+ * @param args.chrome       - The injected `docChrome` module namespace (its renderers, marker constants, and validators).
+ * @param args.fetchImpl    - The `fetch` implementation used to resolve a remote project source. Defaults to the global `fetch`; tests inject a fake.
+ * @param args.manifestPath - Absolute path to the plugin's manifest - a compiled module or a `.json` file.
+ * @param args.pluginRoot   - Absolute path to the plugin root that the manifest's surface and file references resolve against.
+ * @param args.splice       - The injected {@link spliceMarkedRegion} from `featureOptions-docs.ts`.
+ *
+ * @throws When the manifest is mis-shaped, when a resolved project source is malformed, when a target file cannot be read, or when any region's marker pair is absent or
+ *         ambiguous - propagating the splice's own framed errors so the dispatch site frames them uniformly.
+ */
+export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, pluginRoot, splice }: {
+
+  chrome: DocChromeModule;
+  fetchImpl?: typeof fetch;
+  manifestPath: string;
+  pluginRoot: string;
+  splice: typeof spliceMarkedRegion;
+}): Promise<void> {
+
+  const { DEV_BADGES_BEGIN, DEV_BADGES_END, DOCUMENTATION_BEGIN, DOCUMENTATION_END, MASTHEAD_BEGIN, MASTHEAD_END, PROJECTS_BEGIN, PROJECTS_END,
+    parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } = chrome;
+
+  // Load and validate the manifest up front so a mis-shaped manifest fails with a diagnostic naming the offending field rather than a downstream render error. Parsing
+  // returns the same value typed as a validated manifest, so every field access below is type-checked.
+  const manifest = parseDocChromeManifest(await loadDocChromeManifest(manifestPath), manifestPath);
+
+  // Resolve the optional project source to inline data before rendering; the renderers never perform I/O.
+  const projects = await resolveProjects(manifest.projects, { fetchImpl, manifestPath, parseEntries: parseProjectEntries, pluginRoot });
+
+  // Build the per-file edit plan. Each target file collects the ordered marked-region splices that apply to it; a file may carry more than one region (the README
+  // carries three), each spliced independently against its own marker pair.
+  const plan = new Map<string, { begin: string; content: string; end: string }[]>();
+
+  const addRegion = (path: string, begin: string, end: string, content: string): void => {
+
+    const edits = plan.get(path) ?? [];
+
+    edits.push({ begin, content, end });
+    plan.set(path, edits);
+  };
+
+  // The README: the masthead, the documentation index, and - when declared - the dashboard badges.
+  const readmePath = resolve(pluginRoot, manifest.surfaces?.readme ?? "README.md");
+
+  addRegion(readmePath, MASTHEAD_BEGIN, MASTHEAD_END, renderMasthead(manifest));
+  addRegion(readmePath, DOCUMENTATION_BEGIN, DOCUMENTATION_END, renderDocIndex({ manifest, surface: "readme" }));
+
+  if((manifest.devBadges !== undefined) && (manifest.devBadges.length > 0)) {
+
+    addRegion(readmePath, DEV_BADGES_BEGIN, DEV_BADGES_END, renderDevBadges(manifest));
+  }
+
+  // Each content doc: the masthead (unless the entry opts out, as the changelog does) and a self-omitting footer index.
+  for(const section of manifest.nav) {
+
+    for(const entry of section.entries) {
+
+      if(entry.kind !== "doc") {
+
+        continue;
+      }
+
+      const docPath = resolve(pluginRoot, entry.file);
+
+      if(entry.masthead !== false) {
+
+        addRegion(docPath, MASTHEAD_BEGIN, MASTHEAD_END, renderMasthead(manifest));
+      }
+
+      addRegion(docPath, DOCUMENTATION_BEGIN, DOCUMENTATION_END, renderDocIndex({ currentFile: entry.file, manifest, surface: "doc-footer" }));
+    }
+  }
+
+  // The webUI Support tab is optional: a plugin without a custom config UI has no target to stamp, so we include its regions only when the file exists. The
+  // documentation index is always stamped there; the project list only when a source resolved.
+  const webuiPath = resolve(pluginRoot, manifest.surfaces?.webui ?? "homebridge-ui/public/index.html");
+  let webuiExists = true;
+
+  try {
+
+    await stat(webuiPath);
+  } catch(error) {
+
+    // A missing webUI is expected for a plugin without a custom config UI; any other stat failure (a permissions error, say) is a genuine problem we must surface rather
+    // than silently treat as "no webUI".
+    if((error instanceof Error) && ("code" in error) && (error.code === "ENOENT")) {
+
+      webuiExists = false;
+    } else {
+
+      throw error;
+    }
+  }
+
+  if(webuiExists) {
+
+    addRegion(webuiPath, DOCUMENTATION_BEGIN, DOCUMENTATION_END, renderDocIndex({ manifest, surface: "webui" }));
+
+    if(projects !== undefined) {
+
+      addRegion(webuiPath, PROJECTS_BEGIN, PROJECTS_END, renderProjects(projects));
+    }
+  }
+
+  // Validate-all: read each target and splice every region in memory. Splicing validates each marker pair, so a missing, inverted, or duplicated marker anywhere aborts
+  // the whole run here - before any file is written - rather than leaving a partial stamp behind.
+  const staged = await Promise.all([...plan].map(async ([ path, edits ]) => {
+
+    let content: string;
+
+    try {
+
+      content = await readFile(path, "utf8");
+    } catch {
+
+      throw new Error("Target file " + path + " could not be read; ensure it exists and carries the required markers.");
+    }
+
+    // Splice each region against its own marker pair; a malformed marker throws, rejecting the whole collection (per the validate-all note above).
+    for(const edit of edits) {
+
+      content = splice(content, edit.content, { beginMarker: edit.begin, endMarker: edit.end });
+    }
+
+    return { content, path };
+  }));
+
+  // Write-all in two phases for strong cross-file atomicity. Stage every file's new content in a sibling `.tmp` first; if any staging write fails, remove the temps
+  // already written and abort with every original untouched. Only once all temps exist do we rename them over their targets, so the promotion phase - a set of atomic
+  // renames - cannot leave a half-spliced file behind.
+  const tmpPaths = staged.map(({ path }) => path + ".tmp");
+
+  try {
+
+    await Promise.all(staged.map(({ content, path }) => writeFile(path + ".tmp", content, "utf8")));
+  } catch(error) {
+
+    await Promise.all(tmpPaths.map((tmpPath) => rm(tmpPath, { force: true })));
+
+    throw error;
+  }
+
+  try {
+
+    await Promise.all(staged.map(({ path }) => rename(path + ".tmp", path)));
+  } catch(error) {
+
+    // A rename-phase failure is rare - every temp staged successfully - but it can leave some targets promoted and others not. Best-effort remove any temp that survives
+    // so a failed run does not litter the tree; the already-promoted targets are left as they are, since their content is the intended new content.
+    await Promise.all(tmpPaths.map((tmpPath) => rm(tmpPath, { force: true })));
+
+    throw error;
+  }
+}
+
 /**
  * Run the CLI against a synthetic argv vector. Returns the process exit code that the entry block propagates. Pure-by-injection: takes its `cwd`, `stderr`, and
  * `sourceRoot` as arguments rather than reading them from globals, so tests exercise the full dispatch path against a captured stderr, a tmpdir source root, and a
@@ -316,7 +598,7 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
   // parseArgs runs in strict mode, so an unrecognized flag (e.g. a typo'd `--docs`) throws `ERR_PARSE_ARGS_UNKNOWN_OPTION` here rather than falling through to the
   // usage banner. That throw is intentionally uncaught - the per-case try/catch blocks below wrap only the subcommand work - so it surfaces as a rejected `runCli`
   // promise at the entry point, distinct from the default case's banner handling for an unknown positional command.
-  const { positionals, values } = parseArgs({ allowPositionals: true, args: [...argv], options: { doc: { type: "string" } }, strict: true });
+  const { positionals, values } = parseArgs({ allowPositionals: true, args: [...argv], options: { doc: { type: "string" }, root: { type: "string" } }, strict: true });
   const [ command, ...rest ] = positionals;
 
   switch(command) {
@@ -391,6 +673,54 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       return 0;
     }
 
+    case "prepare-chrome": {
+
+      const [manifestArg] = rest;
+
+      if(!manifestArg) {
+
+        stderr.write("homebridge-plugin-utils prepare-chrome: missing required manifest argument.\n");
+
+        return 1;
+      }
+
+      // Resolve the manifest path and the plugin root that the manifest's surface and file references resolve against. The root defaults to the working directory.
+      const manifestPath = resolve(cwd, manifestArg);
+      const pluginRoot = resolve(cwd, values.root ?? ".");
+
+      // Reach HBPU's own doc-chrome renderers and the splice primitive through computed dynamic imports of their compiled modules - never static relative imports - so
+      // the single-file bin stays symlink-safe. A failed import means HBPU itself has not been built, a distinct and actionable condition from a downstream failure.
+      const chromePath = join(sourceRoot, "dist", "docChrome.js");
+      const splicePath = join(sourceRoot, "dist", "featureOptions-docs.js");
+
+      let chrome: DocChromeModule;
+      let splicer: { spliceMarkedRegion: typeof spliceMarkedRegion };
+
+      try {
+
+        chrome = await import(pathToFileURL(chromePath).href) as DocChromeModule;
+        splicer = await import(pathToFileURL(splicePath).href) as typeof splicer;
+      } catch {
+
+        stderr.write("homebridge-plugin-utils prepare-chrome: HBPU has not been built: " + chromePath + " or " + splicePath + " is missing. Run `npm run build` in " +
+          "HBPU first.\n");
+
+        return 1;
+      }
+
+      try {
+
+        await prepareChrome({ chrome, manifestPath, pluginRoot, splice: splicer.spliceMarkedRegion });
+      } catch(error) {
+
+        stderr.write("homebridge-plugin-utils prepare-chrome: " + (error instanceof Error ? error.message : String(error)) + "\n");
+
+        return 1;
+      }
+
+      return 0;
+    }
+
     default: {
 
       stderr.write(USAGE);
@@ -406,11 +736,11 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
  * Decide whether this module is the program entry point (run as the bin) versus imported as a library (by the test suite). Canonicalizes the real path of both the
  * launch path (`process.argv[1]`) and this module's own URL before comparing them.
  *
- * The realpath normalization is the load-bearing detail. npm exposes a bin as a symlink in `node_modules/.bin`, so under default Node the launch path is the
+ * The realpath normalization is the detail that matters. npm exposes a bin as a symlink in `node_modules/.bin`, so under default Node the launch path is the
  * symlink while `import.meta.url` is the resolved target - a raw string comparison never matches and the CLI silently does nothing. Canonicalizing both sides
  * collapses that indirection (and any `file:`-dependency, copied-package, or `--preserve-symlinks` layout) to a single real path, so the check holds however the
  * launcher reached this file. We keep this explicit realpath comparison rather than deferring to `import.meta.main`: the symlink and copied-package indirection is the
- * load-bearing concern the entry-point check exists to handle, and resolving it explicitly keeps that handling visible at the call site.
+ * concern the entry-point check exists to handle, and resolving it explicitly keeps that handling visible at the call site.
  *
  * @returns `true` when invoked as the program entry, `false` when imported or when the launch path cannot be resolved.
  */
@@ -434,7 +764,7 @@ function isEntryPoint(): boolean {
 }
 
 // Execute the CLI when this module is the program entry point. When imported by the test suite instead, `isEntryPoint()` is false and the module exposes
-// `prepareUi` / `prepareDocs` / `runCli` / `USAGE` as a side-effect-free library surface.
+// `prepareUi` / `prepareDocs` / `prepareChrome` / `runCli` / `USAGE` as a side-effect-free library surface.
 if(isEntryPoint()) {
 
   // Resolve HBPU's package root from this file's real location. The compiled CLI sits at `dist/cli/index.js`; walking two segments up from its real directory

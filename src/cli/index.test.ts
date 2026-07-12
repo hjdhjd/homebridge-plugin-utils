@@ -1,14 +1,16 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * cli/index.test.ts: Unit tests for the CLI module. Four test surfaces: the pure {@link prepareUi} transform (content-hashed mirror semantics, manifest shape,
- * stale-build cleanup, preservation of non-version entries, source-side validation), the pure {@link prepareDocs} transform (catalog validation, scope-hook
- * forwarding, atomic-write marker splicing), the {@link runCli} dispatcher (argument routing, exit codes, usage banner), and the entry-point execution invoked
- * through a symlink (the real bin invocation path that a direct-path test never exercises). Every surface but the last runs against AsyncDisposable tmpdir
+ * cli/index.test.ts: Unit tests for the CLI module, covering the pure {@link prepareUi} transform (content-hashed mirror semantics, manifest shape, stale-build
+ * cleanup, preservation of non-version entries, source-side validation), the pure {@link prepareDocs} transform (catalog validation, scope-hook forwarding,
+ * atomic-write marker splicing), the pure {@link prepareChrome} transform (multi-region stamping across the README, docs, and webUI, external project-source
+ * resolution, and all-or-nothing writes), the {@link runCli} dispatcher (argument routing, exit codes, usage banner), and the entry-point execution invoked through
+ * a symlink (the real bin invocation path that a direct-path test never exercises). Every surface but the last runs against AsyncDisposable tmpdir
  * scratch roots and `process.stderr` capture helpers; the entry-point test alone spawns the CLI as a subprocess through a symlink. No test touches a real install
  * or modifies the working tree.
  */
+import * as docChrome from "../docChrome.ts";
 import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference, spliceMarkedRegion } from "../featureOptions-docs.ts";
-import { USAGE, prepareDocs, prepareUi, runCli } from "./index.ts";
+import { USAGE, prepareChrome, prepareDocs, prepareUi, runCli } from "./index.ts";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
@@ -412,7 +414,7 @@ async function writeDoc({ markers = true, root }: { markers?: boolean; root: str
 
 describe("prepareDocs", () => {
 
-  test("replaces the marked region with the rendered reference, idempotently, leaving surrounding prose intact", async () => {
+  test("replaces the marked region with the rendered reference, repeatably, leaving surrounding prose intact", async () => {
 
     await using scratch = await makeScratchRoot();
 
@@ -433,7 +435,7 @@ describe("prepareDocs", () => {
     assert.match(first, /`Nvr\.Recording\.Retention\.<value>`/, "the value option must render with the .<value> placeholder");
 
     // Re-running against the now-spliced doc must reproduce it byte-for-byte: the renderer is a pure projection of the unchanged catalog and the splice is
-    // idempotent, so a second pass is a no-op. This is the property the plugin's build-docs script relies on to stay diff-free across rebuilds.
+    // repeatable, so a second pass is a no-op. This is the property the plugin's build-docs script relies on to stay diff-free across rebuilds.
     await prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion });
 
     const second = await readFile(docPath, "utf8");
@@ -458,7 +460,7 @@ describe("prepareDocs", () => {
 
     await using scratch = await makeScratchRoot();
 
-    // The export exists but is the wrong shape (an object, not an array). Array.isArray is the discriminant, so a non-array value is rejected the same way an absent
+    // The export exists but is the wrong shape (an object, not an array). Array.isArray is what decides, so a non-array value is rejected the same way an absent
     // one is - the renderer never sees a mis-typed categories list.
     const catalogModulePath = await writeCatalog({ body: "export const featureOptionCategories = {}; export const featureOptions = {};\n", root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
@@ -754,6 +756,352 @@ describe("runCli", () => {
     assert.equal(code, 1);
     assert.match(capture.chunks(), /homebridge-plugin-utils prepare-docs: /, "the prepareDocs failure must be framed under the subcommand prefix");
     assert.match(capture.chunks(), /begin marker not found/, "the propagated splice error must be surfaced verbatim");
+  });
+});
+
+// A minimal but complete doc-chrome manifest covering every entry kind the stamper handles: a README-anchor entry, a doc entry that receives a masthead, and a doc
+// entry (the changelog) that opts out of the masthead. Serialized to a `.mjs` module by writeManifest so the genuine dynamic-import load path is exercised. Tests
+// spread over it to add a project source or drop a field.
+const BASE_MANIFEST = {
+
+  devBadges: [{ alt: "License", image: "https://img.test/license.svg", link: "https://plugin.test/license" }],
+  masthead: {
+
+    badges: [{ alt: "Downloads", image: "https://img.test/dl.svg", link: "https://plugin.test/npm" }],
+    logo: { alt: "example-plugin", href: "https://github.com/acme/example-plugin", src: "https://raw.test/logo.svg" },
+    tagline: "Support using Homebridge.",
+    title: "Example Plugin"
+  },
+  nav: [{ entries: [
+
+    { anchor: "installation", blurb: "installing this plugin.", kind: "readme-anchor", title: "Installation" },
+    { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", title: "Best Practices" },
+    { blurb: "release history.", file: "docs/Changelog.md", kind: "doc", masthead: false, title: "Changelog" }
+  ], title: "Getting Started" }],
+  repo: { branch: "main", name: "example-plugin", owner: "acme" }
+};
+
+// Wrap a stale placeholder in a begin/end marker pair - the shape each stampable region has before prepareChrome replaces its interior.
+function markedRegion(begin: string, end: string): string {
+
+  return begin + "\nstale region content\n" + end;
+}
+
+/**
+ * Write a doc-chrome manifest into a scratch root as a `.mjs` module exporting `docChrome`, and return its absolute path. Serializing a plain object through JSON keeps
+ * each test's manifest a readable data literal while still exercising the real extension-dispatched module load path.
+ *
+ * @param args
+ * @param args.manifest - The manifest object to serialize.
+ * @param args.root     - The scratch directory the manifest is written into.
+ *
+ * @returns The absolute path to the written manifest module.
+ */
+async function writeManifest({ manifest, root }: { manifest: unknown; root: string }): Promise<string> {
+
+  const manifestPath = join(root, "docChrome.mjs");
+
+  await writeFile(manifestPath, "export const docChrome = " + JSON.stringify(manifest) + ";\n");
+
+  return manifestPath;
+}
+
+/**
+ * Write a synthetic plugin documentation tree into a scratch root - a README with the masthead, documentation, and dashboard-badge regions; a content doc with the
+ * masthead and footer regions; a changelog with only the footer region (it opts out of the masthead); and, unless suppressed, a webUI carrying the documentation and
+ * project regions. Every region is a marker pair around a stale placeholder, wrapped in hand-written prose so each assertion can confirm the splice touches only its
+ * region.
+ *
+ * @param args
+ * @param args.root  - The scratch directory the tree is written into.
+ * @param args.webui - When `false`, the webUI file is omitted so the webUI-absent skip can be exercised. Defaults to `true`.
+ */
+async function writePluginTree({ root, webui = true }: { root: string; webui?: boolean }): Promise<void> {
+
+  await writeFile(join(root, "README.md"), "# Top\n\n" + markedRegion(docChrome.MASTHEAD_BEGIN, docChrome.MASTHEAD_END) + "\n\nHand intro.\n\n## Documentation\n" +
+    markedRegion(docChrome.DOCUMENTATION_BEGIN, docChrome.DOCUMENTATION_END) + "\n\n## Dashboard\n" + markedRegion(docChrome.DEV_BADGES_BEGIN, docChrome.DEV_BADGES_END) +
+    "\n\nHand footer.\n");
+
+  await mkdir(join(root, "docs"), { recursive: true });
+
+  await writeFile(join(root, "docs", "BestPractices.md"), "# BP\n\n" + markedRegion(docChrome.MASTHEAD_BEGIN, docChrome.MASTHEAD_END) + "\n\nBody.\n\n" +
+    markedRegion(docChrome.DOCUMENTATION_BEGIN, docChrome.DOCUMENTATION_END) + "\n");
+
+  await writeFile(join(root, "docs", "Changelog.md"), "# Changelog\n\nBody.\n\n" + markedRegion(docChrome.DOCUMENTATION_BEGIN, docChrome.DOCUMENTATION_END) + "\n");
+
+  if(webui) {
+
+    await mkdir(join(root, "homebridge-ui", "public"), { recursive: true });
+
+    await writeFile(join(root, "homebridge-ui", "public", "index.html"), "<html>\n" + markedRegion(docChrome.DOCUMENTATION_BEGIN, docChrome.DOCUMENTATION_END) + "\n" +
+      markedRegion(docChrome.PROJECTS_BEGIN, docChrome.PROJECTS_END) + "\n</html>\n");
+  }
+}
+
+describe("prepareChrome", () => {
+
+  test("stamps every region across the README, docs, and webUI, leaving surrounding prose intact", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifest = { ...BASE_MANIFEST, projects: [{ blurb: "garage support.", href: "https://github.com/acme/ratgdo", title: "ratgdo" }] };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    const readme = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    assert.match(readme, /# Top/, "the hand-written header must be preserved");
+    assert.match(readme, /Hand footer\./, "the hand-written footer must be preserved");
+    assert.equal(readme.includes("stale region content"), false, "every README region's placeholder must be replaced");
+    assert.match(readme, /# Example Plugin/, "the masthead title must be stamped");
+    assert.match(readme, /\* \[Installation\]\(#installation\): installing this plugin\./, "the README nav must use an in-page anchor for the README-hosted entry");
+    assert.match(readme, /\[!\[License\]/, "the dashboard badges must be stamped");
+
+    const bestPractices = await readFile(join(scratch.path, "docs", "BestPractices.md"), "utf8");
+    const footer = bestPractices.slice(bestPractices.indexOf(docChrome.DOCUMENTATION_BEGIN));
+
+    assert.match(bestPractices, /# Example Plugin/, "the doc masthead must be stamped");
+    assert.match(footer, /README\.md#installation/, "the doc footer must resolve the anchor entry to the absolute README URL");
+    assert.equal(footer.includes("BestPractices.md"), false, "the doc footer must omit the current doc's own entry");
+
+    const changelog = await readFile(join(scratch.path, "docs", "Changelog.md"), "utf8");
+
+    assert.equal(changelog.includes("Example Plugin"), false, "the changelog opts out of the masthead");
+    assert.match(changelog, /Best Practices/, "the changelog still receives the footer nav");
+
+    const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
+
+    assert.match(html, /<h5>Getting Started<\/h5>/, "the webUI nav must be stamped as HTML");
+    assert.match(html, /ratgdo: garage support\./, "the webUI project list must be stamped");
+  });
+
+  test("loads a manifest authored as static JSON, not just a module", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    // Author the manifest as a .json file to exercise loadDocChromeManifest's JSON branch - the alternative to the .mjs module every other test uses - and confirm both
+    // authoring formats converge on the same validated stamp.
+    const manifestPath = join(scratch.path, "docChrome.json");
+
+    await writeFile(manifestPath, JSON.stringify(BASE_MANIFEST));
+    await writePluginTree({ root: scratch.path });
+
+    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    const readme = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    assert.match(readme, /# Example Plugin/, "a JSON-authored manifest must stamp the masthead identically to a module-authored one");
+  });
+
+  test("is all-or-nothing across files: a target missing its markers aborts with zero writes", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    // Break one doc: strip its markers so its splice throws during the in-memory validate-all pass, before any file is written.
+    await writeFile(join(scratch.path, "docs", "BestPractices.md"), "# BP\n\nno markers here.\n");
+
+    const readmeBefore = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion }), /begin marker not found/);
+
+    assert.equal(await readFile(join(scratch.path, "README.md"), "utf8"), readmeBefore, "no file may be written when any region fails to splice");
+  });
+
+  test("resolves a remote project source through the injected fetch", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifest = { ...BASE_MANIFEST, projects: { url: "https://projects.test/list.json" } };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    let requested = "";
+    const fetchImpl = (async (input: string): Promise<unknown> => {
+
+      requested = input;
+
+      return { ok: true, status: 200,
+        text: async (): Promise<string> => JSON.stringify([{ blurb: "access support.", href: "https://github.com/acme/access", title: "unifi-access" }]) };
+    }) as unknown as typeof fetch;
+
+    await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    assert.equal(requested, "https://projects.test/list.json", "the manifest's project URL must be fetched");
+
+    const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
+
+    assert.match(html, /unifi-access: access support\./, "the fetched project list must be stamped into the webUI");
+  });
+
+  test("fails with a framed error when the remote project fetch is not OK", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifest = { ...BASE_MANIFEST, projects: { url: "https://projects.test/missing.json" } };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    const fetchImpl = (async (): Promise<unknown> => ({ ok: false, status: 404, text: async (): Promise<string> => "" })) as unknown as typeof fetch;
+
+    await assert.rejects(prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion }), /HTTP 404/);
+  });
+
+  test("resolves a local-file project source relative to the plugin root", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifest = { ...BASE_MANIFEST, projects: { file: "projects.json" } };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    const projects = [{ blurb: "streaming server.", href: "https://github.com/acme/prismcast", title: "prismcast" }];
+
+    await writeFile(join(scratch.path, "projects.json"), JSON.stringify(projects));
+
+    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
+
+    assert.match(html, /prismcast: streaming server\./, "the local-file project list must be stamped into the webUI");
+  });
+
+  test("frames a manifest that is not valid JSON with a source-naming diagnostic", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifestPath = join(scratch.path, "docChrome.json");
+
+    await writeFile(manifestPath, "{ not valid json");
+    await writePluginTree({ root: scratch.path });
+
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion }),
+      /Doc-chrome manifest .* is not valid JSON/);
+  });
+
+  test("frames a local project list that is not valid JSON with a source-naming diagnostic", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifest = { ...BASE_MANIFEST, projects: { file: "projects.json" } };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+    await writeFile(join(scratch.path, "projects.json"), "{ not valid json");
+
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion }),
+      /The project list at .* is not valid JSON/);
+  });
+
+  test("skips the webUI when no index.html is present, still stamping the README and docs", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path, webui: false });
+
+    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    const readme = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    assert.equal(readme.includes("stale region content"), false, "the README regions must be stamped even when no webUI is present");
+  });
+
+  test("rejects a mis-shaped manifest with a field-naming diagnostic and writes nothing", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { masthead: _masthead, ...withoutMasthead } = BASE_MANIFEST;
+    const manifestPath = await writeManifest({ manifest: withoutMasthead, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    const readmeBefore = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion }), /`masthead` must be an object/);
+
+    assert.equal(await readFile(join(scratch.path, "README.md"), "utf8"), readmeBefore, "a manifest rejected before planning must write nothing");
+  });
+});
+
+describe("runCli - prepare-chrome dispatch", () => {
+
+  // Build a synthetic HBPU sourceRoot whose dist modules re-export the REAL doc-chrome renderers and the real splice from this repo's source, so the dispatch path -
+  // both computed dynamic imports, the prepareChrome call, and the success return - runs against a self-contained root independent of whether dist/ has been built.
+  async function writeSyntheticSource(sourceRoot: string): Promise<void> {
+
+    const realChrome = fileURLToPath(new URL("../docChrome.ts", import.meta.url));
+    const realDocs = fileURLToPath(new URL("../featureOptions-docs.ts", import.meta.url));
+
+    await mkdir(join(sourceRoot, "dist"), { recursive: true });
+    await writeFile(join(sourceRoot, "dist", "docChrome.js"), "export * from " + JSON.stringify(pathToFileURL(realChrome).href) + ";\n");
+    await writeFile(join(sourceRoot, "dist", "featureOptions-docs.js"), "export { renderFeatureOptionsReference, spliceMarkedRegion } from " +
+      JSON.stringify(pathToFileURL(realDocs).href) + ";\n");
+  }
+
+  test("dispatches to prepareChrome, stamps the tree, and exits 0 on success", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const cwd = join(scratch.path, "plugin");
+
+    await writeSyntheticSource(sourceRoot);
+    await mkdir(cwd, { recursive: true });
+
+    const manifest = { ...BASE_MANIFEST, projects: [{ blurb: "garage support.", href: "https://github.com/acme/ratgdo", title: "ratgdo" }] };
+
+    await writeManifest({ manifest, root: cwd });
+    await writePluginTree({ root: cwd });
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-chrome", "docChrome.mjs" ], cwd, sourceRoot, stderr: capture.stderr });
+
+    assert.equal(code, 0, "successful dispatch must exit 0; stderr: " + capture.chunks());
+    assert.equal(capture.chunks(), "", "successful dispatch must not write to stderr");
+
+    const readme = await readFile(join(cwd, "README.md"), "utf8");
+
+    assert.match(readme, /# Example Plugin/, "the masthead must be stamped through the dispatch path");
+    assert.equal(readme.includes("stale region content"), false, "the README regions must be replaced");
+  });
+
+  test("with no manifest argument exits 1 with a framed usage error", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: ["prepare-chrome"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.match(capture.chunks(), /missing required manifest argument/);
+  });
+
+  test("reports HBPU not built and exits 1 when the compiled renderer is missing", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const cwd = join(scratch.path, "plugin");
+
+    await mkdir(cwd, { recursive: true });
+    await writeManifest({ manifest: BASE_MANIFEST, root: cwd });
+
+    // The sourceRoot has no dist/docChrome.js, so the renderer's dynamic import fails and the dispatcher must frame it as the actionable not-built condition.
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-chrome", "docChrome.mjs" ], cwd, sourceRoot: join(scratch.path, "empty"), stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.match(capture.chunks(), /HBPU has not been built/);
   });
 });
 

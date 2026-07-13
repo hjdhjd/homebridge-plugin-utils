@@ -5,6 +5,7 @@
 "use strict";
 
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
+import { toastError } from "./webUi-featureOptions/utils.mjs";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 
 /**
@@ -94,7 +95,10 @@ export class webUi {
    * Show the first-run user experience.
    *
    * Wires the submit button to run the caller-supplied submit handler, swap the page from first-run to feature-options, and hand off to the feature-options view.
-   * The save button stays disabled until the user completes the first-run flow so a partially-configured plugin cannot be written back to disk.
+   * The save button stays disabled until the user completes the first-run flow so a partially-configured plugin cannot be written back to disk. A submit failure
+   * surfaces as an error toast, and where the failure landed decides what the user is left looking at: a rejected submit throws before the page swap and leaves the
+   * first-run page fully visible for another attempt, while a failure during the feature-options handoff after a successful submit leaves the main shell visible with
+   * the menu still usable for recovery.
    *
    * @returns {Promise<void>}
    * @private
@@ -134,6 +138,13 @@ export class webUi {
         await this.featureOptions.show(this.#session);
 
         homebridge.enableSaveButton();
+      } catch(err) {
+
+        // A first-run submit can throw from two places, and where it threw decides what the user is left looking at. A rejected onSubmit (a failed login or
+        // configuration validation) throws before the page swap, so the first-run page stays fully visible for another attempt. A rejection from
+        // featureOptions.show() after a successful submit throws after the swap, so the main shell is visible with the menu still usable for recovery. In both cases
+        // the toast is the diagnostic, and the finally below brings the spinner down.
+        toastError(err);
       } finally {
 
         homebridge.hideSpinner();

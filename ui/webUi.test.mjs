@@ -249,6 +249,78 @@ describe("webUi.show - first-run routing", () => {
     assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "save button must remain disabled when onSubmit rejects the submission");
     assert.deepEqual(harness.featureOptionsCalls, [], "featureOptions.show must NOT be invoked when onSubmit returns false");
   });
+
+  test("on first-run submit: when onSubmit rejects with an Error, surfaces one error toast and stays on the first-run page", async () => {
+
+    const onSubmit = async () => { throw new Error("Login failed."); };
+
+    using harness = makeWebUiHarness({
+
+      firstRun: { isRequired: () => true, onStart: () => true, onSubmit },
+      name: "MyPlugin"
+    });
+
+    await harness.ui.show();
+
+    harness.skeleton.firstRun.click();
+    await flushPending();
+
+    // The click handler's catch normalizes the rejection into exactly one error toast; without the catch the rejection escapes as an unhandled rejection and no toast
+    // is recorded. The submit threw before the page swap, so the menu stays hidden, the feature-options handoff never runs, and the save button stays disabled.
+    assert.deepEqual(harness.fake.observed.toasts, [{ message: "Login failed.", title: "Error", variant: "error" }],
+      "a rejected onSubmit must surface exactly one error toast carrying the error message under the \"Error\" title");
+    assert.equal(harness.skeleton.menuWrapper.style.display, "none", "the menu must stay hidden when onSubmit rejects before the page swap");
+    assert.deepEqual(harness.featureOptionsCalls, [], "featureOptions.show must NOT run when onSubmit rejects");
+    assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "the save button must stay disabled when onSubmit rejects");
+    assert.equal(harness.fake.observed.state.spinnerCount, 0, "the spinner must drain in the finally clause after a rejected onSubmit");
+  });
+
+  test("on first-run submit: when onSubmit rejects with a non-Error value, the toast carries the String coercion", async () => {
+
+    const onSubmit = async () => { throw "plain string failure"; };
+
+    using harness = makeWebUiHarness({
+
+      firstRun: { isRequired: () => true, onStart: () => true, onSubmit },
+      name: "MyPlugin"
+    });
+
+    await harness.ui.show();
+
+    harness.skeleton.firstRun.click();
+    await flushPending();
+
+    // A non-Error rejection carries no `message` field, so the shared toastError normalization falls back to a string coercion of the whole value.
+    assert.deepEqual(harness.fake.observed.toasts, [{ message: "plain string failure", title: "Error", variant: "error" }],
+      "a non-Error rejection must surface its String coercion as the toast message");
+  });
+
+  test("on first-run submit: when the feature-options handoff rejects after a successful submit, toasts and lands on the main shell", async () => {
+
+    const onSubmit = () => true;
+
+    using harness = makeWebUiHarness({
+
+      firstRun: { isRequired: () => true, onStart: () => true, onSubmit },
+      name: "MyPlugin"
+    });
+
+    await harness.ui.show();
+
+    // The submit succeeds and swaps the page, then the feature-options handoff rejects. The catch surfaces the toast; because the throw lands after the swap but
+    // before enableSaveButton(), the user sees the main shell with the menu available for recovery while the save button stays disabled.
+    harness.ui.featureOptions.show = async () => { throw new Error("Feature options failed to load."); };
+
+    harness.skeleton.firstRun.click();
+    await flushPending();
+
+    assert.deepEqual(harness.fake.observed.toasts, [{ message: "Feature options failed to load.", title: "Error", variant: "error" }],
+      "a rejected feature-options handoff must surface exactly one error toast");
+    assert.equal(harness.skeleton.pageFirstRun.style.display, "none", "the first-run page must be hidden after the successful submit swapped it away");
+    assert.equal(harness.skeleton.menuWrapper.style.display, "inline-flex", "the menu must be revealed so the user can recover from the failed handoff");
+    assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "the save button must stay disabled when the handoff rejects before enableSaveButton runs");
+    assert.equal(harness.fake.observed.state.spinnerCount, 0, "the spinner must drain in the finally clause after a failed handoff");
+  });
 });
 
 describe("webUi.show - menu wiring", () => {

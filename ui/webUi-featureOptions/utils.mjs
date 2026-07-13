@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webUi-featureOptions/utils.mjs: Shared utilities for the feature options webUI components.
+ * webUi-featureOptions/utils.mjs: Shared utilities for the plugin webUI - used by the feature-options components and the top-level orchestrator alike.
  */
 "use strict";
 
@@ -197,4 +197,17 @@ export function showToast(message, variant = "alert-success") {
     // Remove the node only after Bootstrap's `.fade` transition (150ms) has visually completed, so the toast fades out rather than vanishing abruptly.
     setTimeout(() => toast.remove(), 150);
   }, 3000);
+}
+
+/**
+ * Surface an arbitrary thrown value as an error toast. The webUI's extension points - caller-supplied first-run hooks, plugin device fetchers, the connection-error
+ * retry callback - can reject with any shape (an Error, a string, a plain object, a primitive), so the message is extracted defensively: `err?.message` when the
+ * value carries one, a string coercion of the whole value otherwise. This is the single normalization every user-facing catch across the webUI routes through, so
+ * the toast text stays useful regardless of what bubbled out.
+ *
+ * @param {*} err - The thrown value to surface.
+ */
+export function toastError(err) {
+
+  homebridge.toast.error(err?.message ?? String(err), "Error");
 }

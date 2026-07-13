@@ -4,10 +4,10 @@
  */
 "use strict";
 
+import { delay, toastError } from "./webUi-featureOptions/utils.mjs";
 import { initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { FeatureOptionsStore } from "./webUi-featureOptions/store.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
-import { delay } from "./webUi-featureOptions/utils.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
 import { mountHeaderView } from "./webUi-featureOptions/views/header.mjs";
@@ -45,9 +45,18 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  */
 
 /**
+ * The resolved shape of a `getDevices` hook: the single contract every device fetch crosses. It carries the device list and the connection outcome together, so a
+ * failure travels back with the response it belongs to rather than through a separate side-channel a concurrent probe could rewrite.
+ *
+ * @typedef {Object} DeviceListResult
+ * @property {Object[]} devices - The devices for the requested controller; empty when the probe failed or when the controller legitimately has none.
+ * @property {string} error - The user-facing connection-failure message: empty when the fetch succeeded, the failure text when the fetch failed and `devices` is empty.
+ */
+
+/**
  * @typedef {Object} FeatureOptionsConfig
  * @property {Function} [getControllers] - Handler to retrieve available controllers.
- * @property {Function} [getDevices] - Handler to retrieve devices for a controller.
+ * @property {(controller: (Controller|null)) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's {@link DeviceListResult}.
  * @property {Function} [infoPanel] - Handler to display device information.
  * @property {Object} [sidebar] - Sidebar configuration options.
  * @property {string} [sidebar.controllerLabel="Controllers"] - Label for the controllers section.
@@ -68,7 +77,8 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `hide()` is the navigate-away (it flushes any pending edit, then tears down),
  * `cleanup()` is immediate destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default
- * device source. Plugins consuming the library see no change to this surface.
+ * device source. The device-list contract is rich: a `getDevices` hook resolves a {@link DeviceListResult} carrying both the device array and the connection
+ * outcome, and `getHomebridgeDevices` resolves the same shape.
  *
  * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle seam that boots and tears them down. The one
  * piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the store.
@@ -79,7 +89,7 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  * const session = await PluginConfigSession.open({ host: homebridge, name: "My Plugin" });
  * const featureOptionsUI = new webUiFeatureOptions({
  *   getControllers: ({ config }) => myPlugin.controllersFrom(config),
- *   getDevices: async (controller, { config }) => controller ? myPlugin.getDevices(controller, config) : [],
+ *   getDevices: async (controller, { config }) => controller ? { devices: await myPlugin.getDevices(controller, config), error: "" } : { devices: [], error: "" },
  *   ui: {
  *     isController: (device) => device?.type === "controller",
  *     validOption: (device, option) => device?.type !== "controller" || !option.name.startsWith("Video.")
@@ -197,8 +207,8 @@ export class webUiFeatureOptions {
    *   7. Once controllers resolves: if controller-based mode with empty controllers, show the no-controllers message and return.
    *   8. Pre-fire the devices fetch for the initial controller so it overlaps with the feature catalog.
    *   9. Once the feature catalog resolves: build the catalog, dispatch model:loaded, mount all views.
-   *  10. Once devices resolve: dispatch devices:loaded. If a controller is selected but no devices were returned, fetch the error message, dispatch
-   *      connection:error, and return; otherwise set the initial scope.
+   *  10. Once devices resolve: dispatch devices:loaded. If a controller is selected and the result carried a connection-failure error, dispatch connection:error
+   *      with that message and return; otherwise set the initial scope.
    *  11. Reveal regions that views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
@@ -342,28 +352,23 @@ export class webUiFeatureOptions {
     }
 
     // Wait for devices. The fetch overlapped with config + features; typically already resolved by now.
-    const devices = await devicesPromise;
+    const { devices, error } = await devicesPromise;
 
     if(signal.aborted) {
 
       return;
     }
 
-    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, devices: devices ?? [], type: "devices:loaded" });
+    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, devices, type: "devices:loaded" });
 
-    // Connection-error short-circuit: controller-based mode with a selected controller but no devices returned means the controller is configured but unreachable.
-    // Fetch the user-facing error message from the host and dispatch connection:error so the connection-error view takes over the header. Do not transition the
-    // scope to a device-view (there are no devices); leave it at global so any subsequent retry re-shows from a known scope.
-    if((initialController !== null) && (devices.length === 0)) {
+    // Connection-error short-circuit: a selected controller whose probe reported a failure. The failure message arrives with the device-list response - it travels
+    // back on the DeviceListResult rather than through a separate request - so a non-empty error is the failure signal and dispatching connection:error hands the
+    // header to the connection-error view. A zero-device result with an empty error is a legitimately empty controller and falls through to the scope logic below,
+    // never the connection-error view. Do not transition the scope to a device-view here (there are no devices); leave it at global so any subsequent retry re-shows
+    // from a known scope.
+    if((initialController !== null) && error.length) {
 
-      const message = String(await homebridge.request("/getErrorMessage") ?? "");
-
-      if(signal.aborted) {
-
-        return;
-      }
-
-      this.#store.dispatch({ message, type: "connection:error" });
+      this.#store.dispatch({ message: error, type: "connection:error" });
 
       // The connection-error view reveals #headerInfo itself when it renders the error block (it is the sole owner of the error display, content and reveal together),
       // so the orchestrator only transitions state here and returns. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and
@@ -488,7 +493,9 @@ export class webUiFeatureOptions {
    * Used as the default `getDevices`, it is extracted unbound and later invoked with `#config` as the receiver, so its body must never reference `this` - it reads only
    * the global `homebridge` object. A future edit that needs instance state must bind it explicitly (or stop using it as the bare default).
    *
-   * @returns {Promise<Device[]>} The list of devices sorted alphabetically by name.
+   * The device-only default always succeeds against the local accessory cache, so the {@link DeviceListResult} it resolves carries an empty error.
+   *
+   * @returns {Promise<DeviceListResult>} The device list sorted alphabetically by name, paired with an empty error.
    * @public
    */
   async getHomebridgeDevices() {
@@ -511,7 +518,7 @@ export class webUiFeatureOptions {
       });
     }
 
-    return devices.toSorted((a, b) => (a.name ?? "").toLowerCase().localeCompare((b.name ?? "").toLowerCase()));
+    return { devices: devices.toSorted((a, b) => (a.name ?? "").toLowerCase().localeCompare((b.name ?? "").toLowerCase())), error: "" };
   }
 
   // Mount every view against the active store and page DOM. Each view registers its own listeners with the page signal; nothing here references the views after
@@ -534,9 +541,16 @@ export class webUiFeatureOptions {
 
         // Retry routes through show(), which owns teardown: its internal `await this.hide()` flushes any debounced edit before aborting the page signal, so a retry
         // cannot drop a pending write. We deliberately do not call cleanup() here - cleanup() aborts the signal without flushing, which is exactly the drop we avoid.
+        // The retry button fires this as `void onRetry()`, so a rejection is otherwise unobserved; the try/catch surfaces a failed re-show as an error toast instead.
         onRetry: async () => {
 
-          await this.show(this.#session);
+          try {
+
+            await this.show(this.#session);
+          } catch(err) {
+
+            toastError(err);
+          }
         },
         retryDelayMs: this.#config.controllerRetryEnableDelayMs,
         root: headerInfo,
@@ -574,7 +588,6 @@ export class webUiFeatureOptions {
       mountNavView({
 
         getDevices: (controller) => this.#devicesFor(controller),
-        host: homebridge,
         labelControllers: this.#config.labelControllers,
         labelDevices: this.#config.labelDevices,
         rootControllers: controllersContainer,
@@ -585,12 +598,24 @@ export class webUiFeatureOptions {
     }
   }
 
-  // Resolve the device list for a controller, injecting the live platform config the plugin's getDevices needs to recover the controller's credentials. Centralizing
-  // the injection here means both the initial fetch in show() and the on-click fetch in the nav view call the same config-fed seam, and the config is read fresh from
-  // the session on every call - never captured - so a credential change is always reflected. The default device-only getDevices ignores the injected config.
-  #devicesFor(controller) {
+  // Resolve a controller's DeviceListResult, injecting the live platform config the plugin's getDevices needs to recover the controller's credentials. This is the
+  // single seam every device fetch crosses - the initial fetch in show() and the on-click fetch in the nav view both route through it - and the config is read fresh
+  // from the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
+  //
+  // The full rich contract is enforced here with a fail-fast guard: the hook must resolve an object carrying a `devices` array and a string `error`. The error half
+  // is what guarantees every downstream reader (the connection-error view's DOM construction, whose createElement child loop passes a non-string message straight to
+  // appendChild) receives a string. A resolved value that does not match trips a TypeError naming the contract, so a shape mistake surfaces loudly at the seam rather
+  // than as a corrupted render deeper in.
+  async #devicesFor(controller) {
 
-    return this.#config.getDevices(controller, { config: this.#session?.platform });
+    const result = await this.#config.getDevices(controller, { config: this.#session?.platform });
+
+    if(!result || !Array.isArray(result.devices) || (typeof result.error !== "string")) {
+
+      throw new TypeError("getDevices must resolve to { devices, error }.");
+    }
+
+    return result;
   }
 }
 

@@ -638,8 +638,9 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
     using _homebridge = installHomebridge(createFakeHomebridge({ cachedAccessories: [cachedAccessory] }));
 
     const orchestrator = new webUiFeatureOptions();
-    const devices = await orchestrator.getHomebridgeDevices();
+    const { devices, error } = await orchestrator.getHomebridgeDevices();
 
+    assert.equal(error, "", "the device-only default resolves a rich shape carrying an empty error");
     assert.equal(devices.length, 1, "one accessory must produce one device");
     assert.equal(devices[0].name, "Kitchen Cam", "displayName maps to the device name");
     assert.equal(devices[0].serialNumber, "SN-001", "the serial-number characteristic value propagates to the device");
@@ -666,7 +667,7 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
     using _homebridge = installHomebridge(createFakeHomebridge({ cachedAccessories: accessories }));
 
     const orchestrator = new webUiFeatureOptions();
-    const devices = await orchestrator.getHomebridgeDevices();
+    const { devices } = await orchestrator.getHomebridgeDevices();
 
     assert.deepEqual(devices.map((d) => d.name), [ "Apple", "banana", "zebra" ],
       "devices must be sorted case-insensitively by display name");
@@ -681,9 +682,10 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
     using _homebridge = installHomebridge(createFakeHomebridge({ cachedAccessories: [] }));
 
     const orchestrator = new webUiFeatureOptions();
-    const devices = await orchestrator.getHomebridgeDevices();
+    const { devices, error } = await orchestrator.getHomebridgeDevices();
 
     assert.deepEqual(devices, [], "empty cache produces an empty device list");
+    assert.equal(error, "", "the device-only default resolves a rich shape carrying an empty error");
   });
 });
 
@@ -942,7 +944,7 @@ describe("webUiFeatureOptions - device info panel", () => {
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
-      getDevices: () => [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }]
+      getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" })
     });
 
     await orchestrator.show(await openTestSession());
@@ -980,7 +982,7 @@ describe("webUiFeatureOptions - device info panel", () => {
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
-      getDevices: () => [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }]
+      getDevices: () => ({ devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" })
     });
 
     await orchestrator.show(await openTestSession());
@@ -1429,14 +1431,18 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
           await devicesGate;
         }
 
-        return [{
+        return {
 
-          firmwareRevision: "1.0",
-          manufacturer: "X",
-          model: "Y",
-          name: controller?.name ?? "Device",
-          serialNumber: controller?.serialNumber ?? ""
-        }];
+          devices: [{
+
+            firmwareRevision: "1.0",
+            manufacturer: "X",
+            model: "Y",
+            name: controller?.name ?? "Device",
+            serialNumber: controller?.serialNumber ?? ""
+          }],
+          error: ""
+        };
       }
     });
 
@@ -1650,7 +1656,9 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
       // Predicates reference the fixture's own controllerEntry rather than re-stating the serial literal - the controller object is the SSOT for "what is this
       // fixture's controller," so any change to its identity propagates everywhere consistently.
       getControllers: async () => [controllerEntry],
-      getDevices: async (controller) => (controller?.serialNumber === controllerEntry.serialNumber) ? [ controllerAsDevice, deviceA, deviceB ] : [],
+      getDevices: async (controller) => (controller?.serialNumber === controllerEntry.serialNumber) ?
+        { devices: [ controllerAsDevice, deviceA, deviceB ], error: "" } :
+        { devices: [], error: "" },
       ui: { isController: (device) => device?.serialNumber === controllerEntry.serialNumber }
     });
 
@@ -1886,6 +1894,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     clickNav(".nav-link[data-navigation='controller'][data-device-serial='" + CONTROLLER_SERIAL + "']");
     await waitFor(() => document.querySelector(".nav-link[data-navigation='device'][data-device-serial='" + DEVICE_A_SERIAL + "']"),
       { message: "device list must repopulate after navigating back through the controller" });
+    await flush();
 
     // Step 5: navigate back to the device and verify the device-level Disable is still reflected. This is the assertion that matters: the model write from
     // step 2 must survive all the navigations, and the renderer must read it fresh on re-render rather than carry any stale DOM state from the original render.
@@ -2019,5 +2028,167 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
     assert.ok(aMotionTableRevisit !== aMotionTableSnapshot,
       "scope-aware invalidation: a controller-scope mutation drops cache entries for devices under that controller - revisiting A gets a fresh DOM");
+  });
+});
+
+describe("webUiFeatureOptions - the getDevices contract guard", () => {
+
+  // Build a controller-mode orchestrator whose device fetch result is a mutable closure variable. The initial show resolves a valid rich shape so the sidebar
+  // renders a clickable controller link; a test then swaps in an invalid shape and clicks the controller so the fetch routes through the real #devicesFor seam, where
+  // the contract guard runs. The guard's TypeError surfaces through the nav handler's catch as the connection-error message, so the rendered <code> element is the
+  // observable proof that the named guard tripped.
+  function makeGuardHarness() {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const state = { devicesResult: { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub", serialNumber: "CTRL-1" }], error: "" } };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getDevices: () => state.devicesResult
+    });
+
+    return {
+
+      orchestrator,
+      skeleton,
+      state,
+
+      [Symbol.dispose]() {
+
+        orchestrator.cleanup();
+        homebridgeGuard[Symbol.dispose]();
+      }
+    };
+  }
+
+  test("trips the named TypeError when the resolved value has no devices array (error-only object and the legacy bare array)", async () => {
+
+    using _dom = createTestDom();
+    using harness = makeGuardHarness();
+
+    await harness.orchestrator.show(await openTestSession());
+    await flush();
+
+    // Two devices-half-invalid shapes: an object carrying only the error, and the bare-array payload the rich contract rejects.
+    for(const invalid of [ { error: "boom" }, [{ serialNumber: "CTRL-1" }] ]) {
+
+      harness.state.devicesResult = invalid;
+      harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-1']").click();
+
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+
+      const codeElement = harness.skeleton.headerInfo.querySelector("code");
+
+      assert.equal(codeElement?.textContent, "getDevices must resolve to { devices, error }.",
+        "a resolved value without a devices array must trip the named contract TypeError, surfaced as the connection-error message");
+    }
+  });
+
+  test("trips the named TypeError when the resolved error is missing or not a string", async () => {
+
+    using _dom = createTestDom();
+    using harness = makeGuardHarness();
+
+    await harness.orchestrator.show(await openTestSession());
+    await flush();
+
+    // Two error-half-invalid shapes: the error property missing entirely, and a non-string error.
+    for(const invalid of [ { devices: [] }, { devices: [], error: 123 } ]) {
+
+      harness.state.devicesResult = invalid;
+      harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-1']").click();
+
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+
+      const codeElement = harness.skeleton.headerInfo.querySelector("code");
+
+      assert.equal(codeElement?.textContent, "getDevices must resolve to { devices, error }.",
+        "a resolved value whose error is missing or non-string must trip the named contract TypeError, surfaced as the connection-error message");
+    }
+  });
+});
+
+describe("webUiFeatureOptions - empty-success semantics", () => {
+
+  test("empty-success on the initial show renders the normal empty UI and never shows connection-error", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // A selected controller that legitimately has no devices resolves an empty-success result (empty error). The orchestrator must fall through to the global scope
+    // and reveal the regions, never the connection-error short-circuit that a non-empty error would trigger.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getDevices: () => ({ devices: [], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "an empty-success result must never render the connection-error view");
+    assert.equal(skeleton.sidebar.style.display, "", "the success path must reveal the regions rather than returning early on the connection-error branch");
+
+    orchestrator.cleanup();
+  });
+
+  test("empty-success on a nav controller-click stands the optimistic controller scope and never shows connection-error", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Controller A carries a device so the initial show lands on it; controller B legitimately has none - an empty-success result whose empty error must render the
+    // normal empty UI, leaving the optimistic controller scope in place, rather than the connection-error view.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ],
+      getDevices: (controller) => (controller?.serialNumber === "CTRL-A") ?
+        { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub A", serialNumber: "CTRL-A" }], error: "" } :
+        { devices: [], error: "" }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const ctrlBLink = skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']");
+
+    ctrlBLink.click();
+    await flush();
+
+    assert.equal(ctrlBLink.classList.contains("active"), true, "the optimistic controller scope must stand over an empty-success result");
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "an empty-success result must never render the connection-error view");
+
+    orchestrator.cleanup();
   });
 });

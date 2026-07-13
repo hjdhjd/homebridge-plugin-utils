@@ -196,7 +196,6 @@ export function createSkeletonFeatureOptionsDom() {
  *     of the same array would be vacuous, since the session's `platform` getter aliases the previously-read reference).
  *   - `cachedAccessories` - what `getCachedAccessories` returns. Default `[]`.
  *   - `lightingMode` - what `userCurrentLightingMode` returns. Default `"light"`.
- *   - `errorMessage` - the string `request("/getErrorMessage")` resolves with. Default `""`.
  *   - `requestResponses` - a Map<path, response> consulted by `request(path)`. Defaults to empty; unknown paths resolve with `null`.
  *
  * Inspection surface - nested under `observed` on the returned bridge, reachable from tests as `fake.observed.*`:
@@ -219,7 +218,6 @@ export function createFakeHomebridge(init = {}) {
   let config = init.config ?? [];
   const cachedAccessories = init.cachedAccessories ?? [];
   const lightingMode = init.lightingMode ?? "light";
-  const errorMessage = init.errorMessage ?? "";
   const requestResponses = init.requestResponses ?? new Map();
 
   const updatedConfigs = [];
@@ -274,15 +272,7 @@ export function createFakeHomebridge(init = {}) {
 
     // The config-ui request router. Tests seed specific responses via the Map; unknown paths resolve with null so a missing entry is a quiet miss rather than a
     // throw.
-    request: async (path) => {
-
-      if(path === "/getErrorMessage") {
-
-        return errorMessage;
-      }
-
-      return requestResponses.has(path) ? requestResponses.get(path) : null;
-    },
+    request: async (path) => requestResponses.has(path) ? requestResponses.get(path) : null,
 
     showSchemaForm: () => {
 

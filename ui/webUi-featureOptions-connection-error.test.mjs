@@ -51,7 +51,6 @@ describe("webUiFeatureOptions - connection-error view", () => {
     const fake = createFakeHomebridge({
 
       config: makePluginConfig(),
-      errorMessage: "Connection refused: 192.0.2.1:1883",
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
@@ -59,12 +58,12 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     seedBootstrapProbeShim();
 
-    // Build an orchestrator with getControllers returning one controller and getDevices returning empty for that controller. This is the exact precondition for the
-    // connection-error path: a controller is configured but the orchestrator cannot reach any devices behind it.
+    // Build an orchestrator with getControllers returning one controller and getDevices resolving a carried connection-failure error for that controller. This is the
+    // exact precondition for the connection-error path: a controller is configured but the probe reported it unreachable, so the failure travels back on the result.
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => [{ name: "Network Hub", serialNumber: "CTRL-001" }],
-      getDevices: () => []
+      getDevices: () => ({ devices: [], error: "Connection refused: 192.0.2.1:1883" })
     });
 
     await orchestrator.show(await openTestSession());
@@ -82,7 +81,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     assert.ok(codeElement, "remote error text must be wrapped in a <code> element");
     assert.equal(codeElement.textContent, "Connection refused: 192.0.2.1:1883",
-      "the remote /getErrorMessage response must surface verbatim in the error display");
+      "the carried connection-failure message must surface verbatim in the error display");
 
     // The connection-error view owns the header reveal: it reveals #headerInfo itself when it renders the error block, so the error is visible without the orchestrator
     // running its success-path revealRegions(). Every other region stays hidden - the user has no devices to navigate to, and views never self-reveal on mount; only
@@ -101,7 +100,6 @@ describe("webUiFeatureOptions - connection-error view", () => {
     const fake = createFakeHomebridge({
 
       config: makePluginConfig(),
-      errorMessage: "down",
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
@@ -123,7 +121,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       const orchestrator = new webUiFeatureOptions({
 
         getControllers: () => [{ name: "Hub", serialNumber: "CTRL-001" }],
-        getDevices: () => [],
+        getDevices: () => ({ devices: [], error: "down" }),
         ui: { controllerRetryEnableDelayMs: 100 }
       });
 
@@ -169,7 +167,6 @@ describe("webUiFeatureOptions - connection-error view", () => {
     const fake = createFakeHomebridge({
 
       config: makePluginConfig(),
-      errorMessage: "transient",
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
@@ -195,7 +192,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
           return [{ name: "Hub", serialNumber: "CTRL-1" }];
         },
-        getDevices: () => [],
+        getDevices: () => ({ devices: [], error: "transient" }),
         ui: { controllerRetryEnableDelayMs: 100 }
       });
 
@@ -225,6 +222,71 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
       assert.ok(getControllersCalls > callsBefore,
         "clicking the enabled retry button must trigger a fresh show() that re-invokes getControllers");
+
+      orchestrator.cleanup();
+    } finally {
+
+      mock.timers.reset();
+    }
+  });
+
+  test("a retry whose re-show rejects surfaces an error toast instead of an unobserved rejection", async () => {
+
+    // The retry button fires the orchestrator's re-show as `void onRetry()`, so a rejection there would otherwise go unobserved. We drive the first show() into the
+    // connection-error state, then make the re-show's device fetch resolve a shape that trips the device-list contract guard: the retry closure's try/catch must
+    // surface the resulting TypeError as an error toast.
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    // The device fetch result is a mutable closure variable so the retry can resolve a different (invalid) shape than the initial show did.
+    let devicesResult = { devices: [], error: "transient" };
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const session = await openTestSession();
+
+    mock.timers.enable({ apis: ["setTimeout"] });
+
+    try {
+
+      const orchestrator = new webUiFeatureOptions({
+
+        getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+        getDevices: () => devicesResult,
+        ui: { controllerRetryEnableDelayMs: 100 }
+      });
+
+      const showPromise = orchestrator.show(session);
+
+      mock.timers.tick(5000);
+      await showPromise;
+      await new Promise((resolve) => setImmediate(resolve));
+
+      mock.timers.tick(150);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const retryButton = document.getElementById("headerInfo").querySelector("button.btn-warning");
+
+      assert.equal(retryButton.disabled, false, "retry button must be enabled before the click");
+
+      // Make the re-show's device fetch resolve a shape missing the string error so #devicesFor's contract guard trips, rejecting the re-show. Switch to real timers
+      // for the re-show's internal awaits before the click.
+      devicesResult = { devices: [] };
+      mock.timers.reset();
+
+      retryButton.click();
+      await delay(50);
+
+      assert.deepEqual(fake.observed.toasts.at(-1), { message: "getDevices must resolve to { devices, error }.", title: "Error", variant: "error" },
+        "a rejected re-show must surface the contract-guard failure as an error toast");
 
       orchestrator.cleanup();
     } finally {

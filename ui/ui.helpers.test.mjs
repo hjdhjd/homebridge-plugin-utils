@@ -190,12 +190,6 @@ describe("createFakeHomebridge - state mutations", () => {
 
 describe("createFakeHomebridge - request router", () => {
 
-  test("/getErrorMessage resolves to the seeded errorMessage (default empty string)", async () => {
-
-    assert.equal(await createFakeHomebridge().request("/getErrorMessage"), "", "default errorMessage is empty string");
-    assert.equal(await createFakeHomebridge({ errorMessage: "boom" }).request("/getErrorMessage"), "boom", "seeded errorMessage flows through");
-  });
-
   test("seeded paths resolve to their map values; unknown paths resolve to null", async () => {
 
     const responses = new Map([ [ "/getOptions", { categories: [] } ], [ "/getDevices", [{ id: "x" }] ] ]);

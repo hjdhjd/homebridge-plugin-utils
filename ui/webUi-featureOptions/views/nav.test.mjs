@@ -30,7 +30,7 @@ const DEVICES = [
   { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device B", serialNumber: "dev-b" }
 ];
 
-const setup = ({ controllers = CONTROLLERS, devices = [], host = { request: async () => "" }, getDevices, mode = "controller-based" } = {}) => {
+const setup = ({ controllers = CONTROLLERS, devices = [], getDevices, mode = "controller-based" } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const rootControllers = document.createElement("div");
@@ -48,7 +48,6 @@ const setup = ({ controllers = CONTROLLERS, devices = [], host = { request: asyn
   mountNavView({
 
     getDevices,
-    host,
     labelControllers: "Controllers",
     labelDevices: "Devices",
     rootControllers,
@@ -210,7 +209,7 @@ describe("mountNavView - click dispatch", () => {
 
       fetched = controller;
 
-      return fetchedDevices;
+      return { devices: fetchedDevices, error: "" };
     };
     const { rootControllers, store } = setup({ getDevices });
     const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
@@ -226,13 +225,13 @@ describe("mountNavView - click dispatch", () => {
     assert.equal(store.state.scope.kind, "device", "scope moves to the controller-as-device entry");
   });
 
-  test("clicking a controller whose getDevices returns empty dispatches connection:error", async () => {
+  test("clicking a controller whose getDevices carries an error dispatches connection:error with that message", async () => {
 
     using _dom = createTestDom();
 
-    const getDevices = async () => [];
-    const host = { request: async () => "Controller unreachable." };
-    const { rootControllers, store } = setup({ getDevices, host });
+    // The failure message travels back on the DeviceListResult, so the connection-error message is the carried error verbatim - no separate request is made.
+    const getDevices = async () => ({ devices: [], error: "Controller unreachable." });
+    const { rootControllers, store } = setup({ getDevices });
     const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
 
     ctrlLink.click();
@@ -240,5 +239,84 @@ describe("mountNavView - click dispatch", () => {
 
     assert.equal(store.state.status.kind, "connection-error");
     assert.equal(store.state.status.message, "Controller unreachable.");
+  });
+
+  test("clicking a controller whose getDevices throws a non-Error dispatches the generic connection:error message", async () => {
+
+    using _dom = createTestDom();
+
+    // A rejection that is not an Error instance (a thrown string) exercises the catch's fallback branch: the user-facing message is the generic sentence rather than
+    // the raw thrown value.
+    const getDevices = async () => { throw "kaboom"; };
+    const { rootControllers, store } = setup({ getDevices });
+    const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
+
+    ctrlLink.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(store.state.status.kind, "connection-error");
+    assert.equal(store.state.status.message, "Failed to fetch devices.");
+  });
+
+  test("a superseded controller click's late resolve is discarded - the newest click owns the store", async () => {
+
+    using _dom = createTestDom();
+
+    // Two controller clicks whose fetches settle out of order. Each getDevices call hands back a controllable deferred keyed by the controller serial, so the test can
+    // resolve the second (newest) click first and the first (superseded) click afterward.
+    const gates = new Map();
+    const getDevices = (controller) => {
+
+      const deferred = Promise.withResolvers();
+
+      gates.set(controller.serialNumber, deferred);
+
+      return deferred.promise;
+    };
+    const { rootControllers, store } = setup({ getDevices });
+
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-b']").click();
+
+    // Resolve the newest click (ctrl-b) first: it renders. Then resolve the superseded click (ctrl-a): the generation guard must discard it on the resolve path.
+    gates.get("ctrl-b").resolve({ devices: [DEVICES[1]], error: "" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    gates.get("ctrl-a").resolve({ devices: [DEVICES[0]], error: "" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(store.state.devices, [DEVICES[1]], "only the newest click's devices may land");
+    assert.equal(store.state.devicesControllerId, "ctrl-b", "the devices belong to the newest click's controller");
+    assert.equal(store.state.scope.kind, "device", "the newest click settled to its controller-as-device scope");
+    assert.equal(store.state.scope.controllerId, "ctrl-b", "the settled scope belongs to the newest click");
+  });
+
+  test("a superseded controller click's late reject does not overwrite the newest click's rendered state", async () => {
+
+    using _dom = createTestDom();
+
+    const gates = new Map();
+    const getDevices = (controller) => {
+
+      const deferred = Promise.withResolvers();
+
+      gates.set(controller.serialNumber, deferred);
+
+      return deferred.promise;
+    };
+    const { rootControllers, store } = setup({ getDevices });
+
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-b']").click();
+
+    // The newest click (ctrl-b) renders; then the superseded click (ctrl-a) rejects. The generation guard on the reject path must discard it so no stale
+    // connection:error lands over the newest click's state.
+    gates.get("ctrl-b").resolve({ devices: [DEVICES[1]], error: "" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    gates.get("ctrl-a").reject(new Error("ctrl-a failed late"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(store.state.status.kind, "ready", "the stale reject must not transition the store to connection-error");
+    assert.deepEqual(store.state.devices, [DEVICES[1]], "the newest click's devices must remain");
+    assert.equal(store.state.scope.controllerId, "ctrl-b", "the newest click's scope must remain");
   });
 });

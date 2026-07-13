@@ -342,6 +342,28 @@ describe("webUi.show - menu wiring", () => {
     assert.deepEqual(harness.featureOptionsCalls, ["show"], "menuFeatureOptions click must invoke featureOptions.show()");
   });
 
+  test("clicking menuFeatureOptions when featureOptions.show rejects surfaces an error toast", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false }
+    });
+
+    await harness.ui.show();
+
+    // The re-entry path routes through #showFeatureOptions, whose try/catch surfaces a failed re-show as a toast rather than dropping the rejection. Swap in a
+    // rejecting show and clear the toast log so the assertion isolates the click-driven toast.
+    harness.ui.featureOptions.show = async () => { throw new Error("re-entry failed"); };
+    harness.fake.observed.toasts.length = 0;
+
+    harness.skeleton.menuFeatureOptions.click();
+    await flushPending();
+
+    assert.deepEqual(harness.fake.observed.toasts, [{ message: "re-entry failed", title: "Error", variant: "error" }],
+      "a rejected feature-options re-entry must surface exactly one error toast");
+  });
+
   test("clicking menuSettings reveals the schema form and hides the feature-options view", async () => {
 
     using harness = makeWebUiHarness({

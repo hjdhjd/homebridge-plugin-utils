@@ -28,23 +28,24 @@ import { effect } from "../store.mjs";
  *   - `scope:changed` - update active-link highlighting without rebuilding.
  *   - `model:loaded` - initial build (controllers + global link + mode-aware structure).
  *
- * The controller-click handler does I/O: it calls the caller-supplied `getDevices` callback to fetch the new controller's devices, then dispatches a
- * `devices:loaded` action. The dispatch is wrapped in a try/catch so a failing fetch surfaces as a `connection:error` action; the view layer never silently
- * swallows a network failure.
+ * The controller-click handler does I/O: it calls the caller-supplied `getDevices` callback to fetch the new controller's DeviceListResult, then dispatches a
+ * `devices:loaded` action followed by either a scope change (devices present) or a `connection:error` (the result carried a failure message). A per-mount fetch
+ * generation guards the last-resolved-wins race: the newest click owns the store, so a superseded controller click discards its result on both settlement paths
+ * (resolve and reject) rather than overwriting the newer click's rendered state. The handler wraps its fetch in a try/catch so a rejected fetch surfaces as a
+ * `connection:error` action rather than an unhandled rejection; the view layer never silently swallows a failure.
  *
  * @param {Object} args
  * @param {((controller: import("../state.mjs").Controller | null) =>
- *           Promise<readonly import("../state.mjs").Device[]>) | undefined} args.getDevices
- *        - Plugin-provided fetcher for a controller's devices. Called on controller-link click.
+ *           Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>) | undefined} args.getDevices
+ *        - Plugin-provided fetcher resolving a controller's DeviceListResult. Called on controller-link click.
  * @param {string} args.labelControllers - Section header label for the controllers list.
  * @param {string} args.labelDevices - Section header label for the devices list.
- * @param {{ request: (path: string) => Promise<unknown> }} args.host - Homebridge bridge (used to fetch the error message on connection failure).
  * @param {HTMLElement} args.rootControllers - The `#controllersContainer` element.
  * @param {HTMLElement} args.rootDevices - The `#devicesContainer` element.
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountNavView = ({ getDevices, host, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
+export const mountNavView = ({ getDevices, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
 
   // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - a controllers-only refresh hook not currently dispatched.
   effect({
@@ -96,8 +97,14 @@ export const mountNavView = ({ getDevices, host, labelControllers, labelDevices,
     store
   });
 
+  // Per-mount fetch generation for the controller-click handler. Held as a mutable reference (not a plain number) because handleNavClick is module-scope: a number
+  // would be copied by value into the call, defeating the guard. The closure-held object mirrors the connection-error view's retryAbort per-mount state. Each
+  // controller click captures the incremented generation before its fetch; a continuation whose generation no longer matches has been superseded by a newer click and
+  // discards its result.
+  const clickFetch = { generation: 0 };
+
   // Click delegation: one listener on each container resolves the clicked nav link's `data-navigation` and dispatches the appropriate scope-change.
-  const onClick = (event) => handleNavClick({ event, getDevices, host, signal, store });
+  const onClick = (event) => handleNavClick({ clickFetch, event, getDevices, signal, store });
 
   rootControllers.addEventListener("click", onClick, { signal });
   rootDevices.addEventListener("click", onClick, { signal });
@@ -238,8 +245,8 @@ const applyDevicesHighlight = (root, scope) => {
 };
 
 // Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally
-// fetch the new controller's devices via the caller-supplied `getDevices` callback.
-const handleNavClick = async ({ event, getDevices, host, signal, store }) => {
+// fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback.
+const handleNavClick = async ({ clickFetch, event, getDevices, signal, store }) => {
 
   const navLink = event.target.closest(".nav-link[data-navigation]");
 
@@ -264,8 +271,8 @@ const handleNavClick = async ({ event, getDevices, host, signal, store }) => {
 
     case "controller": {
 
-      // Optimistic scope update before the fetch so the sidebar highlight repaints immediately. If the fetch fails we transition to connection:error; if it
-      // succeeds we dispatch devices:loaded and select the controller-as-device entry (the first device in the returned list).
+      // Optimistic scope update before the fetch so the sidebar highlight repaints immediately. If the result carries a failure message we transition to
+      // connection:error; if it carries devices we select the controller-as-device entry (the first device in the returned list).
       store.dispatch({ scope: { controllerId: deviceSerial, kind: "controller" }, type: "scope:changed" });
 
       if(!getDevices) {
@@ -273,43 +280,50 @@ const handleNavClick = async ({ event, getDevices, host, signal, store }) => {
         return;
       }
 
+      // Capture this fetch's generation before awaiting. The newest click owns the store, so a continuation whose generation no longer matches has been superseded by
+      // a later click and discards its result on both settlement paths below.
+      const generation = ++clickFetch.generation;
+
       try {
 
         const controller = store.state.controllers.find((c) => c.serialNumber === deviceSerial);
-        const devices = await getDevices(controller ?? null);
+        const { devices, error } = await getDevices(controller ?? null);
 
-        if(signal.aborted) {
+        // Bail if the page tore down or a newer click superseded this one; a stale continuation must not overwrite the newer click's rendered state.
+        if(signal.aborted || (generation !== clickFetch.generation)) {
 
           return;
         }
 
         store.dispatch({ controllerId: deviceSerial, devices, type: "devices:loaded" });
 
+        if(error.length) {
+
+          // The result carried a connection-failure message - hand the header to the connection-error view. The message arrived with the device-list response, so no
+          // separate request is made.
+          store.dispatch({ message: error, type: "connection:error" });
+
+          return;
+        }
+
         if(devices.length === 0) {
 
-          // No devices returned despite a controller in scope - treat as a connection failure and surface the upstream error message via the host.
-          const message = String(await host.request("/getErrorMessage") ?? "");
-
-          if(signal.aborted) {
-
-            return;
-          }
-
-          store.dispatch({ message, type: "connection:error" });
-
+          // A legitimately empty controller: the optimistic controller scope stands over the empty list, with no device-scope dispatch.
           return;
         }
 
         // Select the controller-as-device entry (the first device in the returned list).
         store.dispatch({ scope: { controllerId: deviceSerial, deviceId: devices[0].serialNumber, kind: "device" }, type: "scope:changed" });
-      } catch {
+      } catch(err) {
 
-        if(signal.aborted) {
+        // The same staleness bail guards the reject path: a superseded fetch that rejects (an IPC failure, the contract-guard TypeError) must not dispatch a stale
+        // connection:error over the newer click's state. A named Error reaches the user verbatim; non-Error junk falls back to the generic sentence.
+        if(signal.aborted || (generation !== clickFetch.generation)) {
 
           return;
         }
 
-        store.dispatch({ message: "Failed to fetch devices.", type: "connection:error" });
+        store.dispatch({ message: (err instanceof Error) ? err.message : "Failed to fetch devices.", type: "connection:error" });
       }
 
       return;

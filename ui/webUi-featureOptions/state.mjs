@@ -304,8 +304,8 @@ export const reducer = (state, action) => {
 
     case "connection:error": {
 
-      // Controller unreachable on the current view. The orchestrator's connection-error flow dispatches this after fetching the user-facing message from
-      // `/getErrorMessage`; subscribers (status bar / sidebar) consume the message.
+      // Controller unreachable on the current view. The orchestrator's connection-error flow dispatches this with the user-facing message that arrived alongside the
+      // device-list response; subscribers (status bar / sidebar) consume the message.
       return { ...state, status: { kind: "connection-error", message: action.message } };
     }
 

@@ -379,7 +379,11 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => controllers,
-      getDevices: (controller) => [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device", serialNumber: controller.serialNumber }]
+      getDevices: (controller) => ({
+
+        devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device", serialNumber: controller.serialNumber }],
+        error: ""
+      })
     });
 
     await orchestrator.show(await openTestSession());
@@ -423,7 +427,7 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
-      getDevices: () => devices,
+      getDevices: () => ({ devices, error: "" }),
       ui: { isController: (device) => device.serialNumber === "CTRL-1" }
     });
 

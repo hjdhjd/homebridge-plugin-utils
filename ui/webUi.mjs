@@ -81,10 +81,9 @@ export class webUi {
       await this.#launchWebUI();
     } catch(err) {
 
-      // Outermost user-facing diagnostic seam in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape (strings, plain
-      // objects, primitives), so normalize before reaching the toast: `err?.message` extracts the message field when present, the nullish coalesce falls back
-      // to a string coercion of the whole value otherwise. This keeps the toast text useful regardless of what bubbled out of `#launchWebUI`.
-      homebridge.toast.error(err?.message ?? String(err), "Error");
+      // Outermost user-facing diagnostic seam in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape, so the shared
+      // toastError normalization extracts a useful message regardless of what bubbled out of `#launchWebUI`.
+      toastError(err);
     } finally {
 
       homebridge.hideSpinner();
@@ -152,6 +151,27 @@ export class webUi {
     });
 
     document.getElementById("pageFirstRun").style.display = "block";
+  }
+
+  /**
+   * Show the feature-options tab from the menu.
+   *
+   * The menuFeatureOptions button re-enters the feature-options view. `featureOptions.show()` can reject - a plugin `getDevices` hook that resolves the wrong shape
+   * trips the device-list contract guard, for one - and the click listener drops the returned promise, so this method brackets the re-entry in a try/catch that
+   * surfaces a failed re-show as an error toast rather than an unobserved rejection.
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #showFeatureOptions() {
+
+    try {
+
+      await this.featureOptions.show(this.#session);
+    } catch(err) {
+
+      toastError(err);
+    }
   }
 
   /**
@@ -239,13 +259,14 @@ export class webUi {
     // later reader sees.
     this.#session = await PluginConfigSession.open({ host: homebridge, name: this.#name });
 
-    // Menu click listeners use a uniform shape: an arrow expression that calls the handler and returns its result. addEventListener discards the return value, so an
-    // async handler's promise is dropped either way; wrapping `featureOptions.show()` in `async () => await ...` would add a microtask hop and break the visual
-    // symmetry across the three sibling registrations for no behavioral benefit. All three handlers are async (show() syncs; #showSettings / #showSupport await
-    // the navigate-away flush before revealing the next tab), and the dropped promise is a deliberate fire-and-forget: each handler's own try/finally reveals the tab
-    // and drains the spinner on every path, and the flush drain's failure surfaces internally via persist:failed's toast - so there is no unobserved rejection here.
+    // Menu click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
+    // async handler's promise is dropped; the handlers own their error handling so the drop carries no unobserved rejection. #showFeatureOptions wraps
+    // featureOptions.show() in a try/catch that toasts a failed re-entry - the show pipeline can reject (a plugin getDevices hook that resolves the wrong shape trips
+    // the device-list contract guard, for one), and without the wrapper that rejection would surface nowhere. #showSettings and #showSupport each bracket their
+    // navigate-away flush in a try/finally that reveals the next tab and drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's
+    // toast).
     document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
-    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.featureOptions.show(this.#session));
+    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.#showFeatureOptions());
     document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
 
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run

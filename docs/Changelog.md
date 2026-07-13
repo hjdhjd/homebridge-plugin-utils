@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.1.0 (2026-07-13)
+  * Breaking change: the feature options webUI's `getDevices` hook now resolves `{ devices, error }` instead of a bare device array, carrying a connection failure back with the response it belongs to. The `/getErrorMessage` side-channel convention is gone, closing a race where rapid controller switches could show one controller's error under another. The webUI also discards a superseded controller click's late result rather than letting it overwrite the newest view, and a failed re-entry into the feature options page - from the menu or the connection-error retry - surfaces as an error toast rather than vanishing. The default Homebridge accessory-cache device source resolves the same shape, so device-only plugins need no changes.
+  * New feature: the CLI's `prepare-docs` can now generate your plugin family's shared documentation chrome - the masthead and documentation index across your README, docs, and webUI support page - from a single manifest, so the common elements can't drift between plugins.
+  * New feature: `guardedDispatch` wraps the async handlers HomeKit invokes without awaiting, so a failure inside them is contained and reported instead of escaping as an unhandled rejection.
+  * New feature: the fMP4 assembler and recording process surfaces now expose a tagged segment stream that distinguishes the initialization segment from media segments, so a consumer can route each without re-parsing.
+  * Improvement: a failed first-run submit in the webUI now surfaces as an error toast, whether the failure lands before the page swap (you stay on the first-run form) or after it (the main shell stays usable).
+  * Fix: restored Node 22 compatibility to RTP port reservation with an internal `DisposableStack` implementation.
+  * Housekeeping.
+
 ## 2.0.0 (2026-07-07)
   * Breaking change: the feature options web UI has been rebuilt on a new reactive architecture, and its internal module files were reorganized (the old `webUi-featureoptions-*.mjs` files are gone). It re-reads the host configuration when you open it, so a change made on the Settings tab is reflected on return, and it flushes any pending edit when you leave, so a toggle made right before navigating away still reaches the config. Just re-run `prepare-ui` to mirror the new files into your plugin; only a plugin that loaded those individual module files by name needs to update.
   * Breaking change: `FeatureOptions.color()` has been removed. The web UI now derives its scope-based coloring internally, so the method had no remaining callers. If you called it directly, resolve the scope with `FeatureOptions.scope()` and map it to your own class.

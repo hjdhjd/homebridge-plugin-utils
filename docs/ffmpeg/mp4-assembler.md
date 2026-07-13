@@ -9,14 +9,17 @@
 AsyncDisposable fMP4 segment assembler.
 
 The assembler composes a [Mp4BoxParser](mp4-parser.md#mp4boxparser) against an arbitrary Node [Readable](https://nodejs.org/api/stream.html#class-streamreadable) source (typically an FFmpeg process's stdout, but any Readable of well-formed
-fMP4 bytes works - including in-memory fixtures for tests) and exposes two views over the single-pass box pipeline:
+fMP4 bytes works - including in-memory fixtures for tests) and exposes complementary views over the single-pass box pipeline:
 
   - `initSegment: Promise<Buffer>` - resolves once with the concatenated bytes of every box that appeared before the first `moof` (typically ftyp + moov).
   - `segments(): AsyncGenerator<Buffer>` - yields each subsequent `moof` / `mdat` pair concatenated into a single Buffer.
+  - `stream(): AsyncGenerator<Mp4Segment>` - yields the whole sequence tagged by kind: one `"init"` item carrying the initialization bytes, then a `"media"`
+    item per fragment, so a caller can forward init and media through one loop.
 
 One-shot artifacts (the init segment) are promises; continuous streams (media segments) are async generators. Lifetime is governed by
 a composed [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal): external abort, parent signal propagation, source error, source end, or an optional inter-segment watchdog timeout all converge on the
-same signal. The class is single-consumer by design - `initSegment` and `segments()` are two views on one internal drain loop, not independent subscriptions.
+same signal. The class is single-consumer by design - these views share one internal drain loop, not independent subscriptions, so a caller uses `stream()` OR the
+`initSegment` / `segments()` pair, never both concurrently.
 
 ## FFmpeg
 
@@ -126,7 +129,7 @@ get isTimedOut(): boolean;
 ```
 
 `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` emitted by the inter-segment watchdog and the platform
-`TimeoutError` emitted by `AbortSignal.timeout()`. The discrimination lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every
+`TimeoutError` emitted by `AbortSignal.timeout()`. The branching lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every
 resource class in the library shares one definition of "timeout."
 
 ###### Returns
@@ -189,9 +192,9 @@ Yields only after [Mp4SegmentAssembler.initSegment](#initsegment) has resolved -
 ends, the assembler aborts, or the optional caller signal aborts; in every case the queue is drained before the generator returns, so a consumer never loses a
 segment that was already assembled before teardown.
 
-**Single-consumer only.** The internal parked-waiter slot is single-writer; calling `segments()` concurrently with another consumer on the same assembler is
-unsupported and will hang one of the consumers when the producer's wake-up resolves only the later parker. If fan-out is needed, tee at the consumer side by
-replicating each yielded Buffer into per-consumer queues external to the assembler.
+**Single-consumer only.** The internal parked-waiter slot is single-writer; calling `segments()` concurrently with another consumer on the same assembler - including
+the [Mp4SegmentAssembler.stream](#stream) view, which drives this generator internally - is unsupported and will hang one of the consumers when the producer's wake-up
+resolves only the later parker. If fan-out is needed, tee at the consumer side by replicating each yielded Buffer into per-consumer queues external to the assembler.
 
 ###### Parameters
 
@@ -206,6 +209,50 @@ replicating each yielded Buffer into per-consumer queues external to the assembl
 
 An async generator yielding concatenated `moof` + `mdat` pair buffers in stream order.
 
+##### stream()
+
+```ts
+stream(init?): AsyncGenerator<Mp4Segment>;
+```
+
+Async generator yielding the whole segment stream as a kind-tagged sequence: exactly one [Mp4Segment](#mp4segment) of kind `"init"` carrying the initialization bytes,
+followed by one of kind `"media"` per completed media fragment. This is a third view over the same single-pass pipeline, composed from [initSegment](#initsegment) and
+[segments](#segments) - it lets a consumer forward the init segment and the media segments through a single loop without tracking which item is which by position.
+
+Terminates cleanly on the same conditions as [segments](#segments): the source ends, the assembler aborts, or the optional caller signal aborts; queued media drains
+before the generator returns, so no assembled segment is lost. If the assembler is aborted before the initialization segment arrives, the generator returns without
+yielding anything.
+
+**Single-consumer only.** `stream()` drives [segments](#segments) internally, so it shares the one parked-waiter slot. Use `stream()` OR the [initSegment](#initsegment) /
+[segments](#segments) pair on a single assembler, never both concurrently - mixing them competes for the same drain and hangs one consumer.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<[`Mp4Segment`](#mp4segment)\>
+
+An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+
+***
+
+### Mp4Segment
+
+A single fMP4 segment yielded by [Mp4SegmentAssembler.stream](#stream), tagged with its kind so a consumer can tell the one-shot initialization segment apart from the
+media fragments that follow it without relying on positional ordering.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="bytes"></a> `bytes` | `Buffer` | The complete segment bytes: for `"init"`, the concatenated initialization boxes (typically `ftyp` + `moov`); for `"media"`, a concatenated `moof` + `mdat` pair. |
+| <a id="kind"></a> `kind` | [`Mp4SegmentKind`](#mp4segmentkind-1) | `"init"` for the single leading initialization segment, `"media"` for each subsequent media fragment. |
+
 ***
 
 ### Mp4SegmentAssemblerInit
@@ -218,3 +265,15 @@ Construction-time options for [Mp4SegmentAssembler](#mp4segmentassembler).
 | ------ | ------ | ------ |
 | <a id="segmenttimeout"></a> `segmentTimeout?` | `number` | Optional watchdog window, in milliseconds. The timer arms when the initialization segment resolves (we begin expecting media segments) and re-arms on each completed media segment. If no segment arrives within the window, the assembler aborts with `HbpuAbortError("timeout")` and the generator terminates cleanly. Typical value for HKSV is a little under five seconds. |
 | <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the assembler's internal controller. When the parent aborts, the assembler tears down and the segment generator exits. |
+
+***
+
+### Mp4SegmentKind
+
+```ts
+type Mp4SegmentKind = "init" | "media";
+```
+
+The kind of a segment yielded by [Mp4SegmentAssembler.stream](#stream). `"init"` is the one-shot initialization segment; `"media"` is a continuous media fragment. A
+consumer that paces or forwards every item uniformly can read [Mp4Segment.bytes](#bytes) without branching; a consumer that must treat the init segment specially
+branches on this field.

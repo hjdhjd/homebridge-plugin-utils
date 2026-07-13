@@ -61,7 +61,7 @@ Error.constructor
 Thrown synchronously by [BackpressureWriter.write](#write) when the pending queue is already at the configured [BackpressureWriterInit.highWaterMark](#highwatermark) and
 accepting the new chunk would push it over.
 
-Separate from the "writer has aborted" and "underlying stream is dead" failure modes so callers can discriminate backpressure-overflow (back off and retry later)
+Separate from the "writer has aborted" and "underlying stream is dead" failure modes so callers can distinguish backpressure-overflow (back off and retry later)
 from terminal failures (give up or escalate) by type rather than by inspecting error message text.
 
 #### Extends

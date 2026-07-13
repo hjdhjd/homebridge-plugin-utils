@@ -37,7 +37,7 @@ Signal-driven RTP/RTCP demultiplexer with FFmpeg keepalive heartbeat.
 
 The class owns one bound UDP socket. Inbound datagrams are classified by an internal [RtpPacketParser](rtp-parser.md#rtppacketparser) and forwarded through the same socket to the configured
 `rtpPort` (RTP-classified) or `rtcpPort` (RTCP-classified) on the loopback interface. Sharing the bound socket between receive and send gives the relay two
-load-bearing properties:
+essential properties:
 
   1. **Source-endpoint symmetry.** Every forwarded datagram leaves the bound socket with source = `loopback:inputPort`. Because the demuxer holds an exclusive
      kernel bind on that port, no other non-root process can spoof that source endpoint - downstream receivers (typically FFmpeg) can therefore enforce source
@@ -46,7 +46,7 @@ load-bearing properties:
      the duration of the session, expanding the attack surface and the kernel-resource count for no architectural benefit.
 
 A self-rearming [Watchdog](../util.md#watchdog) replays the last observed RTCP packet to `rtpPort` whenever the gap between inbound RTCP arrivals exceeds the configured
-[RTCP\_HEARTBEAT\_INTERVAL](settings.md#rtcp_heartbeat_interval). The heartbeat is part of the demuxer's invariant contract - FFmpeg-bound two-way audio is the only use case that constructs this
+[RTCP\_HEARTBEAT\_INTERVAL](settings.md#rtcp_heartbeat_interval). The heartbeat is part of the demuxer's contract - FFmpeg-bound two-way audio is the only use case that constructs this
 class, and that use case relies on the keepalive to keep inbound traffic arriving at FFmpeg's RTP input during legitimate quiet periods on the camera's audio
 backchannel. No FFmpeg input-timeout flag (`-timeout` / `rw_timeout`) is configured anywhere - the keepalive is a defensive guard against any FFmpeg-side idle
 handling of a quiet UDP/RTP input, not a timeout this code sets. The cadence is the single exported constant [RTCP\_HEARTBEAT\_INTERVAL](settings.md#rtcp_heartbeat_interval).
@@ -165,7 +165,7 @@ get isTimedOut(): boolean;
 ```
 
 `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` emitted by the inactivity watchdog and the platform
-`TimeoutError` emitted by `AbortSignal.timeout()` - consumers discriminate on a single getter regardless of which code path produced the timeout. The discrimination
+`TimeoutError` emitted by `AbortSignal.timeout()` - consumers branch on a single getter regardless of which code path produced the timeout. The branching
 logic lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library shares one definition of "timeout."
 
 ###### Returns
@@ -324,7 +324,7 @@ AsyncDisposable handle representing one or two reserved UDP ports.
 Ports are held exclusively against the [RtpPortAllocator](#rtpportallocator)'s internal pool until `[Symbol.asyncDispose]` is invoked. Callers typically
 manage the lifetime with `await using` for scope-bound reservations, or by storing the handle on a session entry and disposing explicitly when the session ends.
 
-Disposal is idempotent: the first call releases the ports back to the allocator; subsequent calls are no-ops. This guarantees `await using` combined with an
+Disposal is safe to repeat: the first call releases the ports back to the allocator; subsequent calls are no-ops. This guarantees `await using` combined with an
 explicit dispose (for example, on an error path that releases early and then falls through the `using` block) does not double-release.
 
 #### Extends

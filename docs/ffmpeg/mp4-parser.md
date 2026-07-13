@@ -117,7 +117,7 @@ A complete parsed ISO BMFF box emitted by [Mp4BoxParser](#mp4boxparser).
 const BOX_TYPE_FTYP: 1718909296 = 0x66747970;
 ```
 
-ISO BMFF box type code for the `ftyp` (file type) box, encoded as a 32-bit big-endian integer. Useful for discriminating on [Mp4Box.type](#type) without re-encoding
+ISO BMFF box type code for the `ftyp` (file type) box, encoded as a 32-bit big-endian integer. Useful for branching on [Mp4Box.type](#type) without re-encoding
 the 4-character ASCII tag on every comparison.
 
 ***

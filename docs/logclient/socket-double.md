@@ -415,7 +415,7 @@ registered listener of that type.
 close(code?): void;
 ```
 
-Close the socket. Records the close code and flips `readyState` to CLOSED. Idempotent in the sense the seam needs: a second close simply records a second code.
+Close the socket. Records the close code and flips `readyState` to CLOSED. Safe to repeat in the sense the seam needs: a second close simply records a second code.
 
 ###### Parameters
 

@@ -13,7 +13,7 @@ timestamp on demand via [parseLogTimestamp](parser.md#parselogtimestamp). It is 
 the package barrel: it carries per-stream state (the carry-forward instant), so a single async-generator transform - fresh state per call, structurally single-use -
 makes cross-stream reuse with stale state unrepresentable, whereas a reused predicate would be wrong on a second stream.
 
-The carry-forward is the load-bearing detail. A record with no parseable instant (a `null` timestamp, or text in an unrecognized locale) is a continuation line of a
+The carry-forward is the detail that matters. A record with no parseable instant (a `null` timestamp, or text in an unrecognized locale) is a continuation line of a
 multi-line message (a stack trace whose only first line carries `[timestamp]`), a bare status line, or a parse failure. A naive "is this record's own epoch in range"
 test would shred every stack trace - the first line in, the traceback gone. Instead a null-epoch line inherits the instant of the most recent record that DID parse, so
 a continuation is kept iff its parent is. This is a log-semantics rule intrinsic to "filter records by time correctly," so it lives in this primitive. The generator

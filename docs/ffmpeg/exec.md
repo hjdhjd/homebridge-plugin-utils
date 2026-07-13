@@ -97,7 +97,7 @@ microtask, giving synchronous post-construction caller code (e.g., attaching a d
 | <a id="stderr"></a> `stderr` | `readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#stderr) |
 | <a id="stdin"></a> `stdin` | `readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdin`](process.md#stdin) |
 | <a id="stdout"></a> `stdout` | `readonly` | `never` | stdout is consumed internally by the collector loop. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a second reader. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#stdout) | - |
-| <a id="stdoutbuffer"></a> `stdoutBuffer` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Buffer`\<`ArrayBufferLike`\>\> | Promise that resolves with every byte the child wrote to stdout before its stdout pipe closed. The pipe closes for any reason - natural EOF after a clean exit, abort-driven kill, synthetic stream destroy - and the promise settles the same way: whatever the consumer absorbed before close, byte-for-byte. Resolves with `Buffer.alloc(0)` only when the underlying readable surfaces a stream error (the catch branch in `#collectStdout`); the abort-kill path does not normally produce a stream error, so an aborted run yields whatever bytes happened to arrive before the kill landed - which may be all of them, some of them, or none of them. This promise is the data channel only. To discriminate "the child wrote nothing" from "the run was aborted before the child could write anything," consult [FfmpegExec.exited](process.md#exited) (`exitCode` / `exitSignal`) and [FfmpegProcess.signal](process.md#signal) (`signal.reason`). Those are the single source of truth for process disposition; an empty buffer carries no disposition meaning on its own. | - | - |
+| <a id="stdoutbuffer"></a> `stdoutBuffer` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Buffer`\<`ArrayBufferLike`\>\> | Promise that resolves with every byte the child wrote to stdout before its stdout pipe closed. The pipe closes for any reason - natural EOF after a clean exit, abort-driven kill, synthetic stream destroy - and the promise settles the same way: whatever the consumer absorbed before close, byte-for-byte. Resolves with `Buffer.alloc(0)` only when the underlying readable surfaces a stream error (the catch branch in `#collectStdout`); the abort-kill path does not normally produce a stream error, so an aborted run yields whatever bytes happened to arrive before the kill landed - which may be all of them, some of them, or none of them. This promise is the data channel only. To distinguish "the child wrote nothing" from "the run was aborted before the child could write anything," consult [FfmpegExec.exited](process.md#exited) (`exitCode` / `exitSignal`) and [FfmpegProcess.signal](process.md#signal) (`signal.reason`). Those are the single source of truth for process disposition; an empty buffer carries no disposition meaning on its own. | - | - |
 
 #### Accessors
 
@@ -146,7 +146,7 @@ get isTimedOut(): boolean;
 ```
 
 `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` and the platform `TimeoutError` emitted by
-`AbortSignal.timeout()`. The discrimination lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
+`AbortSignal.timeout()`. The branching lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
 shares one definition of "timeout."
 
 ###### Returns
@@ -231,7 +231,7 @@ result(): Promise<ExecResult>;
 Await the process to completion and return the bundled result.
 
 Resolves once both the stdout collector and the base class's `exited` promise settle. Rejects with the same reason `exited` would reject with (today, only when
-the child never spawned - e.g., ENOENT). On any normal exit, including non-zero exit codes, this method resolves; callers discriminate outcomes by inspecting
+the child never spawned - e.g., ENOENT). On any normal exit, including non-zero exit codes, this method resolves; callers distinguish outcomes by inspecting
 `exitCode` and `exitSignal` in the result, or the derived `hasError` getter on the instance.
 
 ###### Returns

@@ -13,10 +13,10 @@ credential arm maps to one of the server's authentication paths: a pre-acquired 
 /api/auth/login` (carrying an optional one-time passcode), and `noauth` posts to `POST /api/auth/noauth`, which the server honors only when its UI is configured with
 `auth: "none"`.
 
-The module's load-bearing concern beyond "get a token" is failure classification. The socket's reconnect loop re-authenticates on every reconnect, so it must be able
+The module's central concern beyond "get a token" is failure classification. The socket's reconnect loop re-authenticates on every reconnect, so it must be able
 to tell a transient fault (the server is briefly down or returned a 5xx) from a permanent one (the credentials are wrong, an OTP is required, or noauth is disabled).
 A transient fault should be retried with backoff; a permanent one must fail the reconnect fast so the user gets an actionable error rather than an endless retry loop
-against credentials that will never work. [acquireToken](#acquiretoken) therefore rejects with a [LogAuthError](#logautherror) whose `kind` discriminates `"permanent"` from
+against credentials that will never work. [acquireToken](#acquiretoken) therefore rejects with a [LogAuthError](#logautherror) whose `kind` distinguishes `"permanent"` from
 `"transient"`, and the reconnect's `shouldRetry` predicate vetoes a retry on the permanent kind via [isPermanentAuthError](#ispermanentautherror).
 
 The `fetch` implementation is injected (defaulting to the global `fetch`) so the whole module is exercised in tests without a live server.
@@ -27,7 +27,7 @@ The `fetch` implementation is injected (defaulting to the global `fetch`) so the
 
 The error thrown by [acquireToken](#acquiretoken) when authentication fails.
 
-Carries a [LogAuthErrorKind](#logautherrorkind-1) discriminator so a consumer (specifically the socket's reconnect `shouldRetry` predicate) can distinguish a permanent credential
+Carries a [LogAuthErrorKind](#logautherrorkind-1) tag so a consumer (specifically the socket's reconnect `shouldRetry` predicate) can distinguish a permanent credential
 problem from a transient network/server fault without parsing the message text. The message itself is already actionable - it names the failing path and the reason -
 so it can be surfaced to the user directly.
 

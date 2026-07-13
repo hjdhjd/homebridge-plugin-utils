@@ -79,7 +79,7 @@ Error.constructor
 
 | Property | Modifier | Type | Description | Overrides |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="name"></a> `name` | `readonly` | [`HbpuAbortReason`](#hbpuabortreason) | The discriminator. Matches one of [HbpuAbortReason](#hbpuabortreason). | `Error.name` |
+| <a id="name"></a> `name` | `readonly` | [`HbpuAbortReason`](#hbpuabortreason) | The tag. Matches one of [HbpuAbortReason](#hbpuabortreason). | `Error.name` |
 
 ***
 
@@ -155,7 +155,7 @@ dispose: void;
 ```
 
 `Disposable` implementation. Clears any pending fire AND permanently disables the watchdog: after this runs, `arm()` is a no-op and no further `onFire` calls can
-occur. This is the contract `using watchdog = new Watchdog(...)` relies on - the resource is dead when the block exits, not merely quiescent. Idempotent; repeated
+occur. This is the contract `using watchdog = new Watchdog(...)` relies on - the resource is dead when the block exits, not merely quiescent. Repeated
 disposal is a no-op. Because the class does not own an abort controller, disposal does not signal anything to the rest of the system.
 
 ###### Returns
@@ -189,7 +189,7 @@ clear(): void;
 ```
 
 Cancel any pending fire without aborting anything and without marking the watchdog as permanently dead. Subsequent `arm()` calls continue to work. Safe to call
-when no arm is pending - the method is idempotent.
+when no arm is pending - repeat calls are no-ops.
 
 ###### Returns
 
@@ -206,7 +206,7 @@ Options accepted by [HbpuAbortError](#hbpuaborterror)'s constructor.
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="cause"></a> `cause?` | `unknown` | The underlying cause of the abort. For `"failed"` reasons this is typically the upstream error. For `"failed"` exits from child processes, this is idiomatically a structured object carrying diagnostic context (e.g., `{ exitCode, exitSignal }`) - specialized subclasses may tighten this later. |
-| <a id="message"></a> `message?` | `string` | Optional human-readable message. When omitted, the error's `message` defaults to the reason name, which is sufficient for discrimination-based handling. |
+| <a id="message"></a> `message?` | `string` | Optional human-readable message. When omitted, the error's `message` defaults to the reason name, which is sufficient for name-based handling. |
 
 ***
 
@@ -344,6 +344,29 @@ const obj: ReadonlyObj = { id: "a", nested: { value: 1 } };
 
 ***
 
+### DispatchCallback
+
+```ts
+type DispatchCallback = (error?) => void;
+```
+
+The minimal completion-callback shape [guardedDispatch](#guardeddispatch) guards. HomeKit's camera-delegate callbacks (snapshot, prepare-stream, stream-request) each answer with
+an optional leading `Error` and, in some cases, an optional trailing payload; every one is structurally assignable to this error-first shape, so `guardedDispatch`
+serves them all without importing any HomeKit or hap-nodejs type. A richer callback that also carries a success payload is preserved through the generic parameter on
+[guardedDispatch](#guardeddispatch), which keeps the caller's exact signature while still guarding it.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `error?` | `Error` |
+
+#### Returns
+
+`void`
+
+***
+
 ### HbpuAbortReason
 
 ```ts
@@ -353,8 +376,8 @@ type HbpuAbortReason = "closed" | "failed" | "replaced" | "shutdown" | "timeout"
 The canonical set of abort reasons used across `homebridge-plugin-utils`.
 
 Every long-lived resource class in the library exposes an [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) whose abort reason is normally an [HbpuAbortError](#hbpuaborterror) carrying one of these names.
-Consumers discriminate on the `.name` field. Platform errors produced by `AbortSignal.timeout()` and bare `controller.abort()` interoperate by matching names:
-`TimeoutError` and `AbortError` from the platform both flow through the same discrimination paths unchanged.
+Consumers branch on the `.name` field. Platform errors produced by `AbortSignal.timeout()` and bare `controller.abort()` interoperate by matching names:
+`TimeoutError` and `AbortError` from the platform both flow through the same branching paths unchanged.
 
 #### Remarks
 
@@ -579,6 +602,92 @@ try {
 
 ***
 
+### guardedDispatch()
+
+#### Call Signature
+
+```ts
+function guardedDispatch<C>(options): void;
+```
+
+Run an async handler that HomeKit invokes without awaiting - a camera-delegate method whose interface return type is `void` - so a rejection can never float as an
+unhandled rejection and the delegate's completion callback is answered exactly once.
+
+HomeKit's camera-delegate methods (snapshot, prepare-stream, stream-request) are declared to return `void` yet are naturally written as `async`. Calling an async
+method in that position discards its promise: a rejection surfaces as a process-level unhandled rejection, and if the method faulted before answering its callback,
+HomeKit waits forever for a response that never comes. `guardedDispatch` closes both gaps. It owns a once-guard around the real callback and hands the guarded callback
+to `handler`, so however the handler behaves - answered then faulted, faulted before answering, or answered twice by mistake - the real callback fires exactly once:
+the first answer wins; a fault after an answer is logged and the earlier answer stands; a fault before any answer is delivered to HomeKit through the callback itself.
+The handler's promise is marked observed through [markHandled](#markhandled), so nothing floats.
+
+##### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `C` *extends* [`DispatchCallback`](#dispatchcallback) | The caller's exact callback signature. Constrained to [DispatchCallback](#dispatchcallback) (error-first) so any HomeKit delegate callback fits, while preserving a richer signature - one that also passes a snapshot buffer or stream response - for the handler to answer with. |
+
+##### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `callback`: `C`; `handler`: (`callback`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>; `label`: `string`; `log`: [`Logger`](#logger); \} | Dispatch inputs. |
+| `options.callback` | `C` | The real completion callback HomeKit supplied. It is wrapped in a once-guard and never invoked more than once. |
+| `options.handler` | (`callback`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | The async work, given the guarded callback to answer with. A rejection, or a synchronous throw, is caught: while the callback is still open it receives the error, otherwise the error is logged. |
+| `options.label` | `string` | A short human-readable name for the operation (for example `"snapshot request"`), interpolated into the failure log line. |
+| `options.log` | [`Logger`](#logger) | The logger a post-answer fault is reported through. |
+
+##### Returns
+
+`void`
+
+##### Example
+
+```ts
+import { guardedDispatch } from "homebridge-plugin-utils";
+
+// A snapshot delegate HomeKit calls without awaiting. The method itself returns void; the async work and its one-shot callback are handed to guardedDispatch.
+public handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
+
+  guardedDispatch({ callback, handler: (answer) => this.snapshot(request, answer), label: "snapshot request", log: this.log });
+}
+```
+
+#### Call Signature
+
+```ts
+function guardedDispatch(options): void;
+```
+
+Run an async, callback-less handler that HomeKit (or any caller) invokes without awaiting, so a rejection can never float as an unhandled rejection. With no callback
+to carry a failure back, a fault is simply logged.
+
+##### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `handler`: () => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>; `label`: `string`; `log`: [`Logger`](#logger); \} | Dispatch inputs. |
+| `options.handler` | () => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | The async work to run. A rejection, or a synchronous throw, is caught and logged. |
+| `options.label` | `string` | A short human-readable name for the operation (for example `"recording activation"`), interpolated into the failure log line. |
+| `options.log` | [`Logger`](#logger) | The logger a fault is reported through. |
+
+##### Returns
+
+`void`
+
+##### Example
+
+```ts
+import { guardedDispatch } from "homebridge-plugin-utils";
+
+// A recording-state update HomeKit calls without awaiting. There is no callback, so a fault is logged rather than reported back to HomeKit.
+public updateRecordingActive(active: boolean): void {
+
+  guardedDispatch({ handler: () => this.applyRecordingActive(active), label: "recording activation", log: this.log });
+}
+```
+
+***
+
 ### isHbpuAbortError()
 
 ```ts
@@ -587,7 +696,7 @@ function isHbpuAbortError(error): error is HbpuAbortError;
 
 Type guard: returns `true` if `error` is an [HbpuAbortError](#hbpuaborterror).
 
-Use this to discriminate HBPU's canonical abort errors from arbitrary thrown values, without nesting `instanceof` checks.
+Use this to distinguish HBPU's canonical abort errors from arbitrary thrown values, without nesting `instanceof` checks.
 
 #### Parameters
 
@@ -613,7 +722,7 @@ Convenience type predicate: returns `true` if `error` is an [HbpuAbortError](#hb
 `error.cause` and related fields without further casts.
 
 Collapses the common "is this an HBPU abort, and was it this specific reason?" question into a single call, avoiding the `instanceof` + `.name` nesting that appears
-throughout consuming code. The generic parameter `R` preserves the specific reason string in the narrowed type so callers that discriminate further by name get the
+throughout consuming code. The generic parameter `R` preserves the specific reason string in the narrowed type so callers that distinguish further by name get the
 literal narrowed form automatically.
 
 #### Type Parameters
@@ -645,7 +754,7 @@ function isTimeoutReason(reason): boolean;
 
 Test whether an abort reason indicates a timeout. Matches both the canonical [HbpuAbortError](#hbpuaborterror) with `"timeout"` name - produced by project watchdogs
 ([Watchdog](#watchdog), the inactivity monitors on `FfmpegProcess` / `RtpDemuxer` / `Mp4SegmentAssembler`) - and the platform [DOMException](https://developer.mozilla.org/en-US/docs/Web/API/DOMException)/`Error` whose
-`.name === "TimeoutError"` - produced by `AbortSignal.timeout()`. Consumers discriminate on a single predicate regardless of which code path originated the timeout.
+`.name === "TimeoutError"` - produced by `AbortSignal.timeout()`. Consumers branch on a single predicate regardless of which code path originated the timeout.
 
 Exists because every long-lived resource class exposes an `isTimedOut` getter with identical branching logic; routing all of them through this single predicate
 enforces one taxonomy and eliminates drift if the project ever needs to add, say, a third timeout shape (e.g., an upstream-framework cancellation).
@@ -815,7 +924,7 @@ async function abortableWait<T>(promise: Promise<T>, signal: AbortSignal): Promi
     // Abort-driven action goes here.
   });
 
-  // `return await promise` (not a bare `return promise`) is load-bearing inside an async function. `using` disposes when the enclosing function body finishes
+  // `return await promise` (not a bare `return promise`) is required inside an async function. `using` disposes when the enclosing function body finishes
   // executing, and without an `await` the body finishes synchronously at the `return` statement - even though the returned promise is still pending. The
   // listener would therefore be removed the instant the function returned, well before the promise settles. Adding `await` creates a suspension point that
   // keeps the `using` scope alive until the promise actually settles, which is what the "scope-bound registration" pattern relies on.
@@ -971,9 +1080,9 @@ function superviseLoop(options): Promise<void>;
 Supervise a detached, signal-bound async loop: run the loop, resolve quietly when it ends or its signal aborts, and route any genuine fault to a caller-supplied
 handler exactly once.
 
-Resilient background loops - membership observers, reachability probes, telemetry firehoses - all share one subtle, correctness-critical invariant: a throw is a
+Resilient background loops - membership observers, reachability probes, telemetry firehoses - all share one subtle, correctness-critical rule: a throw is a
 *fault* only when we did not cause it. When the bound signal is aborted, a throw is the orderly unwinding of a loop the caller already tore down, so it is swallowed
-silently. Any other throw is a genuine fault and is handed to `onError` exactly once. Hand-copying that swallow-on-abort-versus-surface-once discrimination across
+silently. Any other throw is a genuine fault and is handed to `onError` exactly once. Hand-copying that swallow-on-abort-versus-surface-once distinction across
 call sites that share no ancestor is how it drifts apart; owning it in one generic primitive is how it stays consistent.
 
 The home is here, beside [composeSignals](#composesignals), because the envelope is fully generic - it carries no logging policy, no message wording, and makes no detachment

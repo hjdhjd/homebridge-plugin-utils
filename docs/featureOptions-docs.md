@@ -10,7 +10,7 @@ A shared documentation renderer for the [FeatureOptions](featureOptions.md#featu
 
 Every plugin in the family used to ship a near-duplicate `*-gendocs.ts` script that walked its feature-options catalog and printed a markdown category index plus
 per-category option tables, then pasted the result into its `docs/FeatureOptions.md` by hand. ~95% of each script was identical, and each hand-rolled the dotted-key
-construction and the value-vs-toggle discrimination that this library already owns as single-source-of-truth helpers. This module collapses all of that into one
+construction and the value-vs-toggle distinction that this library already owns as single-source-of-truth helpers. This module collapses all of that into one
 elegant renderer so the documentation becomes a pure projection of the live catalog.
 
 The module exports two pure string functions:
@@ -109,7 +109,7 @@ surrounding prose untouched. This is the pure half of the in-place splice each p
 `writeFile` around it.
 
 The replacement inserts a newline before and after `content`, so a marker pair on its own lines stays on its own lines and the rendered fragment is cleanly framed.
-The operation is idempotent: splicing the same `content` into an already-spliced document reproduces it byte-for-byte. Each marker may be overridden through the
+The operation is repeatable: splicing the same `content` into an already-spliced document reproduces it byte-for-byte. Each marker may be overridden through the
 options object for documents that use a different convention, though the defaults match what every plugin in the family embeds.
 
 #### Parameters

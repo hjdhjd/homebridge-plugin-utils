@@ -60,7 +60,7 @@ Connection is initiated synchronously as part of construction; there is no separ
 broker URL) surfaces as an `Error` wrapping the underlying cause, so a misconfigured plugin fails loudly instead of living in a zombie state. Network-level
 failures (an unreachable broker reachable by a valid URL) do not throw - they surface asynchronously through the client's `error` event, are logged, and trigger
 mqtt.js's built-in auto-reconnect until [MqttClient.abort](#abort) or a parent signal ends the client for good. A pre-aborted parent signal still constructs
-a client (so `#mqtt` remains a class invariant) and then immediately runs the regular teardown path.
+a client (so `#mqtt` stays non-null) and then immediately runs the regular teardown path.
 
 ###### Parameters
 

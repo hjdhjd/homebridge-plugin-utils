@@ -12,7 +12,7 @@ Streamed REST log retrieval for the Homebridge UI log client.
 `AsyncIterable<string>` of raw lines (ANSI escapes intact). The server has no range/tail parameter - it always streams the whole file - so this is the deep-history
 channel paid only when the user explicitly asks for history beyond the socket's ~500-line seed (see the cost model on `TailRequest` in `types.ts`).
 
-Two details are load-bearing:
+Two details matter here:
 
 - The response body is streamed, not buffered. We feed each chunk through the shared [LogLineSplitter](parser.md#loglinesplitter) so a multi-MB log never has to be materialized in memory
   as one string, and the consumer can begin processing lines as they arrive. The splitter handles lines split across chunk boundaries and the mixed newline

@@ -29,7 +29,7 @@ Lifecycle, in one pass:
 - A Socket.IO CONNECT_ERROR (`44/log,`) on the namespace is surfaced as a connect-phase failure - transient and retried for a refreshable credential (password/noauth),
   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
 
-Teardown is idempotent and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, clears the
+Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, clears the
 watchdog, and settles the parked stdout waiter exactly once. The class introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a
 near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
 

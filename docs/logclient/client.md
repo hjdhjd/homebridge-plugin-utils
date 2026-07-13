@@ -17,7 +17,7 @@ AsyncDisposable client for the Homebridge UI log stream.
 - [HomebridgeLogClient.tail](#tail) - a [TailRequest](types.md#tailrequest)-driven dispatcher that selects `history`, `follow`, the socket-first `follow-history` join, or the
   hedged-seed time-bounded `window` channel.
 
-The following design points are load-bearing:
+The following design points matter:
 
 - **Token lifecycle via a closure.** The client builds one [TokenProvider](socket.md#tokenprovider-1) closure over [acquireToken](auth.md#acquiretoken) and the stored credentials. The socket invokes it on
   every connect attempt, so a `password`/`noauth` credential re-authenticates from the stored credentials on each reconnect (surviving token expiry across a drop). A

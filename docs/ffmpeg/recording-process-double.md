@@ -225,6 +225,33 @@ An async generator yielding the configured media segment buffers in order.
 
 [`RecordingProcess`](record.md#recordingprocess).[`segments`](record.md#segments-3)
 
+##### stream()
+
+```ts
+stream(init?): AsyncGenerator<Mp4Segment>;
+```
+
+Yield the whole segment stream as a kind-tagged sequence: one [Mp4Segment](mp4-assembler.md#mp4segment) of kind `"init"` carrying the configured init segment, then one of kind `"media"`
+per configured media segment, in order. Terminates on this process's own signal or the passed `init.signal` the same way [TestRecordingProcess.segments](#segments) does;
+an abort before the init item is yielded ends the stream with nothing yielded, mirroring the real `Mp4SegmentAssembler.stream` return-on-pre-init-abort behavior.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this process's own signal; aborting either terminates this generator call. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<[`Mp4Segment`](mp4-assembler.md#mp4segment)\>
+
+An async generator yielding one `"init"` segment followed by the configured `"media"` segments in order.
+
+###### Implementation of
+
+[`RecordingProcess`](record.md#recordingprocess).[`stream`](record.md#stream-3)
+
 ***
 
 ### TestRecordingProcessFactory

@@ -146,7 +146,7 @@ get isTimedOut(): boolean;
 ```
 
 `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` and the platform `TimeoutError` emitted by
-`AbortSignal.timeout()`. The discrimination lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
+`AbortSignal.timeout()`. The branching lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
 shares one definition of "timeout."
 
 ###### Returns
@@ -258,6 +258,29 @@ signal aborts, or when the underlying stdout ends.
 `AsyncGenerator`\<`Buffer`\<`ArrayBufferLike`\>\>
 
 An async generator yielding media segment buffers in stream order.
+
+##### stream()
+
+```ts
+stream(init?): AsyncGenerator<Mp4Segment>;
+```
+
+Async generator yielding the whole segment stream as a kind-tagged sequence: one [Mp4Segment](mp4-assembler.md#mp4segment) of kind `"init"` carrying the initialization bytes, then one of
+kind `"media"` per completed media fragment. Delegates to [Mp4SegmentAssembler.stream](mp4-assembler.md#stream); it is a third view over the same pipeline as
+[FfmpegFMp4Process.getInitSegment](#getinitsegment) / [FfmpegFMp4Process.segments](#segments) and shares their single-consumer contract - use one view or the other, never both.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<[`Mp4Segment`](mp4-assembler.md#mp4segment)\>
+
+An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
 
 ***
 
@@ -405,7 +428,7 @@ get isTimedOut(): boolean;
 ```
 
 `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` and the platform `TimeoutError` emitted by
-`AbortSignal.timeout()`. The discrimination lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
+`AbortSignal.timeout()`. The branching lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
 shares one definition of "timeout."
 
 ###### Returns
@@ -525,6 +548,33 @@ An async generator yielding media segment buffers in stream order.
 ###### Inherited from
 
 [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`segments`](#segments)
+
+##### stream()
+
+```ts
+stream(init?): AsyncGenerator<Mp4Segment>;
+```
+
+Async generator yielding the whole segment stream as a kind-tagged sequence: one [Mp4Segment](mp4-assembler.md#mp4segment) of kind `"init"` carrying the initialization bytes, then one of
+kind `"media"` per completed media fragment. Delegates to [Mp4SegmentAssembler.stream](mp4-assembler.md#stream); it is a third view over the same pipeline as
+[FfmpegFMp4Process.getInitSegment](#getinitsegment) / [FfmpegFMp4Process.segments](#segments) and shares their single-consumer contract - use one view or the other, never both.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<[`Mp4Segment`](mp4-assembler.md#mp4segment)\>
+
+An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+
+###### Inherited from
+
+[`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stream`](#stream)
 
 ***
 
@@ -680,7 +730,7 @@ get isTimedOut(): boolean;
 ```
 
 `true` when the abort reason indicates a timeout. Matches both the canonical `HbpuAbortError("timeout")` and the platform `TimeoutError` emitted by
-`AbortSignal.timeout()`. The discrimination lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
+`AbortSignal.timeout()`. The branching lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stays a one-line delegation and every resource class in the library
 shares one definition of "timeout."
 
 ###### Returns
@@ -824,6 +874,37 @@ An async generator yielding media segment buffers in stream order.
 ###### Inherited from
 
 [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`segments`](#segments)
+
+##### stream()
+
+```ts
+stream(init?): AsyncGenerator<Mp4Segment>;
+```
+
+Async generator yielding the whole segment stream as a kind-tagged sequence: one [Mp4Segment](mp4-assembler.md#mp4segment) of kind `"init"` carrying the initialization bytes, then one of
+kind `"media"` per completed media fragment. Delegates to [Mp4SegmentAssembler.stream](mp4-assembler.md#stream); it is a third view over the same pipeline as
+[FfmpegFMp4Process.getInitSegment](#getinitsegment) / [FfmpegFMp4Process.segments](#segments) and shares their single-consumer contract - use one view or the other, never both.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<[`Mp4Segment`](mp4-assembler.md#mp4segment)\>
+
+An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+
+###### Implementation of
+
+[`RecordingProcess`](#recordingprocess).[`stream`](#stream-3)
+
+###### Inherited from
+
+[`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stream`](#stream)
 
 ***
 
@@ -1021,7 +1102,7 @@ The minimal surface a recording consumer reads off a recording process. This is 
 delegate depends on this narrow interface rather than the concrete [FfmpegRecordingProcess](#ffmpegrecordingprocess), so a test (or any alternative segment source) can substitute a
 fake without dragging FFmpeg into the consumer's dependency graph. The interface is type-only, so importing it costs a consumer nothing at runtime.
 
-Every member here is defined on [FfmpegFMp4Process](#abstract-ffmpegfmp4process) (`getInitSegment`, `segments`, `bufferedSegments`) or inherited from [FfmpegProcess](process.md#ffmpegprocess)
+Every member here is defined on [FfmpegFMp4Process](#abstract-ffmpegfmp4process) (`getInitSegment`, `segments`, `stream`, `bufferedSegments`) or inherited from [FfmpegProcess](process.md#ffmpegprocess)
 (`abort`, `isTimedOut`, `signal`, `stderrLog`, `stdin`), so the real [FfmpegRecordingProcess](#ffmpegrecordingprocess) satisfies it by inheritance and carries only an `implements`
 annotation - zero runtime behavior change. This is deliberately the consumer's minimal surface, not the class's full surface: `ready`, `exited`, `stdout`,
 `aborted`, `hasError`, and `[Symbol.asyncDispose]` are NOT here because the recording consumer does not read them.
@@ -1097,6 +1178,29 @@ or the caller's signal aborts, or when the underlying source ends.
 `AsyncGenerator`\<`Buffer`\<`ArrayBufferLike`\>\>
 
 An async generator yielding media segment buffers in stream order.
+
+##### stream()
+
+```ts
+stream(init?): AsyncGenerator<Mp4Segment>;
+```
+
+Async generator yielding the whole segment stream as a kind-tagged sequence: one [Mp4Segment](mp4-assembler.md#mp4segment) of kind `"init"` carrying the initialization bytes, then one of
+kind `"media"` per completed media fragment. A third view over the same pipeline as [RecordingProcess.getInitSegment](#getinitsegment-3) / [RecordingProcess.segments](#segments-3) that
+shares their single-consumer contract - a consumer uses this view or that pair, never both.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<[`Mp4Segment`](mp4-assembler.md#mp4segment)\>
+
+An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
 
 ***
 

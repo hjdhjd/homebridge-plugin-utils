@@ -37,7 +37,7 @@ preserves the catalog's data-only shape so it stays JSON-serializable when every
 available for bespoke needs that the registry does not cover.
 
 The set targets the unit categories that recur across plugin catalogs: bitrate (in either of the two common storage conventions), data size, percentages, and
-durations. Extend the union when a new shared format becomes load-bearing across multiple plugins. Resist adding a formatter speculatively - the function escape
+durations. Extend the union when a new format is genuinely shared across multiple plugins. Resist adding a formatter speculatively - the function escape
 hatch already covers one-off needs, and an unused formatter is dead surface that downstream plugins still see in their IDE autocomplete.
 
 ## Other
@@ -275,7 +275,7 @@ Remove every configured-options entry addressing the given option at the given s
 
 Callers express intent ("forget any configuration for option X at scope Y") and the model owns the entry-format end-to-end. The match is value-aware: for
 value-centric options it covers both the bare scoped entry and any entry carrying a single trailing value segment, so a subsequent [setOption](#setoption) cleanly
-replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as an idempotent reset.
+replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
 
 ###### Parameters
 
@@ -685,7 +685,7 @@ Returns the current value associated with `option` if the feature option is enab
 Immutable derived index over the catalog inputs ([FeatureCategoryEntry](#featurecategoryentry)[] + the options map). Every field except `categories` / `options` is derived from
 those two; the index bundles them with their derivations so a single value carries everything any caller needs to make catalog-level decisions in O(1).
 
-The index is built once per catalog at [buildCatalogIndex](#buildcatalogindex); it is invariant across configured-options mutations, so a consumer that holds a stable
+The index is built once per catalog at [buildCatalogIndex](#buildcatalogindex); it is unchanged across configured-options mutations, so a consumer that holds a stable
 reference can rely on its query results until the catalog itself changes. The [FeatureOptions](#featureoptions) class holds one internally; consumers driving reducers
 directly hold it as state and reuse it across every dispatch that does not touch the catalog.
 
@@ -757,7 +757,7 @@ Entry describing a feature option.
 | <a id="description-1"></a> `description` | `string` | Description of the feature option for display or documentation. |
 | <a id="group"></a> `group?` | `string` | Optional. Grouping/category for the feature option. |
 | <a id="inputsize"></a> `inputSize?` | `number` | Optional. Width of the input field for a value-based feature option. Defaults to 5 characters. |
-| <a id="meta-1"></a> `meta?` | `TMeta` | Optional. An opaque, plugin-private annotation channel the core never interprets. HBPU's types deliberately cannot see inside `TMeta`; the value is carried verbatim through the catalog and forwarded to the documentation renderer's closures (the only surface that knows its concrete shape). This mirrors the OpenAPI `x-*` extension discipline, made type-safe: a plugin parameterizes the entry with its own annotation type, the core treats it as `unknown`, and the round-trip stays structurally invariant rather than a naming convention. |
+| <a id="meta-1"></a> `meta?` | `TMeta` | Optional. An opaque, plugin-private annotation channel the core never interprets. HBPU's types deliberately cannot see inside `TMeta`; the value is carried verbatim through the catalog and forwarded to the documentation renderer's closures (the only surface that knows its concrete shape). This mirrors the OpenAPI `x-*` extension discipline, made type-safe: a plugin parameterizes the entry with its own annotation type, the core treats it as `unknown`, and the round-trip stays structurally unchanged rather than a naming convention. |
 | <a id="name-1"></a> `name` | `string` | Name of the feature option (used in option strings). |
 | <a id="render"></a> `render?` | \| [`FeatureOptionFormatter`](#featureoptionformatter) \| ((`value`) => `string`) | Optional. Maps the raw stored value of a value-centric option to a display string. Either a [FeatureOptionFormatter](#featureoptionformatter) string naming a built-in formatter (preferred when the format already exists in the registry, since this keeps the enclosing catalog JSON-serializable and lets every plugin share one implementation) or an inline function for bespoke formatting the registry does not cover. Consulted by [FeatureOptions.logFeature](#logfeature) when emitting deviation lines so the catalog stays the single source of truth for how an option's value renders; ignored for plain boolean options. When absent, values render as the raw string returned by [FeatureOptions.value](#value). An unrecognized formatter name throws at catalog-rebuild time, surfacing the misconfiguration loudly rather than silently producing the raw-value fallback. |
 
@@ -896,7 +896,7 @@ defaults, value-options registry, groups (both directions), renderers, and the l
 name on a `render` declaration does not resolve, surfacing the misconfiguration at load time rather than silently degrading the log-emission path.
 
 The index is the catalog-side input to every other pure helper in this module. Build it once per catalog; reuse it across every configured-options mutation
-because the catalog is invariant across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
+because the catalog is unchanged across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
 future expansion before any option has migrated into it).
 
 #### Parameters

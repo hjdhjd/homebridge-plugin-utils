@@ -9,7 +9,7 @@
 Pure stateful byte-to-record parser for RTP and RTCP datagrams multiplexed on a single UDP port per RFC 5761.
 
 Each RTP or RTCP packet arrives as a self-contained UDP datagram, so the parser does not have to reassemble anything across chunks. Its job is classification: given
-the raw datagram bytes, decide whether the packet is RTP or RTCP and surface the payload type for callers that discriminate further. This mirrors the shape of
+the raw datagram bytes, decide whether the packet is RTP or RTCP and surface the payload type for callers that distinguish further. This mirrors the shape of
 [Mp4BoxParser](mp4-parser.md#mp4boxparser) (pure, stateful class, `consume(chunk)` returning an iterable) so the composing caller - typically
 [RtpDemuxer](rtp.md#rtpdemuxer) - can drive either parser through the same wiring.
 
@@ -109,4 +109,4 @@ type RtpPacketKind = "rtcp" | "rtp";
 ```
 
 Classification of a UDP datagram emitted by [RtpPacketParser](#rtppacketparser). `"rtp"` denotes a media packet; `"rtcp"` denotes a control packet. Consumers typically
-discriminate on this union to route to the correct downstream FFmpeg port.
+branch on this union to route to the correct downstream FFmpeg port.

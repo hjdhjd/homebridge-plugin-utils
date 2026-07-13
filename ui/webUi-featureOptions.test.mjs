@@ -366,7 +366,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     await orchestrator.show(session);
     await flush();
 
-    // The failure surfaced as an error toast rather than rejecting into a dropped-promise menu handler, and show() bailed before the page abort controller / render.
+    // The failure surfaced as an error toast, and show() bailed before the page abort controller / render.
     const errorToasts = fake.observed.toasts.filter((t) => t.variant === "error");
 
     assert.ok(errorToasts.some((t) => t.message === "host read failed"), "a re-sync read failure must surface as an error toast");

@@ -233,13 +233,13 @@ export class webUiFeatureOptions {
     // Re-read the host config into the session before the page renders against it. show() is the single entry chokepoint (launch, first-run, the menu, and the
     // connection-error retry), so re-syncing here makes "every show is fresh" an unconditional guarantee: an edit made in the Settings tab while this page was hidden
     // is reflected on return rather than rendering against a frozen snapshot. The sync lands before getControllers reads session.platform and before the options read
-    // below, so both derive from the re-read config. A read failure surfaces as a toast and bails rather than rejecting into a dropped-promise menu handler.
+    // below, so both derive from the re-read config. A read failure surfaces as a toast and bails, so the page never renders against a config the session could not read.
     try {
 
       await this.#session.sync();
     } catch(err) {
 
-      homebridge.toast.error(err?.message ?? String(err), "Error");
+      toastError(err);
 
       return;
     }

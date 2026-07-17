@@ -6,7 +6,7 @@ import { BOX_TYPE_FTYP, BOX_TYPE_MDAT, BOX_TYPE_MOOF, BOX_TYPE_MOOV, Mp4BoxParse
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { expectAt } from "../testing.helpers.ts";
-import { makeBox } from "./mp4.helpers.ts";
+import { makeBox } from "./fmp4-builders.ts";
 
 describe("Mp4BoxParser - single-chunk parsing", () => {
 

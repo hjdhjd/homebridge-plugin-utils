@@ -1,41 +1,37 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/mp4.helpers.ts: Shared ISO BMFF byte-level construction helpers for tests that exercise the fMP4 parser, assembler, and static predicates.
+ * ffmpeg/fmp4-builders.ts: Published ISO BMFF (fMP4) byte-level construction builders for the parser, assembler, and predicate test suites.
  */
 
 /**
- * Shared test helpers for ISO BMFF (fMP4) byte-level tests.
+ * Shared ISO BMFF (fMP4) byte-level construction builders.
  *
- * Co-located with the modules under test so changes to the construction surface land next to the code that depends on them. Files matching `*.helpers.ts` are excluded
- * from the build emit (see `tsconfig.build.json`) so nothing from this module ships in the published package.
+ * The parser-aligned construction surface every consumer's tests build fragments and initialization segments on - the library's own parser, assembler, and predicate
+ * suites and downstream plugins alike. Ships on the package's main export alongside the other test doubles (`TestClock`, `TestRecordingProcessFactory`) so a consumer
+ * composes real fMP4 bytes without hand-rolling box headers or re-deriving the wire layouts the predicates read.
  *
  * Construction layers, from primitive to fullbox builders:
  *
- * - {@link makeBox} - the primitive: header + payload. Every higher helper composes against this.
+ * - {@link makeBox} - the primitive: header + payload. Every higher builder composes against this.
  * - {@link makeContainer} - a convenience wrapper that concatenates nested box bytes into a parent container (e.g., `makeContainer("moov", [ trak1, trak2 ])`).
  * - {@link makeHdlrBox} / {@link makeTrunBox} - fullbox builders that encode the specific header layouts the `fmp4.ts` predicates read (`hasAudioTrack` walks the
- *   handler-type field; `isKeyframe` walks TRUN flags). Keeping these here means every test file that needs them goes through one parser-aligned construction path, so
- *   a future tweak to either predicate's wire layout has exactly one helper to update.
+ *   handler-type field; `isKeyframe` walks TRUN flags). Routing every test through one parser-aligned construction path means a future tweak to either predicate's wire
+ *   layout has exactly one builder to update.
  *
  * **Wire-format constants.** Anything the production parser reads lives in `fmp4.ts` (TRUN flag bits, sample-flag bits, the audio handler-type code) and is imported
- * here so the production reader and the test-construction path share one definition. Test-only values that production never consumes - currently the video
- * handler-type code, used as a negative-path handler for `hasAudioTrack` - live in this module as locally-scoped exports, which keeps the production surface to
- * exactly what production needs.
+ * here so the production reader and the construction path share one definition. Test-only values production never consumes - the video handler-type code, used as a
+ * negative-path handler for `hasAudioTrack` - live in this module, which keeps the production surface to exactly what production needs.
  *
  * @module
  */
-import { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, TRUN_FLAG_DATA_OFFSET, TRUN_FLAG_FIRST_SAMPLE_FLAGS, TRUN_FLAG_SAMPLE_DURATION, TRUN_FLAG_SAMPLE_FLAGS,
+import { BOX_HEADER_SIZE, TRUN_FLAG_DATA_OFFSET, TRUN_FLAG_FIRST_SAMPLE_FLAGS, TRUN_FLAG_SAMPLE_DURATION, TRUN_FLAG_SAMPLE_FLAGS,
   TRUN_FLAG_SAMPLE_SIZE } from "./fmp4.ts";
 import assert from "node:assert/strict";
 
-// Re-export the production constants the helpers consume so test files can import from `mp4.helpers.ts` alone as their one-stop shop for ISO BMFF byte construction.
-// These values live in `fmp4.ts`; the re-export is a navigation convenience, not a second source.
-export { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC };
-
 /**
  * Handler-type code for video tracks in ISO BMFF `hdlr` boxes: ASCII `"vide"` encoded as a 32-bit big-endian integer. Defined here rather than in `fmp4.ts` because
- * production never inspects it - `hasAudioTrack` compares each track's handler_type against {@link HDLR_TYPE_SOUN} and any non-match (including `"vide"`) is treated
- * uniformly as "not audio." Tests need a concrete non-audio value to exercise the negative path of that predicate, so the constant lives with the test helpers.
+ * production never inspects it - `hasAudioTrack` compares each track's handler_type against `HDLR_TYPE_SOUN` and any non-match (including `"vide"`) is treated
+ * uniformly as "not audio." Tests need a concrete non-audio value to exercise the negative path of that predicate, so the constant lives with the test builders.
  */
 export const HDLR_TYPE_VIDE = 0x76696465;
 
@@ -53,8 +49,9 @@ export function makeBox(type: string, payload: Buffer = Buffer.alloc(0)): Buffer
 
   assert.equal(type.length, 4, "box type must be exactly 4 ASCII characters");
 
-  const size = 8 + payload.length;
-  const header = Buffer.alloc(8);
+  // The header width comes from BOX_HEADER_SIZE, the constant the production parser walks boxes with, so the construction path and the parser read one definition of it.
+  const size = BOX_HEADER_SIZE + payload.length;
+  const header = Buffer.alloc(BOX_HEADER_SIZE);
 
   header.writeUInt32BE(size, 0);
   header.write(type, 4, 4, "ascii");
@@ -91,7 +88,7 @@ export function makeContainer(type: string, children: Buffer[]): Buffer {
  * exactly what `hasAudioTrack` reads when deciding whether a track is audio. Tests compose an initialization segment by wrapping an hdlr inside `moov -> trak -> mdia`,
  * with the handler_type selecting the track media type under test.
  *
- * @param handlerType - The 32-bit big-endian handler type code. Use {@link HDLR_TYPE_SOUN} for audio, {@link HDLR_TYPE_VIDE} for video, or any other value to
+ * @param handlerType - The 32-bit big-endian handler type code. Use `HDLR_TYPE_SOUN` for audio, {@link HDLR_TYPE_VIDE} for video, or any other value to
  *                      exercise the "unknown handler" negative path.
  * @param truncate    - Optional. When `true`, emits an hdlr whose payload is smaller than the minimum `hasAudioTrack` reads (stops before the handler_type field). Used
  *                      by the "undersized hdlr" negative test; defaults to `false`.
@@ -126,7 +123,7 @@ export function makeHdlrBox(handlerType: number, truncate = false): Buffer {
  * @param options.includeDuration   - When `true`, set `TRUN_FLAG_SAMPLE_DURATION` and reserve a 4-byte per-sample duration slot before the flags slot.
  * @param options.includeSize       - When `true`, set `TRUN_FLAG_SAMPLE_SIZE` and reserve a 4-byte per-sample size slot before the flags slot.
  * @param options.sampleFlagsValue  - The 32-bit value to write into the chosen flags field (first_sample_flags or per-sample flags). Use `0` for a keyframe; use
- *                                    {@link SAMPLE_FLAG_NON_SYNC} for a non-keyframe.
+ *                                    `SAMPLE_FLAG_NON_SYNC` for a non-keyframe.
  * @param options.truncate          - When `true`, emit a trun whose payload stops short of the flags field the predicate would read. Exercises the "insufficient bytes"
  *                                    guard inside `isKeyframe` without changing the declared box size.
  *

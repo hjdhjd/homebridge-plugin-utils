@@ -1,10 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/mp4.helpers.test.ts: Unit tests for the ISO BMFF byte-level construction helpers in mp4.helpers.ts. Helpers earn the same enumerated-criteria coverage as
- * production code per the testing convention - every branch, every error path, every flag combination - because the suites that consume these helpers (parser,
- * assembler, fmp4 predicate tests) silently lose their meaning if the helpers themselves drift from the wire layouts they encode.
+ * ffmpeg/fmp4-builders.test.ts: Unit tests for the ISO BMFF byte-level construction builders in fmp4-builders.ts. Builders earn the same enumerated-criteria coverage as
+ * production code per the testing convention - every branch, every error path, every flag combination - because the suites that consume these builders (parser,
+ * assembler, fmp4 predicate tests) silently lose their meaning if the builders themselves drift from the wire layouts they encode.
  */
-import { HDLR_TYPE_SOUN, HDLR_TYPE_VIDE, SAMPLE_FLAG_NON_SYNC, makeBox, makeContainer, makeHdlrBox, makeTrunBox } from "./mp4.helpers.ts";
+import { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC } from "./fmp4.ts";
+import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeHdlrBox, makeTrunBox } from "./fmp4-builders.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 

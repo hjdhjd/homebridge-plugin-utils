@@ -6,7 +6,7 @@
 /**
  * Cross-cutting test helpers shared across every test file in the HBPU suite.
  *
- * Domain-specific helpers live next to the modules they exercise (e.g., `ffmpeg/mp4.helpers.ts` for ISO BMFF construction, `mqtt.helpers.ts` for the MQTT transport
+ * Domain-specific helpers live next to the modules they exercise (e.g., `ffmpeg/fmp4-builders.ts` for ISO BMFF construction, `mqtt.helpers.ts` for the MQTT transport
  * stub). This module holds the primitives that are useful regardless of subject:
  *
  * - {@link expectAt} - narrow-or-fail indexed access helper that papers over `noUncheckedIndexedAccess` without introducing non-null assertions in test bodies.

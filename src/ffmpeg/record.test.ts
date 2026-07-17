@@ -13,7 +13,7 @@ import type { FfmpegOptions } from "./options.ts";
 import type { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { capturingLog } from "../testing.helpers.ts";
-import { makeBox } from "./mp4.helpers.ts";
+import { makeBox } from "./fmp4-builders.ts";
 import { makeCodecs } from "./codecs.helpers.ts";
 
 // Minimal FfmpegOptions stand-in. The record subclasses call `options.videoDecoder`, `options.recordEncoder`, and `options.audioEncoder` during command-line

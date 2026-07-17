@@ -10,7 +10,7 @@ import { Mp4SegmentAssembler } from "./mp4-assembler.ts";
 import { PassThrough } from "node:stream";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import { makeBox } from "./mp4.helpers.ts";
+import { makeBox } from "./fmp4-builders.ts";
 
 // Advance the generator one step and return the Buffer it yielded. If the generator terminated instead, fail the test with the supplied context. Encapsulating this
 // narrow-or-fail pattern keeps each test body free of IteratorResult shape handling and avoids non-null assertions on potentially-done results.

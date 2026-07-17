@@ -6,9 +6,9 @@
  * consumed both internally (the parser reuses `BOX_HEADER_SIZE` and the assembler compares box type codes via the `BOX_TYPE_*` constants) and externally (HBUP calls
  * `isKeyframe(buffer)` directly at its timeshift boundary), so the behavioral surface here must stay stable across the parser/assembler refactor.
  */
-import { HDLR_TYPE_SOUN, HDLR_TYPE_VIDE, SAMPLE_FLAG_NON_SYNC, makeBox, makeContainer, makeHdlrBox, makeTrunBox } from "./mp4.helpers.ts";
+import { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, hasAudioTrack, isKeyframe, splitMoofMdat } from "./fmp4.ts";
+import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeHdlrBox, makeTrunBox } from "./fmp4-builders.ts";
 import { describe, test } from "node:test";
-import { findBox, hasAudioTrack, isKeyframe, splitMoofMdat } from "./fmp4.ts";
 import assert from "node:assert/strict";
 
 describe("findBox", () => {

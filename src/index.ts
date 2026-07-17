@@ -12,5 +12,6 @@ export * from "./homebridge-enums.ts";
 export * from "./mqttClient.ts";
 export * from "./service.ts";
 export * from "./util.ts";
+export * from "./webui-loader.ts";
 export * from "./ffmpeg/index.ts";
 export * from "./logclient/index.ts";

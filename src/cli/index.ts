@@ -22,9 +22,10 @@
  * @module
  */
 import type { ProjectEntry, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } from "../docChrome.ts";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { parseWebUiLoaderConfig, renderWebUiLoaderScript } from "../webui-loader.ts";
 import type { renderFeatureOptionsReference, spliceMarkedRegion } from "../featureOptions-docs.ts";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
@@ -119,15 +120,29 @@ async function computeContentHash(root: string): Promise<string> {
  * removed in the same pass; non-version-shaped entries in the destination are left untouched so a plugin's own files (assets, sibling tooling, README copies)
  * survive across runs.
  *
+ * When the `loader` and `splice` namespaces are injected, a final step stamps the plugin's webUI script loader: the `index.html` beside the destination is read, its
+ * `WEBUI LOADER CONFIG` comment parsed, the loader block rendered from that config plus this run's `libPath` and package name, and spliced into its marked region with
+ * an atomic `.tmp` + rename. The step is marker-gated - no `index.html`, or no BEGIN marker, is a silent no-op - so a plugin that has not opted in, and every
+ * no-injection caller, mirror exactly as before. The stamp derives from the same package name and destination the mirror used, so the two never drift.
+ *
  * @param args
  * @param args.dest       - The plugin's destination directory (typically `homebridge-ui/public/lib`). Created if missing.
+ * @param args.loader     - The injected webUI-loader namespace (marker constants, `parseWebUiLoaderConfig`, `renderWebUiLoaderScript`). Absent = no stamp step, so the
+ *                          mirror-only path and its existing tests are untouched. Supplied with `splice`, it stamps the plugin's `index.html` loader region.
  * @param args.sourceRoot - Path to HBPU's package root (the directory containing `package.json` and `dist/`). The entry block resolves this from the CLI's own
  *                          real path; tests pass a tmpdir populated with a synthetic HBPU layout.
+ * @param args.splice     - The injected {@link spliceMarkedRegion} that replaces the loader's marked region. Paired with `loader`; absent = no stamp step.
  *
- * @throws When the source has not been built (`dist/ui/` missing), the source `package.json` lacks a `version` field, or the source `dist/ui` path exists but is not a
- *         directory.
+ * @throws When the source has not been built (`dist/ui/` missing), the source `package.json` lacks a `version` field (or, when stamping, a `name` field), or the source
+ *         `dist/ui` path exists but is not a directory; and, when stamping, propagates the parse/splice framed errors under a "mirror succeeded, stamp failed" frame.
  */
-export async function prepareUi({ dest, sourceRoot }: { dest: string; sourceRoot: string }): Promise<void> {
+export async function prepareUi({ dest, loader, sourceRoot, splice }: {
+
+  dest: string;
+  loader?: WebUiLoaderModule;
+  sourceRoot: string;
+  splice?: typeof spliceMarkedRegion;
+}): Promise<void> {
 
   const sourceUiDir = join(sourceRoot, "dist", "ui");
   const sourcePackageJson = join(sourceRoot, "package.json");
@@ -151,7 +166,7 @@ export async function prepareUi({ dest, sourceRoot }: { dest: string; sourceRoot
   }
 
   const packageManifestRaw = await readFile(sourcePackageJson, "utf8");
-  const packageManifest = JSON.parse(packageManifestRaw) as { version?: string };
+  const packageManifest = JSON.parse(packageManifestRaw) as { name?: string; version?: string };
   const version = packageManifest.version;
 
   if(!version) {
@@ -196,6 +211,81 @@ export async function prepareUi({ dest, sourceRoot }: { dest: string; sourceRoot
   await Promise.all(entries
     .filter((entry) => entry.isDirectory() && VERSION_PATTERN.test(entry.name) && (entry.name !== subdir))
     .map((entry) => rm(join(absDest, entry.name), { force: true, recursive: true })));
+
+  // Stamp the webUI script loader when the loader namespace is injected. The mirror is complete by now (subdir, manifest, sweep), so the stamp is a final overlay on
+  // the plugin's index.html; without injection this is skipped entirely and the mirror-only path is unchanged. The importmap prefix derives from the mirrored package's
+  // own name, so a missing name is a stamp-only precondition failure rather than a mirror one.
+  if(loader && splice) {
+
+    const packageName = packageManifest.name;
+
+    if(!packageName) {
+
+      throw new Error("HBPU package.json at " + sourcePackageJson + " has no name field; the webUI loader importmap prefix derives from it.");
+    }
+
+    await stampWebUiLoader({ absDest, loader, packageName, splice });
+  }
+}
+
+// The subset of the `webui-loader` module the CLI reaches through a computed dynamic import at dispatch time: the marker strings, the config parser, and the block
+// renderer. Declaring it as an interface built from the module's own export types keeps the injected namespace in lockstep with `webui-loader.ts` without a load-time
+// value import that would fracture this symlink-safe bin.
+interface WebUiLoaderModule {
+
+  readonly WEBUI_LOADER_BEGIN: string;
+  readonly WEBUI_LOADER_END: string;
+  readonly parseWebUiLoaderConfig: typeof parseWebUiLoaderConfig;
+  readonly renderWebUiLoaderScript: typeof renderWebUiLoaderScript;
+}
+
+// Stamp the rendered loader block into the plugin's index.html. Marker-gated and a no-op on repeat: no index.html beside the destination, or no BEGIN marker, is a
+// silent skip (a plugin without a config UI, or one that has not opted into the stamped loader, is left untouched); otherwise the config comment is parsed, the block
+// rendered from it plus this run's destination-relative libPath and the mirrored package's name, and spliced into the marked region with an atomic `.tmp` + rename.
+// The parse and splice throw their own framed errors; a stamp-phase failure re-frames them so the message states the mirror already succeeded and only the stamp
+// failed, since by this point the destination has been mirrored and only the plugin's index.html overlay remains.
+async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
+
+  absDest: string;
+  loader: WebUiLoaderModule;
+  packageName: string;
+  splice: typeof spliceMarkedRegion;
+}): Promise<void> {
+
+  const indexPath = join(dirname(absDest), "index.html");
+  let html: string;
+
+  try {
+
+    html = await readFile(indexPath, "utf8");
+  } catch {
+
+    // No index.html beside the destination: a plugin without a custom config UI page has nothing to stamp.
+    return;
+  }
+
+  // No marked region means the plugin has not opted into the stamped loader; leave its index.html untouched.
+  if(!html.includes(loader.WEBUI_LOADER_BEGIN)) {
+
+    return;
+  }
+
+  try {
+
+    const config = loader.parseWebUiLoaderConfig(html, indexPath);
+
+    // The destination-relative segment the manifest fetch and the importmap prefix resolve against - `"./lib/"` for the family convention - derived from the mirror's
+    // own destination basename so it is correct for any destination the plugin chose.
+    const libPath = "./" + basename(absDest) + "/";
+    const script = loader.renderWebUiLoaderScript({ bust: config.bust, entry: config.entry, libPath, packageName });
+    const stamped = splice(html, script, { beginMarker: loader.WEBUI_LOADER_BEGIN, endMarker: loader.WEBUI_LOADER_END });
+
+    await writeFile(indexPath + ".tmp", stamped, "utf8");
+    await rename(indexPath + ".tmp", indexPath);
+  } catch(error) {
+
+    throw new Error("The webUI mirror succeeded but stamping the loader in " + indexPath + " failed: " + (error instanceof Error ? error.message : String(error)) + ".");
+  }
 }
 
 /**
@@ -614,9 +704,30 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
         return 1;
       }
 
+      // Reach HBPU's own loader renderer and the splice primitive through computed dynamic imports of their compiled modules - never static relative imports - so the
+      // single-file bin stays symlink-safe. A dist complete enough to mirror `dist/ui` yet missing these is a build inconsistency that must fail loudly rather than
+      // silently skip the wanted stamp, exactly as prepare-docs hard-fails on its own missing renderer.
+      const loaderPath = join(sourceRoot, "dist", "webui-loader.js");
+      const uiSplicePath = join(sourceRoot, "dist", "featureOptions-docs.js");
+
+      let loader: WebUiLoaderModule;
+      let uiSplicer: { spliceMarkedRegion: typeof spliceMarkedRegion };
+
       try {
 
-        await prepareUi({ dest: destination, sourceRoot });
+        loader = await import(pathToFileURL(loaderPath).href) as WebUiLoaderModule;
+        uiSplicer = await import(pathToFileURL(uiSplicePath).href) as typeof uiSplicer;
+      } catch {
+
+        stderr.write("homebridge-plugin-utils prepare-ui: HBPU has not been built: " + loaderPath + " or " + uiSplicePath + " is missing. Run `npm run build` in " +
+          "HBPU first.\n");
+
+        return 1;
+      }
+
+      try {
+
+        await prepareUi({ dest: destination, loader, sourceRoot, splice: uiSplicer.spliceMarkedRegion });
       } catch(error) {
 
         stderr.write("homebridge-plugin-utils prepare-ui: " + (error instanceof Error ? error.message : String(error)) + "\n");

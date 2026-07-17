@@ -9,6 +9,7 @@
  * or modifies the working tree.
  */
 import * as docChrome from "../docChrome.ts";
+import * as webuiLoader from "../webui-loader.ts";
 import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference, spliceMarkedRegion } from "../featureOptions-docs.ts";
 import { USAGE, prepareChrome, prepareDocs, prepareUi, runCli } from "./index.ts";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -61,6 +62,25 @@ async function setupSource({ files, root, version }: { files: readonly string[];
     await mkdir(dirname(absolute), { recursive: true });
     await writeFile(absolute, relative);
   }));
+}
+
+/**
+ * Write the two compiled dist modules the `prepare-ui` dispatch reaches through computed dynamic imports for its loader stamp: `dist/webui-loader.js` and
+ * `dist/featureOptions-docs.js`, each a thin re-export of the real source through a `file:` URL. This mirrors how the `prepare-docs` dispatch tests supply their
+ * renderer, so a `runCli` (or subprocess) `prepare-ui` invocation exercises the genuine dynamic-import path rather than a mock, and hard-fails the same way when these
+ * are absent.
+ *
+ * @param root - The synthetic HBPU source root whose `dist/` receives the two re-export modules.
+ */
+async function writeLoaderDist(root: string): Promise<void> {
+
+  const realLoader = fileURLToPath(new URL("../webui-loader.ts", import.meta.url));
+  const realDocs = fileURLToPath(new URL("../featureOptions-docs.ts", import.meta.url));
+
+  await mkdir(join(root, "dist"), { recursive: true });
+  await writeFile(join(root, "dist", "webui-loader.js"), "export * from " + JSON.stringify(pathToFileURL(realLoader).href) + ";\n");
+  await writeFile(join(root, "dist", "featureOptions-docs.js"), "export { renderFeatureOptionsReference, spliceMarkedRegion } from " +
+    JSON.stringify(pathToFileURL(realDocs).href) + ";\n");
 }
 
 /**
@@ -358,6 +378,125 @@ describe("prepareUi", () => {
   });
 });
 
+describe("prepareUi - webUI loader stamp", () => {
+
+  // Build a scratch layout for the stamp tests: a synthetic HBPU source root, a `lib` destination, and the plugin's `index.html` beside it (so the stamp resolves it
+  // from the destination's parent). The dest basename is `lib` so the derived libPath is the family-convention `./lib/`. The real webui-loader module and the real
+  // splice primitive are injected, exercising the genuine parse/render/splice path rather than a mock.
+  async function setupStamp(scratchPath: string, indexHtml: string): Promise<{ dest: string; indexPath: string; sourceRoot: string }> {
+
+    const sourceRoot = join(scratchPath, "source");
+    const dest = join(scratchPath, "lib");
+    const indexPath = join(scratchPath, "index.html");
+
+    await mkdir(sourceRoot, { recursive: true });
+    await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
+    await writeFile(indexPath, indexHtml);
+
+    return { dest, indexPath, sourceRoot };
+  }
+
+  const CONFIG_COMMENT = "<!-- WEBUI LOADER CONFIG {\"bust\":[\"./protect-config.mjs\"],\"entry\":\"./ui.mjs\"} -->";
+  const MARKED_INDEX = "<html>\n<body></body>\n" + CONFIG_COMMENT + "\n" + webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n</html>\n";
+
+  test("no index.html beside the destination is a no-op - the mirror still runs and no index.html is created", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const dest = join(scratch.path, "lib");
+
+    await mkdir(sourceRoot, { recursive: true });
+    await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
+
+    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+
+    assert.ok(await readFile(join(dest, "manifest.json"), "utf8"), "the mirror still produced its manifest");
+    await assert.rejects(async () => readFile(join(scratch.path, "index.html"), "utf8"), "the stamp step creates no index.html when none exists");
+  });
+
+  test("an index.html without the loader markers is left byte-untouched", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const plain = "<html>\n<body>no loader region here</body>\n</html>\n";
+    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, plain);
+
+    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+
+    assert.equal(await readFile(indexPath, "utf8"), plain, "an index.html with no BEGIN marker is not opted in and stays byte-identical");
+  });
+
+  test("a marked index.html with a valid config is stamped, and a second run is byte-identical", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+
+    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+
+    const stamped = await readFile(indexPath, "utf8");
+
+    assert.match(stamped, /<script type="module">/, "the loader block is stamped between the markers");
+    assert.match(stamped, /"homebridge-plugin-utils\/": new URL\("\.\/lib\/" \+ manifest\.subdir \+ "\/"/,
+      "the importmap prefix uses the mirrored package name and the derived ./lib/ libPath");
+    assert.match(stamped, /await import\("\.\/ui\.mjs"\)/, "the entry import is present");
+    assert.match(stamped, new RegExp(CONFIG_COMMENT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the config comment survives outside the marked region");
+
+    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+
+    assert.equal(await readFile(indexPath, "utf8"), stamped, "a second stamp run is byte-identical");
+  });
+
+  test("neighboring marked regions in the same html are left byte-identical through the stamp", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const other = "<html>\n" + docChrome.DOCUMENTATION_BEGIN + "\ndocs region content\n" + docChrome.DOCUMENTATION_END + "\n" + CONFIG_COMMENT + "\n" +
+      webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n" + docChrome.PROJECTS_BEGIN + "\nprojects region content\n" + docChrome.PROJECTS_END +
+      "\n</html>\n";
+    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, other);
+
+    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+
+    const result = await readFile(indexPath, "utf8");
+
+    assert.ok(result.includes(docChrome.DOCUMENTATION_BEGIN + "\ndocs region content\n" + docChrome.DOCUMENTATION_END), "the DOCUMENTATION region is byte-identical");
+    assert.ok(result.includes(docChrome.PROJECTS_BEGIN + "\nprojects region content\n" + docChrome.PROJECTS_END), "the PROJECTS region is byte-identical");
+    assert.match(result, /<script type="module">/, "the loader region was the only region stamped");
+  });
+
+  test("duplicated loader markers propagate the splice ambiguity error under the stamp-phase frame", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const dupMarkers = "<html>\n" + CONFIG_COMMENT + "\n" + webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n" + webuiLoader.WEBUI_LOADER_BEGIN +
+      "\n" + webuiLoader.WEBUI_LOADER_END + "\n</html>\n";
+    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, dupMarkers);
+
+    await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion }),
+      /mirror succeeded but stamping the loader[\s\S]*ambiguous/, "the ambiguous-marker error is framed as a stamp-phase failure over a completed mirror");
+
+    // The failed stamp writes nothing over the original: the marked region still holds no stamped block.
+    assert.doesNotMatch(await readFile(indexPath, "utf8"), /<script type="module">/, "a failed stamp leaves the index.html unstamped");
+  });
+
+  test("a package.json without a name field fails the stamp with the framed derivation error", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+
+    // The stamp derives the importmap prefix from the package name, so a name-less package.json is a precondition failure the stamp names; the mirror itself needs
+    // only the version and completes first.
+    await writeFile(join(sourceRoot, "package.json"), JSON.stringify({ version: "2.0.0" }, null, 2));
+
+    await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion }), /has no name field/);
+
+    assert.equal(await readFile(indexPath, "utf8"), MARKED_INDEX, "the index.html is untouched when the stamp fails its precondition");
+  });
+});
+
 // A minimal well-formed catalog module body: two categories, one of which carries a value option, sufficient to render a non-trivial fragment (including the
 // `.<value>` legend) so the splice has substantive content to verify. Held as a module-scope constant rather than inlined as a parameter default so the multi-line
 // ESM source stays out of the destructuring signature.
@@ -639,6 +778,10 @@ describe("runCli", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
 
+    // The prepare-ui dispatch reaches HBPU's loader renderer and the splice primitive through computed dynamic imports of its built dist; supply them the same way the
+    // prepare-docs dispatch tests supply their renderer. No index.html beside the destination means the stamp itself is a no-op, so this pins the dispatch + mirror.
+    await writeLoaderDist(sourceRoot);
+
     const capture = captureStderr();
     const code = await runCli({ argv: [ "prepare-ui", dest ], cwd: sourceRoot, sourceRoot, stderr: capture.stderr });
 
@@ -657,16 +800,37 @@ describe("runCli", () => {
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
 
-    // Source root exists but has no dist/ui - prepareUi will throw with the corrective-action message, and the dispatcher should surface it on stderr rather than
-    // letting the rejection escape unhandled.
+    // The loader dist is present so the dispatch's computed imports succeed and control reaches prepareUi, but the source has no dist/ui - prepareUi throws with the
+    // corrective-action message, and the dispatcher should surface it on stderr rather than letting the rejection escape unhandled.
     await mkdir(sourceRoot, { recursive: true });
     await writeFile(join(sourceRoot, "package.json"), JSON.stringify({ version: "2.0.0" }));
+    await writeLoaderDist(sourceRoot);
 
     const capture = captureStderr();
     const code = await runCli({ argv: [ "prepare-ui", dest ], cwd: sourceRoot, sourceRoot, stderr: capture.stderr });
 
     assert.equal(code, 1);
     assert.match(capture.chunks(), /HBPU has not been built/);
+  });
+
+  test("prepare-ui frames a not-built HBPU when the loader modules are absent from sourceRoot", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const dest = join(scratch.path, "dest");
+
+    // The source has a dist/ui to mirror but no dist/webui-loader.js, so the dispatch's computed import of the loader renderer fails. The dispatcher must catch that and
+    // frame it as the actionable "HBPU has not been built" condition rather than silently skipping a wanted stamp - the same hard-fail prepare-docs applies to its
+    // absent renderer, and the reason a dist complete enough to mirror dist/ui yet missing the loader is treated as a build inconsistency.
+    await mkdir(sourceRoot, { recursive: true });
+    await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-ui", dest ], cwd: sourceRoot, sourceRoot, stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.match(capture.chunks(), /HBPU has not been built:.*webui-loader\.js/);
   });
 
   test("prepare-docs without a catalog-module argument writes a misuse message and exits 1", async () => {
@@ -1122,6 +1286,10 @@ describe("CLI entry point (invoked through a symlink)", () => {
     await writeFile(join(pkgRoot, "package.json"), JSON.stringify({ name: "homebridge-plugin-utils", version: "9.9.9" }));
     await writeFile(join(pkgRoot, "dist", "ui", "webUi.mjs"), "webUi");
     await writeFile(join(pkgRoot, "dist", "ui", "views", "options.mjs"), "options");
+
+    // The dispatch dynamically imports the loader renderer and the splice primitive from the package's own dist, so the synthetic package must carry them; without an
+    // index.html beside the destination the stamp is a no-op, so this keeps the entry-point test focused on the symlink resolution while satisfying the dispatch.
+    await writeLoaderDist(pkgRoot);
 
     const cliSource = fileURLToPath(new URL("./index.ts", import.meta.url));
 

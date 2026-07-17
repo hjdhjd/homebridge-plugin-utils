@@ -49,7 +49,10 @@ const loadedState = ({ configuredOptions = [], controllers = [], devices = [], m
 
   const base = reducer(initialState(), { catalog: CATALOG, configuredOptions, controllers, mode, type: "model:loaded" });
 
-  return reducer(base, { devices, type: "devices:loaded" });
+  // Land the devices through the request/outcome pairing the reducer guards: mint the fetch sequence, then apply the outcome stamped with it.
+  const requested = reducer(base, { controllerId: null, type: "devices:requested" });
+
+  return reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 };
 
 describe("scope-extraction helpers", () => {

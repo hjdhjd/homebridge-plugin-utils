@@ -44,7 +44,8 @@ describe("mountConnectionErrorView - error rendering", () => {
 
     const { root, store } = setup();
 
-    store.dispatch({ message: "Controller unreachable.", type: "connection:error" });
+    store.dispatch({ guidance: "Check the Settings tab to verify the controller details are correct.", headline: "Unable to connect to the controller.",
+      message: "Controller unreachable.", type: "connection:error" });
 
     assert.match(root.textContent, /Unable to connect to the controller/);
     assert.match(root.textContent, /Controller unreachable\./);
@@ -59,7 +60,8 @@ describe("mountConnectionErrorView - error rendering", () => {
 
     const { root, store } = setup({ retryDelayMs: 30 });
 
-    store.dispatch({ message: "down", type: "connection:error" });
+    store.dispatch({ guidance: "Check the Settings tab to verify the controller details are correct.", headline: "Unable to connect to the controller.", message: "down",
+      type: "connection:error" });
 
     await waitFor(() => root.querySelector("button")?.disabled === false, { message: "retry button to enable", timeout: 500 });
 
@@ -75,7 +77,8 @@ describe("mountConnectionErrorView - error rendering", () => {
     const onRetry = async () => { retryFired = true; };
     const { root, store } = setup({ onRetry, retryDelayMs: 20 });
 
-    store.dispatch({ message: "down", type: "connection:error" });
+    store.dispatch({ guidance: "Check the Settings tab to verify the controller details are correct.", headline: "Unable to connect to the controller.", message: "down",
+      type: "connection:error" });
 
     const retryBtn = await waitFor(() => {
 
@@ -99,7 +102,8 @@ describe("mountConnectionErrorView - lifecycle", () => {
 
     const { abort, root, store } = setup({ retryDelayMs: 500 });
 
-    store.dispatch({ message: "down", type: "connection:error" });
+    store.dispatch({ guidance: "Check the Settings tab to verify the controller details are correct.", headline: "Unable to connect to the controller.", message: "down",
+      type: "connection:error" });
 
     abort();
 

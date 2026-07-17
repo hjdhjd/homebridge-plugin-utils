@@ -105,15 +105,139 @@ describe("reducer - controllers:loaded", () => {
   });
 });
 
+describe("reducer - devices:requested", () => {
+
+  test("mints a monotonically increasing sequence and records the pending request", () => {
+
+    const first = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
+
+    assert.equal(first.devicesRequestSeq, 1, "the first request mints sequence 1");
+    assert.deepEqual(first.devicesRequest, { controllerId: "ctrl-a", seq: 1 });
+
+    const second = reducer(first, { controllerId: "ctrl-b", type: "devices:requested" });
+
+    assert.equal(second.devicesRequestSeq, 2, "the counter advances monotonically");
+    assert.deepEqual(second.devicesRequest, { controllerId: "ctrl-b", seq: 2 }, "the latest request owns the pending slot");
+  });
+
+  test("normalizes an absent controllerId to null (a device-only fetch)", () => {
+
+    const next = reducer(initialState(), { type: "devices:requested" });
+
+    assert.deepEqual(next.devicesRequest, { controllerId: null, seq: 1 });
+  });
+});
+
 describe("reducer - devices:loaded", () => {
 
-  test("replaces only the devices field", () => {
+  const DEVICES = [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
 
-    const devices = [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
-    const next = reducer(initialState(), { devices, type: "devices:loaded" });
+  // Pair a request with its answering outcome: mint the sequence, then apply the outcome stamped with it. The reducer applies a loaded only when its sequence still
+  // answers the pending request, so this pairing is how a fetch's outcome lands in state.
+  const requestThenLoad = (state, { controllerId = null, devices = [], error = "" } = {}) => {
 
-    assert.equal(next.devices, devices);
-    assert.deepEqual(next.scope, { kind: "global" }, "scope not touched by devices:loaded - caller dispatches scope:changed separately");
+    const requested = reducer(state, { controllerId, type: "devices:requested" });
+
+    return reducer(requested, { controllerId, devices, error, seq: requested.devicesRequest.seq, type: "devices:loaded" });
+  };
+
+  test("an outcome that answers the pending request applies the devices and clears the pending slot", () => {
+
+    const next = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: DEVICES });
+
+    assert.equal(next.devices, DEVICES, "the device list is adopted");
+    assert.equal(next.devicesControllerId, "ctrl-a", "the owning controller is recorded");
+    assert.equal(next.devicesAppliedSeq, 1, "the applied sequence is recorded as the reducer's verdict fact");
+    assert.equal(next.devicesRequest, null, "the pending slot is cleared once answered");
+    assert.deepEqual(next.scope, { kind: "global" }, "scope not touched by devices:loaded - a dispatcher moves the selection separately");
+  });
+
+  test("an outcome whose sequence is superseded returns the identical state reference (dropped)", () => {
+
+    // Two requests mint seq 1 then seq 2, so the pending slot holds seq 2. The seq-1 outcome arrives late and must drop, returning the SAME state reference so
+    // subscribers reading reference equality see a no-op.
+    const pending = reducer(reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" }), { controllerId: "ctrl-a", type: "devices:requested" });
+    const dropped = reducer(pending, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq: 1, type: "devices:loaded" });
+
+    assert.equal(dropped, pending, "the stale outcome returns the identical state reference");
+  });
+
+  test("same-controller race: the first fetch's outcome drops and the second's applies (the sequence, not the controllerId, is the identity)", () => {
+
+    // Two fetches for the SAME controller. This is the row a controllerId-keyed implementation fails: swap the reducer's `action.seq !== state.devicesRequest.seq`
+    // comparison for a controllerId comparison and the first outcome would wrongly apply here, since both fetches carry the same controllerId.
+    const firstRequested = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
+    const secondRequested = reducer(firstRequested, { controllerId: "ctrl-a", type: "devices:requested" });
+    const firstSeq = firstRequested.devicesRequest.seq;
+    const secondSeq = secondRequested.devicesRequest.seq;
+
+    // The first fetch's outcome arrives first - superseded, so it drops.
+    const afterFirst = reducer(secondRequested, { controllerId: "ctrl-a", devices: [], error: "", seq: firstSeq, type: "devices:loaded" });
+
+    assert.equal(afterFirst, secondRequested, "the superseded first outcome drops");
+
+    // The second fetch's outcome arrives - it answers the pending request and applies.
+    const afterSecond = reducer(afterFirst, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq: secondSeq, type: "devices:loaded" });
+
+    assert.equal(afterSecond.devices, DEVICES, "the second (latest) outcome applies");
+    assert.equal(afterSecond.devicesAppliedSeq, secondSeq);
+  });
+
+  test("same-controller race, reverse arrival: the second's outcome applies first and the first's drops after", () => {
+
+    const firstRequested = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
+    const secondRequested = reducer(firstRequested, { controllerId: "ctrl-a", type: "devices:requested" });
+
+    // The second (latest) outcome arrives first and applies, clearing the pending slot.
+    const afterSecond = reducer(secondRequested,
+      { controllerId: "ctrl-a", devices: DEVICES, error: "", seq: secondRequested.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.equal(afterSecond.devices, DEVICES);
+    assert.equal(afterSecond.devicesRequest, null, "the pending slot is cleared");
+
+    // The first (superseded) outcome arrives after - no pending request remains, so it drops.
+    const afterFirst = reducer(afterSecond, { controllerId: "ctrl-a", devices: [], error: "", seq: firstRequested.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.equal(afterFirst, afterSecond, "the late superseded outcome drops");
+  });
+
+  test("device-only round-trip: a null controllerId is normalized and applied", () => {
+
+    const next = requestThenLoad(initialState(), { controllerId: null, devices: DEVICES });
+
+    assert.equal(next.devices, DEVICES);
+    assert.equal(next.devicesControllerId, null, "device-only mode records a null owning controller");
+  });
+
+  test("an outcome carrying a non-empty error applies the empty list AND transitions status to connection-error", () => {
+
+    const next = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+
+    assert.deepEqual(next.devices, [], "a failed fetch applies its empty device list");
+    assert.equal(next.devicesControllerId, "ctrl-a");
+    assert.equal(next.status.kind, "connection-error", "a non-empty error moves the status to connection-error");
+    assert.equal(next.status.message, "Controller unreachable.", "the controller-failure message is carried on the status");
+  });
+
+  test("an outcome against no pending request drops (the explicit null check, not an optional-chained comparison)", () => {
+
+    // No devices:requested has run, so devicesRequest is null. A seq-carrying outcome must drop rather than apply - the explicit null check guards against an
+    // optional-chained comparison reading undefined on both sides and wrongly applying.
+    const base = initialState();
+    const next = reducer(base, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq: 1, type: "devices:loaded" });
+
+    assert.equal(next, base, "the outcome drops against a null pending request, returning the identical state reference");
+  });
+
+  test("a seq-less outcome against no pending request drops - the case an optional-chained guard would wrongly apply", () => {
+
+    // The discriminating case for the guard's explicit null check: with devicesRequest null AND no seq on the action, an optional-chained comparison reads undefined
+    // on both sides and applies the outcome. This is the exact shape of an unpaired legacy dispatch, so its loud drop is what keeps such a fixture from passing
+    // silently.
+    const base = initialState();
+    const next = reducer(base, { controllerId: "ctrl-a", devices: DEVICES, error: "", type: "devices:loaded" });
+
+    assert.equal(next, base, "a seq-less outcome drops against a null pending request, returning the identical state reference");
   });
 });
 

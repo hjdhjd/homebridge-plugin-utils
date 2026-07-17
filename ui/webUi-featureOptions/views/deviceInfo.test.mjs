@@ -83,7 +83,8 @@ describe("mountDeviceInfoView", () => {
     const calls = [];
 
     store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
-    store.dispatch({ devices: [DEVICE], type: "devices:loaded" });
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [DEVICE], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
 
     mountDeviceInfoView({
 
@@ -114,7 +115,8 @@ describe("mountDeviceInfoView", () => {
     const controller = new AbortController();
 
     store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
-    store.dispatch({ devices: [DEVICE], type: "devices:loaded" });
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [DEVICE], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
 
     mountDeviceInfoView({ root, signal: controller.signal, store });
     store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
@@ -139,7 +141,8 @@ describe("mountDeviceInfoView", () => {
     // orchestrator's responsibility, so this asserts the view populates its region without flipping it visible.
     root.style.display = "none";
     store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
-    store.dispatch({ devices: [DEVICE], type: "devices:loaded" });
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [DEVICE], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
     mountDeviceInfoView({ root, signal: controller.signal, store });
     store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 

@@ -25,7 +25,10 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *
  *   - `model:loaded` - first load: catalog, configuredOptions, controllers, mode are populated; status transitions to ready.
  *   - `controllers:loaded` - controllers-only refresh (reducer + nav subscriber wired) that no code currently dispatches; the retry path re-runs the full `model:loaded`.
- *   - `devices:loaded` - devices list updated when the active controller changes or device-only mode resolves the accessory cache.
+ *   - `devices:requested` - a device fetch is beginning: mints the next fetch sequence into state and records it as the pending request, so the outcome that
+ *     eventually answers it can be told apart from a superseded one.
+ *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
+ *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error.
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
@@ -113,9 +116,16 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {readonly string[]} configuredOptions - The canonical user-state array. Mutations replace it via the pure transforms from featureOptions.ts.
  * @property {readonly Controller[]} controllers - Controllers list (empty in device-only mode or before resolution).
  * @property {readonly Device[]} devices - Devices list for the active controller (or the cached-accessories list in device-only mode).
+ * @property {number} devicesAppliedSeq - The sequence of the device-fetch outcome currently applied. The reducer's own verdict fact: a dispatcher reads it back to
+ *   learn whether its outcome (the one carrying this sequence) is the one that landed, gating its follow-up work on one integer comparison rather than on the
+ *   device array's reference, which the shared-empty-array idiom and a caching `getDevices` can alias across fetches.
  * @property {string | null} devicesControllerId - Serial of the controller whose `devices` are loaded, or null (device-only / none yet). Preserves the
  *   device-to-controller association that `scope` drops once the selection goes global, so a loaded device's parent controller stays resolvable after the
  *   selection leaves controller scope.
+ * @property {{controllerId: string | null, seq: number} | null} devicesRequest - The pending device-fetch record, or null when no fetch is outstanding. A
+ *   `devices:requested` records the latest fetch here; the `devices:loaded` that carries the same sequence clears it, and any other outcome is dropped.
+ * @property {number} devicesRequestSeq - The persistent monotonic fetch counter. Never reset within a store's life, so every fetch across the session gets a unique,
+ *   increasing sequence and last-request-wins holds even for two fetches against the same controller.
  * @property {{mode: "all" | "modified", query: string}} filter - Search and filter state. Two-field record because the dimensions are independent (every combination
  *                                                                is valid and meaningful).
  * @property {readonly string[]} initialOptions - The at-show() snapshot for "Revert to Saved." Stable across the session except when re-show() loads an option
@@ -166,7 +176,10 @@ export const initialState = () => {
     configuredOptions: empty,
     controllers: [],
     devices: [],
+    devicesAppliedSeq: 0,
     devicesControllerId: null,
+    devicesRequest: null,
+    devicesRequestSeq: 0,
     filter: { mode: "all", query: "" },
     initialOptions: empty,
     mode: "device-only",
@@ -215,12 +228,41 @@ export const reducer = (state, action) => {
       return { ...state, controllers: action.controllers };
     }
 
+    case "devices:requested": {
+
+      // Mint the next monotonic fetch sequence and record it as the pending request. The sequence - not the controllerId - is the fetch identity, so two in-flight
+      // fetches for the same controller (a re-click, or a click racing the initial fetch) still resolve last-request-wins. The latest request owns the pending slot;
+      // an earlier in-flight fetch's outcome finds its sequence superseded when it lands.
+      const seq = state.devicesRequestSeq + 1;
+
+      return { ...state, devicesRequest: { controllerId: action.controllerId ?? null, seq }, devicesRequestSeq: seq };
+    }
+
     case "devices:loaded": {
 
-      // Devices list updated when the active controller changes or device-only mode resolves the cached-accessories list. `devicesControllerId` records which
-      // controller these devices belong to (null in device-only mode), so the association survives a later move to global scope. Scope is not touched here - the
-      // caller dispatches `scope:changed` separately if the selection needs to move.
-      return { ...state, devices: action.devices, devicesControllerId: action.controllerId ?? null };
+      // A device fetch's outcome, stamped with the sequence its `devices:requested` minted. Apply it only when it answers the pending request; a superseded or
+      // seq-less outcome vanishes here so a stale continuation cannot clobber the current view, and tests can assert reference equality on the dropped path. The null
+      // check is explicit: an optional-chained comparison would read undefined on both sides for a seq-less action against no pending request and wrongly apply it,
+      // silently green-lighting an unpaired legacy fixture.
+      if((state.devicesRequest === null) || (action.seq !== state.devicesRequest.seq)) {
+
+        return state;
+      }
+
+      // The pending request is answered. Record the applied sequence as the reducer's own verdict fact (dispatchers read it back to gate their follow-ups), clear the
+      // pending slot, and adopt the device list with its owning controller (null in device-only mode) so the association survives a later move to global scope.
+      const applied = {
+
+        ...state,
+        devices: action.devices,
+        devicesAppliedSeq: action.seq,
+        devicesControllerId: action.controllerId ?? null,
+        devicesRequest: null
+      };
+
+      // A non-empty error is the connection-failure signal: the outcome carried an empty device list and the controller-failure message alongside it, so the status
+      // moves to connection-error at this, the reducer's one fetch-failure transition. Scope is not touched here - a dispatcher moves the selection separately.
+      return action.error.length ? { ...applied, status: { kind: "connection-error", message: action.error } } : applied;
     }
 
     case "scope:changed": {

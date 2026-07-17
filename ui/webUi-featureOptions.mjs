@@ -205,10 +205,11 @@ export class webUiFeatureOptions {
    *   5. Adopt the design tokens. Synchronous - tokens are static declarations with no I/O dependencies.
    *   6. Fire the theme effect, persist effect, keyboard effect in parallel. The theme effect's I/O (Bootstrap probe) runs in the background.
    *   7. Once controllers resolves: if controller-based mode with empty controllers, show the no-controllers message and return.
-   *   8. Pre-fire the devices fetch for the initial controller so it overlaps with the feature catalog.
+   *   8. Record and pre-fire the initial controller's devices fetch (a `devices:requested` mints its sequence) so it overlaps with the feature catalog.
    *   9. Once the feature catalog resolves: build the catalog, dispatch model:loaded, mount all views.
-   *  10. Once devices resolve: dispatch devices:loaded. If a controller is selected and the result carried a connection-failure error, dispatch connection:error
-   *      with that message and return; otherwise set the initial scope.
+   *  10. Once devices resolve: dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and
+   *      folds a fetch failure into the connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error
+   *      status returns without revealing, otherwise it sets the initial scope.
    *  11. Reveal regions that views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
@@ -302,6 +303,12 @@ export class webUiFeatureOptions {
     }
 
     const initialController = controllers?.[0] ?? null;
+
+    // Record this fetch at the store's chokepoint before firing it, then read back the minted sequence - the store's ticket for this fetch. The sequence, not the
+    // controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
+    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, type: "devices:requested" });
+
+    const devicesSeq = this.#store.state.devicesRequest.seq;
     const devicesPromise = this.#devicesFor(initialController);
 
     // Wait for the feature catalog. Build the catalog (catalog index + validators) and dispatch model:loaded so the store transitions to "ready" and views can mount
@@ -359,25 +366,28 @@ export class webUiFeatureOptions {
       return;
     }
 
-    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, devices, type: "devices:loaded" });
+    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, devices, error, seq: devicesSeq, type: "devices:loaded" });
 
-    // Connection-error short-circuit: a selected controller whose probe reported a failure. The failure message arrives with the device-list response - it travels
-    // back on the DeviceListResult rather than through a separate request - so a non-empty error is the failure signal and dispatching connection:error hands the
-    // header to the connection-error view. A zero-device result with an empty error is a legitimately empty controller and falls through to the scope logic below,
-    // never the connection-error view. Do not transition the scope to a device-view here (there are no devices); leave it at global so any subsequent retry re-shows
-    // from a known scope.
-    if((initialController !== null) && error.length) {
+    // Gate every follow-up on the reducer's own verdict: my outcome applied only when the sequence I carried is the one the reducer recorded. A controller click that
+    // raced this initial fetch would have superseded it - its outcome owns the store, and this stale continuation must neither reveal the page over it nor overwrite
+    // its scope.
+    if(this.#store.state.devicesAppliedSeq !== devicesSeq) {
 
-      this.#store.dispatch({ message: error, type: "connection:error" });
-
-      // The connection-error view reveals #headerInfo itself when it renders the error block (it is the sole owner of the error display, content and reveal together),
-      // so the orchestrator only transitions state here and returns. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and
-      // the success-path revealRegions() never runs on this branch - because the user has no devices to navigate to.
       return;
     }
 
-    // Set the initial scope. Controller-based mode lands on the first controller's controller-as-device entry (devices[0]). Device-only mode lands on global so
-    // the user sees the global options first.
+    // My outcome applied and it turned the store to connection-error: a selected controller whose probe reported a failure. The failure message travelled back on the
+    // DeviceListResult rather than through a separate request, and the reducer folded it into the connection-error transition. The connection-error view reveals
+    // #headerInfo itself when it renders the error block (it is the sole owner of the error display, content and reveal together), so the orchestrator only returns
+    // here. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and the success-path revealRegions() never runs on this
+    // branch - because the user has no devices to navigate to.
+    if(this.#store.state.status.kind === "connection-error") {
+
+      return;
+    }
+
+    // Set the initial scope. My outcome applied, so the local `devices` is the applied list. Controller-based mode lands on the first controller's controller-as-device
+    // entry (devices[0]). Device-only mode lands on global so the user sees the global options first.
     if((initialController !== null) && (devices.length > 0)) {
 
       this.#store.dispatch({

@@ -375,6 +375,79 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
   });
 });
 
+describe("webUiFeatureOptions.show - a controller click racing the initial device fetch", () => {
+
+  // The staleness contract end-to-end: the reducer's fetch sequence is the fetch identity, so a controller click made while show()'s own initial fetch is still in
+  // flight owns the store, and show()'s superseded outcome neither reveals the page over the click's state nor overwrites its scope. The initial controller's fetch is
+  // gated so it stays parked while the click's (ungated) fetch resolves and applies; releasing the initial fetch afterward exercises the reducer dropping the stale
+  // outcome and show() gating its follow-ups on `devicesAppliedSeq`.
+  test("a controller click during the initial fetch wins - show()'s superseded outcome neither reveals over it nor overwrites its scope", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let releaseInitial;
+    const initialGate = new Promise((resolve) => { releaseInitial = resolve; });
+    const deviceA = { firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Device A", serialNumber: "DEV-A" };
+    const deviceB = { firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Device B", serialNumber: "DEV-B" };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ],
+      getDevices: async (controller) => {
+
+        // CTRL-A is the initial controller: park its fetch on the gate so it is still in flight when the CTRL-B click lands. CTRL-B resolves immediately.
+        if(controller?.serialNumber === "CTRL-A") {
+
+          await initialGate;
+
+          return { devices: [deviceA], error: "" };
+        }
+
+        return { devices: [deviceB], error: "" };
+      }
+    });
+
+    // Start show() without awaiting it to completion: it mounts the nav (model:loaded + mountViews) and then parks awaiting the gated CTRL-A fetch. The nav renders the
+    // controller links even while the regions stay hidden, so CTRL-B is clickable.
+    const showPromise = orchestrator.show(await openTestSession());
+    const ctrlBLink = await waitFor(() => skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']"),
+      { message: "the nav must mount the CTRL-B link while the initial fetch is gated" });
+
+    ctrlBLink.click();
+    await flush();
+
+    // The click's outcome applied: the sidebar shows CTRL-B's device and highlights it.
+    assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-B']"), "the click's device (DEV-B) must render in the sidebar");
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "DEV-B",
+      "the click's controller-as-device scope must be the active selection");
+
+    // Release the initial CTRL-A fetch. Its outcome carries the superseded sequence, so the reducer drops it and show() returns on the `devicesAppliedSeq` gate.
+    releaseInitial();
+    await showPromise;
+    await flush();
+
+    // show()'s stale outcome never landed: DEV-A did not render, DEV-B still owns the sidebar and the selection, and the reveal bailed (the sidebar stays hidden
+    // because show() returned before revealRegions - the click owns presentation, not the superseded initial flow).
+    assert.equal(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-A']"), null, "show()'s superseded outcome must not render its device (DEV-A)");
+    assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-B']"), "the click's device must remain after the stale outcome dropped");
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "DEV-B",
+      "show()'s initial scope dispatch must not overwrite the click's selection");
+    assert.equal(skeleton.sidebar.style.display, "none", "the reveal bail: show() returned before revealRegions on its superseded outcome");
+
+    orchestrator.cleanup();
+  });
+});
+
 describe("webUiFeatureOptions.show - progressive disclosure (no overlay spinner)", () => {
 
   // The orchestrator does not raise a global spinner overlay during show(). The synchronous page-shell transition (revealing `pageFeatureOptions`, hiding

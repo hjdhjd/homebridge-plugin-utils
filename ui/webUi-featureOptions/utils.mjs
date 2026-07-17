@@ -200,14 +200,25 @@ export function showToast(message, variant = "alert-success") {
 }
 
 /**
- * Surface an arbitrary thrown value as an error toast. The webUI's extension points - caller-supplied first-run hooks, plugin device fetchers, the connection-error
- * retry callback - can reject with any shape (an Error, a string, a plain object, a primitive), so the message is extracted defensively: `err?.message` when the
- * value carries one, a string coercion of the whole value otherwise. This is the single normalization every user-facing catch across the webUI routes through, so
- * the toast text stays useful regardless of what bubbled out.
+ * Extract a user-facing message from an arbitrary thrown value. The webUI's extension points - caller-supplied first-run hooks, plugin device fetchers, the
+ * connection-error retry callback, the config re-sync - can reject with any shape (an Error, a string, a plain object, a primitive), so the message is extracted
+ * defensively: `err?.message` when the value carries one, a string coercion of the whole value otherwise. This is the single error-to-text truth the webUI shares,
+ * so a toast, a nav-view connection-error message, and the sync-failure copy all read the same thrown value the same way.
+ *
+ * @param {*} err - The thrown value to describe.
+ * @returns {string} The extracted message.
+ */
+export function errorMessage(err) {
+
+  return err?.message ?? String(err);
+}
+
+/**
+ * Surface an arbitrary thrown value as an error toast. Routes the value through {@link errorMessage} so the toast text stays useful regardless of what bubbled out.
  *
  * @param {*} err - The thrown value to surface.
  */
 export function toastError(err) {
 
-  homebridge.toast.error(err?.message ?? String(err), "Error");
+  homebridge.toast.error(errorMessage(err), "Error");
 }

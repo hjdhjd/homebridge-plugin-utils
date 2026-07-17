@@ -54,7 +54,10 @@ const loadedState = ({ configuredOptions = [], devices = [], scope } = {}) => {
 
   const catalog = buildCatalog();
   const base = reducer(initialState(), { catalog, configuredOptions, controllers: [], mode: "device-only", type: "model:loaded" });
-  const withDevices = reducer(base, { devices, type: "devices:loaded" });
+
+  // Land the devices through the request/outcome pairing the reducer guards: mint the fetch sequence, then apply the outcome stamped with it.
+  const requested = reducer(base, { controllerId: null, type: "devices:requested" });
+  const withDevices = reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 
   return scope ? reducer(withDevices, { scope, type: "scope:changed" }) : withDevices;
 };

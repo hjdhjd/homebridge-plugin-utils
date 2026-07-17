@@ -10,8 +10,8 @@ import { effect } from "../store.mjs";
 /**
  * Mount the connection-error view.
  *
- * Subscribes to `connection:error` and `model:loaded`. On `model:loaded` this view yields - it aborts its retry window and stops rendering - and the shared
- * `#headerInfo` container is reclaimed by the header view; it does not itself clear the error display.
+ * Subscribes to `connection:error`, `devices:loaded`, and `model:loaded`. On `model:loaded` this view yields - it aborts its retry window and stops rendering - and the
+ * shared `#headerInfo` container is reclaimed by the header view; it does not itself clear the error display.
  *
  * Renders into the same `#headerInfo` container the priority-chain header uses. The two views coordinate via the `state.status` tag: header yields when
  * status is connection-error; this view yields when status is anything else.
@@ -38,12 +38,27 @@ export const mountConnectionErrorView = ({ onRetry, retryDelayMs = 5000, root, s
   // retry button does not linger after the user navigates away.
   let retryAbort = null;
 
+  // The last status object this view acted on. The reducer mints a new status object only on a genuine transition, so a `devices:loaded` that did not move the status
+  // leaves this reference unchanged and the effect below skips - a dropped or successful device outcome neither tears down an armed retry window nor restarts its
+  // progress animation.
+  let lastStatus;
+
   effect({
 
-    events: [ "connection:error", "model:loaded" ],
+    events: [ "connection:error", "devices:loaded", "model:loaded" ],
     fn: () => {
 
       const { status } = store.state;
+
+      // Skip when the status is reference-identical to the one already acted on. The subscription includes `devices:loaded` because the reducer folds its
+      // fetch-failure transition into that action - without the subscription the folded error would never render the retry UI - and this guard keeps a successful or
+      // dropped device outcome, which does not touch the status, from resetting the retry window that a live connection-error is showing.
+      if(status === lastStatus) {
+
+        return;
+      }
+
+      lastStatus = status;
 
       // Tear down any prior retry window before either rendering a new one or yielding back to the header view.
       retryAbort?.abort();

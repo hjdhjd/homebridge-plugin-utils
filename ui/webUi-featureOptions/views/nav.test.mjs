@@ -42,7 +42,9 @@ const setup = ({ controllers = CONTROLLERS, devices = [], getDevices, mode = "co
 
   if(devices.length > 0) {
 
-    store.dispatch({ devices, type: "devices:loaded" });
+    // Land the devices through the request/outcome pairing the reducer guards: mint the fetch sequence, then apply the outcome stamped with it.
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
   }
 
   mountNavView({
@@ -241,12 +243,12 @@ describe("mountNavView - click dispatch", () => {
     assert.equal(store.state.status.message, "Controller unreachable.");
   });
 
-  test("clicking a controller whose getDevices throws a non-Error dispatches the generic connection:error message", async () => {
+  test("clicking a controller whose getDevices throws a non-Error routes the stringified value to the connection-error message", async () => {
 
     using _dom = createTestDom();
 
-    // A rejection that is not an Error instance (a thrown string) exercises the catch's fallback branch: the user-facing message is the generic sentence rather than
-    // the raw thrown value.
+    // A rejection that is not an Error instance (a thrown string) exercises the shared errorMessage fallback: with no `.message` on the thrown value, the user-facing
+    // message is the string coercion of the value itself.
     const getDevices = async () => { throw "kaboom"; };
     const { rootControllers, store } = setup({ getDevices });
     const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
@@ -255,7 +257,7 @@ describe("mountNavView - click dispatch", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.equal(store.state.status.kind, "connection-error");
-    assert.equal(store.state.status.message, "Failed to fetch devices.");
+    assert.equal(store.state.status.message, "kaboom");
   });
 
   test("a superseded controller click's late resolve is discarded - the newest click owns the store", async () => {
@@ -278,7 +280,8 @@ describe("mountNavView - click dispatch", () => {
     rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
     rootControllers.querySelector(".nav-link[data-device-serial='ctrl-b']").click();
 
-    // Resolve the newest click (ctrl-b) first: it renders. Then resolve the superseded click (ctrl-a): the generation guard must discard it on the resolve path.
+    // Resolve the newest click (ctrl-b) first: it renders. Then resolve the superseded click (ctrl-a): the reducer drops it on the resolve path because its sequence
+    // no longer answers the pending request.
     gates.get("ctrl-b").resolve({ devices: [DEVICES[1]], error: "" });
     await new Promise((resolve) => setTimeout(resolve, 10));
     gates.get("ctrl-a").resolve({ devices: [DEVICES[0]], error: "" });
@@ -308,8 +311,8 @@ describe("mountNavView - click dispatch", () => {
     rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
     rootControllers.querySelector(".nav-link[data-device-serial='ctrl-b']").click();
 
-    // The newest click (ctrl-b) renders; then the superseded click (ctrl-a) rejects. The generation guard on the reject path must discard it so no stale
-    // connection:error lands over the newest click's state.
+    // The newest click (ctrl-b) renders; then the superseded click (ctrl-a) rejects. The reducer drops it on the reject path because its sequence no longer answers
+    // the pending request, so no stale connection:error lands over the newest click's state.
     gates.get("ctrl-b").resolve({ devices: [DEVICES[1]], error: "" });
     await new Promise((resolve) => setTimeout(resolve, 10));
     gates.get("ctrl-a").reject(new Error("ctrl-a failed late"));
@@ -318,5 +321,69 @@ describe("mountNavView - click dispatch", () => {
     assert.equal(store.state.status.kind, "ready", "the stale reject must not transition the store to connection-error");
     assert.deepEqual(store.state.devices, [DEVICES[1]], "the newest click's devices must remain");
     assert.equal(store.state.scope.controllerId, "ctrl-b", "the newest click's scope must remain");
+  });
+
+  test("a same-controller re-click resolves last-request-wins - the newest click's outcome owns the store even for the same controller", async () => {
+
+    using _dom = createTestDom();
+
+    // Two clicks on the SAME controller, each handed a controllable deferred. The reducer's fetch sequence owns this race: the second click supersedes the first
+    // even though both target ctrl-a, which a controllerId-keyed guard could not tell apart.
+    const deferreds = [];
+    const getDevices = () => {
+
+      const deferred = Promise.withResolvers();
+
+      deferreds.push(deferred);
+
+      return deferred.promise;
+    };
+    const { rootControllers, store } = setup({ getDevices });
+    const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
+
+    ctrlLink.click();
+    ctrlLink.click();
+
+    // Resolve the FIRST click last so its outcome is the stale one. The second click's outcome applies; the first click's must drop at the reducer.
+    deferreds[1].resolve({ devices: [DEVICES[1]], error: "" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    deferreds[0].resolve({ devices: [DEVICES[0]], error: "" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(store.state.devices, [DEVICES[1]], "only the newest same-controller click's devices may land");
+    assert.equal(store.state.scope.deviceId, "dev-b", "the newest click settled to its controller-as-device scope");
+  });
+
+  test("a failed controller click renders the error view AND clears the stale device list", async () => {
+
+    using _dom = createTestDom();
+
+    // The reject path routes through devices:loaded with an empty list, so the reducer clears the stale devices as it moves to connection-error, rather than leaving
+    // them lingering under the error view. Seed a device list first so the clear is observable.
+    const getDevices = async () => { throw new Error("Controller unreachable."); };
+    const { rootControllers, store } = setup({ devices: DEVICES, getDevices });
+
+    assert.deepEqual(store.state.devices, DEVICES, "pre-condition: the sidebar shows a device list");
+
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(store.state.status.kind, "connection-error", "the failed click renders the connection-error view");
+    assert.equal(store.state.status.message, "Controller unreachable.", "the rejection message reaches the connection-error status");
+    assert.deepEqual(store.state.devices, [], "the stale device list is cleared by the reject path's empty-devices outcome");
+  });
+
+  test("a devices:loaded dispatched against a store with no pending request drops (the reducer's null-check guard)", async () => {
+
+    using _dom = createTestDom();
+
+    // The setup's fetch pairing already cleared the pending slot (devicesRequest is null). A stray seq-1 outcome must drop rather than overwrite the rendered
+    // list - the reducer's explicit null check, not an optional-chained comparison, is what makes a seq-less-against-null outcome vanish here.
+    const { store } = setup({ devices: DEVICES });
+    const beforeDevices = store.state.devices;
+
+    store.dispatch({ controllerId: "ctrl-a", devices: [], error: "", seq: 1, type: "devices:loaded" });
+
+    assert.equal(store.state.devices, beforeDevices, "the outcome drops against a null pending request, leaving the device list untouched");
   });
 });

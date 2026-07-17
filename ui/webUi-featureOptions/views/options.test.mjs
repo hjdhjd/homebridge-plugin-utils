@@ -236,7 +236,8 @@ describe("mountOptionsView - per-device cache", () => {
     const dev = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
     const { configTable, store } = setup();
 
-    store.dispatch({ devices: [dev], type: "devices:loaded" });
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [dev], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
 
     // Move to a device scope to populate per-device cache.
     store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
@@ -268,7 +269,8 @@ describe("mountOptionsView - per-device cache", () => {
     ];
     const { configTable, store } = setup();
 
-    store.dispatch({ devices: devs, type: "devices:loaded" });
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: devs, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
     store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     const motionA = configTable.querySelector("details[data-category='Motion']");
@@ -335,7 +337,8 @@ describe("mountOptionsView - legacy category-state key migration", () => {
     const { configTable, store } = setup();
     const dev = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "DEV-A" };
 
-    store.dispatch({ devices: [dev], type: "devices:loaded" });
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [dev], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
     store.dispatch({ scope: { controllerId: null, deviceId: "DEV-A", kind: "device" }, type: "scope:changed" });
 
     const motion = configTable.querySelector("details[data-category='Motion']");

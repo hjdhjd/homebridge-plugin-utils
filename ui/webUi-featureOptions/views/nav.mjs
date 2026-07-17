@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { createElement } from "../utils.mjs";
+import { createElement, errorMessage } from "../utils.mjs";
 import { effect } from "../store.mjs";
 
 /**
@@ -28,11 +28,12 @@ import { effect } from "../store.mjs";
  *   - `scope:changed` - update active-link highlighting without rebuilding.
  *   - `model:loaded` - initial build (controllers + global link + mode-aware structure).
  *
- * The controller-click handler does I/O: it calls the caller-supplied `getDevices` callback to fetch the new controller's DeviceListResult, then dispatches a
- * `devices:loaded` action followed by either a scope change (devices present) or a `connection:error` (the result carried a failure message). A per-mount fetch
- * generation guards the last-resolved-wins race: the newest click owns the store, so a superseded controller click discards its result on both settlement paths
- * (resolve and reject) rather than overwriting the newer click's rendered state. The handler wraps its fetch in a try/catch so a rejected fetch surfaces as a
- * `connection:error` action rather than an unhandled rejection; the view layer never silently swallows a failure.
+ * The controller-click handler does I/O: it records the fetch at the store (`devices:requested`, which mints the fetch sequence), calls the caller-supplied
+ * `getDevices` callback for the new controller's DeviceListResult, then stamps the outcome onto a `devices:loaded` carrying that sequence. The reducer applies the
+ * outcome only when it still answers the pending request, so the sequence is the fetch identity and the newest click owns the store: a superseded controller click's
+ * outcome - whether it resolved with devices or rejected - is dropped at the reducer rather than overwriting the newer click's rendered state. A failed fetch's
+ * message travels back on that same `devices:loaded` (empty devices, non-empty error), which the reducer turns into the connection-error transition. The handler
+ * wraps its fetch in a try/catch so a rejected fetch becomes that same outcome rather than an unhandled rejection; the view layer never silently swallows a failure.
  *
  * @param {Object} args
  * @param {((controller: import("../state.mjs").Controller | null) =>
@@ -97,14 +98,9 @@ export const mountNavView = ({ getDevices, labelControllers, labelDevices, rootC
     store
   });
 
-  // Per-mount fetch generation for the controller-click handler. Held as a mutable reference (not a plain number) because handleNavClick is module-scope: a number
-  // would be copied by value into the call, defeating the guard. The closure-held object mirrors the connection-error view's retryAbort per-mount state. Each
-  // controller click captures the incremented generation before its fetch; a continuation whose generation no longer matches has been superseded by a newer click and
-  // discards its result.
-  const clickFetch = { generation: 0 };
-
-  // Click delegation: one listener on each container resolves the clicked nav link's `data-navigation` and dispatches the appropriate scope-change.
-  const onClick = (event) => handleNavClick({ clickFetch, event, getDevices, signal, store });
+  // Click delegation: one listener on each container resolves the clicked nav link's `data-navigation` and dispatches the appropriate scope-change. The
+  // last-request-wins race a controller click can open is owned by the reducer's fetch sequence, so the handler holds no per-mount generation state of its own.
+  const onClick = (event) => handleNavClick({ event, getDevices, signal, store });
 
   rootControllers.addEventListener("click", onClick, { signal });
   rootDevices.addEventListener("click", onClick, { signal });
@@ -246,7 +242,7 @@ const applyDevicesHighlight = (root, scope) => {
 
 // Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally
 // fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback.
-const handleNavClick = async ({ clickFetch, event, getDevices, signal, store }) => {
+const handleNavClick = async ({ event, getDevices, signal, store }) => {
 
   const navLink = event.target.closest(".nav-link[data-navigation]");
 
@@ -271,8 +267,8 @@ const handleNavClick = async ({ clickFetch, event, getDevices, signal, store }) 
 
     case "controller": {
 
-      // Optimistic scope update before the fetch so the sidebar highlight repaints immediately. If the result carries a failure message we transition to
-      // connection:error; if it carries devices we select the controller-as-device entry (the first device in the returned list).
+      // Optimistic scope update before the fetch so the sidebar highlight repaints immediately. The fetch's outcome lands through the request/outcome pairing
+      // below - the reducer owns both the staleness decision and the failure transition - and a devices-bearing outcome selects the controller-as-device entry.
       store.dispatch({ scope: { controllerId: deviceSerial, kind: "controller" }, type: "scope:changed" });
 
       if(!getDevices) {
@@ -280,35 +276,31 @@ const handleNavClick = async ({ clickFetch, event, getDevices, signal, store }) 
         return;
       }
 
-      // Capture this fetch's generation before awaiting. The newest click owns the store, so a continuation whose generation no longer matches has been superseded by
-      // a later click and discards its result on both settlement paths below.
-      const generation = ++clickFetch.generation;
+      // Record this fetch at the store's chokepoint before awaiting, then read back the minted sequence - the store's ticket for this fetch. The newest click owns
+      // the pending slot, so a superseded click's outcome finds its sequence gone when it lands and drops at the reducer.
+      store.dispatch({ controllerId: deviceSerial, type: "devices:requested" });
+
+      const seq = store.state.devicesRequest.seq;
 
       try {
 
         const controller = store.state.controllers.find((c) => c.serialNumber === deviceSerial);
         const { devices, error } = await getDevices(controller ?? null);
 
-        // Bail if the page tore down or a newer click superseded this one; a stale continuation must not overwrite the newer click's rendered state.
-        if(signal.aborted || (generation !== clickFetch.generation)) {
+        // Bail if the page tore down; a torn-down store must not be dispatched against. Staleness itself is the reducer's job - it drops an outcome whose sequence no
+        // longer answers the pending request.
+        if(signal.aborted) {
 
           return;
         }
 
-        store.dispatch({ controllerId: deviceSerial, devices, type: "devices:loaded" });
+        store.dispatch({ controllerId: deviceSerial, devices, error, seq, type: "devices:loaded" });
 
-        if(error.length) {
+        // Gate the follow-up on the reducer's own verdict: select the controller-as-device entry only when my outcome is the one that applied, carried no failure,
+        // and returned at least one device. A superseded outcome, a connection failure (the reducer moved the store to connection-error), or an empty controller each
+        // leaves the optimistic controller scope standing with no device-scope dispatch.
+        if((store.state.devicesAppliedSeq !== seq) || error.length || (devices.length === 0)) {
 
-          // The result carried a connection-failure message - hand the header to the connection-error view. The message arrived with the device-list response, so no
-          // separate request is made.
-          store.dispatch({ message: error, type: "connection:error" });
-
-          return;
-        }
-
-        if(devices.length === 0) {
-
-          // A legitimately empty controller: the optimistic controller scope stands over the empty list, with no device-scope dispatch.
           return;
         }
 
@@ -316,14 +308,15 @@ const handleNavClick = async ({ clickFetch, event, getDevices, signal, store }) 
         store.dispatch({ scope: { controllerId: deviceSerial, deviceId: devices[0].serialNumber, kind: "device" }, type: "scope:changed" });
       } catch(err) {
 
-        // The same staleness bail guards the reject path: a superseded fetch that rejects (an IPC failure, the contract-guard TypeError) must not dispatch a stale
-        // connection:error over the newer click's state. A named Error reaches the user verbatim; non-Error junk falls back to the generic sentence.
-        if(signal.aborted || (generation !== clickFetch.generation)) {
+        // The page-teardown bail guards the reject path too. Route the rejection (an IPC failure, the contract-guard TypeError) through the same outcome channel: the
+        // reducer drops it if a newer click superseded this one, and otherwise clears the stale device list and moves the store to connection-error. A named Error
+        // reaches the user verbatim; other junk is stringified.
+        if(signal.aborted) {
 
           return;
         }
 
-        store.dispatch({ message: (err instanceof Error) ? err.message : "Failed to fetch devices.", type: "connection:error" });
+        store.dispatch({ controllerId: deviceSerial, devices: [], error: errorMessage(err), seq, type: "devices:loaded" });
       }
 
       return;

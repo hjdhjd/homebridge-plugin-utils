@@ -14,7 +14,8 @@ import { effect } from "../store.mjs";
  * device-only mode. Bold lead-in text frames it as a precedence statement; color-coded labels (warning / success / info) match the same scope-color convention the
  * row labels use, so users have one consistent visual lens for "where does a setting come from."
  *
- * Runs on `model:loaded` and `connection:error`; all other dispatches never invoke it because they are not subscribed. On `connection:error` (and the loading
+ * Runs on `model:loaded`, `connection:error`, and `devices:loaded`; other dispatches never invoke it because they are not subscribed, and a subscribed dispatch
+ * that leaves the status reference unchanged skips via the memo below. On `connection:error` (and the loading
  * status), `fn` yields inside its `status.kind` checks. In practice the header content is rendered once, at `model:loaded`. The connection-error and no-controllers
  * views render their own content into the same container, so this view yields when the status indicates either of those states.
  *
@@ -25,12 +26,28 @@ import { effect } from "../store.mjs";
  */
 export const mountHeaderView = ({ root, signal, store }) => {
 
+  // The last status object this view acted on. The reducer mints a new status object only on a genuine transition, so a `devices:loaded` that did not move the status
+  // (a successful fetch, or a dropped stale outcome that returns the identical state) leaves this reference unchanged and the effect below skips - the precedence
+  // chain is never rebuilt for a device-list change it does not depend on.
+  let lastStatus;
+
   effect({
 
-    events: [ "model:loaded", "connection:error" ],
+    events: [ "connection:error", "devices:loaded", "model:loaded" ],
     fn: () => {
 
       const { mode, status } = store.state;
+
+      // Skip when the status is reference-identical to the one already acted on: this view renders from `mode` and `status`, and `mode` is fixed after model:loaded,
+      // so an unchanged status means nothing to redo. The subscription includes `devices:loaded` because the reducer folds its fetch-failure transition into that
+      // action - without the subscription the header would never yield to the connection-error view on a failed fetch - and this guard keeps every successful or
+      // dropped device outcome from needlessly rebuilding the chain.
+      if(status === lastStatus) {
+
+        return;
+      }
+
+      lastStatus = status;
 
       // Yield to the connection-error view when an error is active - that view owns the header content in error states.
       if(status.kind === "connection-error") {

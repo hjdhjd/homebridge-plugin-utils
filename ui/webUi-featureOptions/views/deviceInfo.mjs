@@ -34,6 +34,13 @@ export const mountDeviceInfoView = ({ infoPanel = defaultInfoPanel, root, signal
     events: [ "scope:changed", "devices:loaded", "model:loaded" ],
     fn: () => {
 
+      // Skip the pre-model mount. The orchestrator mounts every view before model:loaded fires, so this view's immediate-run pass would otherwise render against the
+      // loading placeholder - work the model:loaded pass immediately redoes. The sibling views carry the same guard.
+      if(store.state.status.kind === "loading") {
+
+        return;
+      }
+
       // The view populates its region but never reveals it; the orchestrator owns region visibility (revealRegions on the success path), so the device-stats panel
       // appears together with the rest of the populated UI rather than the moment this view mounts.
       render(infoPanel);

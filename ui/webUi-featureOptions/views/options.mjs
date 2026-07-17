@@ -33,7 +33,8 @@ import { effect } from "../store.mjs";
  *
  * @param {Object} args
  * @param {HTMLElement} args.configTable - The `#configTable` element.
- * @param {string | undefined} args.platform - The Homebridge plugin platform identifier (for localStorage key namespacing).
+ * @param {() => (string | undefined)} args.platform - A thunk returning the Homebridge plugin platform identifier (for localStorage key namespacing). Deferred as a
+ *        thunk because the views mount before the session re-syncs, so the identifier is read inside the model:loaded effect - post-sync - rather than at mount.
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
@@ -44,10 +45,14 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
   let mountedKey;
 
   // Per-view category expansion state, persisted via localStorage. The orchestrator writes the user's expand/collapse choices through this object so the disk
-  // projection survives page reloads; on re-entry to a view we apply the persisted state so the user's collapse choices stay sticky across sessions.
-  const categoryState = new FeatureOptionsCategoryState(platform);
+  // projection survives page reloads; on re-entry to a view we apply the persisted state so the user's collapse choices stay sticky across sessions. Its localStorage
+  // namespace is the platform identifier, which is only correct once the session has re-synced, so it is constructed inside the model:loaded effect below (reading the
+  // `platform` thunk post-sync) rather than at mount - the views mount before the sync resolves.
+  let categoryState;
 
-  // Rebuild on model:loaded - clears any prior content and prepares for the first scope-render. The actual category shells come from the scope-render path.
+  // Rebuild on model:loaded - construct the category-state store from the freshly-synced platform, then clear any prior content and prepare for the first
+  // scope-render. The actual category shells come from the scope-render path. This effect is registered before the scope-render effect below, so on a model:loaded
+  // dispatch it runs first and `categoryState` is built before that effect reads it.
   effect({
 
     events: ["model:loaded"],
@@ -58,6 +63,7 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
         return;
       }
 
+      categoryState = new FeatureOptionsCategoryState(platform());
       configTable.textContent = "";
       cache.clear();
       mountedKey = undefined;

@@ -16,7 +16,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     because each kind carries different data; merging them into a flat record would smear the guarantees across two fields and force consumers to recover the
  *     kind via predicates.
  *   - {@link LifecycleStatus} - `loading` | `ready` | `persisting` | `persist-error` | `connection-error`. The page-state pointer. Discriminated because the
- *     variants carry different per-state payloads (a snapshot when persisting, an error when failed, a message when the connection broke).
+ *     variants carry different per-state payloads (a snapshot when persisting, an error when failed, the full display copy when the connection broke).
  *   - {@link Catalog} - `CatalogIndex` (from featureOptions.ts) extended with plugin-provided validator callbacks. Bundled as one value because both the index and
  *     the validators are plugin-provided immutable config moving together; splitting them would force every consumer that needs both to take two parameters.
  *
@@ -38,7 +38,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `persist:started` - persist call entering flight; status becomes persisting.
  *   - `persist:succeeded` - persist call landed on disk; anchor updated, status returns to ready.
  *   - `persist:failed` - final-attempt failure (no superseding mutation); configuredOptions rolls back to anchor, status becomes persist-error.
- *   - `connection:error` - controller unreachable on the current view; status becomes connection-error with the user-facing message.
+ *   - `connection:error` - the config re-sync failed before the page could render; status becomes connection-error carrying the full display copy the view renders.
  *
  * The reducer is pure: `(state, action) => state`. Unchanged slices retain their reference across dispatches (structural sharing), so memoized selectors that
  * depend on a slice return cached results until that specific slice changes. Unknown action types throw - silently ignoring them would let typo bugs escape into
@@ -103,8 +103,12 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * LifecycleStatus - The page-state pointer. Discriminated because the variants carry different per-state payloads. Drop a status variant when it stops being a
  * named UI state; add one when a new named state surfaces.
  *
+ * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps three text slots without
+ * hardcoding any prose. The two suppliers (the reducer's fetch-failure transition on {@link devices:loaded} and the orchestrator's config-sync-failure
+ * {@link connection:error} dispatch) each carry copy appropriate to their failure.
+ *
  * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "persisting", snapshot: readonly string[]} | {kind: "persist-error", error: Error}
- *           | {kind: "connection-error", message: string}} LifecycleStatus
+ *           | {kind: "connection-error", guidance: string, headline: string, message: string}} LifecycleStatus
  */
 
 /**
@@ -151,6 +155,16 @@ const EMPTY_CATALOG = {
     validOption: () => true,
     validOptionCategory: () => true
   }
+};
+
+// The connection-error display copy for a controller fetch failure. The reducer supplies it at its one fetch-failure transition (on devices:loaded), so this
+// controller wording lives here rather than being hardcoded in the connection-error view, which maps every text slot from the status. The per-fetch failure
+// message travels back on the outcome and is layered on as `message`.
+const CONTROLLER_FAILURE_STATUS = {
+
+  guidance: "Check the Settings tab to verify the controller details are correct.",
+  headline: "Unable to connect to the controller.",
+  kind: "connection-error"
 };
 
 /**
@@ -260,9 +274,10 @@ export const reducer = (state, action) => {
         devicesRequest: null
       };
 
-      // A non-empty error is the connection-failure signal: the outcome carried an empty device list and the controller-failure message alongside it, so the status
-      // moves to connection-error at this, the reducer's one fetch-failure transition. Scope is not touched here - a dispatcher moves the selection separately.
-      return action.error.length ? { ...applied, status: { kind: "connection-error", message: action.error } } : applied;
+      // A non-empty error is the connection-failure signal: the outcome carried an empty device list and the per-fetch failure message alongside it, so the status
+      // moves to connection-error at this, the reducer's one fetch-failure transition, layering the message onto the shared controller-failure copy. Scope is not
+      // touched here - a dispatcher moves the selection separately.
+      return action.error.length ? { ...applied, status: { ...CONTROLLER_FAILURE_STATUS, message: action.error } } : applied;
     }
 
     case "scope:changed": {
@@ -346,9 +361,9 @@ export const reducer = (state, action) => {
 
     case "connection:error": {
 
-      // Controller unreachable on the current view. The orchestrator's connection-error flow dispatches this with the user-facing message that arrived alongside the
-      // device-list response; subscribers (status bar / sidebar) consume the message.
-      return { ...state, status: { kind: "connection-error", message: action.message } };
+      // The config re-sync failed before the page could render. The orchestrator dispatches this with the full display copy for the connection-error view (headline,
+      // guidance, message); the reducer's own fetch-failure transition on devices:loaded is the other supplier of this variant.
+      return { ...state, status: { guidance: action.guidance, headline: action.headline, kind: "connection-error", message: action.message } };
     }
 
     default: {

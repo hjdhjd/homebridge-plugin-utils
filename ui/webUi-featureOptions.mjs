@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { delay, toastError } from "./webUi-featureOptions/utils.mjs";
+import { delay, errorMessage, toastError } from "./webUi-featureOptions/utils.mjs";
 import { initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { FeatureOptionsStore } from "./webUi-featureOptions/store.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
@@ -197,16 +197,17 @@ export class webUiFeatureOptions {
    *
    *   1. Synchronous page-shell setup: hide schema form, update menu state, reveal the feature-options page. The user sees the layout immediately; the async I/O
    *      below populates each region against the visible shell.
-   *   2. Tear down any prior show() cycle via hide() (it flushes any pending edit before tearing down), then re-sync the session against the host config; a sync
-   *      failure toasts the error message and bails.
-   *   3. Create the page abort controller. Every effect and view registers listeners with this signal so cleanup() tears them all down in one operation.
-   *   4. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
+   *   2. Tear down any prior show() cycle via hide() (it flushes any pending edit before tearing down).
+   *   3. Create the page abort controller, clear stale containers, create the store, and mount every view. The views mount here - before any data loads, against the
+   *      loading placeholder - so the connection-error view already exists to render a config-sync failure into the visible shell.
+   *   4. Re-sync the session against the host config. A read failure routes into the connection-error view (with the config-read copy) and bails, so a failed sync
+   *      shows the retry affordance rather than stranding a blank frame; the sync also lands before getControllers and the options read below, so both see fresh config.
+   *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
-   *   5. Adopt the design tokens. Synchronous - tokens are static declarations with no I/O dependencies.
-   *   6. Fire the theme effect, persist effect, keyboard effect in parallel. The theme effect's I/O (Bootstrap probe) runs in the background.
+   *   6. Adopt the design tokens (synchronous), then fire the theme, persist, and keyboard effects. The theme effect's I/O (Bootstrap probe) runs in the background.
    *   7. Once controllers resolves: if controller-based mode with empty controllers, show the no-controllers message and return.
    *   8. Record and pre-fire the initial controller's devices fetch (a `devices:requested` mints its sequence) so it overlaps with the feature catalog.
-   *   9. Once the feature catalog resolves: build the catalog, dispatch model:loaded, mount all views.
+   *   9. Once the feature catalog resolves: build the catalog and dispatch model:loaded - the mounted views transition off their loading placeholder and render.
    *  10. Once devices resolve: dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and
    *      folds a fetch failure into the connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error
    *      status returns without revealing, otherwise it sets the initial scope.
@@ -231,20 +232,6 @@ export class webUiFeatureOptions {
     // the menu or the connection-error retry must drain the previous cycle's debounced edit before this cycle's store replaces it.
     await this.hide();
 
-    // Re-read the host config into the session before the page renders against it. show() is the single entry chokepoint (launch, first-run, the menu, and the
-    // connection-error retry), so re-syncing here makes "every show is fresh" an unconditional guarantee: an edit made in the Settings tab while this page was hidden
-    // is reflected on return rather than rendering against a frozen snapshot. The sync lands before getControllers reads session.platform and before the options read
-    // below, so both derive from the re-read config. A read failure surfaces as a toast and bails, so the page never renders against a config the session could not read.
-    try {
-
-      await this.#session.sync();
-    } catch(err) {
-
-      toastError(err);
-
-      return;
-    }
-
     // Fresh page-level abort controller for this show() cycle.
     this.#pageAbort = new AbortController();
 
@@ -255,6 +242,32 @@ export class webUiFeatureOptions {
 
     // Initialize the store with empty state. The reducer transitions through loading -> ready once model:loaded dispatches.
     this.#store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+
+    // Mount every view before any data loads. Each view registers its effects against the loading placeholder and yields until model:loaded fires, so mounting
+    // here renders nothing yet - but the connection-error view exists from this point on, so a config-sync failure below renders its retry affordance instead of
+    // stranding a blank frame. Each mount is a no-op if its required page element is missing, so the orchestrator does not need to validate the page skeleton up front.
+    this.#mountViews(signal);
+
+    // Re-read the host config into the session before the page renders against it. show() is the single entry chokepoint (launch, first-run, the menu, and the
+    // connection-error retry), so re-syncing here makes "every show is fresh" an unconditional guarantee: an edit made in the Settings tab while this page was hidden
+    // is reflected on return rather than rendering against a frozen snapshot. The sync lands before getControllers reads session.platform and before the options read
+    // below, so both derive from the re-read config. A read failure routes into the already-mounted connection-error view rather than a bare toast: the store and
+    // views exist by now, so the page shows the retry affordance instead of stranding a blank frame.
+    try {
+
+      await this.#session.sync();
+    } catch(err) {
+
+      this.#store.dispatch({
+
+        guidance: "Retry once the Homebridge server is reachable again.",
+        headline: "Unable to read the plugin configuration.",
+        message: errorMessage(err),
+        type: "connection:error"
+      });
+
+      return;
+    }
 
     // Fire every independent I/O in parallel. The independent sources: controllers (optional), the /getOptions catalog, and the Homebridge lighting mode (via the
     // theme effect's host). The plugin config is not fetched here - the session already holds it - so getControllers receives the injected platform config rather
@@ -345,9 +358,6 @@ export class webUiFeatureOptions {
       mode: this.#config.getControllers ? "controller-based" : "device-only",
       type: "model:loaded"
     });
-
-    // Mount every view. Each mount is a no-op if its required page element is missing, so the orchestrator does not need to validate the page skeleton up front.
-    this.#mountViews(signal);
 
     // Wait for the theme's matchMedia listener registration before any user interaction can trigger a theme change. By this point, themeInitPromise has almost
     // always already resolved - it ran in parallel with every other fetch above.
@@ -589,8 +599,10 @@ export class webUiFeatureOptions {
 
     if(configTable) {
 
-      // The localStorage namespace key is the Homebridge platform identifier - the primary entry's `platform` field, read from the session.
-      mountOptionsView({ configTable, platform: this.#session?.platform?.platform, signal, store });
+      // The localStorage namespace key is the Homebridge platform identifier - the primary entry's `platform` field. Passed as a thunk, not a frozen string: the
+      // views mount before the session re-syncs, so the options view reads the identifier through the thunk inside its model:loaded effect (post-sync) rather
+      // than capturing a possibly pre-sync value here.
+      mountOptionsView({ configTable, platform: () => this.#session?.platform?.platform, signal, store });
     }
 
     if(controllersContainer && devicesContainer) {
@@ -699,7 +711,8 @@ const sameOptionsSet = (a, b) => {
 };
 
 // Show the "no controllers configured" helper text when the plugin operates in controller-based mode but getControllers returns an empty result. Replaces the
-// header content in place; the orchestrator returns from show() without dispatching model:loaded so views never mount.
+// header content in place; the orchestrator returns from show() without dispatching model:loaded, so the already-mounted views stay on their loading placeholder and
+// never render over this message.
 const showNoControllersMessage = () => {
 
   const headerInfo = document.getElementById("headerInfo");

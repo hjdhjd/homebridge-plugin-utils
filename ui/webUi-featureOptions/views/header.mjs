@@ -55,9 +55,9 @@ export const mountHeaderView = ({ root, signal, store }) => {
         return;
       }
 
-      // Defensive guard against a "loading" status at mount time. In the current call order this branch is unreachable: the no-controllers path returns from
-      // show() before any views mount, and the success path dispatches model:loaded - which sets status to ready - before mountHeaderView runs. The check stays
-      // in place as a safeguard against a future reordering that mounts views before model:loaded fires.
+      // Yield on the "loading" status at mount time. The orchestrator mounts every view before model:loaded fires - so the connection-error view exists to render a
+      // sync failure - which means this view's immediate-run pass sees the loading placeholder and must not render the precedence chain against an empty model. The
+      // model:loaded dispatch fires this effect again with a ready status, which is when the chain actually renders.
       if(status.kind === "loading") {
 
         return;

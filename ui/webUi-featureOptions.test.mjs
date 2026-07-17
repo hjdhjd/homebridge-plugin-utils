@@ -338,7 +338,98 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     orchestrator.cleanup();
   });
 
-  test("a getPluginConfig failure during the show() re-sync surfaces a toast and bails without rendering", async () => {
+  test("a getPluginConfig failure during the show() re-sync renders the connection-error view rather than a toast over a blank frame", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig({ options: ["Enable.Audio.Volume.50"] }),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions();
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    const toastsBefore = fake.observed.toasts.length;
+
+    // The next config read fails (the host dropped the connection between visits). Make the re-sync reject on the upcoming show().
+    fake.getPluginConfig = async () => { throw new Error("host read failed"); };
+
+    await orchestrator.show(session);
+    await flush();
+
+    // The failure routes into the connection-error view: the store and views are mounted before the sync await, so a rejected sync renders the config-read copy,
+    // the raw error, and the retry affordance inline rather than surfacing a bare toast over a stranded blank frame.
+    const codeElement = skeleton.headerInfo.querySelector("code");
+
+    assert.equal(codeElement?.textContent, "host read failed", "the connection-error view must render the config-read failure message");
+    assert.match(skeleton.headerInfo.textContent, /Unable to read the plugin configuration/, "the config-read headline must render");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the connection-error retry button must render");
+    assert.equal(fake.observed.toasts.length, toastsBefore, "the sync failure surfaces inline in the connection-error view, not as a toast");
+
+    orchestrator.cleanup();
+  });
+
+  test("the connection-error retry re-enters show() and recovers once the config read succeeds", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // A short retry-enable delay so the test does not wait the 5s production default before the retry button arms.
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    // Fail the next config read so the re-show routes into the connection-error view.
+    fake.getPluginConfig = async () => { throw new Error("host read failed"); };
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the connection-error view must render after the failed sync");
+
+    // Restore the config read, wait for the retry button to arm, then click it. The retry re-enters show(), which re-syncs successfully and renders the normal UI.
+    fake.getPluginConfig = async () => fake.config;
+
+    const retryButton = await waitFor(() => {
+
+      const btn = skeleton.headerInfo.querySelector("button.btn-warning");
+
+      return (btn && !btn.disabled) ? btn : null;
+    }, { message: "the retry button to arm", timeout: 500 });
+
+    retryButton.click();
+
+    await waitFor(() => skeleton.configTable.querySelector("details[data-category]"),
+      { message: "the recovered show() to render the config table" });
+
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "the connection-error view must clear once the retry recovers");
+
+    orchestrator.cleanup();
+  });
+
+  test("a sync failure records zero config writes - the persist effect never fires on the failure path", async () => {
 
     using _dom = createTestDom();
 
@@ -360,16 +451,16 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     await orchestrator.show(session);
     await flush();
 
-    // The next config read fails (the host dropped the connection between visits). Make the re-sync reject on the upcoming show().
+    const writesBefore = fake.observed.updatedConfigs.length;
+
+    // Fail the re-sync, then let the whole failure path settle well past the persist debounce window. The persist effect is registered only after the sync succeeds, so
+    // on the failure path it is never even registered - the write seam (updatePluginConfig, recorded in observed.updatedConfigs) must stay untouched.
     fake.getPluginConfig = async () => { throw new Error("host read failed"); };
 
     await orchestrator.show(session);
-    await flush();
+    await settlePersist();
 
-    // The failure surfaced as an error toast, and show() bailed before the page abort controller / render.
-    const errorToasts = fake.observed.toasts.filter((t) => t.variant === "error");
-
-    assert.ok(errorToasts.some((t) => t.message === "host read failed"), "a re-sync read failure must surface as an error toast");
+    assert.equal(fake.observed.updatedConfigs.length, writesBefore, "the sync-failure path must record zero config writes");
 
     orchestrator.cleanup();
   });

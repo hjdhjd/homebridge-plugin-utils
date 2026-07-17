@@ -52,7 +52,7 @@ const setup = ({ configuredOptions = [], scope } = {}) => {
     store.dispatch({ scope, type: "scope:changed" });
   }
 
-  mountOptionsView({ configTable, platform: "test-plugin", signal: controller.signal, store });
+  mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
 
   // The mount registers the scope-render effect; trigger an initial scope render so the table has category shells.
   if(!scope) {
@@ -300,7 +300,7 @@ describe("mountOptionsView - legacy category-state key migration", () => {
   // restore path to find data under the legacy key, write it under the new key, and delete the legacy entry - leaving disk in the new shape for every subsequent
   // visit.
 
-  // The localStorage storage key is plugin-namespaced. setup() uses `platform: "test-plugin"`, so all writes land under this key.
+  // The localStorage storage key is plugin-namespaced. setup()'s platform thunk returns "test-plugin", so all writes land under this key.
   const STORAGE_KEY = "homebridge-test-plugin-category-states";
 
   test("a global view restores category state from the legacy \"Global Options\" key and migrates it under the new \"global\" key", () => {

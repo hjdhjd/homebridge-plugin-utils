@@ -18,7 +18,8 @@ import { effect } from "../store.mjs";
  *
  * Renders:
  *
- *   - An error message block with the user-facing message from `state.status.message`.
+ *   - An error block whose headline, guidance, and message all come from the `connection-error` status. The caller - the reducer's fetch-failure transition or the
+ *     orchestrator's config-sync-failure dispatch - supplies the full display copy, so this view maps the three text slots without hardcoding any prose.
  *   - A retry button, initially disabled, that becomes enabled after `retryDelayMs` milliseconds. The delay is a brief throttle so the user does not retry-bash a
  *     recovering controller.
  *   - A progress bar that fills during the retry-delay window so the user has visual feedback that the retry button is coming alive.
@@ -70,7 +71,7 @@ export const mountConnectionErrorView = ({ onRetry, retryDelayMs = 5000, root, s
       }
 
       retryAbort = new AbortController();
-      renderError({ message: status.message, onRetry, retryDelayMs, retrySignal: retryAbort.signal, root });
+      renderError({ guidance: status.guidance, headline: status.headline, message: status.message, onRetry, retryDelayMs, retrySignal: retryAbort.signal, root });
     },
     signal,
     store
@@ -83,15 +84,16 @@ export const mountConnectionErrorView = ({ onRetry, retryDelayMs = 5000, root, s
   }, { once: true });
 };
 
-// Render the error block into the root container. Builds the structural pieces (error text, retry button, progress bar) and arms the retry window via the
-// supplied retry signal.
-const renderError = ({ message, onRetry, retryDelayMs, retrySignal, root }) => {
+// Render the error block into the root container. Builds the structural pieces (headline, guidance, the failure message, retry button, progress bar) and arms the
+// retry window via the supplied retry signal. The three text slots - headline, guidance, message - are caller-supplied through the status, so this view holds no
+// hardcoded failure prose of its own.
+const renderError = ({ guidance, headline, message, onRetry, retryDelayMs, retrySignal, root }) => {
 
   const errorBlock = createElement("div", {}, [
 
-    "Unable to connect to the controller.",
+    headline,
     createElement("br"),
-    "Check the Settings tab to verify the controller details are correct.",
+    guidance,
     createElement("br"),
     createElement("code", { classList: ["text-danger"] }, [message]),
     createElement("br")

@@ -157,6 +157,9 @@ export interface AudioEncoderOptions {
  *                                 VideoToolbox (`-q:v 90`), and Intel QSV (`-global_quality 20`). Intel VideoToolbox and v4l2m2m have no quality-constraint mode and
  *                                 always emit a fixed `-b:v` regardless. In all cases, `smartQuality` also adds `HOMEKIT_STREAMING_HEADROOM` to `-maxrate`, giving the
  *                                 encoder a narrow band of variation above the target bitrate. Defaults to `true`.
+ * @property videoFilters        - Optional. Caller-supplied CPU-side video filters appended at the tail of the composed filter chain, in caller order.
+ *                                 When the encoder's own chain leaves frames GPU-resident at that point, the encoder inserts its platform's download transfer first, so
+ *                                 callers never reason about GPU residency. Omitted or empty means the chain is exactly the encoder's own.
  * @property width               - Output video width, in pixels.
  *
  * @example
@@ -199,6 +202,7 @@ export interface VideoEncoderOptions {
   level: H264Level;
   profile: H264Profile;
   smartQuality?: boolean;
+  videoFilters?: readonly string[];
   width: number;
 }
 
@@ -213,10 +217,11 @@ export interface VideoEncoderOptions {
 export type EncoderContext = "record" | "stream";
 
 // `VideoEncoderOptions` after `resolveEncoderOptions` has filled in defaults and clamped the hardware flags against the resolved class config. The resolver-guaranteed
-// fields are narrowed to `Required` so downstream handlers can read `resolved.hardwareDecoding` / `resolved.hardwareTranscoding` / `resolved.smartQuality` as definite
-// booleans rather than `boolean | undefined`. The type exists purely to carry that guarantee through the dispatch chain - internal only, not part of the module's
-// public export surface.
-type ResolvedVideoEncoderOptions = VideoEncoderOptions & Required<Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "smartQuality">>;
+// fields are narrowed to `Required` so downstream handlers read `resolved.hardwareDecoding` / `resolved.hardwareTranscoding` / `resolved.smartQuality` as definite
+// booleans and `resolved.videoFilters` as a definite `readonly string[]`, never their optional forms. The type exists purely to carry that guarantee through the
+// dispatch chain - internal only, not part of the module's public export surface.
+type ResolvedVideoEncoderOptions =
+  VideoEncoderOptions & Required<Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "smartQuality" | "videoFilters">>;
 
 // Shared pre-computed state threaded from `streamEncoder`'s dispatcher into each per-platform handler. Private to the module because every field is an implementation
 // detail of the hardware-stream emission pipeline; exposing it publicly would leak internal wiring without adding caller-facing value. All rate-control strings are
@@ -1037,13 +1042,19 @@ export class FfmpegOptions {
 
   /**
    * Generate the appropriate scale filter for the current platform. This method returns platform-specific scale filters to leverage hardware acceleration capabilities
-   * where available.
+   * where available, and reports whether the chosen scaler leaves frames in GPU memory. The residency fact travels with the filters so the one switch that picks the
+   * scaler is also the single source of where the frames live afterward - the hardware-stream context reads it to decide whether appended CPU-side filters need a
+   * download transfer bridged in ahead of them.
    */
-  #getScaleFilter(options: ResolvedVideoEncoderOptions): string[] {
+  #getScaleFilter(options: ResolvedVideoEncoderOptions): { filters: string[]; gpuResident: boolean } {
 
     // Determine the target dimensions for our scale operation. We maintain aspect ratio while ensuring the output doesn't exceed the requested height.
     const targetHeight = options.height.toString();
     const filters: string[] = [];
+
+    // Whether the scaler chosen below leaves frames on the GPU. Software scalers are CPU-resident, so this stays false unless a hardware scaler (scale_vt, vpp_qsv) sets
+    // it - the fact the hardware-stream context reads to decide whether a caller's CPU-side filters need a download transfer bridged in ahead of them.
+    let gpuResident = false;
 
     // Our default software scaler.
     const swScale = "scale=-2:min(ih\\, " + targetHeight + ")" + ":in_range=auto:out_range=auto";
@@ -1066,8 +1077,9 @@ export class FfmpegOptions {
 
           // On macOS with FFmpeg 8.x, we can use the VideoToolbox scaler (scale_vt) which provides hardware-accelerated scaling. This is significantly more efficient
           // than software scaling and can handle higher throughput with lower CPU usage. Prior to FFmpeg 8.0, this would break under a variety of scenarios and was
-          // unreliable.
+          // unreliable. scale_vt runs on the GPU and leaves its output there.
           filters.push("scale_vt=-2:min(ih\\, " + targetHeight + ")");
+          gpuResident = true;
         } else {
 
           // Fall back to software scaling with explicit pixel format conversion.
@@ -1100,6 +1112,9 @@ export class FfmpegOptions {
               "h=min(ih\\, " + options.height.toString() + ")"
             ].join(":")
           );
+
+          // vpp_qsv is a GPU post-processing filter and leaves its output on the GPU.
+          gpuResident = true;
         } else {
 
           filters.push(swScale);
@@ -1108,7 +1123,7 @@ export class FfmpegOptions {
         break;
     }
 
-    return filters;
+    return { filters, gpuResident };
   }
 
   // Generates the default set of FFmpeg video encoder arguments for software transcoding using libx264. Builds command-line options based on the provided encoder
@@ -1149,6 +1164,9 @@ export class FfmpegOptions {
 
       videoFilters.push(...pixelFilters, ...(options.fps > options.inputFps ? fpsFilter : []));
     }
+
+    // The caller's filters go at the tail. This libx264 chain is CPU-resident at its tail, so they need no download transfer bridged in ahead of them.
+    videoFilters.push(...options.videoFilters);
 
     // Default to the tried-and-true libx264. We use the following options by default:
     //
@@ -1284,12 +1302,14 @@ export class FfmpegOptions {
    *
    * `??` coalesces undefined (whether from omission or explicit-undefined spread) to the class default; `&&` then clamps against the resolved class capability so a
    * caller can only ever downgrade a flag, never upgrade one. `smartQuality` has no class-level counterpart and no clamp - it defaults to `true` when the caller omits
-   * it and passes through otherwise. The result satisfies `Required<Pick<...>>` at the type level *and* at runtime because the formula produces a concrete boolean on
-   * every branch; there is no code path that can leave a resolver-guaranteed field undefined.
+   * it and passes through otherwise. `videoFilters` likewise has no clamp - it normalizes to an empty array on omission, so downstream code always reads a definite
+   * `readonly string[]` and never re-derives an undefined guard. The result satisfies `Required<Pick<...>>` at the type level *and* at runtime because the formula
+   * produces a concrete value on every branch; there is no code path that can leave a resolver-guaranteed field undefined.
    *
    * @param options - The caller-supplied encoder options.
-   * @returns A resolved options object with defaults filled in and hardware flags clamped against the resolved class config. The three resolver-guaranteed fields
-   *          (`hardwareDecoding`, `hardwareTranscoding`, `smartQuality`) are narrowed to `Required` in the return type so downstream handlers see definite booleans.
+   * @returns A resolved options object with defaults filled in and hardware flags clamped against the resolved class config. The resolver-guaranteed fields
+   *          (`hardwareDecoding`, `hardwareTranscoding`, `smartQuality`, `videoFilters`) are narrowed to `Required` in the return type so downstream handlers see
+   *          definite booleans and a definite `readonly string[]`.
    */
   #resolveEncoderOptions(options: VideoEncoderOptions): ResolvedVideoEncoderOptions {
 
@@ -1298,7 +1318,8 @@ export class FfmpegOptions {
       ...options,
       hardwareDecoding: (options.hardwareDecoding ?? this.config.hardwareDecoding) && this.config.hardwareDecoding,
       hardwareTranscoding: (options.hardwareTranscoding ?? this.config.hardwareTranscoding) && this.config.hardwareTranscoding,
-      smartQuality: options.smartQuality ?? true
+      smartQuality: options.smartQuality ?? true,
+      videoFilters: options.videoFilters ?? []
     };
   }
 
@@ -1309,18 +1330,25 @@ export class FfmpegOptions {
    * - `bufsize`, `gop`, `maxrate` are the pre-formatted rate-control strings every hardware handler splices directly into its `-bufsize` / `-g:v` / `-maxrate` args.
    *   Sourced from the module-scope `bufsizeArg` / `gopArg` / `maxrateArg` helpers so the software and hardware paths share one derivation of each.
    * - `filterChain` is the comma-joined `-filter:v` value. Crop sits first when configured (CPU-side filter), then the platform-specific scaler (which may prepend its
-   *   own transfer filters; see `getScaleFilter`).
+   *   own transfer filters; see `getScaleFilter`), and finally the caller's `videoFilters` at the tail, preceded by a download transfer when the scaler left frames on
+   *   the GPU.
    * - `frameRateArg` materializes the `...(fps !== inputFps ? ["-r", fps] : [])` conditional once so every handler can splat it directly.
    * - `init` is the platform-specific hardware-device init args (`-init_hw_device` / `-filter_hw_device`, emitted only for SW-decode + HW-encode on FFmpeg 8.x macOS
    *   and on generic QSV hosts). Prepended by the dispatcher before the handler's output.
    */
   #hardwareStreamContext(options: ResolvedVideoEncoderOptions): HardwareStreamContext {
 
-    const videoFilters = [
+    // Compose the encoder's own chain: crop (CPU-side) first when configured, then the platform scaler, which also reports whether it left frames on the GPU.
+    const { filters: scaleFilters, gpuResident } = this.#getScaleFilter(options);
+    const videoFilters = [ ...this.#cropFilterSegment, ...scaleFilters ];
 
-      ...this.#cropFilterSegment,
-      ...this.#getScaleFilter(options)
-    ];
+    // The caller's filters run CPU-side, so they go at the tail. When the scaler left frames in GPU memory, the platform's own download transfer bridges them back to
+    // system memory first - reached with a purpose-built flags view that says "frames are in hardware memory, the next stage is CPU-side", so the per-platform download
+    // vocabulary stays in one home and no version or hardware-flag check is restated here.
+    if(options.videoFilters.length) {
+
+      videoFilters.push(...(gpuResident ? this.#getHardwareTransferFilters({ hardwareDecoding: true, hardwareTranscoding: false }) : []), ...options.videoFilters);
+    }
 
     return {
 

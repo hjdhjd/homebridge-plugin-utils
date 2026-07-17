@@ -111,6 +111,10 @@ const BASE_ENCODER_OPTIONS: VideoEncoderOptions = {
   width: 1920
 };
 
+// Caller-supplied CPU-side filters used by the videoFilters-seam rows. Opaque to the encoder: it appends them at the chain tail in caller order, bridging a download
+// transfer ahead of them only when the platform scaler left frames on the GPU. More than one entry, so the rows also pin that the encoder joins them with ", ".
+const CALLER_VIDEO_FILTERS = [ "fps=30", "minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc" ];
+
 // Assert an ordered `-key value` pair is present in the args array. FFmpeg option parsing is strictly positional, so the key and value must appear adjacently.
 function assertHasArg(args: readonly string[], key: string, value?: string): void {
 
@@ -1539,6 +1543,274 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
     }, HW_TRANSCODE);
 
     assert.deepEqual(options.videoDecoder("av1"), []);
+  });
+});
+
+describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)", () => {
+
+  // Full-argv snapshots for the caller-filter seam. Each row pins the complete emission via deepEqual so a filter appended in the wrong position, a missing download
+  // bridge, or a spurious one fails loudly. The platform scaler chains match the golden snapshots above; the caller filters are appended at the tail, preceded by
+  // the platform download transfer only when the scaler left frames on the GPU.
+  const swScaleChain = "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto";
+  const scaleVtChain = "scale_vt=-2:min(ih\\, 1080)";
+  const vppQsvChain = "vpp_qsv=format=same:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)";
+
+  // The caller filters as the encoder appends them: the leading separator that joins them onto a non-empty chain, then the two filters comma-joined.
+  const callerTail = ", " + CALLER_VIDEO_FILTERS.join(", ");
+
+  test("software path appends the caller filters at the chain tail with a single separator", () => {
+
+    const { options } = makeOptions({ hostSystem: "generic" });
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-codec:v", "libx264",
+      "-preset", "veryfast",
+      "-profile:v", "high",
+      "-level:v", "4.0",
+      "-noautoscale",
+      "-bf", "0",
+      "-filter:v", swScaleChain + callerTail,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-crf", "20"
+    ]);
+  });
+
+  test("software path with hardware decoding keeps the pre-existing download ahead of scale, caller filters at the tail", () => {
+
+    // The download transfer (GPU->CPU, from the hardware-decode pairing) is the pre-existing software-path behavior and stays at the head of the pixel chain. The caller
+    // filters go at the very tail, after scale - pinning the ordering interaction: download, scale, then the caller's own filters.
+    const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_DECODE);
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-codec:v", "libx264",
+      "-preset", "veryfast",
+      "-profile:v", "high",
+      "-level:v", "4.0",
+      "-noautoscale",
+      "-bf", "0",
+      "-filter:v", "hwdownload, format=nv12, " + swScaleChain + callerTail,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-crf", "20"
+    ]);
+  });
+
+  test("macOS VideoToolbox 8.x bridges a download between the GPU scaler and the caller filters", () => {
+
+    // scale_vt leaves frames on the GPU, so the caller's CPU-side filters must be preceded by the platform download transfer (hwdownload, format=nv12 on macOS 8.x). The
+    // bridge sits between the encoder's own chain and the caller's filters.
+    const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-codec:v", "h264_videotoolbox",
+      "-allow_sw", "1",
+      "-realtime", "1",
+      "-profile:v", "high",
+      "-level:v", "0",
+      "-bf", "0",
+      "-noautoscale",
+      "-filter:v", scaleVtChain + ", hwdownload, format=nv12" + callerTail,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-q:v", "90"
+    ]);
+  });
+
+  test("macOS VideoToolbox on FFmpeg 6.1.1 falls back to software scale and appends the caller filters with no bridge", () => {
+
+    // Below FFmpeg 8, macOS uses the software scaler, which is CPU-resident, so the caller filters attach directly with no download transfer.
+    const { options } = makeOptions(VIDEOTOOLBOX_CODECS, HW_FULL);
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-codec:v", "h264_videotoolbox",
+      "-allow_sw", "1",
+      "-realtime", "1",
+      "-profile:v", "high",
+      "-level:v", "0",
+      "-bf", "0",
+      "-noautoscale",
+      "-filter:v", swScaleChain + callerTail,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-q:v", "90"
+    ]);
+  });
+
+  test("generic QSV on FFmpeg 6.1.1 bridges a download after vpp_qsv regardless of version", () => {
+
+    // vpp_qsv runs on the GPU with no FFmpeg-version gate, so the caller filters must be preceded by a download transfer even on 6.1.1 - the row that fails against any
+    // version-gated or platform-blind bridge.
+    const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-codec:v", "h264_qsv",
+      "-profile:v", "high",
+      "-level:v", "0",
+      "-bf", "0",
+      "-noautoscale",
+      "-filter:v", vppQsvChain + ", hwdownload" + callerTail,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-global_quality", "20"
+    ]);
+  });
+
+  test("raspbian keeps its upload transfer, software-scales, and appends the caller filters with no bridge", () => {
+
+    // Raspbian forces software decoding, so the chain opens with the format=yuv420p upload transfer, then software scale. The software scaler is CPU-resident and
+    // raspbian's download branch is empty, so the caller filters attach with no bridge.
+    const { options } = makeOptions(RASPBIAN_CODECS, HW_FULL);
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-codec:v", "h264_v4l2m2m",
+      "-profile:v", "100",
+      "-bf", "0",
+      "-noautoscale",
+      "-reset_timestamps", "1",
+      "-filter:v", "format=yuv420p, " + swScaleChain + callerTail,
+      "-b:v", "3000k",
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k"
+    ]);
+  });
+
+  test("both transfer directions compose around the scaler on a SW-decode + HW-transcode macOS 8.x chain", () => {
+
+    // Software decode paired with hardware transcode: the chain uploads (hwupload) into the GPU scaler, scale_vt runs GPU-resident, then the caller's CPU-side filters
+    // pull the frames back down (hwdownload, format=nv12) before running. Both transfer directions compose correctly around the scaler in one chain.
+    const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-init_hw_device", "videotoolbox=hw",
+      "-filter_hw_device", "hw",
+      "-codec:v", "h264_videotoolbox",
+      "-allow_sw", "1",
+      "-realtime", "1",
+      "-profile:v", "high",
+      "-level:v", "0",
+      "-bf", "0",
+      "-noautoscale",
+      "-filter:v", "hwupload, " + scaleVtChain + ", hwdownload, format=nv12" + callerTail,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-q:v", "90"
+    ]);
+  });
+
+  test("a software chain adds no transfer token for the caller filters even with hardware available and FFmpeg 8.x", () => {
+
+    // The resolved shape is hardwareDecoding false with a per-call hardwareTranscoding: false override, so the call runs the software chain despite the class having
+    // hardware available on FFmpeg 8.x. The hardwareDecoding pin matters: a decode-true construction would legitimately emit the pre-existing decode-side download. This
+    // row isolates the fact that the caller-filter mechanism adds nothing to a software chain - the outcome that replaces the consumer's hand-written raw-hint bridge.
+    const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
+
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, hardwareTranscoding: false, videoFilters: CALLER_VIDEO_FILTERS }), [
+
+      "-codec:v", "libx264",
+      "-preset", "veryfast",
+      "-profile:v", "high",
+      "-level:v", "4.0",
+      "-noautoscale",
+      "-bf", "0",
+      "-filter:v", swScaleChain + callerTail,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-crf", "20"
+    ]);
+  });
+
+  test("macOS 8.x hardware argv is byte-identical to the baseline when videoFilters is omitted or empty", () => {
+
+    // The GPU-resident macOS 8.x chain must not gain a download bridge or a trailing separator when there are no caller filters. Both the omitted field and an explicit
+    // empty array reproduce the baseline argv exactly.
+    const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
+    const baseline = [
+
+      "-codec:v", "h264_videotoolbox",
+      "-allow_sw", "1",
+      "-realtime", "1",
+      "-profile:v", "high",
+      "-level:v", "0",
+      "-bf", "0",
+      "-noautoscale",
+      "-filter:v", scaleVtChain,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-q:v", "90"
+    ];
+
+    assert.deepEqual(options.streamEncoder(BASE_ENCODER_OPTIONS), baseline);
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: [] }), baseline);
+  });
+
+  test("generic QSV hardware argv is byte-identical to the baseline when videoFilters is omitted or empty", () => {
+
+    const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
+    const baseline = [
+
+      "-codec:v", "h264_qsv",
+      "-profile:v", "high",
+      "-level:v", "0",
+      "-bf", "0",
+      "-noautoscale",
+      "-filter:v", vppQsvChain,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-global_quality", "20"
+    ];
+
+    assert.deepEqual(options.streamEncoder(BASE_ENCODER_OPTIONS), baseline);
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: [] }), baseline);
+  });
+
+  test("plain software argv is byte-identical to the baseline when videoFilters is omitted or empty", () => {
+
+    const { options } = makeOptions({ hostSystem: "generic" });
+    const baseline = [
+
+      "-codec:v", "libx264",
+      "-preset", "veryfast",
+      "-profile:v", "high",
+      "-level:v", "4.0",
+      "-noautoscale",
+      "-bf", "0",
+      "-filter:v", swScaleChain,
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3064k",
+      "-crf", "20"
+    ];
+
+    assert.deepEqual(options.streamEncoder(BASE_ENCODER_OPTIONS), baseline);
+    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: [] }), baseline);
+  });
+
+  test("recordEncoder threads the caller filters through its delegation to streamEncoder", () => {
+
+    // recordEncoder overrides smartQuality and delegates to streamEncoder; the videoFilters ride the full options object with no explicit threading. The emitted
+    // -filter:v value is pinned exactly to prove the filters survive the delegation.
+    const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
+    const chain = filterChain(options.recordEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }));
+
+    assert.equal(chain, scaleVtChain + ", hwdownload, format=nv12" + callerTail);
   });
 });
 

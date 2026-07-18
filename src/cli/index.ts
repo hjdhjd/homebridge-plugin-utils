@@ -561,7 +561,8 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
     addRegion(readmePath, DEV_BADGES_BEGIN, DEV_BADGES_END, renderDevBadges(manifest));
   }
 
-  // Each content doc: the masthead (unless the entry opts out, as the changelog does) and a self-omitting footer index.
+  // Each content doc: the masthead and the self-omitting footer index, each unless the entry opts out. A file opted out of both - the changelog is the canonical case -
+  // receives no stamped regions at all while remaining listed in every documentation index.
   for(const section of manifest.nav) {
 
     for(const entry of section.entries) {
@@ -578,7 +579,10 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
         addRegion(docPath, MASTHEAD_BEGIN, MASTHEAD_END, renderMasthead(manifest));
       }
 
-      addRegion(docPath, DOCUMENTATION_BEGIN, DOCUMENTATION_END, renderDocIndex({ currentFile: entry.file, manifest, surface: "doc-footer" }));
+      if(entry.footer !== false) {
+
+        addRegion(docPath, DOCUMENTATION_BEGIN, DOCUMENTATION_END, renderDocIndex({ currentFile: entry.file, manifest, surface: "doc-footer" }));
+      }
     }
   }
 

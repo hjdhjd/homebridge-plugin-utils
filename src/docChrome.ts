@@ -62,14 +62,16 @@ export interface Masthead {
 
 /**
  * One documentation-index entry. A discriminated union on `kind`: a `"doc"` entry points at a file under the plugin's `docs/` tree (and may opt out of the masthead via
- * `masthead: false`, as the changelog does), while a `"readme-anchor"` entry points at a section anchor within the README itself. The renderer derives the correct href
+ * `masthead: false`, or of the documentation-footer region via `footer: false` - with both opted out, a linked file such as the changelog stays entirely free of stamped
+ * chrome while remaining listed in every documentation index), while a `"readme-anchor"` entry points at a section anchor within the README itself. The renderer derives
+ * the correct href
  * per surface from this one canonical shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere else.
  *
  * @category Doc Chrome
  */
 export type DocEntry =
   { readonly anchor: string; readonly blurb: string; readonly kind: "readme-anchor"; readonly title: string } |
-  { readonly blurb: string; readonly file: string; readonly kind: "doc"; readonly masthead?: boolean; readonly title: string };
+  { readonly blurb: string; readonly file: string; readonly footer?: boolean; readonly kind: "doc"; readonly masthead?: boolean; readonly title: string };
 
 /**
  * A named, ordered group of documentation entries (for example "Getting Started" or "Additional Topics"). Sections render in array order, and entries within a section
@@ -414,7 +416,7 @@ function assertDocEntry(value: unknown, path: string, source: string): void {
     fail(source, "field `" + path + "` must be an object");
   }
 
-  const entry = value as { anchor?: unknown; blurb?: unknown; file?: unknown; kind?: unknown; masthead?: unknown; title?: unknown };
+  const entry = value as { anchor?: unknown; blurb?: unknown; file?: unknown; footer?: unknown; kind?: unknown; masthead?: unknown; title?: unknown };
 
   assertString(entry.title, path + ".title", source);
   assertString(entry.blurb, path + ".blurb", source);
@@ -424,6 +426,11 @@ function assertDocEntry(value: unknown, path: string, source: string): void {
     case "doc": {
 
       assertString(entry.file, path + ".file", source);
+
+      if((entry.footer !== undefined) && (typeof entry.footer !== "boolean")) {
+
+        fail(source, "field `" + path + ".footer` must be a boolean when present");
+      }
 
       if((entry.masthead !== undefined) && (typeof entry.masthead !== "boolean")) {
 

@@ -1042,6 +1042,41 @@ describe("prepareChrome", () => {
     assert.match(html, /ratgdo: garage support\./, "the webUI project list must be stamped");
   });
 
+  test("a doc entry opted out of both regions stays byte-untouched while remaining listed in every documentation index", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const entries = [
+
+      { anchor: "installation", blurb: "installing this plugin.", kind: "readme-anchor", title: "Installation" },
+      { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", title: "Best Practices" },
+      { blurb: "release history.", file: "docs/Changelog.md", footer: false, kind: "doc", masthead: false, title: "Changelog" }
+    ];
+
+    const manifest = { ...BASE_MANIFEST, nav: [{ entries, title: "Getting Started" }] };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    // A fully-opted-out file needs no marker pairs at all: replace the tree's changelog with pure prose so the assertion below proves the stamper never touches it.
+    const pristine = "# Changelog\n\nHand-written history, no chrome.\n";
+
+    await writeFile(join(scratch.path, "docs", "Changelog.md"), pristine);
+
+    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    assert.equal(await readFile(join(scratch.path, "docs", "Changelog.md"), "utf8"), pristine, "the fully-opted-out changelog must be byte-untouched");
+
+    const readme = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    assert.match(readme, /\[Changelog\]/, "the README documentation index still lists the changelog");
+
+    const bestPractices = await readFile(join(scratch.path, "docs", "BestPractices.md"), "utf8");
+    const footer = bestPractices.slice(bestPractices.indexOf(docChrome.DOCUMENTATION_BEGIN));
+
+    assert.match(footer, /\[Changelog\]/, "a sibling doc's footer still lists the changelog");
+  });
+
   test("loads a manifest authored as static JSON, not just a module", async () => {
 
     await using scratch = await makeScratchRoot();

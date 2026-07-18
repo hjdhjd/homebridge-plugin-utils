@@ -429,6 +429,7 @@ const args = ffmpegOpts.streamEncoder(encoderOptions);
 | <a id="level"></a> `level` | `H264Level` | H.264 profile level for output. |
 | <a id="profile"></a> `profile` | `H264Profile` | H.264 profile for output. |
 | <a id="smartquality"></a> `smartQuality?` | `boolean` | Optional. Enables variable-bitrate quality-constrained encoding on encoders that support it - libx264 (`-crf 20`), Apple Silicon VideoToolbox (`-q:v 90`), and Intel QSV (`-global_quality 20`). Intel VideoToolbox and v4l2m2m have no quality-constraint mode and always emit a fixed `-b:v` regardless. In all cases, `smartQuality` also adds `HOMEKIT_STREAMING_HEADROOM` to `-maxrate`, giving the encoder a narrow band of variation above the target bitrate. Defaults to `true`. |
+| <a id="videofilters"></a> `videoFilters?` | readonly `string`[] | Optional. Caller-supplied CPU-side video filters appended at the tail of the composed filter chain, in caller order. When the encoder's own chain leaves frames GPU-resident at that point, the encoder inserts its platform's download transfer first, so callers never reason about GPU residency. Omitted or empty means the chain is exactly the encoder's own. |
 | <a id="width"></a> `width` | `number` | Output video width, in pixels. |
 
 ***

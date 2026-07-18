@@ -34,6 +34,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [ffmpeg/dgram-util](ffmpeg/dgram-util.md) | Single source of truth for the `"ipv4"` / `"ipv6"` -> `node:dgram` translations the FFmpeg subsystem needs. |
 | [ffmpeg/exec](ffmpeg/exec.md) | One-shot FFmpeg execution with composed signal lifetime. |
 | [ffmpeg/fmp4](ffmpeg/fmp4.md) | ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data. |
+| [ffmpeg/fmp4-builders](ffmpeg/fmp4-builders.md) | Shared ISO BMFF (fMP4) byte-level construction builders. |
 | [ffmpeg/hap-enums](ffmpeg/hap-enums.md) | Mirrors HAP protocol const enum values that HomeKit camera plugins need at value-side runtime. `verbatimModuleSyntax` disallows value imports of ambient const enums, so the numeric and string contracts from hap-nodejs must be re-declared at value-side. Centralizing the mirrors here gives every consumer a single import path and a single update point if upstream `hap-nodejs` ever changes a value. |
 | [ffmpeg/mp4-assembler](ffmpeg/mp4-assembler.md) | AsyncDisposable fMP4 segment assembler. |
 | [ffmpeg/mp4-parser](ffmpeg/mp4-parser.md) | Pure stateful byte-to-record parser for ISO BMFF (fMP4) box streams. |
@@ -65,4 +66,6 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [logclient/types](logclient/types.md) | Shared, dependency-light type definitions for the Homebridge UI log client. |
 | [mqttClient](mqttClient.md) | AsyncDisposable MQTT client whose connection lifetime is a composed [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). |
 | [service](service.md) | Homebridge service helper utilities. |
+| [timer-registry](timer-registry.md) | A lifetime-bounded registry of callback timers. |
 | [util](util.md) | TypeScript Utilities. |
+| [webui-loader](webui-loader.md) | The webUI script-loader stamp. A plugin's `index.html` hand-copies an importmap/cache-bust `<script type="module">` block whose runtime job is to read the homebridge-plugin-utils manifest, inject an importmap mapping the bare package specifier to the hashed-versioned subdir the `prepare-ui` CLI mirrors into place, and dynamically import the plugin's entry module. That block is identical across the family, so this module renders it from one template: the plugin declares its entry and cache-bust list in a config comment, and `prepare-ui` stamps the rendered block into a marker-fenced region on every build. |

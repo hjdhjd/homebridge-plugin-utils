@@ -231,12 +231,12 @@ function example(log: HomebridgePluginLogging) {
 
 #### Properties
 
-| Property | Type | Description |
-| ------ | ------ | ------ |
-| <a id="debug"></a> `debug` | (`message`, ...`parameters`) => `void` | Logs a debug-level message. |
-| <a id="error"></a> `error` | (`message`, ...`parameters`) => `void` | Logs an error-level message. |
-| <a id="info"></a> `info` | (`message`, ...`parameters`) => `void` | Logs an info-level message. |
-| <a id="warn"></a> `warn` | (`message`, ...`parameters`) => `void` | Logs a warning-level message. |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="debug"></a> `debug` | `readonly` | (`message`, ...`parameters`) => `void` | Logs a debug-level message. |
+| <a id="error"></a> `error` | `readonly` | (`message`, ...`parameters`) => `void` | Logs an error-level message. |
+| <a id="info"></a> `info` | `readonly` | (`message`, ...`parameters`) => `void` | Logs an info-level message. |
+| <a id="warn"></a> `warn` | `readonly` | (`message`, ...`parameters`) => `void` | Logs a warning-level message. |
 
 ***
 
@@ -930,6 +930,43 @@ async function abortableWait<T>(promise: Promise<T>, signal: AbortSignal): Promi
   // keeps the `using` scope alive until the promise actually settles, which is what the "scope-bound registration" pattern relies on.
   return await promise;
 }
+```
+
+***
+
+### prefixedLog()
+
+```ts
+function prefixedLog(base, prefix): HomebridgePluginLogging;
+```
+
+Derive a prefixed [HomebridgePluginLogging](#homebridgepluginlogging) from a base logger. Each level prepends the supplied prefix and the family's ": " separator to the
+message and passes the message and its parameters through to the base logger unchanged, so formatting happens exactly once, at the sink, behind
+whatever gates the sink applies. The prefix is a supplier evaluated on every call: identity that can change at runtime (a renamed accessory, a
+retitled controller) flows into the very next line without any re-wiring, and a captured string can never freeze it.
+
+Printf-style tokens behave as if the caller had written the prefix into its own format string: the composed prefix-plus-message string is what meets
+the parameters at the sink.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `base` | [`Logger`](#logger) | The logger that receives the prefixed calls and owns formatting and gating. |
+| `prefix` | () => `string` | Supplier for the prefix, evaluated on every call. |
+
+#### Returns
+
+[`HomebridgePluginLogging`](#homebridgepluginlogging)
+
+A [HomebridgePluginLogging](#homebridgepluginlogging) whose four levels route to the corresponding levels of `base`.
+
+#### Example
+
+```ts
+const log = prefixedLog(platformLog, () => this.name);
+
+log.info("Connected to %s.", address);
 ```
 
 ***

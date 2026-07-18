@@ -5,12 +5,14 @@
  * (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds,
-  guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, retry, runWithAbort, sanitizeName, superviseLoop,
+  guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort, sanitizeName,
+  superviseLoop,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing.helpers.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import util from "node:util";
 
 // Block until `signal` aborts, then throw its reason. Models a signal-aware operation - `fetch(url, { signal })`, `events.once(emitter, event, { signal })`, etc. -
 // that blocks until cancellation and surfaces `signal.reason` as the rejection. Uses `once` rather than a manual `addEventListener`-in-a-Promise construct for the same
@@ -1556,6 +1558,80 @@ describe("Watchdog - dispose (permanently inert)", () => {
     watchdog[Symbol.dispose]();
 
     assert.equal(controller.signal.aborted, false, "disposing a Watchdog must not abort the signal it observed");
+  });
+});
+
+describe("prefixedLog", () => {
+
+  test("prefixes the message, passes the parameters through untouched, and calls only the matching level", () => {
+
+    // The wrapper prepends the supplier's value and the family's ": " separator to the message string, leaves the parameter list exactly as the caller passed it, and
+    // routes to the base level of the same name and no other.
+    const base = capturingLog();
+    const wrapped = prefixedLog(base, () => "Front Door");
+
+    wrapped.info("Connected to %s.", "host");
+
+    assert.equal(base.entries.length, 1, "only the info level must have been called");
+
+    const entry = expectAt(base.entries, 0, "the info entry");
+
+    assert.equal(entry.level, "info");
+    assert.equal(entry.message, "Front Door: Connected to %s.");
+    assert.deepEqual(entry.params, ["host"]);
+  });
+
+  test("evaluates the prefix supplier on every call so a changed identity flows into the very next line", () => {
+
+    // The prefix is a supplier, not a captured string, so a renamed accessory or retitled controller reaches the next line without any re-wiring. A supplier that
+    // yields "A" then "B" produces those prefixes in order.
+    const base = capturingLog();
+    const prefixes = [ "A", "B" ];
+    const wrapped = prefixedLog(base, () => prefixes.shift() ?? "?");
+
+    wrapped.info("first");
+    wrapped.info("second");
+
+    assert.deepEqual(base.entries.map((entry) => entry.message), [ "A: first", "B: second" ]);
+  });
+
+  test("the composed output matches formatting the prefixed message directly, for parameterized and bare messages", () => {
+
+    const base = capturingLog();
+    const prefix = "Camera 3";
+    const wrapped = prefixedLog(base, () => prefix);
+
+    // The parameterized case exercises %s, %d, and a trailing object parameter; the bare case has no parameters at all. In each, formatting the wrapper's captured
+    // message and parameters must equal writing the prefix into the caller's own format string and formatting that, which proves the prefix rides the format string and
+    // the parameters reach the sink untouched.
+    wrapped.info("Motion on %s at %d.", "front", 5, { zone: "porch" });
+    wrapped.warn("Stream stalled.");
+
+    const parameterized = expectAt(base.entries, 0, "the parameterized entry");
+    const bare = expectAt(base.entries, 1, "the bare entry");
+
+    assert.equal(util.format(parameterized.message, ...parameterized.params), util.format(prefix + ": " + "Motion on %s at %d.", "front", 5, { zone: "porch" }));
+    assert.equal(util.format(bare.message, ...bare.params), util.format(prefix + ": " + "Stream stalled."));
+  });
+
+  test("each wrapped level routes to the base method of the same name and no other", () => {
+
+    const base = capturingLog();
+    const wrapped = prefixedLog(base, () => "X");
+
+    wrapped.debug("d");
+    wrapped.error("e");
+    wrapped.info("i");
+    wrapped.warn("w");
+
+    // Each level is present exactly once, in call order, carrying its own prefixed message - so no level routes to a sibling method.
+    assert.deepEqual(base.entries.map((entry) => ({ level: entry.level, message: entry.message })), [
+
+      { level: "debug", message: "X: d" },
+      { level: "error", message: "X: e" },
+      { level: "info", message: "X: i" },
+      { level: "warn", message: "X: w" }
+    ]);
   });
 });
 

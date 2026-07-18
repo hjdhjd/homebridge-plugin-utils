@@ -440,7 +440,7 @@ export interface HomebridgePluginLogging {
    * @param message    - The message string, with optional format specifiers.
    * @param parameters - Optional parameters for message formatting.
    */
-  debug: (message: string, ...parameters: unknown[]) => void;
+  readonly debug: (message: string, ...parameters: unknown[]) => void;
 
   /**
    * Logs an error-level message.
@@ -448,7 +448,7 @@ export interface HomebridgePluginLogging {
    * @param message    - The message string, with optional format specifiers.
    * @param parameters - Optional parameters for message formatting.
    */
-  error: (message: string, ...parameters: unknown[]) => void;
+  readonly error: (message: string, ...parameters: unknown[]) => void;
 
   /**
    * Logs an info-level message.
@@ -456,7 +456,7 @@ export interface HomebridgePluginLogging {
    * @param message    - The message string, with optional format specifiers.
    * @param parameters - Optional parameters for message formatting.
    */
-  info: (message: string, ...parameters: unknown[]) => void;
+  readonly info: (message: string, ...parameters: unknown[]) => void;
 
   /**
    * Logs a warning-level message.
@@ -464,7 +464,7 @@ export interface HomebridgePluginLogging {
    * @param message    - The message string, with optional format specifiers.
    * @param parameters - Optional parameters for message formatting.
    */
-  warn: (message: string, ...parameters: unknown[]) => void;
+  readonly warn: (message: string, ...parameters: unknown[]) => void;
 }
 
 /**
@@ -490,6 +490,44 @@ export const noOpLog: HomebridgePluginLogging = {
  * @category Utilities
  */
 export type Logger = HomebridgePluginLogging | Logging;
+
+/**
+ * Derive a prefixed {@link HomebridgePluginLogging} from a base logger. Each level prepends the supplied prefix and the family's ": " separator to the
+ * message and passes the message and its parameters through to the base logger unchanged, so formatting happens exactly once, at the sink, behind
+ * whatever gates the sink applies. The prefix is a supplier evaluated on every call: identity that can change at runtime (a renamed accessory, a
+ * retitled controller) flows into the very next line without any re-wiring, and a captured string can never freeze it.
+ *
+ * Printf-style tokens behave as if the caller had written the prefix into its own format string: the composed prefix-plus-message string is what meets
+ * the parameters at the sink.
+ *
+ * @param base   - The logger that receives the prefixed calls and owns formatting and gating.
+ * @param prefix - Supplier for the prefix, evaluated on every call.
+ *
+ * @returns A {@link HomebridgePluginLogging} whose four levels route to the corresponding levels of `base`.
+ *
+ * @example
+ *
+ * ```ts
+ * const log = prefixedLog(platformLog, () => this.name);
+ *
+ * log.info("Connected to %s.", address);
+ * ```
+ *
+ * @category Utilities
+ */
+export function prefixedLog(base: Logger, prefix: () => string): HomebridgePluginLogging {
+
+  // Compose the prefixed format string once per call: the live prefix, the family's ": " separator, and the caller's message, in that order.
+  const prefixed = (message: string): string => prefix() + ": " + message;
+
+  return {
+
+    debug: (message: string, ...parameters: unknown[]): void => base.debug(prefixed(message), ...parameters),
+    error: (message: string, ...parameters: unknown[]): void => base.error(prefixed(message), ...parameters),
+    info: (message: string, ...parameters: unknown[]): void => base.info(prefixed(message), ...parameters),
+    warn: (message: string, ...parameters: unknown[]): void => base.warn(prefixed(message), ...parameters)
+  };
+}
 
 // Re-export the magnitude-and-percentage formatters from the browser-safe `formatters.ts` module. `featureOptions.ts` imports them directly from there (so it can
 // ship into `dist/ui/` without dragging in any of util.ts's Node-only imports); util.ts surfaces them here so server-side consumers see the same public API they

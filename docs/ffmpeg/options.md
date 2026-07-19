@@ -203,6 +203,32 @@ Array of FFmpeg command-line arguments for audio encoding.
 const args = ffmpegOpts.audioEncoder();
 ```
 
+##### hardwareEncodes()
+
+```ts
+hardwareEncodes(context): boolean;
+```
+
+Reports whether the given transcode context runs on the host's hardware encoder in this instance's resolved configuration. Live streaming uses the hardware
+encoder whenever transcoding is resolved on; HKSV recording additionally excludes Raspberry Pi, whose h264_v4l2m2m encoder is unreliable for event recording - a
+matter separate from the FFmpeg-7+ h264_v4l2m2m decoder regression noted in #configureRaspbianHwAccel, which affects decoding only. The answer reads the resolved
+class config set in the constructor by #configureHwAccel, before any encoder method is callable.
+
+The encoder choice, the source ceiling, and any consumer narration or policy all read this one predicate, so they can never disagree about a given context, and
+relaxing the raspbian exclusion here flips every one of them together with no consumer change.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `context` | [`EncoderContext`](#encodercontext) | The transcode context whose hardware-encoder use is queried. |
+
+###### Returns
+
+`boolean`
+
+`true` when `context` runs on the host's hardware encoder in the resolved configuration, `false` when it software-encodes.
+
 ##### maxSourcePixels()
 
 ```ts

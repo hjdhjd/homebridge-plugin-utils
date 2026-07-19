@@ -1138,7 +1138,7 @@ describe("FfmpegOptions - maxSourcePixels", () => {
     assert.equal(options.maxSourcePixels("record"), Infinity);
   });
 
-  // Agreement rule. The ceiling and the encoder choice both derive from #hardwareEncodes, so on a fully-hardware Pi the record context must report both an uncapped
+  // Agreement rule. The ceiling and the encoder choice both derive from hardwareEncodes, so on a fully-hardware Pi the record context must report both an uncapped
   // source (Infinity) AND a software encoder (libx264, never h264_v4l2m2m). Pinning the pair co-located freezes the shared-predicate wiring: a future change that flips
   // one without the other would fail here. This deliberately restates the libx264 fact from the recordEncoder block, kept to the single assertion pair the rule
   // needs.
@@ -1161,6 +1161,49 @@ describe("FfmpegOptions - maxSourcePixels", () => {
     const args = options.recordEncoder({ ...BASE_ENCODER_OPTIONS, hardwareTranscoding: false });
 
     assertHasArg(args, "-codec:v", "libx264");
+  });
+});
+
+describe("FfmpegOptions - hardwareEncodes", () => {
+
+  // A host that resolves hardware transcoding true and imposes no record-context exclusion (VideoToolbox) runs both contexts on the hardware encoder. This pins the
+  // baseline the marker and the source ceiling both key on.
+  test("reports both contexts on the hardware encoder for a resolved-hardware non-raspbian host", () => {
+
+    const { options } = makeOptions(VIDEOTOOLBOX_CODECS, HW_FULL);
+
+    assert.equal(options.hardwareEncodes("stream"), true);
+    assert.equal(options.hardwareEncodes("record"), true);
+  });
+
+  // The record-context exclusion pinned: on a fully-hardware Raspberry Pi the live stream runs on h264_v4l2m2m while HKSV recording software-encodes, so the stream
+  // context is on the hardware encoder and the record context is not.
+  test("excludes only the record context on a fully-hardware raspbian host", () => {
+
+    const { options } = makeOptions(RASPBIAN_CODECS, HW_FULL);
+
+    assert.equal(options.hardwareEncodes("stream"), true);
+    assert.equal(options.hardwareEncodes("record"), false);
+  });
+
+  // Hardware transcoding resolved off - even on a host whose accelerator is present (VideoToolbox with decode-only) - reports software for both contexts, since the
+  // predicate gates on the resolved hardwareTranscoding flag before any per-context rule.
+  test("reports software for both contexts when hardware transcoding is resolved off", () => {
+
+    const { options } = makeOptions(VIDEOTOOLBOX_CODECS, HW_DECODE);
+
+    assert.equal(options.hardwareEncodes("stream"), false);
+    assert.equal(options.hardwareEncodes("record"), false);
+  });
+
+  // The resolved-versus-requested distinction pinned: a generic host requests hardware transcoding but advertises no QSV, so configureHwAccel resolves the flag to
+  // false and both contexts report software - the caller asked for hardware and the probe said no.
+  test("reports software for both contexts when hardware was requested but the probe found no accelerator", () => {
+
+    const { options } = makeOptions({ hostSystem: "generic" }, HW_TRANSCODE);
+
+    assert.equal(options.hardwareEncodes("stream"), false);
+    assert.equal(options.hardwareEncodes("record"), false);
   });
 });
 

@@ -1235,7 +1235,7 @@ export class FfmpegOptions {
 
     // Recording falls back to software wherever it can't use the hardware encoder (Raspberry Pi today). This is the same predicate maxSourcePixels("record") consults, so
     // the encoder choice and the source ceiling are guaranteed consistent and evolve together when the upstream v4l2m2m regression is fixed.
-    if(!this.#hardwareEncodes("record")) {
+    if(!this.hardwareEncodes("record")) {
 
       return this.#defaultVideoEncoderOptions(this.#resolveEncoderOptions(recordingInput));
     }
@@ -1485,13 +1485,19 @@ export class FfmpegOptions {
     return args;
   }
 
-  // The single source of truth for "does this transcode context run on the hardware encoder on THIS host, in the resolved class config?". Live streaming uses the
-  // hardware encoder whenever transcoding is enabled; HKSV recording additionally excludes Raspberry Pi, whose h264_v4l2m2m encoder is unreliable for event recording
-  // for reasons separate from the FFmpeg-7+ h264_v4l2m2m decoder regression noted in #configureRaspbianHwAccel, which affects decoding only. Both recordEncoder and
-  // maxSourcePixels consult this, so the encoder choice and the source ceiling can never disagree - if the encoder is ever validated as reliable for event recording,
-  // relaxing the raspbian exclusion here flips both together with no consumer change. Reads the resolved class config (set in the constructor by #configureHwAccel,
-  // before any encoder method is callable), matching the class-level decision recordEncoder has always made.
-  #hardwareEncodes(context: EncoderContext): boolean {
+  /**
+   * Reports whether the given transcode context runs on the host's hardware encoder in this instance's resolved configuration. Live streaming uses the hardware
+   * encoder whenever transcoding is resolved on; HKSV recording additionally excludes Raspberry Pi, whose h264_v4l2m2m encoder is unreliable for event recording - a
+   * matter separate from the FFmpeg-7+ h264_v4l2m2m decoder regression noted in #configureRaspbianHwAccel, which affects decoding only. The answer reads the resolved
+   * class config set in the constructor by #configureHwAccel, before any encoder method is callable.
+   *
+   * The encoder choice, the source ceiling, and any consumer narration or policy all read this one predicate, so they can never disagree about a given context, and
+   * relaxing the raspbian exclusion here flips every one of them together with no consumer change.
+   *
+   * @param context - The transcode context whose hardware-encoder use is queried.
+   * @returns `true` when `context` runs on the host's hardware encoder in the resolved configuration, `false` when it software-encodes.
+   */
+  public hardwareEncodes(context: EncoderContext): boolean {
 
     if(!this.config.hardwareTranscoding) {
 
@@ -1512,7 +1518,7 @@ export class FfmpegOptions {
    */
   public maxSourcePixels(context: EncoderContext): number {
 
-    return (this.#hardwareEncodes(context) && (this.#codecSupport.hostSystem === "raspbian")) ? RPI4_HW_TRANSCODE_MAX_PIXELS : Infinity;
+    return (this.hardwareEncodes(context) && (this.#codecSupport.hostSystem === "raspbian")) ? RPI4_HW_TRANSCODE_MAX_PIXELS : Infinity;
   }
 
   // Translates HomeKit's `H264Level` enum into the string or numeric form FFmpeg's `-level:v` accepts. `numeric=true` returns the v4l2m2m form (e.g. "31"); the default

@@ -31,6 +31,21 @@
     "noPropertyAccessFromIndexSignature": true,
     "noUncheckedIndexedAccess": true,
     "noUncheckedSideEffectImports": true,
+
+    /* Host-package type identity for composed development rigs. TypeScript unifies two physical copies of a package into one type identity only when their
+     * package name and version match exactly, so a plugin tree and a symlinked library tree holding different homebridge or hap-nodejs versions split every HAP
+     * type into two incompatible identities. Mapping the host packages to the extending project's own node_modules makes the consumer's copy the single source of
+     * type truth for the whole compilation - the same composition npm produces in a published install - so version skew surfaces only as genuine API
+     * incompatibilities. ${configDir} resolves to the directory of the final extending tsconfig, so every consumer resolves its own tree rather than this base
+     * file's. The mappings name each package's declaration entry file rather than its package directory: a paths substitution is a bare file lookup that never
+     * consults the target's package.json, so a directory target fails silently and resolution falls back to the importing file's own tree.
+     */
+    "paths": {
+
+      "@homebridge/hap-nodejs": ["${configDir}/node_modules/@homebridge/hap-nodejs/dist/index.d.ts"],
+      "homebridge": ["${configDir}/node_modules/homebridge/dist/index.d.ts"]
+    },
+
     "resolveJsonModule": true,
     "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,

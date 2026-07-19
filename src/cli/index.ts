@@ -25,7 +25,7 @@ import type { ProjectEntry, parseDocChromeManifest, parseProjectEntries, renderD
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { parseWebUiLoaderConfig, renderWebUiLoaderScript } from "../webui-loader.ts";
+import type { parseWebUiLoaderConfig, renderWebUiBootRegion } from "../webui-loader.ts";
 import type { renderFeatureOptionsReference, spliceMarkedRegion } from "../featureOptions-docs.ts";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
@@ -127,7 +127,7 @@ async function computeContentHash(root: string): Promise<string> {
  *
  * @param args
  * @param args.dest       - The plugin's destination directory (typically `homebridge-ui/public/lib`). Created if missing.
- * @param args.loader     - The injected webUI-loader namespace (marker constants, `parseWebUiLoaderConfig`, `renderWebUiLoaderScript`). Absent = no stamp step, so the
+ * @param args.loader     - The injected webUI-loader namespace (marker constants, `parseWebUiLoaderConfig`, `renderWebUiBootRegion`). Absent = no stamp step, so the
  *                          mirror-only path and its existing tests are untouched. Supplied with `splice`, it stamps the plugin's `index.html` loader region.
  * @param args.sourceRoot - Path to HBPU's package root (the directory containing `package.json` and `dist/`). The entry block resolves this from the CLI's own
  *                          real path; tests pass a tmpdir populated with a synthetic HBPU layout.
@@ -228,7 +228,7 @@ export async function prepareUi({ dest, loader, sourceRoot, splice }: {
   }
 }
 
-// The subset of the `webui-loader` module the CLI reaches through a computed dynamic import at dispatch time: the marker strings, the config parser, and the block
+// The subset of the `webui-loader` module the CLI reaches through a computed dynamic import at dispatch time: the marker strings, the config parser, and the boot-region
 // renderer. Declaring it as an interface built from the module's own export types keeps the injected namespace in lockstep with `webui-loader.ts` without a load-time
 // value import that would fracture this symlink-safe bin.
 interface WebUiLoaderModule {
@@ -236,7 +236,7 @@ interface WebUiLoaderModule {
   readonly WEBUI_LOADER_BEGIN: string;
   readonly WEBUI_LOADER_END: string;
   readonly parseWebUiLoaderConfig: typeof parseWebUiLoaderConfig;
-  readonly renderWebUiLoaderScript: typeof renderWebUiLoaderScript;
+  readonly renderWebUiBootRegion: typeof renderWebUiBootRegion;
 }
 
 // Stamp the rendered loader block into the plugin's index.html. Marker-gated and a no-op on repeat: no index.html beside the destination, or no BEGIN marker, is a
@@ -277,7 +277,7 @@ async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
     // The destination-relative segment the manifest fetch and the importmap prefix resolve against - `"./lib/"` for the family convention - derived from the mirror's
     // own destination basename so it is correct for any destination the plugin chose.
     const libPath = "./" + basename(absDest) + "/";
-    const script = loader.renderWebUiLoaderScript({ bust: config.bust, entry: config.entry, libPath, packageName });
+    const script = loader.renderWebUiBootRegion({ bust: config.bust, entry: config.entry, libPath, packageName });
     const stamped = splice(html, script, { beginMarker: loader.WEBUI_LOADER_BEGIN, endMarker: loader.WEBUI_LOADER_END });
 
     await writeFile(indexPath + ".tmp", stamped, "utf8");

@@ -87,6 +87,11 @@ export class webUi {
     } finally {
 
       homebridge.hideSpinner();
+
+      // Stand the boot monitor down. Once show() settles the app owns the surface either way - on success the UI rendered, on failure the toast above displayed the
+      // diagnostic - so any earlier boot-phase error the monitor may have caught was non-fatal, and it should retract any panel it raised. The optional chain tolerates
+      // a stamped region that carries no boot monitor.
+      globalThis.webUiBoot?.ready?.();
     }
   }
 

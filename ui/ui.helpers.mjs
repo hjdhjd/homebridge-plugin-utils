@@ -394,6 +394,36 @@ export function installHomebridge(fake) {
 }
 
 /**
+ * Install the supplied fake boot monitor as the `webUiBoot` global. Returns a disposable that restores the previous value on cleanup. The boot monitor is the classic
+ * inline script the stamped index.html defines as `window.webUiBoot`; in a browser `window` and `globalThis` are the same object, so tests that drive `webUi.show()`'s
+ * stand-down handshake install their stub here, mirroring {@link installHomebridge}'s snapshot/restore shape.
+ *
+ * @param {Object} fake - The fake boot monitor, typically an object exposing `fail` and `ready` spies.
+ * @returns {{ [Symbol.dispose](): void }} A disposable handle.
+ */
+export function installWebUiBoot(fake) {
+
+  const previous = globalThis.webUiBoot;
+
+  globalThis.webUiBoot = fake;
+
+  return {
+
+    [Symbol.dispose]() {
+
+      if(previous === undefined) {
+
+        delete globalThis.webUiBoot;
+
+        return;
+      }
+
+      globalThis.webUiBoot = previous;
+    }
+  };
+}
+
+/**
  * Simulate a user clicking a category disclosure's header. Happy-DOM implements the native `<details>`/`<summary>` toggle contract: clicking the summary mutates
  * `details.open` AND fires the `toggle` event the orchestrator's capture-phase delegated handler listens for. This helper is the single idiom for "drive a category
  * toggle from a test," shared across every webUI test file so the contract under exercise is uniform regardless of which suite the test lives in.

@@ -8,7 +8,7 @@
  */
 "use strict";
 
-import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge } from "./ui.helpers.mjs";
+import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installWebUiBoot } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushPending } from "node:timers/promises";
@@ -591,5 +591,71 @@ describe("webUi - first-run handler normalization", () => {
     assert.equal(harness.skeleton.menuWrapper.style.display, "inline-flex", "the menu wrapper must be revealed on the feature-options route");
     assert.equal(harness.skeleton.pageFirstRun.style.display, "none", "no first-run page on the default route");
     assert.equal(harness.fake.observed.updatedConfigs.length, 0, "no eager seed write on the feature-options route");
+  });
+});
+
+describe("webUi.show - boot monitor handshake", () => {
+
+  // A minimal boot-monitor stub whose ready() is a call counter. The real monitor is the classic inline script the stamped index.html defines as window.webUiBoot; the
+  // handshake only reaches it through globalThis.webUiBoot?.ready?.(), so a two-method stub is enough to observe the stand-down.
+  function bootStub() {
+
+    const calls = { ready: 0 };
+    const stub = { fail: () => {}, ready: () => { calls.ready += 1; } };
+
+    return { calls, stub };
+  }
+
+  test("show() stands the boot monitor down via ready() once the UI has rendered", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false }
+    });
+
+    const { calls, stub } = bootStub();
+
+    using _boot = installWebUiBoot(stub);
+
+    await harness.ui.show();
+
+    // The success path renders the UI, and the finally hands off to ready() so the monitor retracts any panel it raised during boot.
+    assert.deepEqual(harness.featureOptionsCalls, ["show"], "the success path renders the feature-options view");
+    assert.equal(calls.ready, 1, "the finally stands the boot monitor down exactly once on success");
+  });
+
+  test("show() stands the boot monitor down via ready() even when the launch fails and toasts", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false }
+    });
+
+    // Make the launch reject so the outer catch toasts; the finally must still hand off to ready(), since the app owns the surface through the toast it displayed.
+    harness.ui.featureOptions.show = async () => { throw new Error("boom from inner"); };
+
+    const { calls, stub } = bootStub();
+
+    using _boot = installWebUiBoot(stub);
+
+    await harness.ui.show();
+
+    assert.equal(harness.fake.observed.toasts.length, 1, "the launch failure still surfaces a toast");
+    assert.equal(calls.ready, 1, "the finally stands the boot monitor down exactly once on the failure path");
+  });
+
+  test("show() tolerates the absence of the boot monitor global without throwing", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false }
+    });
+
+    // No installWebUiBoot here, so globalThis.webUiBoot is undefined. The optional chain in show()'s finally must make the handshake a silent no-op - the shape a
+    // stamped region that carries no boot monitor produces.
+    await assert.doesNotReject(async () => harness.ui.show(), "a region without a boot monitor must not break show()");
   });
 });

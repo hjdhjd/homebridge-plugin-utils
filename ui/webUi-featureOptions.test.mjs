@@ -2356,3 +2356,156 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
     orchestrator.cleanup();
   });
 });
+
+describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
+
+  // The optional onOptionsEdited hook fires after any option mutation has transitioned the store, giving a plugin's own webUI code the moment an edit lands. These
+  // tests drive real mutations through the DOM (the only external entry point the harness exposes) and assert the hook's timing and post-transition editedConfig view.
+
+  test("onOptionsEdited fires after an option set and an option cleared, exposing the post-transition editedConfig from inside the callback", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // The hook records the primary entry's options as editedConfig reports them each time it fires. The store applies the reducer before firing the mutation event, so
+    // every capture below reflects the post-transition state - the guarantee the hook exists to provide.
+    const seenOptions = [];
+    const orchestrator = new webUiFeatureOptions({
+
+      onOptionsEdited: () => seenOptions.push([...(orchestrator.editedConfig[0]?.options ?? [])])
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // No mutation has occurred yet, so the hook has not fired - in particular the effect()'s registration-time immediate-run pass (which precedes model:loaded) must
+    // not invoke it.
+    assert.equal(seenOptions.length, 0, "onOptionsEdited must not fire before the user edits an option");
+
+    // Expand Motion, then toggle Motion.Detect off. At global scope with no upstream entry, disabling a default-on option is an option:set (Disable.Motion.Detect).
+    clickCategoryHeader(skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    const checkbox = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    assert.equal(seenOptions.length, 1, "onOptionsEdited must fire once after the option:set mutation");
+    assert.deepEqual(seenOptions[0], ["Disable.Motion.Detect"], "the callback must see the post-set editedConfig carrying the disable entry");
+
+    // Toggle it back on. Returning to the catalog default clears the override (an option:cleared mutation), so editedConfig loses the entry.
+    const recheck = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    recheck.checked = true;
+    recheck.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    assert.equal(seenOptions.length, 2, "onOptionsEdited must fire again after the option:cleared mutation");
+    assert.deepEqual(seenOptions[1], [], "the callback must see the post-clear editedConfig with the disable entry gone");
+
+    orchestrator.cleanup();
+  });
+
+  test("onOptionsEdited does not fire before the model loads, nor after the lifecycle signal aborts", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let fireCount = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      onOptionsEdited: () => fireCount++
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // Across the whole show() lifecycle - the effect's immediate-run pass, model:loaded, scope:changed, and the devices dispatches - none is one of the four subscribed
+    // mutation events, so the hook has not fired before the model loaded.
+    assert.equal(fireCount, 0, "onOptionsEdited must not fire during show() before any option mutation");
+
+    // A live mutation fires it, confirming the wiring works before we tear down.
+    clickCategoryHeader(skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    const checkbox = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    assert.equal(fireCount, 1, "onOptionsEdited must fire while the page is live");
+
+    // cleanup() aborts the page signal. The hook was registered on that signal (the same one the persist and keyboard effects use), so its store subscription tears
+    // down along with the rest of the edit path. Re-driving the same toggle after the abort must not reach it.
+    orchestrator.cleanup();
+
+    const afterAbort = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    afterAbort.checked = true;
+    afterAbort.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    assert.equal(fireCount, 1, "onOptionsEdited must not fire after the lifecycle signal aborts");
+  });
+
+  test("a config without onOptionsEdited edits without throwing and still persists", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // No onOptionsEdited supplied: the optional-chained invocation must be a silent no-op, so the edit-and-persist path works exactly as it does for any consumer that
+    // omits the hook.
+    const orchestrator = new webUiFeatureOptions();
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    clickCategoryHeader(skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    const checkbox = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    checkbox.checked = false;
+
+    assert.doesNotThrow(() => checkbox.dispatchEvent(new Event("change", { bubbles: true })), "a mutation with no hook configured must not throw");
+
+    await settlePersist();
+
+    const lastUpdate = fake.observed.updatedConfigs.at(-1);
+
+    assert.ok(lastUpdate?.[0]?.options?.includes("Disable.Motion.Detect"),
+      "the edit must still persist to homebridge exactly as before, with no hook configured");
+
+    orchestrator.cleanup();
+  });
+});

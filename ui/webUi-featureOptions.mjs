@@ -4,9 +4,9 @@
  */
 "use strict";
 
+import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { delay, errorMessage, toastError } from "./webUi-featureOptions/utils.mjs";
 import { initialState, reducer } from "./webUi-featureOptions/state.mjs";
-import { FeatureOptionsStore } from "./webUi-featureOptions/store.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
@@ -58,6 +58,9 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  * @property {Function} [getControllers] - Handler to retrieve available controllers.
  * @property {(controller: (Controller|null)) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's {@link DeviceListResult}.
  * @property {Function} [infoPanel] - Handler to display device information.
+ * @property {() => void} [onOptionsEdited] - Invoked after the store state has transitioned for any option mutation (an option set or cleared, the options reset,
+ *   or the model reverted), so a consumer reading editedConfig from inside the callback sees the post-edit state. Invoked once per mutation with no arguments and no
+ *   debounce; a consumer that needs coalescing applies its own.
  * @property {Object} [sidebar] - Sidebar configuration options.
  * @property {string} [sidebar.controllerLabel="Controllers"] - Label for the controllers section.
  * @property {string} [sidebar.deviceLabel="Devices"] - Label for the devices section.
@@ -140,6 +143,7 @@ export class webUiFeatureOptions {
       getControllers = undefined,
       getDevices = this.getHomebridgeDevices,
       infoPanel = undefined,
+      onOptionsEdited = undefined,
       sidebar = {},
       ui = {}
     } = options;
@@ -152,6 +156,7 @@ export class webUiFeatureOptions {
       infoPanel,
       labelControllers: sidebar.controllerLabel ?? "Controllers",
       labelDevices: sidebar.deviceLabel ?? "Devices",
+      onOptionsEdited,
       validators: {
 
         isController: ui.isController ?? (() => false),
@@ -287,6 +292,24 @@ export class webUiFeatureOptions {
     // persist effect's flush handle so hide() (and the visibilitychange handler below) can drain a debounced-but-unwritten edit before the page tears down.
     this.#flushPersist = registerPersistEffect({ host: homebridge, session, signal, store: this.#store })?.flush ?? null;
     registerKeyboardEffect({ signal, store: this.#store });
+
+    // Notify the plugin's optional edit hook after any option mutation has transitioned the store, so a consumer reading editedConfig from inside the callback sees
+    // the post-edit state. We subscribe to exactly the four mutation events the persist effect writes to disk (see effects/persist.mjs); the two subscriptions must
+    // stay in lockstep, since every mutation the persist effect commits is one the consumer should hear about. The effect() immediate-run pass hands the body
+    // `undefined`, so we notify only on a real dispatch, never at registration before model:loaded. Registered on the page signal so teardown detaches it.
+    effect({
+
+      events: [ "option:set", "option:cleared", "options:reset", "model:reverted" ],
+      fn: (action) => {
+
+        if(action) {
+
+          this.#config.onOptionsEdited?.();
+        }
+      },
+      signal,
+      store: this.#store
+    });
 
     // Best-effort browser-exit flush. When the tab is backgrounded or closing while the page is still alive, drain any pending edit so it reaches the host's config
     // model. This is fire-and-forget (the page is hidden/closing with no user present to see it, so an error toast the persist drain may raise on a failed final

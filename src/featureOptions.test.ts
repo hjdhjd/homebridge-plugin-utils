@@ -1165,13 +1165,13 @@ describe("FeatureOptions - shared parser correctness", () => {
 
 describe("FeatureOptions - browser-safe runtime-import boundary", () => {
 
-  // Regression guard for the `dist/ui` shipping pipeline. `featureOptions.ts` compiles into `dist/featureOptions.js`, which the `copyFeatureOptions` build step copies
+  // Regression guard for the `dist/ui` shipping pipeline. `featureOptions.ts` compiles into `dist/featureOptions.js`, which the browser-module copy step copies
   // to `dist/ui/featureOptions.js` for the browser to load. Every relative value-import in `featureOptions.ts` therefore has to resolve - at browser runtime - to a
-  // sibling file that the build step ALSO copies into `dist/ui/`. Importing from `./util.ts` is the canonical violation: `util.ts` is server-side (drags in
+  // sibling file that the copy step ALSO ships into `dist/ui/`. Importing from `./util.ts` is the canonical violation: `util.ts` is server-side (drags in
   // `node:timers/promises`) and the build pipeline does not ship it next to the orchestrator. This test reads the source file and asserts every relative
   // value-import points at a module on the allowlist - currently just `./formatters.ts`, the one browser-safe module the pipeline mirrors alongside
-  // `featureOptions.js`. Adding a new relative value-import to featureOptions.ts means EITHER pointing it at another browser-safe module that copyFeatureOptions
-  // ALSO ships, OR widening the allowlist here intentionally and wiring the new artifact through the build step.
+  // `featureOptions.js`. Adding a new relative value-import to featureOptions.ts means EITHER pointing it at another browser-safe module the copy step ALSO ships,
+  // OR widening the allowlist here intentionally and registering the new artifact in the `BROWSER_MODULES` list the copy step is driven from.
 
   test("featureOptions.ts has no relative value-imports outside the browser-safe allowlist", async () => {
 
@@ -1196,7 +1196,7 @@ describe("FeatureOptions - browser-safe runtime-import boundary", () => {
     for(const specifier of found) {
 
       assert.ok(allowed.has(specifier), "featureOptions.ts must only relative-value-import from a browser-safe module (allowlist: " + [...allowed].join(", ") +
-        "). Found: " + specifier + ". If this is a new browser-safe module, add it here AND to build/fs-ops.mjs's copyFeatureOptions step.");
+        "). Found: " + specifier + ". If this is a new browser-safe module, add it here AND to the BROWSER_MODULES list in build/browser-modules.mjs.");
     }
   });
 });

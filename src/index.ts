@@ -14,5 +14,6 @@ export * from "./service.ts";
 export * from "./timer-registry.ts";
 export * from "./util.ts";
 export * from "./webui-loader.ts";
+export * from "./webui-status.ts";
 export * from "./ffmpeg/index.ts";
 export * from "./logclient/index.ts";

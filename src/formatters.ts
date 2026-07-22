@@ -5,7 +5,7 @@
  */
 
 /**
- * **Why this file exists.** `featureOptions.ts` ships into `dist/ui/` for the browser to load (via the `copyFeatureOptions` build step). The catalog's built-in
+ * **Why this file exists.** `featureOptions.ts` ships into `dist/ui/` for the browser to load (via the browser-module copy step). The catalog's built-in
  * formatter registry needs `formatBps`, `formatBytes`, `formatMs`, `formatPercent`, and `formatSeconds` at runtime - and pulling them from `util.ts` would drag in
  * `util.ts`'s `node:timers/promises` import, which the browser cannot resolve. This module is the SSOT for the magnitude-rendering policy. It has zero runtime
  * imports of any kind, so shipping it alongside `featureOptions.js` is safe in any runtime that can execute ES2024+ JavaScript.

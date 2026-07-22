@@ -78,10 +78,11 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  * connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal: every effect's
  * subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically.
  *
- * Public API: constructor takes the same options shape, `show()` reveals the UI, `hide()` is the navigate-away (it flushes any pending edit, then tears down),
- * `cleanup()` is immediate destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default
- * device source. The device-list contract is rich: a `getDevices` hook resolves a {@link DeviceListResult} carrying both the device array and the connection
- * outcome, and `getHomebridgeDevices` resolves the same shape.
+ * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
+ * action without re-entering the whole show() cycle, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
+ * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. The device-list
+ * contract is rich: a `getDevices` hook resolves a {@link DeviceListResult} carrying both the device array and the connection outcome, and `getHomebridgeDevices`
+ * resolves the same shape.
  *
  * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle seam that boots and tears them down. The one
  * piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the store.
@@ -437,6 +438,66 @@ export class webUiFeatureOptions {
 
     // Reveal regions that views render into.
     revealRegions();
+  }
+
+  /**
+   * Refresh the controller sidebar in response to an explicit user action, without re-entering the full show() cycle.
+   *
+   * A consumer calls this after a user action that could have changed the controller set - a controller added or removed through the plugin's own affordance - to
+   * repaint the sidebar's controller list against the current configuration. It re-syncs the session against the host config the way show() does before it reads
+   * controllers, so a refresh after a Settings-tab edit acts on the current config rather than a stale key, then re-invokes the configured getControllers hook. The
+   * freshness of the returned list is the consumer hook's concern: this method repaints whatever the hook resolves.
+   *
+   * Contract:
+   *
+   *   - A call before the first show() has established the session and store resolves false without dispatching - there is no sidebar to refresh yet.
+   *   - A config re-sync failure resolves false and leaves the rendered view exactly as it was. This is a deliberate divergence from show(), which routes a sync
+   *     failure into the connection-error view: an explicit refresh must never tear down a working sidebar over a failed config read.
+   *   - A null, absent, or empty resolved controller list resolves false and leaves the store untouched - the consumer owns the messaging for the no-controllers
+   *     case, exactly as show()-time handles it through a direct message that bypasses the store.
+   *   - A non-empty list dispatches controllers:loaded and resolves true once the sidebar has transitioned to the new list.
+   *
+   * A false return, in every case, means the view was left as it was; the caller relies on that to decide whether to surface its own no-controllers messaging.
+   *
+   * @returns {Promise<boolean>} True when a non-empty controller list was loaded and the sidebar transitioned; false when the refresh left the view unchanged.
+   * @public
+   */
+  async refreshControllers() {
+
+    // The pre-store window: a refresh dispatched before the first show() established the session and store has no sidebar to act on. Resolve false without touching
+    // anything, so a consumer that wires its affordance before the first render simply gets a no-op.
+    if(!this.#session || !this.#store) {
+
+      return false;
+    }
+
+    // Re-read the host config into the session before we read controllers, exactly as show() does at its entry, so a refresh after a Settings-tab edit acts on the
+    // current config rather than a frozen snapshot. Unlike show(), a read failure here does NOT route into the connection-error view: an explicit refresh must never
+    // replace a working sidebar with the error frame over a failed config read, so we leave the store untouched and report that the refresh made no change.
+    try {
+
+      await this.#session.sync();
+    } catch {
+
+      return false;
+    }
+
+    // Re-invoke the configured getControllers hook with the same injected-config shape show() uses. A device-only plugin has no hook and thus no controllers to
+    // refresh, so its null result falls through to the no-change return below.
+    const controllers = this.#config.getControllers ? await this.#config.getControllers({ config: this.#session.platform }) : null;
+
+    // A null, absent, or empty list leaves the store untouched: the consumer owns the no-controllers messaging, so a refresh that finds none reports no change rather
+    // than dispatching an empty sidebar or a connection-error frame. Only a non-empty list transitions the view.
+    if(!controllers || (controllers.length === 0)) {
+
+      return false;
+    }
+
+    // A non-empty list: dispatch the controllers-only refresh the nav view subscribes to. The reducer replaces state.controllers and the nav rebuilds the controllers
+    // container against it; the dispatch runs its subscribers synchronously, so the sidebar has transitioned by the time we report success.
+    this.#store.dispatch({ controllers, type: "controllers:loaded" });
+
+    return true;
   }
 
   /**

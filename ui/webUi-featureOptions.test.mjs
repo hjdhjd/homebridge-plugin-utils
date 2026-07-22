@@ -2509,3 +2509,254 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
     orchestrator.cleanup();
   });
 });
+
+describe("webUiFeatureOptions.refreshControllers", () => {
+
+  // refreshControllers is the public controllers-only refresh entry point: a consumer calls it after an explicit user action that could have changed the controller
+  // set, and it re-syncs the session then re-invokes getControllers, dispatching controllers:loaded so the nav sidebar repaints. These tests pin its contract - the
+  // re-synced config reaches the hook and a non-empty list transitions the sidebar (resolves true); a null, empty, sync-failure, device-only, or pre-show() call each
+  // leaves the store untouched and resolves false. The caller owns the no-controllers messaging, and a sync failure never tears the working view down as show() does.
+
+  test("re-syncs the config, re-invokes getControllers, and repaints the sidebar with the new list (resolves true)", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig({ options: ["Enable.Audio.Volume.50"] }),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // getControllers captures the config it is handed on each call and returns the current controllersToReturn, so the test can prove the refresh saw the re-synced
+    // platform and can grow the list between the initial show() and the refresh.
+    const seenPlatforms = [];
+    let controllersToReturn = [{ name: "Hub A", serialNumber: "CTRL-A" }];
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: ({ config }) => {
+
+        seenPlatforms.push(config);
+
+        return controllersToReturn;
+      }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // The initial sidebar carries the single controller from show().
+    assert.ok(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']"),
+      "show() must render the initial controller");
+    assert.equal(skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 1,
+      "the initial sidebar carries exactly one controller");
+
+    // Simulate a Settings-tab edit landing while the page is live, and grow the controller list. Reassign fake.config to a NEW array (an in-place mutation would be
+    // vacuous, since session.platform aliases the previously-read reference).
+    fake.config = makePluginConfig({ options: ["Disable.Motion.Detect"] });
+    controllersToReturn = [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ];
+
+    const result = await orchestrator.refreshControllers();
+
+    await flush();
+
+    // The refresh re-synced before reading controllers: the platform the hook saw on its refresh call carries the externally edited options.
+    assert.deepEqual(seenPlatforms.at(-1).options, ["Disable.Motion.Detect"], "refreshControllers must re-sync so getControllers sees the current config");
+
+    // The sidebar repainted to the new two-controller list, and the call reported success.
+    assert.equal(result, true, "a non-empty refreshed list must resolve true");
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), "the newly added controller must render after the refresh");
+    assert.equal(skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 2,
+      "the sidebar must reflect the refreshed two-controller list");
+
+    orchestrator.cleanup();
+  });
+
+  test("a null resolved list leaves the sidebar untouched and resolves false", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let controllersToReturn = [{ name: "Hub A", serialNumber: "CTRL-A" }];
+    const orchestrator = new webUiFeatureOptions({ getControllers: () => controllersToReturn });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // The refresh's hook resolves null - the consumer owns messaging for that case, so refreshControllers must leave the sidebar as it was.
+    controllersToReturn = null;
+
+    const result = await orchestrator.refreshControllers();
+
+    await flush();
+
+    assert.equal(result, false, "a null refreshed list must resolve false");
+    assert.equal(skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 1,
+      "the store is untouched: the original controller still renders");
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the original controller survives a null refresh");
+
+    orchestrator.cleanup();
+  });
+
+  test("an empty resolved list leaves the sidebar untouched and resolves false", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let controllersToReturn = [{ name: "Hub A", serialNumber: "CTRL-A" }];
+    const orchestrator = new webUiFeatureOptions({ getControllers: () => controllersToReturn });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // An empty list is the no-controllers case: like show()-time, it bypasses the store rather than repainting an empty sidebar, and the caller surfaces its own copy.
+    controllersToReturn = [];
+
+    const result = await orchestrator.refreshControllers();
+
+    await flush();
+
+    assert.equal(result, false, "an empty refreshed list must resolve false");
+    assert.equal(skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 1,
+      "the store is untouched: the original controller still renders after an empty refresh");
+
+    orchestrator.cleanup();
+  });
+
+  test("a config re-sync failure leaves the view untouched and resolves false with no connection-error dispatch", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const seenPlatforms = [];
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: ({ config }) => {
+
+        seenPlatforms.push(config);
+
+        return [{ name: "Hub A", serialNumber: "CTRL-A" }];
+      }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const seenBefore = seenPlatforms.length;
+
+    // Fail the next config read: the host dropped the connection between the render and the refresh.
+    fake.getPluginConfig = async () => { throw new Error("host read failed"); };
+
+    const result = await orchestrator.refreshControllers();
+
+    await flush();
+
+    assert.equal(result, false, "a re-sync failure must resolve false");
+
+    // The sync threw before getControllers ran, so the hook was not re-invoked - the failure short-circuits at the sync boundary.
+    assert.equal(seenPlatforms.length, seenBefore, "a re-sync failure short-circuits before getControllers is invoked");
+
+    // The working view was left intact: no connection-error frame (the deliberate divergence from show()), and the sidebar still carries the controller.
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null,
+      "a refresh re-sync failure must not tear the view down into the connection-error frame");
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the sidebar controller must survive a failed refresh sync");
+
+    orchestrator.cleanup();
+  });
+
+  test("a device-only plugin (no getControllers hook) resolves false as a no-op", async () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // No getControllers supplied: device-only mode has no controllers to refresh.
+    const orchestrator = new webUiFeatureOptions();
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const result = await orchestrator.refreshControllers();
+
+    assert.equal(result, false, "a device-only refresh has no controllers to load and must resolve false");
+
+    orchestrator.cleanup();
+  });
+
+  test("a call before the first show() resolves false without throwing (the pre-store window)", async () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    // The guard covers a refresh dispatched before the first show() established the session and store. getControllers must never be reached on this path.
+    let invoked = false;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => {
+
+        invoked = true;
+
+        return [{ name: "Hub A", serialNumber: "CTRL-A" }];
+      }
+    });
+
+    // A throw here would fail the test outright, so a plain await pins the "without throwing" half alongside the false-resolution half.
+    const result = await orchestrator.refreshControllers();
+
+    assert.equal(result, false, "the pre-store window must resolve false");
+    assert.equal(invoked, false, "the guard must short-circuit before invoking getControllers");
+
+    orchestrator.cleanup();
+  });
+});

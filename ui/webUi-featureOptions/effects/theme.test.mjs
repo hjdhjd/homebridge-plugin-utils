@@ -116,3 +116,84 @@ describe("registerThemeEffect - lifecycle", () => {
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "");
   });
 });
+
+describe("buildThemeCss - status panel variant rules", () => {
+
+  // Adopt the theme sheet and return its rules joined as text. The effect adopts synchronously before it awaits the lighting mode, so the sheet is present once this
+  // resolves; the probe is skipped with timeoutMs 0.
+  const themeCss = async () => {
+
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
+
+    const stylesheet = document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
+
+    return [...stylesheet.cssRules].map((rule) => rule.cssText).join("\n");
+  };
+
+  test("the status-grid variant sets wrap and a row gap", async () => {
+
+    using _dom = createTestDom();
+
+    assert.match(await themeCss(), /\.device-stats-grid\.fo-status-grid\s*\{[^}]*flex-wrap:\s*wrap/);
+  });
+
+  test("the status-grid variant sizes cells to their own content", async () => {
+
+    using _dom = createTestDom();
+
+    // happy-dom expands the `flex: 0 1 auto` shorthand to longhand, so the content-sized signature is flex-grow 0 with a flex-basis of auto.
+    assert.match(await themeCss(), /\.device-stats-grid\.fo-status-grid\s+\.stat-item\s*\{[^}]*flex-grow:\s*0[^}]*flex-basis:\s*auto/);
+  });
+
+  test("the variant cell rule follows the base grid rules so it wins on source order", async () => {
+
+    using _dom = createTestDom();
+
+    const text = await themeCss();
+    const base = text.indexOf(".device-stats-grid .stat-item:first-child");
+    const variant = text.indexOf(".device-stats-grid.fo-status-grid .stat-item");
+
+    assert.ok(base >= 0, "the base first-child rule is present");
+    assert.ok((variant >= 0) && (variant > base), "the variant cell rule appears after the base rules, so a specificity tie resolves in its favor");
+  });
+
+  test("the phantom rule hides its reservation from paint", async () => {
+
+    using _dom = createTestDom();
+
+    assert.match(await themeCss(), /\.fo-phantom\s*\{[^}]*visibility:\s*hidden/);
+  });
+
+  test("the row-break rule is a full-width zero-height spacer", async () => {
+
+    using _dom = createTestDom();
+
+    const text = await themeCss();
+
+    assert.match(text, /\.fo-row-break\s*\{[^}]*flex-basis:\s*100%/);
+    assert.match(text, /\.fo-row-break\s*\{[^}]*height:\s*0/);
+  });
+
+  test("the status message spans the full width and wraps", async () => {
+
+    using _dom = createTestDom();
+
+    const text = await themeCss();
+
+    assert.match(text, /\.fo-status-message\s*\{[^}]*flex-basis:\s*100%/);
+    assert.match(text, /\.fo-status-message\s+\.stat-value\s*\{[^}]*white-space:\s*normal/);
+  });
+
+  test("each responsive hide rule exempts the status grid on the grid token", async () => {
+
+    using _dom = createTestDom();
+
+    const text = await themeCss();
+
+    assert.match(text, /@container \(max-width: 700px\) \{\s*\.device-stats-grid:not\(\.fo-status-grid\) \.stat-item:nth-last-of-type\(1\)/);
+    assert.match(text, /@container \(max-width: 500px\) \{\s*\.device-stats-grid:not\(\.fo-status-grid\) \.stat-item:nth-last-of-type\(2\)/);
+    assert.match(text, /@container \(max-width: 300px\) \{\s*\.device-stats-grid:not\(\.fo-status-grid\) \.stat-item:nth-last-of-type\(3\)/);
+  });
+});

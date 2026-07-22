@@ -51,6 +51,22 @@ export const mountDeviceInfoView = ({ infoPanel = defaultInfoPanel, root, signal
 };
 
 /**
+ * The default device identity field set: firmware, serial number, model, and manufacturer, each a `{ label, value }` pair with a missing value rendered as `"N/A"`.
+ * The single source for the identity quartet, shared by two renderers - {@link defaultInfoPanel} draws it as the device-stats grid, and the live-status panel imports
+ * it as its own identity default - so the field set is defined once rather than mirrored.
+ *
+ * @param {import("../state.mjs").Device} device - The device whose identity fields to read.
+ * @returns {{ label: string, value: string }[]} The identity fields in display order.
+ */
+export const defaultIdentityFields = (device) => [
+
+  { label: "Firmware", value: device.firmwareRevision ?? "N/A" },
+  { label: "Serial Number", value: device.serialNumber ?? "N/A" },
+  { label: "Model", value: device.model ?? "N/A" },
+  { label: "Manufacturer", value: device.manufacturer ?? "N/A" }
+];
+
+/**
  * Default device-info renderer. Renders a labeled grid of device identity fields (firmware / serial number / model / manufacturer), each cell carrying a small
  * uppercase label above the value. Clears the container entirely when no device is in scope.
  *
@@ -69,19 +85,11 @@ export const defaultInfoPanel = (root, device) => {
     return;
   }
 
-  const stats = [
-
-    [ "Firmware", device.firmwareRevision ?? "N/A" ],
-    [ "Serial Number", device.serialNumber ?? "N/A" ],
-    [ "Model", device.model ?? "N/A" ],
-    [ "Manufacturer", device.manufacturer ?? "N/A" ]
-  ];
-
-  const grid = createElement("div", { classList: ["device-stats-grid"] }, stats.map(([ label, value ]) => createElement("div", { classList: ["stat-item"] }, [
+  const cells = defaultIdentityFields(device).map(({ label, value }) => createElement("div", { classList: ["stat-item"] }, [
 
     createElement("span", { classList: ["stat-label"] }, [label]),
     createElement("span", { classList: ["stat-value"] }, [value])
-  ])));
+  ]));
 
-  root.replaceChildren(grid);
+  root.replaceChildren(createElement("div", { classList: ["device-stats-grid"] }, cells));
 };

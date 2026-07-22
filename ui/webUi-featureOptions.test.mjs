@@ -2760,3 +2760,73 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     orchestrator.cleanup();
   });
 });
+
+describe("webUiFeatureOptions - status panel selection", () => {
+
+  test("the constructor accepts infoPanel alone, statusPanel alone, or neither, and rejects both together", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge());
+
+    assert.ok(new webUiFeatureOptions(), "neither panel configured constructs");
+    assert.ok(new webUiFeatureOptions({ infoPanel: () => {} }), "infoPanel alone constructs");
+    assert.ok(new webUiFeatureOptions({ statusPanel: {} }), "statusPanel alone constructs");
+    assert.throws(() => new webUiFeatureOptions({ infoPanel: () => {}, statusPanel: {} }), TypeError, "both panels together throw a TypeError");
+  });
+
+  test("the public statusPanel field is null before show() and stays null when no statusPanel is configured", async () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions();
+
+    assert.equal(orchestrator.statusPanel, null, "the field starts null");
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(orchestrator.statusPanel, null, "the field stays null when no statusPanel is configured - the deviceInfo path mounted instead");
+
+    orchestrator.cleanup();
+  });
+
+  test("a configured statusPanel mounts the live status view on the device-stats region and stores its handle on the public field", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      statusPanel: { placeholderRows: [{ id: "door", label: "Door", sizer: "Stopped (100%)" }] }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // The status-panel variant grid renders on the device-stats region in place of the default device-info grid.
+    assert.ok(skeleton.deviceStatsContainer.querySelector(".device-stats-grid.fo-status-grid"), "the status-panel variant grid mounted on the device-stats region");
+    assert.match(skeleton.deviceStatsContainer.textContent, /Status/, "the component-owned Status cell rendered");
+    assert.equal(typeof orchestrator.statusPanel?.resetStaleGuards, "function", "the public statusPanel field carries the mount handle");
+
+    orchestrator.cleanup();
+  });
+});

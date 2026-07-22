@@ -14,6 +14,7 @@ import { mountHeaderView } from "./webUi-featureOptions/views/header.mjs";
 import { mountNavView } from "./webUi-featureOptions/views/nav.mjs";
 import { mountOptionsView } from "./webUi-featureOptions/views/options.mjs";
 import { mountSearchView } from "./webUi-featureOptions/views/search.mjs";
+import { mountStatusPanelView } from "./webUi-featureOptions/views/statusPanel.mjs";
 import { registerKeyboardEffect } from "./webUi-featureOptions/effects/keyboard.mjs";
 import { registerPersistEffect } from "./webUi-featureOptions/effects/persist.mjs";
 import { registerThemeEffect } from "./webUi-featureOptions/effects/theme.mjs";
@@ -64,6 +65,15 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  * @property {Object} [sidebar] - Sidebar configuration options.
  * @property {string} [sidebar.controllerLabel="Controllers"] - Label for the controllers section.
  * @property {string} [sidebar.deviceLabel="Devices"] - Label for the devices section.
+ * @property {Object} [statusPanel] - Live device-status panel for the device-stats region. Mutually exclusive with {@link FeatureOptionsConfig.infoPanel} (both own
+ *   that region, so supplying both throws a TypeError at construction). The plugin supplies a server-side status adapter that speaks the `webui-status` protocol plus
+ *   the parts below, and inherits the entire rendered panel.
+ * @property {Object} [statusPanel.errorMessages] - Per-reason error-copy overrides, merged field-by-field over the component's credential-neutral defaults so a plugin
+ *   may replace a label, a message, or both.
+ * @property {Function} [statusPanel.identity] - Maps a device to its identity fields (`{ label, mono?, value }[]`). Defaults to firmware / serial number / model /
+ *   manufacturer; a `mono` field renders its value in the monospace token.
+ * @property {Object[]} [statusPanel.placeholderRows] - Row templates (id / label / sizer / optional latch, no value) the skeleton renders before the first snapshot.
+ *   Defaults to `[]`, so an unconfigured skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
  * @property {Object} [ui] - UI validation and display options.
  * @property {number} [ui.controllerRetryEnableDelayMs=5000] - Interval before enabling a retry button when connecting to a controller.
  * @property {Function} [ui.isController] - Validates if a device is a controller.
@@ -107,6 +117,15 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  */
 export class webUiFeatureOptions {
 
+  /**
+   * The live status-panel handle from the most recent show() cycle, or null before the first show() and whenever no statusPanel is configured. Reassigned to a fresh
+   * handle on every show() cycle and deliberately NOT nulled on cleanup() (the store / session precedent): callers re-read `featureOptions.statusPanel` at each use
+   * rather than capturing it, and a stale handle's `resetStaleGuards` clears a dead closure's map, harmless by construction.
+   *
+   * @type {{ resetStaleGuards: () => void } | null}
+   */
+  statusPanel = null;
+
   // Plugin-provided configuration captured at construction. Threaded through to effects and views at mount time via closures; never mutated after the constructor
   // returns.
   #config;
@@ -146,8 +165,16 @@ export class webUiFeatureOptions {
       infoPanel = undefined,
       onOptionsEdited = undefined,
       sidebar = {},
+      statusPanel = undefined,
       ui = {}
     } = options;
+
+    // The device-stats region has a single owner: a plugin supplies EITHER a static info panel OR the live status panel, never both. Surfacing the misconfiguration
+    // as a construction-time TypeError catches it at the plugin-author boundary rather than as a silent double-mount, and it lands through the page's boot monitor.
+    if(infoPanel && statusPanel) {
+
+      throw new TypeError("infoPanel and statusPanel are mutually exclusive - the device-stats region has a single owner.");
+    }
 
     this.#config = {
 
@@ -158,6 +185,7 @@ export class webUiFeatureOptions {
       labelControllers: sidebar.controllerLabel ?? "Controllers",
       labelDevices: sidebar.deviceLabel ?? "Devices",
       onOptionsEdited,
+      statusPanel,
       validators: {
 
         isController: ui.isController ?? (() => false),
@@ -665,15 +693,23 @@ export class webUiFeatureOptions {
 
     if(deviceStatsContainer) {
 
-      const infoPanel = this.#config.infoPanel;
+      const { infoPanel, statusPanel } = this.#config;
 
-      mountDeviceInfoView({
+      // One region, one owner. The constructor already rejected supplying both, so a configured statusPanel mounts the live status view and stores its handle on the
+      // public field; otherwise the static device-info view mounts, adapting the plugin's (device, root) infoPanel to the view's (root, device) argument order.
+      if(statusPanel) {
 
-        infoPanel: infoPanel ? (panel, device) => infoPanel.call(this, device, panel) : undefined,
-        root: deviceStatsContainer,
-        signal,
-        store
-      });
+        this.statusPanel = mountStatusPanelView({ config: statusPanel, root: deviceStatsContainer, signal, store });
+      } else {
+
+        mountDeviceInfoView({
+
+          infoPanel: infoPanel ? (panel, device) => infoPanel.call(this, device, panel) : undefined,
+          root: deviceStatsContainer,
+          signal,
+          store
+        });
+      }
     }
 
     if(searchPanel && configTable) {

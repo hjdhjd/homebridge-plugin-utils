@@ -187,7 +187,8 @@ export function createSkeletonFeatureOptionsDom() {
 
 /**
  * Build a fake `homebridge` bridge matching the subset of the real Homebridge config-ui global that the UI source touches. Every method is a no-op or stub by
- * default; tests assign their own implementations to methods they care about.
+ * default; tests assign their own implementations to methods they care about. The real host is a native EventTarget, so the fake carries `addEventListener` /
+ * `removeEventListener` / `dispatchEvent` delegating to its own EventTarget, plus an `observed.emitPush` helper that dispatches the host's exact push-delivery shape.
  *
  * State shape:
  *
@@ -202,6 +203,8 @@ export function createSkeletonFeatureOptionsDom() {
  *
  *   - `observed.calls` - an ordered log of the host calls whose relative order matters for the reconciliation tests (`getPluginConfig`, `updatePluginConfig`,
  *     `showSchemaForm`), each appending its tag as it runs. Read this to assert sync-before-show and flush-before-schemaform orderings.
+ *   - `observed.emitPush(name, data)` - dispatch a host push event of `name` carrying `data` on `event.data`, the shape the real host delivers, so a component's
+ *     `{ signal }`-scoped push listener receives it exactly as it would in production.
  *   - `observed.updatedConfigs` - every `updatePluginConfig` call's payload.
  *   - `observed.toasts` - every `.toast.*` call's record.
  *   - `observed.state.spinnerCount` - net spinner stack depth (`showSpinner` increments, `hideSpinner` decrements).
@@ -234,11 +237,22 @@ export function createFakeHomebridge(init = {}) {
     toasts.push({ message, title, variant });
   };
 
+  // The event surface backing the fake's addEventListener / removeEventListener / dispatchEvent, mirroring the real host, which is a native EventTarget. createTestDom
+  // swaps neither EventTarget nor MessageEvent onto globalThis, so both bare references here resolve to Node's own classes - the same realm for both sides. That
+  // coherence matters: sourcing one constructor from happy-dom's `window` while the other stays Node's can reject dispatches and silently vacate every push test, the
+  // same discipline store.mjs's ModuleCustomEvent comment documents. emitPush dispatches the host's exact delivery shape - a MessageEvent whose payload rides `data` -
+  // so a component's `event.data` read path is exercised for real.
+  const eventTarget = new EventTarget();
+  const emitPush = (name, data) => eventTarget.dispatchEvent(new MessageEvent(name, { data }));
+
   // Keys sorted alphabetically so the object satisfies the project's sort-keys rule. Grouping comments are inline per section to keep the rationale near the
   // methods without introducing ordering exceptions. The `observed` handle is the bridge's test-inspection surface - distinct from the production methods by both
   // name and shape - and carries live references to `state` (live UI counters / flags), `toasts` (captured emissions), and `updatedConfigs` (captured payloads). The
   // nested-object form keeps the inspection surface visibly separate from the production-shaped methods rather than interleaving them at top level.
   const bridge = {
+
+    // Event surface, delegating to the fake's own EventTarget so a component's `{ signal }`-scoped push subscription registers and tears down natively.
+    addEventListener: (type, listener, options) => eventTarget.addEventListener(type, listener, options),
 
     // The live plugin-config backing, exposed as an accessor so a test can reassign it (`fake.config = [...]`) to simulate an external Settings-tab edit landing
     // between two reads, while every read inside the bridge stays a single source of truth on the `config` closure variable.
@@ -252,6 +266,7 @@ export function createFakeHomebridge(init = {}) {
     },
 
     disableSaveButton: () => { state.saveButtonEnabled = false; },
+    dispatchEvent: (event) => eventTarget.dispatchEvent(event),
     enableSaveButton: () => { state.saveButtonEnabled = true; },
 
     // Homebridge introspection.
@@ -268,7 +283,9 @@ export function createFakeHomebridge(init = {}) {
     hideSchemaForm: () => { state.schemaFormVisible = false; },
     hideSpinner: () => { state.spinnerCount = Math.max(0, state.spinnerCount - 1); },
 
-    observed: { calls, state, toasts, updatedConfigs },
+    observed: { calls, emitPush, state, toasts, updatedConfigs },
+
+    removeEventListener: (type, listener, options) => eventTarget.removeEventListener(type, listener, options),
 
     // The config-ui request router. Tests seed specific responses via the Map; unknown paths resolve with null so a missing entry is a quiet miss rather than a
     // throw.

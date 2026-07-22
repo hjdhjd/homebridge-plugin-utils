@@ -333,12 +333,26 @@ const buildThemeCss = () => [
     "text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
   ".stat-value { font-size: 0.875rem; color: var(--fo-text-on-elevated); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
 
+  // Live-status panel variant. The status grid wraps its cells into two rows - the identity cells with the Status cell closing the top row, then the state rows -
+  // inside one bordered box, so it overrides the base grid's nowrap and proportional split: cells size to their own content (a phantom span per column reserves the
+  // column's maximum-ever width) and a full-width zero-height break forces the row split between the identity cells and the state rows. A classified error renders as
+  // a full-width wrapping message line. These rules sit AFTER the base `.device-stats-grid` rules so the `.fo-status-grid` qualifier ties the base specificity and
+  // wins on source order, which is what lets it override the base `:first-child` proportional split too.
+  ".device-stats-grid.fo-status-grid { flex-wrap: wrap; row-gap: var(--fo-space-xs); }",
+  ".device-stats-grid.fo-status-grid .stat-item { flex: 0 1 auto; min-width: 0; }",
+  ".fo-phantom { display: block; height: 0; overflow: hidden; visibility: hidden; }",
+  ".fo-row-break { flex-basis: 100%; height: 0; }",
+  ".fo-status-message { flex-basis: 100%; }",
+  ".fo-status-message .stat-value { white-space: normal; }",
+
   // Responsive hiding for device stats grid. `@container` (not `@media`) so the breakpoints fire on the panel's actual width, not the viewport. Progressive
   // degradation: as the container narrows, the last stat hides first, then the second-to-last, etc., so the most-important left-most stat (Firmware) stays visible
-  // longest.
-  "@container (max-width: 700px) { .device-stats-grid .stat-item:nth-last-of-type(1) { display: none !important; } }",
-  "@container (max-width: 500px) { .device-stats-grid .stat-item:nth-last-of-type(2) { display: none !important; } }",
-  "@container (max-width: 300px) { .device-stats-grid .stat-item:nth-last-of-type(3) { display: none !important; } }",
+  // longest. Each rule qualifies the grid with `:not(.fo-status-grid)` so the status panel is exempt: the status grid reserves every column at its maximum width and
+  // never hides a cell, and the exemption keyed on the grid token encodes that no-hide policy explicitly, so a page that later nests the container under a container
+  // ancestor cannot silently reintroduce cell-hiding for it.
+  "@container (max-width: 700px) { .device-stats-grid:not(.fo-status-grid) .stat-item:nth-last-of-type(1) { display: none !important; } }",
+  "@container (max-width: 500px) { .device-stats-grid:not(.fo-status-grid) .stat-item:nth-last-of-type(2) { display: none !important; } }",
+  "@container (max-width: 300px) { .device-stats-grid:not(.fo-status-grid) .stat-item:nth-last-of-type(3) { display: none !important; } }",
   "@container (max-width: 400px) { #statusInfo { display: none !important; } }",
 
   // Navigation styles.

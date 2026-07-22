@@ -416,6 +416,32 @@ describe("webUi.show - menu wiring", () => {
   });
 });
 
+describe("webUi.show - menu listener idempotence across repeated launches", () => {
+
+  test("repeated show() cycles fire the menu handler exactly once per click", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false }
+    });
+
+    // Two full launch cycles against the same page. #launchWebUI binds the persistent menu listeners once for the page lifetime; before the fix it re-registered
+    // all three on every launch with no removal, so the second cycle stacked a second handler on each button and a single click then fired its handler twice.
+    await harness.ui.show();
+    await harness.ui.show();
+
+    // Isolate the click-driven invocation from the two routing shows above.
+    harness.featureOptionsCalls.length = 0;
+
+    harness.skeleton.menuFeatureOptions.click();
+    await flushPending();
+
+    assert.deepEqual(harness.featureOptionsCalls, ["show"],
+      "a menu click must fire its handler exactly once even after repeated show() cycles");
+  });
+});
+
 describe("webUi - tab-switch reconciliation ordering (real feature-options pipeline)", () => {
 
   // These tests drive the REAL inner feature-options pipeline (the harness `unstubbed` mode) so an actual sync()/persist drain runs. They pin the orderings

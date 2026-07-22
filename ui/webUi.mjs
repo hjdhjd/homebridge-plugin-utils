@@ -40,6 +40,7 @@ export class webUi {
   featureOptions;
 
   #firstRun;
+  #menuBound = false;
   #name;
   #session;
 
@@ -264,15 +265,9 @@ export class webUi {
     // later reader sees.
     this.#session = await PluginConfigSession.open({ host: homebridge, name: this.#name });
 
-    // Menu click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
-    // async handler's promise is dropped; the handlers own their error handling so the drop carries no unobserved rejection. #showFeatureOptions wraps
-    // featureOptions.show() in a try/catch that toasts a failed re-entry - the show pipeline can reject (a plugin getDevices hook that resolves the wrong shape trips
-    // the device-list contract guard, for one), and without the wrapper that rejection would surface nowhere. #showSettings and #showSupport each bracket their
-    // navigate-away flush in a try/finally that reveals the next tab and drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's
-    // toast).
-    document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
-    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.#showFeatureOptions());
-    document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
+    // Bind the persistent menu listeners once for the page lifetime. The binder is a no-op on any subsequent launch, so a re-entry never stacks a second handler on
+    // each button.
+    this.#bindMenuListeners();
 
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
     // flow returns true on a fresh config (no valid credentials yet), and a plugin without one keeps the default `() => false` gate and lands straight on feature
@@ -290,6 +285,36 @@ export class webUi {
     // the save button is disabled, the click listener is registered, and the page is visible. Returning before this would let `show()`'s `finally` hide the spinner
     // while initialization is still in flight, leaving the user looking at a half-rendered first-run UI.
     await this.#showFirstRun();
+  }
+
+  /**
+   * Bind the top-level menu click listeners exactly once for the webUI's lifetime.
+   *
+   * The three menu buttons are page chrome that persists across every show() cycle, so their listeners belong to the whole page rather than to any one show()'s
+   * teardown. A one-shot guard keeps a repeated #launchWebUI from stacking a second handler on each button, which would fire every tab switch twice. Each arrow reads
+   * the current this.#session through its #show* method, so a single persistent listener always acts on the latest session even after a re-launch replaces it.
+   *
+   * Menu click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
+   * async handler's promise is dropped; the handlers own their error handling so the drop carries no unobserved rejection. #showFeatureOptions wraps
+   * featureOptions.show() in a try/catch that toasts a failed re-entry - the show pipeline can reject (a plugin getDevices hook that resolves the wrong shape trips
+   * the device-list contract guard, for one), and without the wrapper that rejection would surface nowhere. #showSettings and #showSupport each bracket their
+   * navigate-away flush in a try/finally that reveals the next tab and drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's
+   * toast).
+   *
+   * @private
+   */
+  #bindMenuListeners() {
+
+    if(this.#menuBound) {
+
+      return;
+    }
+
+    this.#menuBound = true;
+
+    document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
+    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.#showFeatureOptions());
+    document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
   }
 
   /**

@@ -113,6 +113,9 @@ const rowEvent = (serialNumber, session, id, value) => ({ kind: "row", row: { id
 const availabilityEvent = (serialNumber, session, online, encrypted = false) => ({ encrypted, kind: "availability", online, serialNumber, session });
 const errorEvent = (serialNumber, session, reason) => ({ kind: "error", reason, serialNumber, session });
 
+// The server-scoped hello payload: no serialNumber, no session - just the adapter process's generation.
+const helloEvent = (generation) => ({ generation, kind: "hello" });
+
 describe("statusPanel - selection and the view request", () => {
 
   test("P1: a new selection renders the skeleton - identity cells, Status Connecting..., placeholder rows with sizers, values as the dash", () => {
@@ -830,5 +833,179 @@ describe("statusPanel - the configuration surface", () => {
     selectDevice(store, "AA");
 
     assert.deepEqual(labelsIn(root), [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status" ], "an unconfigured skeleton shows identity and Status only");
+  });
+});
+
+describe("statusPanel - the server-hello recovery", () => {
+
+  test("H1: a fresh-generation hello clears every per-device floor panel-wide and invokes onServerHello once", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    let helloCount = 0;
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ onServerHello: () => { helloCount++; }, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Establish a high floor for the viewed device A and, from off-screen, for device B.
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 500, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "AOpen" }]));
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 500, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "BOpen" }]));
+
+    // Precondition: against A's high floor, a token-1 push is stale and dropped.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "AStaleDropped"));
+    assert.equal(valueFor(root, "Door"), "AOpen", "precondition: a token-1 push is dropped against A's high floor");
+
+    // The fresh server introduces itself: the callback fires exactly once.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(12345));
+    assert.equal(helloCount, 1, "the fresh hello invoked the callback once");
+
+    // A token-1 push for the viewed device now renders - its floor was cleared.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "AFresh"));
+    assert.equal(valueFor(root, "Door"), "AFresh", "the cleared floor accepts A's token-1 push");
+
+    // Switch to B and push a token-1 snapshot: it renders too, so the clearing was panel-wide rather than viewed-only.
+    selectDevice(store, "BB");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "BFresh" }]));
+    assert.equal(valueFor(root, "Door"), "BFresh", "the clearing was panel-wide - B's floor was cleared too");
+  });
+
+  test("H2: a duplicate-generation hello is a no-op in both effects - no second callback and no floor clearing", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    let helloCount = 0;
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ onServerHello: () => { helloCount++; }, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // A first fresh hello adopts generation 7 and fires the callback.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(7));
+    assert.equal(helloCount, 1, "the first hello fired the callback");
+
+    // Re-establish a high floor after the recovery.
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 500, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }]));
+
+    // A duplicate-generation hello: neither re-fires the callback nor clears the floor. A build that clears on every hello fails the stale-drop below; a build that
+    // never clears fails the H1 recovery case.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(7));
+    assert.equal(helloCount, 1, "the duplicate hello did not re-fire the callback");
+
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "Dropped"));
+    assert.equal(valueFor(root, "Door"), "Open", "the duplicate hello did not clear the floor - the stale push is still dropped");
+  });
+
+  test("H2: hellos with a non-finite generation (undefined, null, a string, NaN) are ignored entirely - no callback and no clearing", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    let helloCount = 0;
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ onServerHello: () => { helloCount++; }, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 500, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }]));
+
+    // Each non-finite generation is ignored - an undefined generation must never collide with the null unseen sentinel.
+    fake.observed.emitPush(STATUS_EVENT, { kind: "hello" });
+    fake.observed.emitPush(STATUS_EVENT, { generation: null, kind: "hello" });
+    fake.observed.emitPush(STATUS_EVENT, { generation: "12345", kind: "hello" });
+    fake.observed.emitPush(STATUS_EVENT, { generation: NaN, kind: "hello" });
+
+    assert.equal(helloCount, 0, "no invalid-generation hello fired the callback");
+
+    // The floor was never cleared: a stale token-1 push is still dropped.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "Dropped"));
+    assert.equal(valueFor(root, "Door"), "Open", "no invalid hello cleared the floor - the stale push is still dropped");
+  });
+
+  test("first-contact: a pristine mount's first valid hello invokes the callback (the null unseen sentinel differs from any finite generation)", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    let helloCount = 0;
+
+    const store = readyStore([DEVICE_A]);
+
+    mountPanel({ onServerHello: () => { helloCount++; }, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // No device is viewed yet - the first hello still fires, since serverGeneration starts null and differs from any finite generation.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(1));
+    assert.equal(helloCount, 1, "the first hello fired even before any device was viewed");
+  });
+
+  test("H3: a hello touches no DOM - the panel and a sampled value span keep node identity, and a latch armed before it still clears on schedule", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ onServerHello: () => {}, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "motion", "Detected"));
+
+    const panelBefore = root.querySelector(".device-stats-grid");
+    const motionSpanBefore = valueSpanFor(root, "Motion");
+
+    // The hello clears floors and notifies, but does no DOM work and touches no pending latch.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(99));
+
+    assert.equal(root.querySelector(".device-stats-grid"), panelBefore, "the panel element is the same node across a hello");
+    assert.equal(valueSpanFor(root, "Motion"), motionSpanBefore, "the motion value span is the same node across a hello");
+    assert.equal(motionSpanBefore.textContent, "Detected", "the latched value is unchanged by the hello");
+
+    // The latch armed before the hello still clears its row at its own deadline.
+    t.mock.timers.tick(5001);
+    assert.equal(valueFor(root, "Motion"), "-", "the latch armed before the hello still cleared on schedule");
+  });
+
+  test("the onServerHello callback is optional: a hello with none configured neither throws nor renders, yet still clears the floor", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 500, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }]));
+
+    const panelBefore = root.querySelector(".device-stats-grid");
+
+    // A hello with no configured callback: the optional call is a no-op, and nothing rebuilds the panel.
+    assert.doesNotThrow(() => fake.observed.emitPush(STATUS_EVENT, helloEvent(42)));
+    assert.equal(root.querySelector(".device-stats-grid"), panelBefore, "the hello did not rebuild the panel");
+
+    // The floor still cleared even without a callback: a subsequent token-1 push renders.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "Fresh"));
+    assert.equal(valueFor(root, "Door"), "Fresh", "the floor still cleared even without a callback");
   });
 });

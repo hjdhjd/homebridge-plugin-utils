@@ -38,9 +38,11 @@ import { selectedDevice } from "../selectors.mjs";
  * The bridge push event, tagged on `kind`. Mirrors `StatusEvent` from `src/webui-status.ts`; the handler reads it from the host `MessageEvent`'s `data` property.
  *
  * @typedef {Object} StatusEvent
- * @property {string} kind - The event tag: `"connecting"`, `"snapshot"`, `"row"`, `"availability"`, or `"error"`.
- * @property {string} serialNumber - The device identity, shared by every event and the view request.
- * @property {number} session - The monotonic session token the per-serialNumber guard reads.
+ * @property {string} kind - The event tag: `"hello"`, `"connecting"`, `"snapshot"`, `"row"`, `"availability"`, or `"error"`.
+ * @property {string} [serialNumber] - The device identity, present on every device event and the view request; absent on the server-scoped `"hello"`.
+ * @property {number} [session] - The monotonic session token the per-serialNumber guard reads, present on every device event.
+ * @property {number} [generation] - The adapter process's opaque generation, on a `"hello"`. Compared by equality alone; a value the panel has not seen marks a fresh
+ *   server, so the panel clears its per-device floors and notifies the plugin.
  * @property {boolean} [encrypted] - The transport's encryption state, on snapshot and online-availability events.
  * @property {boolean} [online] - The reachability flag, on availability events.
  * @property {StatusRow[]} [rows] - The authoritative row set, on a snapshot.
@@ -57,6 +59,11 @@ import { selectedDevice } from "../selectors.mjs";
  *   component's credential-neutral default copy: a plugin may replace the label, the message, or both.
  * @property {(device: import("../state.mjs").Device) => { label: string, mono?: boolean, value: string }[]} [identity] - The identity fields for a device. Defaults
  *   to {@link defaultIdentityFields} (firmware / serial number / model / manufacturer). A `mono` field renders its value in the monospace token.
+ * @property {() => void} [onServerHello] - Invoked when a fresh adapter process introduces itself (its hello generation differs from the last seen), after the panel
+ *   has cleared its stale-push floors. The plugin re-elicits its feed here - re-sending whatever standing state the new process needs. The contract: keep it cheap (a
+ *   boot-time hello may arrive beside the page's own initial elicitation), tolerate overlap (it may fire before any device is viewed, before the model loads, or
+ *   concurrently with the plugin's own elicitation paths - route it through the same chokepoint they use), and own the retry posture (the callback fires once per fresh
+ *   generation; a plugin whose re-elicitation resets its own suppression state gets natural retries from its next trigger). The signature may gain arguments additively.
  * @property {StatusRowTemplate[]} [placeholderRows] - The row templates the skeleton renders before the first snapshot. Defaults to `[]`, so an unconfigured
  *   skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
  */
@@ -173,16 +180,20 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
 export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
   // Resolve the configured surface once at mount, defaulting each part the plugin did not supply. `identity` and `placeholderRows` fall back to the shared identity
-  // quartet and an empty skeleton; `errorMessages` stays possibly-undefined and is consulted only when an error renders.
+  // quartet and an empty skeleton; `errorMessages` stays possibly-undefined and is consulted only when an error renders; `onServerHello` likewise stays
+  // possibly-undefined and is invoked only when a fresh adapter process introduces itself. Reading them once here keeps the handler off `config` on every event.
   const errorMessages = config.errorMessages;
   const identity = config.identity ?? defaultIdentityFields;
+  const onServerHello = config.onServerHello;
   const placeholderRows = config.placeholderRows ?? [];
 
   // The viewed device and the render state the panel rebuilds from. `viewedDevice` is the single source of the on-screen serialNumber; `highestToken` guards pushes
-  // per device; `currentRowSet` is the template set the panel renders (the placeholder skeleton until a snapshot replaces it); `statusText` and `panelMessage` are
-  // the Status-cell text and the classified message line. The node references hold the live grid, the Status value span, and one value span per state row.
+  // per device; `serverGeneration` is the last adapter generation the panel has adopted (null until the first hello), so an unseen one marks a fresh helper process;
+  // `currentRowSet` is the template set the panel renders (the placeholder skeleton until a snapshot replaces it); `statusText` and `panelMessage` are the Status-cell
+  // text and the classified message line. The node references hold the live grid, the Status value span, and one value span per state row.
   let viewedDevice = null;
   const highestToken = new Map();
+  let serverGeneration = null;
   let currentRowSet = placeholderRows;
   let statusText = null;
   let panelMessage = null;
@@ -418,18 +429,52 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     requestView(device.serialNumber);
   };
 
-  /* The status push handler. It applies the per-serialNumber stale-push guard first - dropping any payload whose session token trails the highest seen for that
-   * device and recording the token otherwise - then renders only the device on screen; pushes for other pooled devices advance the guard but drive no DOM. It renders
-   * by kind: "connecting" sets the Status text; "snapshot" installs the authoritative row set (a row absent from it disappears), sets the connected label with the
-   * encrypted lock variant, clears the message, rebuilds, and arms the latch for any installed row whose value equals its latch value; "row" updates one value in
-   * place and drives that row's latch; "availability" flips the Status cell; "error" sets the short Status label and the full-sentence message and rebuilds with
-   * harvested values.
+  // The one floor-clearing chokepoint. Both a fresh-server hello and the plugin-facing resetStaleGuards handle drop the per-serialNumber floors through here, so the
+  // clearing semantics live in one place; clearing lets a restarted server's lower tokens be accepted again instead of dropped against stale floors.
+  const clearStaleGuards = () => highestToken.clear();
+
+  /* The status push handler. It handles the server-scoped "hello" first, before any per-device work: a hello carries no serialNumber, and an unseen generation marks a
+   * fresh helper process, so the panel clears its per-device floors and notifies the plugin to re-elicit its feed - which is how a surviving page recovers from a
+   * helper restart it cannot otherwise observe. Every other event is device-scoped, so it applies the per-serialNumber stale-push guard next - dropping any payload
+   * whose session token trails the highest seen for that device and recording the token otherwise - then renders only the device on screen; pushes for other pooled
+   * devices advance the guard but drive no DOM. It renders by kind: "connecting" sets the Status text; "snapshot" installs the authoritative row set (a row absent from
+   * it disappears), sets the connected label with the encrypted lock variant, clears the message, rebuilds, and arms the latch for any installed row whose value equals
+   * its latch value; "row" updates one value in place and drives that row's latch; "availability" flips the Status cell; "error" sets the short Status label and the
+   * full-sentence message and rebuilds with harvested values.
    */
   const handleStatusEvent = (event) => {
 
     const payload = event.data;
 
     if(!payload) {
+
+      return;
+    }
+
+    // The server-scoped hello is handled before the per-device guard. A hello carries no serialNumber, so the guard's floor comparison could not stop it (an undefined
+    // session is never below a floor) and it would otherwise fall through to pollute the token map under an undefined key and then die silently. A generation that is
+    // not a finite number is ignored entirely - the browser-boundary narrowing posture - because an undefined generation would collide with the null unseen sentinel
+    // and falsely read as a fresh server. A generation the panel has already adopted is a duplicate: no re-clear, no re-notify. An unseen finite generation is a fresh
+    // adapter process, so the panel adopts it, clears the per-device floors, and notifies the plugin to re-elicit its feed. No DOM, render state, or latch is touched -
+    // the visible recovery arrives with the pushes the plugin's re-elicitation produces.
+    if(payload.kind === "hello") {
+
+      const generation = payload.generation;
+
+      if(!Number.isFinite(generation)) {
+
+        return;
+      }
+
+      if(generation === serverGeneration) {
+
+        return;
+      }
+
+      serverGeneration = generation;
+
+      clearStaleGuards();
+      onServerHello?.();
 
       return;
     }
@@ -542,6 +587,6 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     // Clear the per-serialNumber stale-push guard. A plugin whose own choreography re-elicits pushes after a server-side restart or re-warm calls this so the fresh
     // server's lower tokens are not dropped against stale floors. Safe at any time: tokens are monotonic within a server lifetime, and the adapter-side
     // session-identity guard is the real stale-push protection.
-    resetStaleGuards: () => highestToken.clear()
+    resetStaleGuards: clearStaleGuards
   };
 };

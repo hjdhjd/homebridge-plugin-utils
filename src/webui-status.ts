@@ -106,15 +106,27 @@ export interface StatusRow extends StatusRowTemplate {
 export type StatusErrorReason = "auth-invalid" | "auth-missing" | "not-found" | "timeout" | "unreachable";
 
 /**
- * The bridge event, a discriminated union tagged on `kind`. Every member carries the device's `serialNumber` - the sidebar device model's universal identity, the
+ * The bridge event, a discriminated union tagged on `kind`. Every DEVICE event carries the device's `serialNumber` - the sidebar device model's universal identity, the
  * protocol's one identity field - and a monotonic `session` token minted server-side from one only-growing counter per feed. The reading side guards per device on
  * strictly-lower tokens; an adapter MUST drop a superseded session's pushes at the source with a session-identity check before every emit, which is what makes the
  * panel's per-mount guard reset safe. The availability variants pin `encrypted: false` when offline because no transport exists, so an encrypted-but-offline event is
  * unrepresentable.
  *
+ * `hello` is the one server-scoped member: a fresh adapter process introduces itself with it, carrying its `generation`, an opaque per-process value whose only contract
+ * is uniqueness across that plugin's helper processes. A millisecond boot timestamp is the convenient source; the panel compares generations by equality alone and claims
+ * no ordering, so a host clock adjustment or an RTC-less boot cannot wrongly reject a genuine fresh server. The panel adopts an unseen generation by clearing its
+ * per-device token floors and notifying the plugin, which is what lets a surviving page recover from a helper restart it cannot otherwise observe. Delivery is advisory
+ * like every push: an adapter emits `hello` once at startup, after its bridge is ready, and a plugin-side belt may cover the rare lost delivery. One known bound lives
+ * here rather than in machinery - in the brief window where a dying process's late device event lands after a fresh generation's adoption, its high token re-arms a
+ * cleared floor; device events carry no generation to attribute them by, the window requires two helper processes' messages to interleave across a handoff, and a
+ * per-event generation field remains the additive escape if the field ever reports it.
+ *
+ * The union grows additively in this library, and `hello`'s field set is itself additive.
+ *
  * @category WebUI Status
  */
 export type StatusEvent =
+  { generation: number; kind: "hello" } |
   { kind: "connecting"; serialNumber: string; session: number } |
   { encrypted: boolean; kind: "snapshot"; online: true; rows: StatusRow[]; serialNumber: string; session: number } |
   { kind: "row"; row: Pick<StatusRow, "id" | "value">; serialNumber: string; session: number } |
@@ -132,7 +144,7 @@ export type StatusEvent =
 export interface StatusViewRequest {
 
   /**
-   * The device the panel is now viewing, addressed by the same universal `serialNumber` identity every {@link StatusEvent} carries.
+   * The device the panel is now viewing, addressed by the same universal `serialNumber` identity every device event carries.
    */
   serialNumber: string;
 }

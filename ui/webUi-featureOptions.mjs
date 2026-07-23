@@ -72,6 +72,9 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  *   may replace a label, a message, or both.
  * @property {Function} [statusPanel.identity] - Maps a device to its identity fields (`{ label, mono?, value }[]`). Defaults to firmware / serial number / model /
  *   manufacturer; a `mono` field renders its value in the monospace token.
+ * @property {Function} [statusPanel.onServerHello] - Invoked when a fresh adapter process introduces itself (its hello generation differs from the last seen), after
+ *   the panel clears its stale-push floors. The plugin re-elicits its feed here; the callback fires once per fresh generation, must be cheap, and must tolerate firing
+ *   before any device is viewed or concurrently with the plugin's own elicitation.
  * @property {Object[]} [statusPanel.placeholderRows] - Row templates (id / label / sizer / optional latch, no value) the skeleton renders before the first snapshot.
  *   Defaults to `[]`, so an unconfigured skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
  * @property {Object} [ui] - UI validation and display options.

@@ -134,7 +134,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *                                                                is valid and meaningful).
  * @property {readonly string[]} initialOptions - The at-show() snapshot for "Revert to Saved." Stable across the session except when re-show() loads an option
  *                                                 set that is not set-equal to the prior snapshot, in which case the snapshot is replaced.
- * @property {"controller-based" | "device-only"} mode - Operating mode. Set once at model:loaded based on whether the plugin provided `getControllers`.
+ * @property {"controller-based" | "device-only" | "global-only"} mode - Operating mode. Set once at model:loaded: "controller-based" when the plugin provided
+ *   `getControllers`, "global-only" when it declared `globalOnly`, otherwise "device-only". In "global-only" the scope is pinned to global for the page's life and the
+ *   reducer refuses any other scope kind.
  * @property {readonly string[]} persistedAnchor - The last-known-on-disk state. Updated on every successful persist; restored to configuredOptions on a final
  *                                                  persist failure (memory then matches disk).
  * @property {Scope} scope - Selection pointer (DU).
@@ -220,6 +222,14 @@ export const reducer = (state, action) => {
 
     case "model:loaded": {
 
+      // Validate the mode literal before adopting it. A typo at the one dispatch site would otherwise silently disarm the global-only scope guard below, since an
+      // unrecognized mode is never "global-only" and the guard would then wave through a non-global scope. Surface it loudly at the dispatch site, the same policy the
+      // unknown-action default applies.
+      if(![ "controller-based", "device-only", "global-only" ].includes(action.mode)) {
+
+        throw new Error("FeatureOptionsState.reducer: model:loaded carried an unknown mode \"" + action.mode + "\".");
+      }
+
       // First load: catalog, configuredOptions, mode, controllers populated. The persistence anchor seeds from the just-loaded options (pre-mutation the loaded array
       // IS the disk state). The initial snapshot - the revert target - takes `action.initialOptions` if the dispatcher supplied it (orchestrator re-shows that
       // detected set-equal options carry the original snapshot forward), otherwise falls back to the loaded options. Status transitions to ready.
@@ -281,6 +291,13 @@ export const reducer = (state, action) => {
     }
 
     case "scope:changed": {
+
+      // Global-only mode pins the scope to global for the page's life. A dispatch carrying any other scope kind is a bug at the dispatch site - the orchestrator never
+      // fires one in this mode - so surface it loudly rather than rendering a device or controller view the page mounts no navigation for.
+      if((state.mode === "global-only") && (action.scope.kind !== "global")) {
+
+        throw new Error("FeatureOptionsState.reducer: scope:changed to \"" + action.scope.kind + "\" is not permitted in global-only mode.");
+      }
 
       // Replace the selection pointer wholesale. The DU is atomic - controllerId, deviceId, and kind all move together so subscribers never observe a partial
       // selection state.

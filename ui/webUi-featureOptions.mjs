@@ -28,6 +28,18 @@ import { registerTokensEffect } from "./webUi-featureOptions/effects/tokens.mjs"
  */
 const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
 
+// The page's content regions, in alphabetical id order. hide() sets each to display:none during teardown so the user never sees a half-built page; the coordinated
+// end-of-load reveal restores them together. Both the teardown-hide loop and the reveal read this single list so the two can never drift.
+const REGION_IDS = [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ];
+
+// The two regions global-only mode never reveals: the device sidebar and the precedence header bar. The reduced global-only reveal set is derived by filtering these
+// out of REGION_IDS, so the reduced set can never name a region the full set does not.
+const GLOBAL_ONLY_HIDDEN_REGION_IDS = [ "headerInfo", "sidebar" ];
+
+// The regions global-only mode reveals: the full set minus the sidebar and header. Derived rather than hand-listed so a content region added to REGION_IDS extends the
+// global-only reveal automatically.
+const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REGION_IDS.includes(id));
+
 /**
  * @typedef {Object} Device
  * @property {string} firmwareRevision - The firmware version of the device.
@@ -58,6 +70,14 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  * @typedef {Object} FeatureOptionsConfig
  * @property {Function} [getControllers] - Handler to retrieve available controllers.
  * @property {(controller: (Controller|null)) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's {@link DeviceListResult}.
+ * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is pinned to
+ *   global for the page's life (the reducer refuses any other scope in this mode), and the {@link FeatureOptionsConfig.infoPanel} callback always receives an undefined
+ *   device. Mutually exclusive with `getControllers`, an explicitly supplied `getDevices`, and `statusPanel` - each throws a TypeError at construction. The `sidebar`
+ *   labels and `ui.isController` are inert here (isController's only consumer is the nav view's grouping filter, which never mounts), while `ui.validOption` and
+ *   `ui.validOptionCategory` stay active and receive an undefined device. This is a UI declaration a plugin adopts only when its runtime evaluates options at global
+ *   scope exclusively; any device- or controller-scoped entries already in the config remain there untouched and are not editable through this page. The page markup
+ *   must keep the revealed content regions (`deviceStatsContainer`, `optionsContainer`, `search`) OUTSIDE the `#sidebar` and `#headerInfo` subtrees (the standard
+ *   template's sibling layout): a region nested under a permanently-hidden ancestor cannot become visible, and the reveal path warns by name when it detects that shape.
  * @property {Function} [infoPanel] - Handler to display device information.
  * @property {() => void} [onOptionsEdited] - Invoked after the store state has transitioned for any option mutation (an option set or cleared, the options reset,
  *   or the model reverted), so a consumer reading editedConfig from inside the callback sees the post-edit state. Invoked once per mutation with no arguments and no
@@ -170,7 +190,8 @@ export class webUiFeatureOptions {
     const {
 
       getControllers = undefined,
-      getDevices = this.getHomebridgeDevices,
+      getDevices = undefined,
+      globalOnly = false,
       infoPanel = undefined,
       onOptionsEdited = undefined,
       sidebar = {},
@@ -178,18 +199,53 @@ export class webUiFeatureOptions {
       ui = {}
     } = options;
 
-    // The device-stats region has a single owner: a plugin supplies EITHER a static info panel OR the live status panel, never both. Surfacing the misconfiguration
-    // as a construction-time TypeError catches it at the plugin-author boundary rather than as a silent double-mount, and it lands through the page's boot monitor.
-    if(infoPanel && statusPanel) {
+    // The page's construction contracts, each a contradiction that cannot be honored. Evaluated in order; the first violated row throws a TypeError naming the conflict
+    // at the plugin-author boundary rather than surfacing as a silent mis-mount or a dead device view, and the throw lands through the page's boot monitor. Global-only
+    // mode runs the page at global scope with no device machinery, so every device- or controller-facing hook contradicts it (getDevices is destructured without a
+    // default, so the un-defaulted binding being defined is the exact "explicitly supplied" test); the device-stats region has a single owner, so infoPanel and
+    // statusPanel cannot both claim it.
+    const contradictions = [
 
-      throw new TypeError("infoPanel and statusPanel are mutually exclusive - the device-stats region has a single owner.");
+      {
+
+        message: "globalOnly and getControllers are mutually exclusive - global-only mode mounts no controller navigation.",
+        violated: globalOnly && (getControllers !== undefined)
+      },
+      {
+
+        message: "globalOnly and getDevices are mutually exclusive - global-only mode fetches no devices.",
+        violated: globalOnly && (getDevices !== undefined)
+      },
+      {
+
+        message: "globalOnly and statusPanel are mutually exclusive - global-only mode mounts no device-stats panel.",
+        violated: globalOnly && (statusPanel !== undefined)
+      },
+      {
+
+        message: "infoPanel and statusPanel are mutually exclusive - the device-stats region has a single owner.",
+        violated: Boolean(infoPanel) && Boolean(statusPanel)
+      }
+    ];
+
+    for(const { message, violated } of contradictions) {
+
+      if(violated) {
+
+        throw new TypeError(message);
+      }
     }
 
     this.#config = {
 
       controllerRetryEnableDelayMs: ui.controllerRetryEnableDelayMs ?? 5000,
       getControllers,
-      getDevices,
+
+      // The device-only default applies here rather than at the destructure so the guard table above can tell an explicitly-supplied getDevices (which contradicts
+      // globalOnly) from the unset default. An explicit undefined takes the default; an explicit null is preserved and keeps its current fail-at-call-site behavior
+      // (the #devicesFor contract guard trips on it), which is why this is an explicit undefined test and deliberately not `??`.
+      getDevices: (getDevices === undefined) ? this.getHomebridgeDevices : getDevices,
+      globalOnly,
       infoPanel,
       labelControllers: sidebar.controllerLabel ?? "Controllers",
       labelDevices: sidebar.deviceLabel ?? "Devices",
@@ -249,12 +305,15 @@ export class webUiFeatureOptions {
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
    *   6. Adopt the design tokens (synchronous), then fire the theme, persist, and keyboard effects. The theme effect's I/O (Bootstrap probe) runs in the background.
    *   7. Once controllers resolves: if controller-based mode with empty controllers, show the no-controllers message and return.
-   *   8. Record and pre-fire the initial controller's devices fetch (a `devices:requested` mints its sequence) so it overlaps with the feature catalog.
+   *   8. In the device-bearing modes, record and pre-fire the initial controller's devices fetch (a `devices:requested` mints its sequence) so it overlaps with the
+   *      feature catalog. Global-only mode skips this step - it fetches no devices.
    *   9. Once the feature catalog resolves: build the catalog and dispatch model:loaded - the mounted views transition off their loading placeholder and render.
-   *  10. Once devices resolve: dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and
-   *      folds a fetch failure into the connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error
-   *      status returns without revealing, otherwise it sets the initial scope.
-   *  11. Reveal regions that views render into.
+   *  10. Global-only mode ends here: after the theme settles it clears #headerInfo (the header view that reclaims it in the other modes never mounts) and reveals the
+   *      reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once devices resolve, dispatch devices:loaded
+   *      carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure into the
+   *      connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error status returns without
+   *      revealing, otherwise it sets the initial scope.
+   *  11. Reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
    *        persisted config and the seam through which option edits are persisted.
@@ -378,12 +437,20 @@ export class webUiFeatureOptions {
 
     const initialController = controllers?.[0] ?? null;
 
-    // Record this fetch at the store's chokepoint before firing it, then read back the minted sequence - the store's ticket for this fetch. The sequence, not the
-    // controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
-    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, type: "devices:requested" });
+    // The device machinery is inert in global-only mode: with scope pinned to global there is no controller device to fetch or select, so the pre-fire here and the
+    // matching devices await, applied-sequence gate, and scope decision further down all sit on the device-bearing path. The global-only branch after the theme await
+    // returns before reaching them, so these bindings are read only when they were assigned.
+    let devicesSeq;
+    let devicesPromise;
 
-    const devicesSeq = this.#store.state.devicesRequest.seq;
-    const devicesPromise = this.#devicesFor(initialController);
+    // In the device-bearing modes, record this fetch at the store's chokepoint before firing it, then read back the minted sequence - the store's ticket for this
+    // fetch. The sequence, not the controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
+    if(!this.#config.globalOnly) {
+
+      this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, type: "devices:requested" });
+      devicesSeq = this.#store.state.devicesRequest.seq;
+      devicesPromise = this.#devicesFor(initialController);
+    }
 
     // Wait for the feature catalog. Build the catalog (catalog index + validators) and dispatch model:loaded so the store transitions to "ready" and views can mount
     // against a populated state. The configured options come from the session's primary entry - the persisted config the orchestrator already loaded.
@@ -416,7 +483,7 @@ export class webUiFeatureOptions {
       configuredOptions: loadedOptions,
       controllers: controllers ?? [],
       initialOptions: this.#initialOptions,
-      mode: this.#config.getControllers ? "controller-based" : "device-only",
+      mode: this.#config.globalOnly ? "global-only" : (this.#config.getControllers ? "controller-based" : "device-only"),
       type: "model:loaded"
     });
 
@@ -425,6 +492,25 @@ export class webUiFeatureOptions {
     await themeInitPromise;
 
     if(signal.aborted) {
+
+      return;
+    }
+
+    // Global-only mode ends the boot here, before the device machinery below ever runs. First reclaim #headerInfo: in the other modes the header view mounts and
+    // reclaims the container on model:loaded, but global-only never mounts that view, so nothing else would reconcile a connection-error block a failed cycle left
+    // behind (clearContainers deliberately excludes #headerInfo). A live connection error is unreachable at this point in this mode - a sync failure returns from
+    // show() before model:loaded, and no devices:loaded ever dispatches here - so this clear only ever discards a prior cycle's stale block, never a current error.
+    // Then reveal the reduced region set (the sidebar and header stay hidden) with the misnesting diagnostic, and return.
+    if(this.#config.globalOnly) {
+
+      const headerInfo = document.getElementById("headerInfo");
+
+      if(headerInfo) {
+
+        headerInfo.textContent = "";
+      }
+
+      revealRegions(GLOBAL_ONLY_REGION_IDS, { warnOnNesting: true });
 
       return;
     }
@@ -473,8 +559,8 @@ export class webUiFeatureOptions {
       this.#store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
     }
 
-    // Reveal regions that views render into.
-    revealRegions();
+    // Reveal the full region set the views render into.
+    revealRegions(REGION_IDS);
   }
 
   /**
@@ -563,7 +649,7 @@ export class webUiFeatureOptions {
 
     await this.#flushPending();
 
-    for(const id of [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ]) {
+    for(const id of REGION_IDS) {
 
       const element = document.getElementById(id);
 
@@ -676,7 +762,12 @@ export class webUiFeatureOptions {
 
     if(headerInfo) {
 
-      mountHeaderView({ root: headerInfo, signal, store });
+      // The precedence header does not mount in global-only mode - there is no device or controller hierarchy for it to head. The connection-error view mounts in every
+      // mode: it is the surface a config-sync failure renders into regardless of mode, so it is never gated.
+      if(!this.#config.globalOnly) {
+
+        mountHeaderView({ root: headerInfo, signal, store });
+      }
 
       mountConnectionErrorView({
 
@@ -734,7 +825,9 @@ export class webUiFeatureOptions {
       mountOptionsView({ configTable, platform: () => this.#session?.platform?.platform, signal, store });
     }
 
-    if(controllersContainer && devicesContainer) {
+    // The nav view does not mount in global-only mode: with scope pinned to global there is no controller or device list to navigate, and its grouping filter (the sole
+    // consumer of ui.isController) is inert here.
+    if(controllersContainer && devicesContainer && !this.#config.globalOnly) {
 
       mountNavView({
 
@@ -808,16 +901,46 @@ const clearContainers = () => {
   }
 };
 
-// Reveal the regions every view renders into. The hide() path set these to display: none so the user did not see a half-built UI during teardown / rebuild.
-const revealRegions = () => {
+// Reveal a set of page regions by clearing their inline display, which the hide() path set to none so the user did not see a half-built UI during teardown / rebuild.
+// The success path passes REGION_IDS in the device-bearing modes and the reduced GLOBAL_ONLY_REGION_IDS in global-only mode. When warnOnNesting is set (global-only),
+// each revealed region is checked for a hidden ancestor: a content region nested under the permanently-hidden sidebar or header cannot become visible however its own
+// display is set, so the misnesting is surfaced as a named console warning rather than a silently-invisible panel.
+const revealRegions = (ids, { warnOnNesting = false } = {}) => {
 
-  for(const id of [ "sidebar", "deviceStatsContainer", "headerInfo", "optionsContainer", "search" ]) {
+  for(const id of ids) {
 
     const element = document.getElementById(id);
 
-    if(element) {
+    if(!element) {
 
-      element.style.display = "";
+      continue;
+    }
+
+    element.style.display = "";
+
+    if(warnOnNesting) {
+
+      warnIfRegionNestedUnderHidden(id, element);
+    }
+  }
+};
+
+// Walk a revealed region's ancestors up to the #pageFeatureOptions boundary; a hidden ancestor means the region is nested under markup global-only mode keeps hidden
+// (the sidebar or the header bar) and so cannot become visible however its own display is set. Global-only mode requires the content regions to sit outside those
+// subtrees, so a hidden ancestor is a misconfigured consumer shell - surface it as a named diagnostic rather than letting the panel stay silently invisible.
+const warnIfRegionNestedUnderHidden = (id, element) => {
+
+  const boundary = document.getElementById("pageFeatureOptions");
+
+  for(let ancestor = element.parentElement; ancestor && (ancestor !== boundary); ancestor = ancestor.parentElement) {
+
+    if(ancestor.style.display === "none") {
+
+      // eslint-disable-next-line no-console
+      console.warn("Global-only mode requires the content region \"" + id +
+        "\" to sit outside the sidebar and header markup, but it is nested under a hidden ancestor and cannot become visible.");
+
+      return;
     }
   }
 };

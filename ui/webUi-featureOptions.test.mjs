@@ -7,7 +7,7 @@
 "use strict";
 
 import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, waitFor } from "./ui.helpers.mjs";
-import { describe, test } from "node:test";
+import { describe, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
@@ -2826,6 +2826,380 @@ describe("webUiFeatureOptions - status panel selection", () => {
     assert.ok(skeleton.deviceStatsContainer.querySelector(".device-stats-grid.fo-status-grid"), "the status-panel variant grid mounted on the device-stats region");
     assert.match(skeleton.deviceStatsContainer.textContent, /Status/, "the component-owned Status cell rendered");
     assert.equal(typeof orchestrator.statusPanel?.resetStaleGuards, "function", "the public statusPanel field carries the mount handle");
+
+    orchestrator.cleanup();
+  });
+});
+
+// A purpose-built page skeleton for the global-only boot tests. The shared createSkeletonFeatureOptionsDom nests #deviceStatsContainer inside #sidebar and #statusInfo
+// inside #headerInfo, so a region revealed under a permanently-hidden sidebar stays invisible - unusable for the reveal assertions here. This mirrors the real
+// consuming shell instead: #headerInfo is a sibling bar above the content row, #sidebar (holding the nav containers) and the content column are the row's two children,
+// and the content column holds #deviceStatsContainer, #search, and #optionsContainer wrapping #configTable. The outer page chrome is reproduced verbatim because show()
+// dereferences #pageSupport and #pageFeatureOptions unguarded. When misnestDeviceStats is set, #deviceStatsContainer is placed back inside #sidebar (the shared
+// skeleton's own shape) to drive the misnesting diagnostic.
+function createGlobalOnlyDom({ misnestDeviceStats = false } = {}) {
+
+  const deviceStats = "<div id=\"deviceStatsContainer\"></div>";
+  const html =
+
+    "<div id=\"pageFirstRun\" style=\"display: none\"><button id=\"firstRun\">Start</button></div>" +
+    "<div id=\"menuWrapper\" style=\"display: none\">" +
+      "<button id=\"menuHome\">Home</button>" +
+      "<button id=\"menuFeatureOptions\">Features</button>" +
+      "<button id=\"menuSettings\">Settings</button>" +
+    "</div>" +
+    "<div id=\"pageSupport\" style=\"display: none\"></div>" +
+    "<div id=\"pageFeatureOptions\" style=\"display: none\">" +
+      "<div id=\"headerInfo\"></div>" +
+      "<div class=\"feature-main-content\">" +
+        "<div id=\"sidebar\">" +
+          "<div id=\"controllersContainer\"></div>" +
+          "<div id=\"devicesContainer\"></div>" +
+          (misnestDeviceStats ? deviceStats : "") +
+        "</div>" +
+        "<div class=\"feature-content\">" +
+          (misnestDeviceStats ? "" : deviceStats) +
+          "<div id=\"search\"></div>" +
+          "<div id=\"optionsContainer\"><div id=\"configTable\"></div></div>" +
+        "</div>" +
+      "</div>" +
+    "</div>";
+
+  document.body.innerHTML = html;
+
+  return {
+
+    configTable: document.getElementById("configTable"),
+    controllersContainer: document.getElementById("controllersContainer"),
+    deviceStatsContainer: document.getElementById("deviceStatsContainer"),
+    devicesContainer: document.getElementById("devicesContainer"),
+    headerInfo: document.getElementById("headerInfo"),
+    optionsContainer: document.getElementById("optionsContainer"),
+    pageFeatureOptions: document.getElementById("pageFeatureOptions"),
+    pageSupport: document.getElementById("pageSupport"),
+    search: document.getElementById("search"),
+    sidebar: document.getElementById("sidebar")
+  };
+}
+
+// Ancestor-aware visibility: a region counts as revealed only when its own inline display is cleared to "" AND no ancestor up to the #pageFeatureOptions boundary carries
+// an inline display:none. The reveal mechanism under test toggles inline styles, so walking inline display up the tree is the honest check in this DOM - a region whose
+// own display is cleared is still invisible if the sidebar or header wrapping it stays hidden.
+function isRegionVisible(id) {
+
+  const element = document.getElementById(id);
+
+  if(!element || (element.style.display !== "")) {
+
+    return false;
+  }
+
+  const boundary = document.getElementById("pageFeatureOptions");
+
+  for(let ancestor = element.parentElement; ancestor && (ancestor !== boundary); ancestor = ancestor.parentElement) {
+
+    if(ancestor.style.display === "none") {
+
+      return false;
+    }
+  }
+
+  return true;
+}
+
+describe("webUiFeatureOptions - global-only construction contracts", () => {
+
+  test("globalOnly alone constructs, and each device-facing hook alongside it throws a TypeError", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge());
+
+    // globalOnly alone constructs - and with NO getDevices supplied. This is the distinguishing negative: it proves the guard tests supplied-ness (getDevices !==
+    // undefined), not the device-only default the #config assembly later applies.
+    assert.ok(new webUiFeatureOptions({ globalOnly: true }), "globalOnly with no getDevices supplied constructs");
+
+    // Each device- or controller-facing hook contradicts globalOnly and throws at construction.
+    assert.throws(() => new webUiFeatureOptions({ getControllers: () => [], globalOnly: true }), TypeError, "globalOnly with getControllers throws");
+    assert.throws(() => new webUiFeatureOptions({ getDevices: () => ({ devices: [], error: "" }), globalOnly: true }), TypeError,
+      "globalOnly with an explicitly supplied getDevices throws");
+    assert.throws(() => new webUiFeatureOptions({ globalOnly: true, statusPanel: {} }), TypeError, "globalOnly with statusPanel throws");
+
+    // The pre-existing infoPanel + statusPanel contradiction still throws through the guard table.
+    assert.throws(() => new webUiFeatureOptions({ infoPanel: () => {}, statusPanel: {} }), TypeError, "infoPanel and statusPanel together still throw");
+  });
+});
+
+describe("webUiFeatureOptions - global-only boot flow", () => {
+
+  test("show() renders the reduced page without any device fetch, nav or header mount, or sidebar and header reveal", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createGlobalOnlyDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Count device fetches. In global-only mode the default hook is the only possible fetcher, so a zero call count proves no device fetch ran.
+    let getCachedCount = 0;
+
+    fake.getCachedAccessories = async () => {
+
+      getCachedCount += 1;
+
+      return [];
+    };
+
+    // A supplied infoPanel records its arguments so the test can assert it was invoked with an undefined device and the device-stats root.
+    let infoPanelArgs;
+    const infoPanel = (device, panel) => { infoPanelArgs = { device, panel }; };
+
+    // Spy console.warn via the test runner's mock so the compliant layout can assert zero misnesting diagnostics; the mock records every call and is restored below.
+    const warnMock = mock.method(console, "warn", () => {});
+
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true, infoPanel });
+    const session = await openTestSession();
+
+    let showThrew = false;
+
+    try {
+
+      await orchestrator.show(session);
+      await flush();
+    } catch {
+
+      showThrew = true;
+    } finally {
+
+      warnMock.mock.restore();
+    }
+
+    // (h) show() resolving without throwing is the runtime proof of A4's no-non-global-scope half: the reducer's scope guard throws on any non-global scope dispatch, so
+    // a clean boot means none fired.
+    assert.equal(showThrew, false, "show() resolved without throwing - a non-global scope dispatch during boot would have thrown at the reducer");
+
+    // (a) No device fetch ran.
+    assert.equal(getCachedCount, 0, "global-only mode never fetches devices - getCachedAccessories was not called");
+
+    // (b) The nav containers stay empty - the nav view never mounted.
+    assert.equal(skeleton.controllersContainer.children.length, 0, "the controllers container stays empty - the nav view never mounted");
+    assert.equal(skeleton.devicesContainer.children.length, 0, "the devices container stays empty - the nav view never mounted");
+
+    // (c) #headerInfo is hidden and empty - the header view never mounted and the orchestrator reclaimed the container.
+    assert.equal(skeleton.headerInfo.style.display, "none", "#headerInfo stays hidden in global-only mode");
+    assert.equal(skeleton.headerInfo.children.length, 0, "#headerInfo is emptied by the orchestrator's reclaim");
+
+    // (d) #sidebar is hidden.
+    assert.equal(skeleton.sidebar.style.display, "none", "#sidebar stays hidden in global-only mode");
+
+    // (e) The reduced content set is revealed, each ancestor-aware visible.
+    assert.ok(isRegionVisible("deviceStatsContainer"), "deviceStatsContainer is revealed and visible");
+    assert.ok(isRegionVisible("optionsContainer"), "optionsContainer is revealed and visible");
+    assert.ok(isRegionVisible("search"), "search is revealed and visible");
+
+    // (f) The options table rendered from model:loaded alone, without any devices:loaded.
+    assert.ok(skeleton.configTable.querySelector("details[data-category]"), "the options table rendered at global scope without any device fetch");
+
+    // (g) The infoPanel was invoked with an undefined device and the device-stats root.
+    assert.ok(infoPanelArgs, "the supplied infoPanel was invoked");
+    assert.equal(infoPanelArgs.device, undefined, "the infoPanel receives an undefined device in global-only mode");
+    assert.equal(infoPanelArgs.panel, skeleton.deviceStatsContainer, "the infoPanel receives the device-stats root");
+
+    // The compliant sibling layout produces no misnesting warnings.
+    const misnestWarnings = warnMock.mock.calls.filter((call) => String(call.arguments[0]).includes("content region"));
+
+    assert.equal(misnestWarnings.length, 0, "a compliant sibling layout produces no misnesting warnings");
+
+    orchestrator.cleanup();
+  });
+
+  test("a failed config sync renders the connection-error view, and a successful retry clears and re-hides #headerInfo", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createGlobalOnlyDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true, ui: { controllerRetryEnableDelayMs: 20 } });
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    // Fail the next config read so the re-show routes into the connection-error view - which renders into #headerInfo and reveals it, in every mode.
+    fake.getPluginConfig = async () => { throw new Error("host read failed"); };
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the connection-error view renders its retry button into #headerInfo in global-only mode");
+    assert.equal(skeleton.headerInfo.style.display, "", "the connection-error view reveals #headerInfo when it renders the error");
+
+    // Restore the config read, wait for the retry button to arm, then click it. The retry re-enters show(), which syncs successfully and runs the global-only success
+    // path - clearing #headerInfo and leaving it hidden, since the header view never mounts to reclaim it.
+    fake.getPluginConfig = async () => fake.config;
+
+    const retryButton = await waitFor(() => {
+
+      const btn = skeleton.headerInfo.querySelector("button.btn-warning");
+
+      return (btn && !btn.disabled) ? btn : null;
+    }, { message: "the retry button to arm", timeout: 500 });
+
+    retryButton.click();
+
+    // The stale error block clears only at the global-only reclaim, which runs after the retry's model:loaded and theme await, so waiting for the button to disappear is
+    // the honest signal that the recovery cycle completed.
+    await waitFor(() => !skeleton.headerInfo.querySelector("button.btn-warning"), { message: "the retry to clear the stale error block", timeout: 1000 });
+    await flush();
+
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "no dead retry button survives the recovery");
+    assert.equal(skeleton.headerInfo.children.length, 0, "#headerInfo is emptied by the orchestrator's reclaim after recovery");
+    assert.equal(skeleton.headerInfo.style.display, "none", "#headerInfo is hidden again after the successful global-only retry");
+    assert.ok(skeleton.configTable.querySelector("details[data-category]"), "the recovered global-only page rendered the options table");
+
+    orchestrator.cleanup();
+  });
+
+  test("an abort delivered after model:loaded but before the reveal leaves every region hidden", async () => {
+
+    using _dom = createTestDom();
+
+    createGlobalOnlyDom();
+
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Gate the theme init's awaited lighting-mode read so the boot blocks between the model:loaded dispatch and the global-only reveal. The reveal sits after the
+    // existing post-theme signal check, so delivering the abort in this window and then releasing the gate lands it exactly where the check catches it - failing both a
+    // build that placed the reveal above the check and one that hoisted it before the theme await entirely.
+    let releaseLighting;
+    const lightingGate = new Promise((resolve) => { releaseLighting = resolve; });
+
+    fake.userCurrentLightingMode = async () => {
+
+      await lightingGate;
+
+      return "light";
+    };
+
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true });
+    const session = await openTestSession();
+    const showPromise = orchestrator.show(session);
+
+    // Drive the boot until model:loaded has rendered the options table - proof the boot passed model:loaded and is now blocked on the theme await.
+    await waitFor(() => document.getElementById("configTable").querySelector("details[data-category]"),
+      { message: "model:loaded to render the options table before the abort" });
+
+    // Abort in the pinned window (after model:loaded, before the reveal), then release the theme gate so the post-theme signal check runs and returns.
+    orchestrator.cleanup();
+    releaseLighting();
+
+    await showPromise;
+    await flush();
+
+    assert.equal(isRegionVisible("deviceStatsContainer"), false, "deviceStatsContainer stays hidden when the abort lands before the reveal");
+    assert.equal(isRegionVisible("optionsContainer"), false, "optionsContainer stays hidden when the abort lands before the reveal");
+    assert.equal(isRegionVisible("search"), false, "search stays hidden when the abort lands before the reveal");
+  });
+
+  test("re-entry re-establishes the full global-only contract on every cycle", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createGlobalOnlyDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let getCachedCount = 0;
+
+    fake.getCachedAccessories = async () => {
+
+      getCachedCount += 1;
+
+      return [];
+    };
+
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true });
+    const session = await openTestSession();
+
+    const assertContract = (cycle) => {
+
+      assert.ok(isRegionVisible("deviceStatsContainer"), cycle + ": deviceStatsContainer is revealed");
+      assert.ok(isRegionVisible("optionsContainer"), cycle + ": optionsContainer is revealed");
+      assert.ok(isRegionVisible("search"), cycle + ": search is revealed");
+      assert.equal(skeleton.headerInfo.style.display, "none", cycle + ": #headerInfo stays hidden");
+      assert.equal(skeleton.sidebar.style.display, "none", cycle + ": #sidebar stays hidden");
+      assert.equal(skeleton.controllersContainer.children.length, 0, cycle + ": the controllers container stays empty");
+      assert.equal(skeleton.devicesContainer.children.length, 0, cycle + ": the devices container stays empty");
+    };
+
+    await orchestrator.show(session);
+    await flush();
+    assertContract("first cycle");
+
+    await orchestrator.hide();
+
+    await orchestrator.show(session);
+    await flush();
+    assertContract("second cycle");
+
+    assert.equal(getCachedCount, 0, "no device fetch ran across either global-only cycle");
+
+    orchestrator.cleanup();
+  });
+
+  test("a content region misnested under the sidebar produces a named console warning", async () => {
+
+    using _dom = createTestDom();
+
+    createGlobalOnlyDom({ misnestDeviceStats: true });
+
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Capture console.warn via the test runner's mock so the misnesting diagnostic can be observed; the mock is restored regardless of outcome.
+    const warnMock = mock.method(console, "warn", () => {});
+
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true });
+
+    try {
+
+      await orchestrator.show(await openTestSession());
+      await flush();
+    } finally {
+
+      warnMock.mock.restore();
+    }
+
+    // The reveal walked deviceStatsContainer's ancestors, found the hidden #sidebar wrapping it, and warned by name.
+    const misnestWarnings = warnMock.mock.calls.filter((call) => {
+
+      const message = String(call.arguments[0]);
+
+      return message.includes("deviceStatsContainer") && message.includes("content region");
+    });
+
+    assert.equal(misnestWarnings.length, 1, "exactly one misnesting warning naming deviceStatsContainer is emitted for the misnested layout");
+    assert.equal(isRegionVisible("deviceStatsContainer"), false, "the misnested deviceStatsContainer stays invisible under the hidden sidebar");
 
     orchestrator.cleanup();
   });

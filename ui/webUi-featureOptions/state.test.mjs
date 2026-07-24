@@ -86,6 +86,21 @@ describe("reducer - model:loaded", () => {
     assert.equal(next.controllers, controllers);
     assert.deepEqual(next.status, { kind: "ready" });
   });
+
+  test("adopts each legal mode literal verbatim and throws on an illegal one", () => {
+
+    for(const mode of [ "controller-based", "device-only", "global-only" ]) {
+
+      const next = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode, type: "model:loaded" });
+
+      assert.equal(next.mode, mode, "the legal mode literal \"" + mode + "\" is adopted verbatim");
+    }
+
+    // A mode typo at the one dispatch site must not silently disarm the global-only scope guard, so an unrecognized literal throws at the reducer rather than being
+    // adopted, matching the unknown-action policy.
+    assert.throws(() => reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-onlyy", type: "model:loaded" }),
+      /unknown mode/, "an illegal mode literal throws");
+  });
 });
 
 describe("reducer - controllers:loaded", () => {
@@ -262,6 +277,27 @@ describe("reducer - scope:changed", () => {
     assert.equal(controller.scope.kind, "controller");
     assert.equal(device.scope.kind, "device");
     assert.equal(deviceOnly.scope.controllerId, null, "device-only mode device scope carries controllerId: null");
+  });
+
+  test("rejects a non-global scope in global-only mode but allows it in the device-bearing modes", () => {
+
+    // A store in each mode, built through model:loaded so state.mode is set exactly as production sets it.
+    const globalOnly = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "global-only", type: "model:loaded" });
+    const deviceOnly = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+    const controllerBased = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "controller-based", type: "model:loaded" });
+    const controllerScope = { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" };
+    const deviceScope = { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" };
+
+    // Global-only mode pins the scope to global: a controller-kind or device-kind dispatch is a bug at the dispatch site and throws.
+    assert.throws(() => reducer(globalOnly, controllerScope), /not permitted in global-only mode/, "a controller scope throws in global-only mode");
+    assert.throws(() => reducer(globalOnly, deviceScope), /not permitted in global-only mode/, "a device scope throws in global-only mode");
+
+    // A global scope stays permitted, including in global-only mode.
+    assert.equal(reducer(globalOnly, { scope: { kind: "global" }, type: "scope:changed" }).scope.kind, "global", "a global scope is permitted in global-only mode");
+
+    // The same non-global dispatches pass unchanged in the device-bearing modes - the guard is scoped to global-only.
+    assert.equal(reducer(deviceOnly, controllerScope).scope.kind, "controller", "a controller scope is permitted in device-only mode");
+    assert.equal(reducer(controllerBased, deviceScope).scope.kind, "device", "a device scope is permitted in controller-based mode");
   });
 });
 

@@ -59,6 +59,12 @@ import { selectedDevice } from "../selectors.mjs";
  *   component's credential-neutral default copy: a plugin may replace the label, the message, or both.
  * @property {(device: import("../state.mjs").Device) => { label: string, mono?: boolean, value: string }[]} [identity] - The identity fields for a device. Defaults
  *   to {@link defaultIdentityFields} (firmware / serial number / model / manufacturer). A `mono` field renders its value in the monospace token.
+ * @property {{ label?: string, message?: string }} [linkLostMessage] - An override for the browser-detected link-lost copy, merged field-by-field over the
+ *   component's default so a plugin may replace the label, the message, or both (a label-only override keeps the default message). The link-lost state is one state, so
+ *   the override is a single object rather than a reason-keyed table like {@link StatusPanelConfig.errorMessages}. A plugin that overrides the label owns its width
+ *   consequence: the Status sizer reserves the DEFAULT label, the same open-set posture the identity fields carry.
+ * @property {number} [linkLostTimeoutSeconds] - The deadline, in seconds, before a watched bridge request that has produced no liveness evidence reads as a lost link.
+ *   A missing, zero, negative, or non-finite value falls back to the component's default of 10 seconds.
  * @property {() => void} [onServerHello] - Invoked when a fresh adapter process introduces itself (its hello generation differs from the last seen), after the panel
  *   has cleared its stale-push floors. The plugin re-elicits its feed here - re-sending whatever standing state the new process needs. The contract: keep it cheap (a
  *   boot-time hello may arrive beside the page's own initial elicitation), tolerate overlap (it may fire before any device is viewed, before the model loads, or
@@ -71,11 +77,6 @@ import { selectedDevice } from "../selectors.mjs";
 // The "Connected" Status-cell label, prefixed with the lock glyph for an encrypted session so the panel mirrors a plugin's encrypted-connection convention: the
 // U+1F512 lock plus U+FE0E, the text-presentation variation selector that forces a monochrome glyph rather than a color emoji.
 const connectedLabel = (encrypted) => encrypted ? "\u{1F512}\u{FE0E} Connected" : "Connected";
-
-// The widest candidates for the Status cell's column, living beside the vocabulary they measure. "Disconnected" and the encrypted "Connected" label are within a few
-// pixels of each other depending on the platform font stack, so the column reserves both through the phantom sizer and takes their maximum rather than deciding a
-// font-metrics question in code; the Status column then never shifts as its text changes.
-const STATUS_SIZER = [ "Disconnected", connectedLabel(true) ];
 
 // The component's default error copy, one entry per classified reason. Deliberately credential-neutral - auth-invalid / auth-missing describe a rejected or absent
 // credential without naming a PSK, password, or token, and not-found says "on the network" rather than naming any one discovery mechanism - so the copy serves every
@@ -100,6 +101,27 @@ const resolveErrorCopy = (reason, overrides) => {
 
   return { ...base, ...overrides?.[reason] };
 };
+
+// The default copy for the browser-detected link-lost state: the host bridge stopped answering the panel's requests and pushing its events, so the panel renders this
+// honest state in place of a silent, permanent "Connecting...". Host-neutral and mechanism-neutral in the error copy's voice - it names the lost connection and the one
+// recovery the iframe can offer, a page reload, without naming the socket relay or the helper process beneath it. A plugin merges a { label?, message? } override over
+// this field-by-field through the same shape resolveErrorCopy uses; the state is one state, not a reason-keyed vocabulary, so the override is a single object.
+const DEFAULT_LINK_LOST_COPY = { label: "Link lost", message: "The connection to the Homebridge UI was lost. Reload the page to reconnect." };
+
+// The default deadline, in seconds, before a watched request that has produced no liveness reads as a lost link. It sits well above a healthy bridge's millisecond-scale
+// round trip, so a live relay never trips, and low enough that a dead one surfaces promptly. A plugin overrides it through the config's Seconds-suffixed field; a
+// missing, zero, negative, or non-finite override falls back here.
+const DEFAULT_LINK_LOST_TIMEOUT_SECONDS = 10;
+
+// Resolve a plugin's configured link-lost deadline. A finite positive value stands; anything else - missing, zero, negative, or non-finite (the browser-boundary
+// narrowing posture the hello handler shares) - falls back to the module default.
+const resolveLinkLostSeconds = (configured) => (Number.isFinite(configured) && (configured > 0)) ? configured : DEFAULT_LINK_LOST_TIMEOUT_SECONDS;
+
+// The widest candidates for the Status cell's column, living beside the vocabulary they measure. "Disconnected", the encrypted "Connected" label, and the link-lost
+// label are within a few pixels of each other depending on the platform font stack, so the column reserves every candidate through the phantom sizer and takes their
+// maximum rather than deciding a font-metrics question in code; the Status column then never shifts as its text changes. A plugin that overrides the link-lost label
+// owns its width consequence - the sizer reserves the default label, the same open-set posture the identity fields carry.
+const STATUS_SIZER = [ "Disconnected", connectedLabel(true), DEFAULT_LINK_LOST_COPY.label ];
 
 // Render a state-row value for display: a blank or empty value shows as a placeholder dash, so an unpopulated cell reads as "no data yet" rather than a rendering gap.
 const displayValue = (value) => ((typeof value === "string") && (value.length > 0)) ? value : "-";
@@ -167,36 +189,43 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
  *
  * All render state is closure-local to this mount, so it is fresh for every show() cycle: the viewed device object (its serialNumber always read from that one
  * object), the per-serialNumber highest-token guard, the current row template set, the status text and panel message, the live node references, and one latch timer
- * per row id. The panel subscribes to selection changes and to the host's status push events; every listener is `{ signal }`-scoped, and the one abort listener the
- * mount registers clears every pending latch timer on teardown. The returned handle exposes {@link resetStaleGuards}.
+ * per row id, and the pending link-lost watchdog. The panel subscribes to selection changes and to the host's status push events; every listener is `{ signal }`-scoped,
+ * and the one abort listener the mount registers clears every pending latch timer and the pending watchdog on teardown. The returned handle exposes
+ * {@link resetStaleGuards} and the plugin-facing watchRequest.
  *
  * @param {Object} args
- * @param {StatusPanelConfig} args.config - The plugin's panel configuration (identity, placeholder rows, error-copy overrides).
+ * @param {StatusPanelConfig} args.config - The plugin's panel configuration (identity, placeholder rows, error-copy overrides, link-lost copy and deadline).
  * @param {HTMLElement} args.root - The `#deviceStatsContainer` element.
- * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down every listener and clears every pending latch timer.
+ * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down every listener, clears every pending latch timer, and cancels the pending watchdog.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
- * @returns {{ resetStaleGuards: () => void }} The panel handle.
+ * @returns {{ resetStaleGuards: () => void, watchRequest: (request: (Promise<unknown> | unknown)) => void }} The panel handle.
  */
 export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
   // Resolve the configured surface once at mount, defaulting each part the plugin did not supply. `identity` and `placeholderRows` fall back to the shared identity
   // quartet and an empty skeleton; `errorMessages` stays possibly-undefined and is consulted only when an error renders; `onServerHello` likewise stays
-  // possibly-undefined and is invoked only when a fresh adapter process introduces itself. Reading them once here keeps the handler off `config` on every event.
+  // possibly-undefined and is invoked only when a fresh adapter process introduces itself; `linkLostCopy` merges the plugin's override over the default field-by-field
+  // (a label-only override keeps the default message); `linkLostTimeoutSeconds` takes the configured deadline only when it is a finite positive number and otherwise
+  // falls back to the module default. Reading them once here keeps the handler off `config` on every event.
   const errorMessages = config.errorMessages;
   const identity = config.identity ?? defaultIdentityFields;
+  const linkLostCopy = { ...DEFAULT_LINK_LOST_COPY, ...config.linkLostMessage };
+  const linkLostTimeoutSeconds = resolveLinkLostSeconds(config.linkLostTimeoutSeconds);
   const onServerHello = config.onServerHello;
   const placeholderRows = config.placeholderRows ?? [];
 
   // The viewed device and the render state the panel rebuilds from. `viewedDevice` is the single source of the on-screen serialNumber; `highestToken` guards pushes
   // per device; `serverGeneration` is the last adapter generation the panel has adopted (null until the first hello), so an unseen one marks a fresh helper process;
   // `currentRowSet` is the template set the panel renders (the placeholder skeleton until a snapshot replaces it); `statusText` and `panelMessage` are the Status-cell
-  // text and the classified message line. The node references hold the live grid, the Status value span, and one value span per state row.
+  // text and the classified message line; `linkLost` is the browser-detected link-lost marker, the one render-state flag the watchdog trip sets and every real render
+  // clears. The node references hold the live grid, the Status value span, and one value span per state row.
   let viewedDevice = null;
   const highestToken = new Map();
   let serverGeneration = null;
   let currentRowSet = placeholderRows;
   let statusText = null;
   let panelMessage = null;
+  let linkLost = false;
   let panelEl = null;
   let statusValueEl = null;
   const rowValueEls = new Map();
@@ -204,6 +233,11 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
   // One clear-back timer per row id. A row's latch is independent of every other row's, so each holds its own timer here; arming a row clears only that row's own
   // pending timer.
   const latchTimers = new Map();
+
+  // The single pending link-lost watchdog timer, or null when disarmed. One timer serves every in-flight request because the host relay is one socket with one liveness
+  // truth: a single answered probe proves the socket for all. Distinct from `linkLost` throughout - this is the timer reference the arm/cancel logic touches, `linkLost`
+  // is the render state the trip sets.
+  let pendingWatchdog = null;
 
   // Clear one row's pending latch timer, if any.
   const clearLatch = (rowId) => {
@@ -276,9 +310,9 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
   /* Build the panel: ONE bordered grid whose cells wrap into two rows - the identity cells with the live "Status" cell closing the top row, then one cell per state
    * row - inside a single box. The `.fo-status-grid` theme variant owns the wrap, the row gap, and the per-cell flex; the row break is a full-width zero-height
-   * spacer at the semantic boundary. A classified message, when present, renders as a full-width wrapping line inside the same box. Values come from the caller's
-   * harvest map so a rebuild preserves live cell state; statusText, currentRowSet, and panelMessage are read from mount state. statusValueEl and rowValueEls are
-   * rebuilt here, so a value-cell reference never outlives its own panel.
+   * spacer at the semantic boundary. A classified message, when present, renders as a full-width wrapping line inside the same box, and in the link-lost state that line
+   * also carries the reload action. Values come from the caller's harvest map so a rebuild preserves live cell state; statusText, currentRowSet, linkLost, and
+   * panelMessage are read from mount state. statusValueEl and rowValueEls are rebuilt here, so a value-cell reference never outlives its own panel.
    */
   const buildPanel = (device, values = new Map()) => {
 
@@ -331,6 +365,28 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
       messageSpan.textContent = panelMessage;
 
       messageLine.append(messageSpan);
+
+      // In the link-lost state - and ONLY then, gated on the marker rather than the message text so a copy override can never collide with it - the message line carries
+      // the reload action: an anchor whose `{ signal }`-scoped click reloads the top frame, turning the honest state into one-tap recovery. Same-origin holds because
+      // the host serves this iframe from its own origin (the CSP's frame-ancestors merely reflects that embedding relationship), so the top frame is reachable; the
+      // action is user-initiated only.
+      if(linkLost) {
+
+        const reloadAction = document.createElement("a");
+
+        reloadAction.className = "fo-status-reload";
+        reloadAction.href = "#";
+        reloadAction.textContent = "Reload";
+
+        reloadAction.addEventListener("click", (clickEvent) => {
+
+          clickEvent.preventDefault();
+          window.top.location.reload();
+        }, { signal });
+
+        messageLine.append(reloadAction);
+      }
+
       grid.append(messageLine);
     }
 
@@ -375,29 +431,113 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     panelEl = rebuilt;
   };
 
-  // Fire the view request and swallow any transport rejection: results ride push events, not this response.
+  // Cancel the pending watchdog and null its handle - the one liveness action. Any settled watched request (either way) and any delivered status push call this: the
+  // relay answered, so the shared deadline is moot, and the next watched request arms a fresh one. A no-op when nothing is pending.
+  const cancelWatchdog = () => {
+
+    if(pendingWatchdog !== null) {
+
+      clearTimeout(pendingWatchdog);
+      pendingWatchdog = null;
+    }
+  };
+
+  // The watchdog fired: the deadline elapsed with no settlement and no push, so the host relay is unresponsive. Null the pending handle FIRST - mirroring the latch fire
+  // callback's first-statement self-delete - so detection re-arms for the next watched request rather than staying dead after this one fire. Then set the link-lost
+  // marker and render the honest state through the same idiom an error render uses: the link-lost label in the Status cell, the link-lost instruction on the message
+  // line, rebuilt from the live row values. When no panel is mounted, setStatus's null-guarded write and refreshPanel's mount guard leave the trip inert until a device
+  // is viewed.
+  const tripLinkLost = () => {
+
+    pendingWatchdog = null;
+    linkLost = true;
+
+    setStatus(linkLostCopy.label);
+
+    panelMessage = linkLostCopy.message;
+
+    refreshPanel(harvestRowValues());
+  };
+
+  // Clear the link-lost marker as a real render's first act. When the marker WAS set, the arriving render proves the relay is live again, so the lingering link-lost
+  // instruction on the message line is now dishonest: nulling the message and rebuilding drops it even for the kinds ("connecting", "availability", "row") that do not
+  // otherwise touch the message line. When the marker was already clear this is a no-op, so every per-kind render can call it unconditionally.
+  const clearLinkLost = () => {
+
+    if(!linkLost) {
+
+      return;
+    }
+
+    linkLost = false;
+    panelMessage = null;
+
+    refreshPanel(harvestRowValues());
+  };
+
+  /**
+   * Watch one bridge request for the liveness of the host relay - the single chokepoint every watched promise passes, whether the panel's own view request or a request
+   * the plugin feeds through the handle. Its first act reads `signal.aborted` DIRECTLY (never a mirrored local flag, which would reopen the window between abort and
+   * this check) and returns before attaching anything, so a stale handle's feed after teardown leaves no chain on a dead closure. The input is normalized through
+   * `Promise.resolve()` so a non-promise or a thenable feed still tracks as a settled or pending promise - boundary hardening for the plugin-facing half. One watchdog
+   * timer serves every in-flight request, because the relay is one socket with one liveness truth: a single answered probe proves the socket for all, so the timer arms
+   * only when none is pending and the next watched request re-arms once a settlement cancels it. The settlement hook is two-armed - a resolution AND a rejection both
+   * report liveness and are both consumed here, so a rejecting probe counts as a live relay and never surfaces as an unhandled rejection.
+   *
+   * @param {Promise<unknown> | unknown} request - The request promise to observe, or any value, normalized to a settled promise.
+   * @returns {void} Nothing; the watch runs on its own timer and settlement hook, and no caller awaits it.
+   */
+  const watchRequest = (request) => {
+
+    if(signal.aborted) {
+
+      return;
+    }
+
+    const promise = Promise.resolve(request);
+
+    if(pendingWatchdog === null) {
+
+      pendingWatchdog = setTimeout(tripLinkLost, linkLostTimeoutSeconds * 1000);
+    }
+
+    // Two-armed settlement hook: a resolution and a rejection both report liveness and are both consumed here, so a rejecting probe never surfaces as an unhandled
+    // rejection. A one-armed `.then` or a `.finally` would leave the rejection unconsumed.
+    promise.then(cancelWatchdog, cancelWatchdog);
+  };
+
+  // Fire the view request as its own liveness probe. The RAW promise feeds the watchdog on one chain, while the console diagnostic rides a SEPARATE chain off the same
+  // promise: the watch must observe the raw promise so a rejection reaches its two-armed hook as a rejection - composing the watch after the .catch would convert every
+  // rejection into a resolution and blind the rejection-is-liveness path. Results ride push events, not this response.
   const requestView = (serialNumber) => {
+
+    const request = homebridge.request(STATUS_VIEW_ROUTE, { serialNumber });
+
+    watchRequest(request);
 
     // console is the browser panel's diagnostic transport; a transport failure here is a diagnostic, since feed progress and errors return over push events.
     // eslint-disable-next-line no-console
-    homebridge.request(STATUS_VIEW_ROUTE, { serialNumber }).catch((error) => console.error("The status view request failed.", error));
+    request.catch((error) => console.error("The status view request failed.", error));
   };
 
-  /* Render for the currently-selected device. No device (global or controller scope) clears everything - render state, every latch timer, the tracked device - and
-   * empties the root. The same serialNumber rebuilds in place from harvested live values WITHOUT touching pending latch timers, so a same-device re-render (a
-   * devices:loaded / model:loaded re-fire) does not reset a running latch. A genuinely new serialNumber clears every latch, resets to the placeholder skeleton, mounts
-   * the panel, and fires the view request; the feed answers over push events.
+  /* Render for the currently-selected device. No device (global or controller scope) clears everything - render state, every latch timer, the pending watchdog, the
+   * tracked device - and empties the root. The same serialNumber rebuilds in place from harvested live values WITHOUT touching pending latch timers or the watchdog, so
+   * a same-device re-render (a devices:loaded / model:loaded re-fire) does not reset a running latch or a deadline mid-flight. A genuinely new serialNumber clears every
+   * latch, cancels any pending watchdog so the fresh view never inherits a stale remaining deadline, resets to the placeholder skeleton, mounts the panel, and fires the
+   * view request - which re-arms detection on a full fresh deadline; the feed answers over push events.
    */
   const showDetails = (device) => {
 
     if(!device) {
 
       clearAllLatches();
+      cancelWatchdog();
 
       viewedDevice = null;
       currentRowSet = placeholderRows;
       statusText = null;
       panelMessage = null;
+      linkLost = false;
       panelEl = null;
       statusValueEl = null;
 
@@ -416,11 +556,13 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     }
 
     clearAllLatches();
+    cancelWatchdog();
 
     viewedDevice = device;
     currentRowSet = placeholderRows;
     statusText = "Connecting...";
     panelMessage = null;
+    linkLost = false;
 
     panelEl = buildPanel(device);
 
@@ -440,9 +582,14 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
    * devices advance the guard but drive no DOM. It renders by kind: "connecting" sets the Status text; "snapshot" installs the authoritative row set (a row absent from
    * it disappears), sets the connected label with the encrypted lock variant, clears the message, rebuilds, and arms the latch for any installed row whose value equals
    * its latch value; "row" updates one value in place and drives that row's latch; "availability" flips the Status cell; "error" sets the short Status label and the
-   * full-sentence message and rebuilds with harvested values.
+   * full-sentence message and rebuilds with harvested values. Every real render also clears the link-lost marker as its first act, so a live push retires the honest
+   * link-lost state.
    */
   const handleStatusEvent = (event) => {
+
+    // A delivered status push of the panel's own type proves the host relay is live, whatever the payload's shape, so it cancels any pending watchdog as the handler's
+    // first act - before the payload guard, so even a payload-less push counts as liveness.
+    cancelWatchdog();
 
     const payload = event.data;
 
@@ -497,12 +644,14 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
       case "connecting":
 
+        clearLinkLost();
         setStatus("Connecting...");
 
         return;
 
       case "snapshot": {
 
+        clearLinkLost();
         setStatus(connectedLabel(payload.encrypted));
 
         currentRowSet = payload.rows.map((row) => ({ id: row.id, label: row.label, latch: row.latch, sizer: row.sizer }));
@@ -520,6 +669,8 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
       case "row": {
 
+        clearLinkLost();
+
         const valueEl = rowValueEls.get(payload.row.id);
 
         if(valueEl) {
@@ -534,11 +685,14 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
       case "availability":
 
+        clearLinkLost();
         setStatus(payload.online ? connectedLabel(payload.encrypted) : "Disconnected");
 
         return;
 
       case "error": {
+
+        clearLinkLost();
 
         const copy = resolveErrorCopy(payload.reason, errorMessages);
 
@@ -579,14 +733,26 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
   // signal tears it down.
   homebridge.addEventListener(STATUS_EVENT, handleStatusEvent, { signal });
 
-  // Clear every pending latch timer on teardown. This is the only explicit teardown the mount registers - every other listener is `{ signal }`-scoped.
-  signal.addEventListener("abort", clearAllLatches, { once: true });
+  // Clear every pending latch timer and the pending watchdog on teardown. This is the only explicit teardown the mount registers - every other listener is
+  // `{ signal }`-scoped. A settlement hook arriving after abort finds no pending watchdog and touches nothing; a watchRequest call on an already-aborted mount returns
+  // before arming.
+  signal.addEventListener("abort", () => {
+
+    clearAllLatches();
+    cancelWatchdog();
+  }, { once: true });
 
   return {
 
     // Clear the per-serialNumber stale-push guard. A plugin whose own choreography re-elicits pushes after a server-side restart or re-warm calls this so the fresh
     // server's lower tokens are not dropped against stale floors. Safe at any time: tokens are monotonic within a server lifetime, and the adapter-side
     // session-identity guard is the real stale-push protection.
-    resetStaleGuards: clearStaleGuards
+    resetStaleGuards: clearStaleGuards,
+
+    // Watch a bridge request the plugin fires on its own elicitation paths - a forced re-warm, a resume-path re-elicit. Feeding the raw promise here trips the same
+    // link-lost state within one deadline when the request goes unanswered, so a dead bridge surfaces honestly no matter which side fired the probe, while a settlement
+    // or any delivered push cancels detection. A call on a torn-down mount reads its already-aborted signal at call time and returns before arming - the same
+    // stale-handle safety resetStaleGuards' dead-closure clear provides, harmless by construction.
+    watchRequest
   };
 };

@@ -72,6 +72,11 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  *   may replace a label, a message, or both.
  * @property {Function} [statusPanel.identity] - Maps a device to its identity fields (`{ label, mono?, value }[]`). Defaults to firmware / serial number / model /
  *   manufacturer; a `mono` field renders its value in the monospace token.
+ * @property {Object} [statusPanel.linkLostMessage] - Override copy for the browser-detected link-lost state (`{ label?, message? }`), merged field-by-field over the
+ *   component default so a plugin may replace the label, the message, or both. One state, one object - not a reason-keyed table like errorMessages. A plugin overriding
+ *   the label owns its width consequence: the Status sizer reserves the default label.
+ * @property {number} [statusPanel.linkLostTimeoutSeconds] - Deadline in seconds before a watched bridge request with no liveness evidence reads as a lost link. A
+ *   missing, zero, negative, or non-finite value falls back to the component default of 10 seconds.
  * @property {Function} [statusPanel.onServerHello] - Invoked when a fresh adapter process introduces itself (its hello generation differs from the last seen), after
  *   the panel clears its stale-push floors. The plugin re-elicits its feed here; the callback fires once per fresh generation, must be cheap, and must tolerate firing
  *   before any device is viewed or concurrently with the plugin's own elicitation.
@@ -123,9 +128,10 @@ export class webUiFeatureOptions {
   /**
    * The live status-panel handle from the most recent show() cycle, or null before the first show() and whenever no statusPanel is configured. Reassigned to a fresh
    * handle on every show() cycle and deliberately NOT nulled on cleanup() (the store / session precedent): callers re-read `featureOptions.statusPanel` at each use
-   * rather than capturing it, and a stale handle's `resetStaleGuards` clears a dead closure's map, harmless by construction.
+   * rather than capturing it, and a stale handle stays harmless by construction - its `resetStaleGuards` clears a dead closure's map, and its `watchRequest` reads the
+   * dead mount's already-aborted signal at call time and returns before arming any timer.
    *
-   * @type {{ resetStaleGuards: () => void } | null}
+   * @type {{ resetStaleGuards: () => void, watchRequest: (request: (Promise<unknown> | unknown)) => void } | null}
    */
   statusPanel = null;
 

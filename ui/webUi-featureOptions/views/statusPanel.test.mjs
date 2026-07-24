@@ -14,6 +14,7 @@ import { initialState, reducer } from "../state.mjs";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { mountStatusPanelView } from "./statusPanel.mjs";
 
 // The permissive catalog every test mounts against - loading the store to "ready" so the panel's loading guard passes.
@@ -30,6 +31,11 @@ const DEVICE_B = { firmwareRevision: "2.0.0", manufacturer: "Beta", model: "Mode
 
 // The encrypted "Connected" label: the U+1F512 lock plus U+FE0E text-presentation selector, then " Connected".
 const LOCKED_CONNECTED = "\u{1F512}\u{FE0E} Connected";
+
+// The component's default link-lost copy and default deadline, mirrored here so a test can assert the exact rendered strings and tick the real clock past the deadline.
+const LINK_LOST_LABEL = "Link lost";
+const LINK_LOST_MESSAGE = "The connection to the Homebridge UI was lost. Reload the page to reconnect.";
+const LINK_LOST_DEADLINE_MS = 10000;
 
 // Placeholder row templates whose sizers differ from their live values, so a harvest assertion can tell a harvested value apart from a harvested phantom. The motion
 // row carries a momentary-value latch.
@@ -81,6 +87,55 @@ const fakeWithViewCapture = () => {
   return { fake, viewRequests };
 };
 
+// A fake bridge whose view-route request returns a caller-controlled deferred promise instead of resolving immediately, so a test can hold the panel's view request open
+// past the watchdog deadline (a never-settling deferred) or settle it on demand to prove a settlement cancels detection. Each captured deferred exposes its own resolve /
+// reject; the never-settling form is simply a deferred left unsettled. The existing fakeWithViewCapture resolves immediately and would cancel every watchdog before it
+// could trip.
+const fakeWithDeferredView = () => {
+
+  const deferreds = [];
+  const fake = createFakeHomebridge();
+
+  fake.request = (path, body) => {
+
+    if(path !== STATUS_VIEW_ROUTE) {
+
+      return Promise.resolve(null);
+    }
+
+    let reject;
+    let resolve;
+    const promise = new Promise((res, rej) => {
+
+      reject = rej;
+      resolve = res;
+    });
+
+    deferreds.push({ body, promise, reject, resolve });
+
+    return promise;
+  };
+
+  return { deferreds, fake };
+};
+
+// A promise that never settles, holding a watched request open so the watchdog can reach its deadline.
+const hangingPromise = () => new Promise(() => {});
+
+// A hand-rolled deferred for a request fed through the handle: the promise plus its own resolve / reject, so a test can settle it after arming the watchdog.
+const deferred = () => {
+
+  let reject;
+  let resolve;
+  const promise = new Promise((res, rej) => {
+
+    reject = rej;
+    resolve = res;
+  });
+
+  return { promise, reject, resolve };
+};
+
 // Mount the panel into a fresh root appended to the document body. The caller owns the DOM and homebridge disposables.
 const mountPanel = (config, store) => {
 
@@ -106,8 +161,10 @@ const phantomsFor = (root, label) => {
 };
 const labelsIn = (root) => [...root.querySelectorAll(".stat-item .stat-label")].map((el) => el.textContent);
 const messageText = (root) => root.querySelector(".fo-status-message .stat-value")?.textContent ?? null;
+const reloadAnchorIn = (root) => root.querySelector(".fo-status-message a");
 
 // Payload builders for each status event kind.
+const connectingEvent = (serialNumber, session) => ({ kind: "connecting", serialNumber, session });
 const snapshotEvent = (serialNumber, session, rows, encrypted = false) => ({ encrypted, kind: "snapshot", online: true, rows, serialNumber, session });
 const rowEvent = (serialNumber, session, id, value) => ({ kind: "row", row: { id, value }, serialNumber, session });
 const availabilityEvent = (serialNumber, session, online, encrypted = false) => ({ encrypted, kind: "availability", online, serialNumber, session });
@@ -474,7 +531,7 @@ describe("statusPanel - the stale-push guard", () => {
 
 describe("statusPanel - phantom reservations", () => {
 
-  test("P10: phantom spans render per sizer candidate, hidden from paint and the accessibility tree, in the value's own class; Status reserves both candidates", () => {
+  test("P10: phantom spans render per sizer candidate, hidden from paint and the accessibility tree, in the value's own class; Status reserves every candidate", () => {
 
     using _dom = createTestDom();
 
@@ -501,8 +558,9 @@ describe("statusPanel - phantom reservations", () => {
       assert.equal(phantom.getAttribute("aria-hidden"), "true", "the phantom is out of the accessibility tree");
     }
 
-    // The component-owned Status cell reserves both of its candidates.
-    assert.deepEqual(phantomsFor(root, "Status").map((el) => el.textContent), [ "Disconnected", LOCKED_CONNECTED ], "the Status cell reserves both candidates");
+    // The component-owned Status cell reserves every one of its candidates - Disconnected, the encrypted Connected label, and the link-lost label.
+    assert.deepEqual(phantomsFor(root, "Status").map((el) => el.textContent), [ "Disconnected", LOCKED_CONNECTED, "Link lost" ],
+      "the Status cell reserves every candidate");
   });
 });
 
@@ -1007,5 +1065,472 @@ describe("statusPanel - the server-hello recovery", () => {
     // The floor still cleared even without a callback: a subsequent token-1 push renders.
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "Fresh"));
     assert.equal(valueFor(root, "Door"), "Fresh", "the floor still cleared even without a callback");
+  });
+});
+
+describe("statusPanel - the link-lost watchdog", () => {
+
+  test("P16: a view request that never settles trips the link-lost state after the deadline, rendering the default copy", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { deferreds, fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    assert.equal(deferreds.length, 1, "the view request fired and is held open");
+
+    // Just short of the deadline, the panel is still Connecting..., with no link-lost message.
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS - 1);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "before the deadline the panel is still Connecting...");
+    assert.equal(messageText(root), null, "before the deadline there is no link-lost message");
+
+    // Past the deadline the watchdog trips and renders the honest link-lost state with the default copy.
+    t.mock.timers.tick(2);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the Status cell shows the link-lost label");
+    assert.equal(messageText(root), LINK_LOST_MESSAGE, "the message line shows the default link-lost instruction");
+  });
+
+  test("P17: a label-only link-lost override applies its label and keeps the default message", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ linkLostMessage: { label: "No link" }, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+
+    assert.equal(valueFor(root, "Status"), "No link", "the label override applies to the Status cell");
+    assert.equal(messageText(root), LINK_LOST_MESSAGE, "the untouched message keeps the default");
+  });
+
+  test("P18: a view request that resolves before the deadline never trips", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { deferreds, fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // Resolving the view request before the deadline is liveness: it cancels the watchdog.
+    deferreds[0].resolve(null);
+    await flushImmediate();
+
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    await flushImmediate();
+
+    assert.equal(valueFor(root, "Status"), "Connecting...", "a resolved request left the panel Connecting... with no trip");
+    assert.equal(messageText(root), null, "no link-lost message rendered");
+  });
+
+  test("P19: a view request that rejects before the deadline is liveness - no trip, and no unhandled rejection", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    // requestView logs a rejected view request through console.error; suppress it so the deliberate rejection here does not pollute the suite output.
+    t.mock.method(console, "error", () => {});
+
+    using _dom = createTestDom();
+
+    const { deferreds, fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // Rejecting the view request before the deadline: the two-armed hook counts the rejection as liveness AND consumes it, so no trip and no unhandled rejection.
+    deferreds[0].reject(new Error("dropped"));
+    await flushImmediate();
+
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    await flushImmediate();
+
+    assert.equal(valueFor(root, "Status"), "Connecting...", "a rejected request cancelled detection - no trip");
+    assert.equal(messageText(root), null, "no link-lost message rendered");
+  });
+
+  test("P20: a delivered status push is liveness - a full push and a payload-less push each cancel the pending watchdog", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // A full status push proves the relay live: the handler cancels the pending watchdog as its first act, so the deadline never trips.
+    fake.observed.emitPush(STATUS_EVENT, availabilityEvent("AA", 1, true, false));
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    assert.equal(valueFor(root, "Status"), "Connected", "the availability push cancelled the watchdog and set the connected label");
+    assert.equal(messageText(root), null, "no link-lost message rendered");
+
+    // Re-arm through the handle, then deliver a PAYLOAD-LESS push: the first-statement cancel runs before the payload guard, so even an empty event cancels the watchdog.
+    handle.watchRequest(hangingPromise());
+    fake.observed.emitPush(STATUS_EVENT, null);
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    assert.equal(valueFor(root, "Status"), "Connected", "the payload-less push cancelled the re-armed watchdog - no trip");
+    assert.equal(messageText(root), null, "still no link-lost message");
+  });
+
+  test("P21: a hanging promise fed through the handle trips the mounted panel on the configured deadline", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 4, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // View a device whose view request RESOLVES immediately (a healthy mount): its settlement cancels the initial watchdog.
+    selectDevice(store, "AA");
+    await flushImmediate();
+
+    // Feed a hanging promise through the handle - the plugin's forced-re-warm path - which arms a fresh watchdog on the configured four-second deadline.
+    handle.watchRequest(hangingPromise());
+
+    // Just short of the configured deadline, no trip yet, proving the configured value governs rather than the default.
+    t.mock.timers.tick(4000 - 1);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "before the configured deadline the panel has not tripped");
+
+    t.mock.timers.tick(2);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the handle-fed hanging request tripped the link-lost state on the mounted panel");
+    assert.equal(messageText(root), LINK_LOST_MESSAGE, "the link-lost message rendered on the mounted panel");
+  });
+
+  test("P22: a snapshot after a trip restores the connected state, and a latch armed before the trip still fires on its own schedule", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // Arm the motion latch (five seconds) via a row push, which also cancels the initial watchdog since a push is liveness.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "motion", "Detected"));
+    assert.equal(valueFor(root, "Motion"), "Detected", "the row push armed the motion latch");
+
+    // Re-arm the watchdog through the handle (two seconds), then trip it before the latch's five-second deadline.
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the watchdog tripped the link-lost state");
+    assert.equal(valueFor(root, "Motion"), "Detected", "the motion value carried through the trip's rebuild");
+    assert.ok(reloadAnchorIn(root), "the reload action renders in the link-lost state");
+
+    // The latch armed BEFORE the trip still fires at its own five-second deadline - the trip touched no latch.
+    t.mock.timers.tick(3000);
+    assert.equal(valueFor(root, "Motion"), "-", "the pre-trip latch cleared the motion value on its own schedule");
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the latch firing did not disturb the link-lost Status");
+
+    // A snapshot push recovers: it clears the link-lost marker and message, restores the connected label, and rebuilds the rows.
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 2, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }]));
+    assert.equal(valueFor(root, "Status"), "Connected", "the snapshot restored the connected label");
+    assert.equal(messageText(root), null, "the snapshot cleared the link-lost message");
+    assert.equal(reloadAnchorIn(root), null, "the reload action is gone after recovery");
+    assert.equal(valueFor(root, "Door"), "Open", "the snapshot rebuilt the rows");
+  });
+
+  test("P23: detection survives its own trip - after a trip on device A, switching to device B re-arms and B trips on its own deadline", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "device A tripped the link-lost state");
+
+    // Switching to device B cancels A's fired watchdog, resets to Connecting..., and B's own hanging view request re-arms a fresh full deadline.
+    selectDevice(store, "BB");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the new selection reset the panel off link-lost");
+    assert.equal(messageText(root), null, "the new selection cleared the link-lost message");
+
+    // B's view request also hangs, so the re-armed watchdog trips a SECOND time - proving detection did not die after A's fire.
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "device B tripped - a second trip after the first, so detection re-armed");
+    assert.ok(reloadAnchorIn(root), "the second trip renders the reload action");
+  });
+
+  test("P24: a view change resets the deadline per view - the switch branch and the no-device branch both cancel a pending watchdog", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Arm on A, then switch to B just before A's deadline: A's watchdog is cancelled and must not trip the fresh B view.
+    selectDevice(store, "AA");
+    t.mock.timers.tick(1999);
+    selectDevice(store, "BB");
+    t.mock.timers.tick(2);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "A's cancelled deadline did not trip the fresh B view");
+
+    // B trips on B's OWN full deadline, not A's remaining time.
+    t.mock.timers.tick(2000);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "B tripped on its own clock");
+
+    // The no-device branch: arm a fresh view, clear the selection to no device, and confirm the cancelled watchdog leaves no trip behind.
+    selectDevice(store, "AA");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "re-selecting A re-armed a fresh view");
+    selectGlobal(store);
+    assert.equal(root.textContent, "", "the no-device selection cleared the panel");
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    assert.equal(root.textContent, "", "no trip rendered after the no-device clear - the watchdog was cancelled");
+  });
+
+  test("P25: the one watchdog serves every in-flight request - settling one probe cancels detection, and the next probe re-arms", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Heal the initial view request so the mount starts with no pending watchdog.
+    selectDevice(store, "AA");
+    await flushImmediate();
+
+    // Two hanging probes under the one watchdog: the second shares the first's timer rather than arming a second.
+    const probe1 = deferred();
+
+    handle.watchRequest(probe1.promise);
+    handle.watchRequest(hangingPromise());
+
+    // Settling probe1 is liveness: it cancels the shared watchdog even though the second probe still hangs.
+    probe1.resolve(null);
+    await flushImmediate();
+
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "settling one probe cancelled the shared watchdog - no trip");
+
+    // Feeding a fresh probe re-arms detection, which now trips on its own full deadline.
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the next request re-armed the watchdog and it tripped");
+  });
+
+  test("P26: after a trip, every non-snapshot render clears the marker and its lingering message, and an error render carries no reload action", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Trip the watchdog fresh on the mounted panel: feed a hanging probe, then tick past the two-second deadline.
+    const tripFresh = () => {
+
+      handle.watchRequest(hangingPromise());
+      t.mock.timers.tick(2001);
+    };
+
+    selectDevice(store, "AA");
+
+    // A "connecting" push clears the marker and its lingering message and returns the Status to Connecting...
+    tripFresh();
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "precondition: the panel tripped to link-lost");
+    fake.observed.emitPush(STATUS_EVENT, connectingEvent("AA", 1));
+    assert.equal(valueFor(root, "Status"), "Connecting...", "a connecting push cleared the link-lost Status");
+    assert.equal(messageText(root), null, "a connecting push cleared the lingering link-lost message");
+    assert.equal(reloadAnchorIn(root), null, "no reload action after the connecting push");
+
+    // An "availability" push clears the marker and message and sets its own connected label.
+    tripFresh();
+    fake.observed.emitPush(STATUS_EVENT, availabilityEvent("AA", 2, true, false));
+    assert.equal(valueFor(root, "Status"), "Connected", "an availability push set the connected label");
+    assert.equal(messageText(root), null, "an availability push cleared the lingering link-lost message");
+    assert.equal(reloadAnchorIn(root), null, "no reload action after the availability push");
+
+    // A "row" push - the least-touching handler - still clears the marker and the message; the Status is corrected by a later status-bearing push.
+    tripFresh();
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 3, "door", "Open"));
+    assert.equal(messageText(root), null, "a row push cleared the lingering link-lost message");
+    assert.equal(reloadAnchorIn(root), null, "no reload action after the row push");
+    assert.equal(valueFor(root, "Door"), "Open", "the row push applied its own value");
+
+    // An "error" push renders the error copy but carries NO reload action - the marker gates the anchor, not the message string.
+    tripFresh();
+    fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 4, "unreachable"));
+    assert.equal(valueFor(root, "Status"), "Unreachable", "the error push set the error label");
+    assert.equal(messageText(root), "This device could not be reached.", "the error push set the error message");
+    assert.equal(reloadAnchorIn(root), null, "the error render carries no reload action");
+  });
+
+  test("P27: teardown cancels the pending watchdog, and a post-abort settlement or a stale-handle feed is inert", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { deferreds, fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { controller, handle, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    assert.equal(deferreds.length, 1, "precondition: a view request is pending with the watchdog armed");
+
+    // Aborting runs the combined teardown hook, which cancels the pending watchdog, so the deadline never trips.
+    controller.abort();
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "no trip rendered after abort - the watchdog was cancelled");
+
+    // Settling the watched promise post-abort is inert: cancelWatchdog finds nothing pending and nothing throws or rejects.
+    deferreds[0].resolve(null);
+    await flushImmediate();
+
+    // A watchRequest on the aborted mount reads its signal at call time and returns before arming, so a later tick trips nothing.
+    assert.doesNotThrow(() => handle.watchRequest(hangingPromise()), "a stale-handle feed on an aborted mount does not throw");
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the stale-handle feed armed no timer");
+  });
+
+  test("P28: a trip with no device viewed is inert, and viewing a device afterward renders Connecting... not link-lost", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // No device is viewed; feed a hanging promise through the handle and let it trip. The trip records its state but renders nothing, so the root stays empty.
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+    assert.equal(root.textContent, "", "the trip is inert with no panel mounted");
+
+    // Viewing a device now resets and re-arms honestly: it renders Connecting..., not the stale link-lost state.
+    selectDevice(store, "AA");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the fresh view rendered Connecting..., not link-lost");
+    assert.equal(messageText(root), null, "no link-lost message carried into the fresh view");
+  });
+
+  test("P29: the reload action renders inside the message line in the link-lost state, clicks without throwing, and is absent from an error render", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    t.mock.timers.tick(2001);
+
+    const anchor = reloadAnchorIn(root);
+
+    assert.ok(anchor, "the reload action renders in the link-lost state");
+    assert.equal(anchor.textContent, "Reload", "the reload action carries its label");
+
+    // Clicking the reload action does not throw. The reload targets the top frame, a seat-read concern: happy-dom's standalone window has window.top === window, so
+    // top-versus-self is not structurally distinguishable in the harness - stated honestly rather than dressed up in a weak assertion.
+    assert.doesNotThrow(() => anchor.click(), "clicking the reload action does not throw");
+
+    // An error render after the trip carries NO reload action: the marker gates the anchor, not the message string.
+    fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 1, "unreachable"));
+    assert.equal(valueFor(root, "Status"), "Unreachable", "the error push rendered the error copy");
+    assert.equal(reloadAnchorIn(root), null, "the error render omits the reload action");
+  });
+
+  test("P30: a zero or negative link-lost timeout falls back to the default deadline, not an instant trip", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    // A zero timeout falls back to the default: it must NOT trip instantly, and must trip on the default clock.
+    const zeroStore = readyStore([DEVICE_A]);
+    const { root: zeroRoot } = mountPanel({ linkLostTimeoutSeconds: 0, placeholderRows: PLACEHOLDER_ROWS }, zeroStore);
+
+    selectDevice(zeroStore, "AA");
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS - 1);
+    assert.equal(valueFor(zeroRoot, "Status"), "Connecting...", "a zero timeout did not trip instantly - it fell back to the default");
+
+    t.mock.timers.tick(2);
+    assert.equal(valueFor(zeroRoot, "Status"), LINK_LOST_LABEL, "a zero timeout tripped on the default deadline");
+
+    // A negative timeout takes the same fallback branch.
+    const negStore = readyStore([DEVICE_A]);
+    const { root: negRoot } = mountPanel({ linkLostTimeoutSeconds: -5, placeholderRows: PLACEHOLDER_ROWS }, negStore);
+
+    selectDevice(negStore, "AA");
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+    assert.equal(valueFor(negRoot, "Status"), LINK_LOST_LABEL, "a negative timeout also fell back to the default and tripped");
   });
 });

@@ -8,8 +8,8 @@
 "use strict";
 
 import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "../../webui-status.js";
+import { afterEach, describe, test } from "node:test";
 import { createFakeHomebridge, createTestDom, installHomebridge } from "../../ui.helpers.mjs";
-import { describe, test } from "node:test";
 import { initialState, reducer } from "../state.mjs";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
@@ -38,6 +38,11 @@ const LINK_LOST_LABEL = "Link lost";
 const LINK_LOST_MESSAGE = "The connection to the Homebridge UI was lost.";
 const LINK_LOST_RELOAD_TEXT = "Reload page to reconnect";
 const LINK_LOST_DEADLINE_MS = 10000;
+
+// The resume detector's check cadence and gap threshold in milliseconds, mirrored from statusPanel.mjs's RESUME_CHECK_INTERVAL_SECONDS and RESUME_GAP_THRESHOLD_SECONDS
+// so a resume test can advance the mock clock in cadence-sized steps and jump it clear past the threshold.
+const RESUME_CHECK_INTERVAL_MS = 15000;
+const RESUME_GAP_THRESHOLD_MS = 90000;
 
 // Placeholder row templates whose sizers differ from their live values, so a harvest assertion can tell a harvested value apart from a harvested phantom. The motion
 // row carries a momentary-value latch.
@@ -138,7 +143,14 @@ const deferred = () => {
   return { promise, reject, resolve };
 };
 
-// Mount the panel into a fresh root appended to the document body. The caller owns the DOM and homebridge disposables.
+// Every AbortController mountPanel mints is recorded here so a single afterEach can abort and drain them all at test exit. The panel's resume-probe detector arms a
+// REAL Node interval - the harness deliberately installs no timer mock (see ui.helpers.mjs), so a mounted detector's setInterval is a live ref'd timer - and an
+// unreclaimed interval keeps the node:test process alive indefinitely. Recording every mint here and draining in one hook reclaims all of them without a teardown edit
+// at each mount call site.
+const mountControllers = [];
+
+// Mount the panel into a fresh root appended to the document body. The caller owns the DOM and homebridge disposables. The minted controller is recorded in
+// `mountControllers` so the suite-wide afterEach reclaims this mount's detector interval even when the test itself never aborts.
 const mountPanel = (config, store) => {
 
   const root = document.createElement("div");
@@ -146,10 +158,26 @@ const mountPanel = (config, store) => {
   document.body.appendChild(root);
 
   const controller = new AbortController();
+
+  mountControllers.push(controller);
+
   const handle = mountStatusPanelView({ config, root, signal: controller.signal, store });
 
   return { controller, handle, root };
 };
+
+// Reclaim every mount after each test: abort and drain the controllers mountPanel recorded, so no mounted detector's interval outlives the test that created it. A
+// controller a test already aborted drains here too - a second abort is a no-op - so the explicit-abort tests need no special handling. The suite completing promptly
+// is itself the proof: a single leaked ref'd interval would keep the process alive indefinitely.
+afterEach(() => {
+
+  for(const controller of mountControllers) {
+
+    controller.abort();
+  }
+
+  mountControllers.length = 0;
+});
 
 // DOM readers keyed by a cell's label so tests never address cells by child position.
 const itemFor = (root, label) => [...root.querySelectorAll(".stat-item")].find((el) => el.querySelector(".stat-label")?.textContent === label) ?? null;
@@ -175,6 +203,11 @@ const errorEvent = (serialNumber, session, reason) => ({ kind: "error", reason, 
 
 // The server-scoped hello payload: no serialNumber, no session - just the adapter process's generation.
 const helloEvent = (generation) => ({ generation, kind: "hello" });
+
+// Enable the mock timers a resume test needs: setTimeout and setInterval for the watchdog and the detector, and Date so setTime can simulate a wall-clock jump. Enabling
+// the Date mock resets the clock to zero, and the detector reads the clock at mount, so this MUST run before mountPanel - an enable-after-mount test would hold a
+// real-epoch last-tick against a zeroed clock, read every gap as negative, and silently kill the probe.
+const enableResumeTimers = (t) => t.mock.timers.enable({ apis: [ "Date", "setInterval", "setTimeout" ] });
 
 describe("statusPanel - selection and the view request", () => {
 
@@ -569,11 +602,11 @@ describe("statusPanel - phantom reservations", () => {
 
 describe("statusPanel - lifecycle", () => {
 
-  test("P12: a post-abort push produces no render, and a pre-aborted mount registers and renders nothing", () => {
+  test("P12/r8: a post-abort push produces no render; a pre-aborted mount arms no detector interval and renders nothing", () => {
 
     using _dom = createTestDom();
 
-    const { fake } = fakeWithViewCapture();
+    const { fake, viewRequests } = fakeWithViewCapture();
 
     using _hb = installHomebridge(fake);
 
@@ -588,7 +621,13 @@ describe("statusPanel - lifecycle", () => {
     fake.observed.emitPush(STATUS_EVENT, availabilityEvent("AA", 2, false, false));
     assert.equal(valueFor(root, "Status"), "Connected", "a push after abort produces no render");
 
-    // A pre-aborted mount short-circuits the effect and registers no push listener, so a selection and a push both render nothing.
+    const requestsBeforePreAborted = viewRequests.length;
+
+    // A pre-aborted mount short-circuits the effect and registers no push listener, so a selection and a push both render nothing. This suite installs no timer mock, so
+    // the detector's setInterval is a REAL Node timer here - and the arm's `if(!signal.aborted)` guard is what keeps a pre-aborted mount from arming one. That guard is
+    // pinned at runtime: this mount's controller is never handed to mountPanel, so the suite-wide afterEach cannot reclaim it, and a leaked real interval would keep the
+    // node:test process alive - the suite's prompt exit is the proof the guard held. A missing guard would also skip on this null-device tick, so counting a probe cannot
+    // catch it; the leak is what does.
     const preAborted = new AbortController();
 
     preAborted.abort();
@@ -600,6 +639,7 @@ describe("statusPanel - lifecycle", () => {
     selectDevice(store, "AA");
     fake.observed.emitPush(STATUS_EVENT, availabilityEvent("AA", 3, true, false));
     assert.equal(preRoot.textContent, "", "a pre-aborted mount renders nothing");
+    assert.equal(viewRequests.length, requestsBeforePreAborted, "a pre-aborted mount fires no view request - its effect never ran");
   });
 
   test("the loading guard skips the immediate-run pass, so mounting before model:loaded renders nothing", () => {
@@ -1542,5 +1582,217 @@ describe("statusPanel - the link-lost watchdog", () => {
     selectDevice(negStore, "AA");
     t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
     assert.equal(valueFor(negRoot, "Status"), LINK_LOST_LABEL, "a negative timeout also fell back to the default and tripped");
+  });
+});
+
+describe("statusPanel - the page-resume detector", () => {
+
+  test("P31/r1: a page resume fires exactly one view request for the viewed device", async (t) => {
+
+    enableResumeTimers(t);
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+
+    mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // View the device: its healthy view request resolves, cancelling the initial watchdog, and the detector arms on the zeroed mock clock.
+    selectDevice(store, "AA");
+    await flushImmediate();
+    assert.deepEqual(viewRequests, [{ serialNumber: "AA" }], "the selection fired the one initial view request");
+
+    // Several normal-cadence ticks: the detector fires each time but every gap equals the cadence, under the threshold, so no probe.
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+    assert.equal(viewRequests.length, 1, "normal cadence fired no probe");
+
+    // Simulate a suspension: jump the wall clock far past the threshold WITHOUT running timers, then tick to drain the interval's backlog. The first drained fire sees
+    // the full jumped gap and probes; every trailing fire sees a zero gap because the unconditional last-tick store absorbs the drain - so a resume yields exactly one
+    // new view request, never one per drained fire.
+    t.mock.timers.setTime(Date.now() + (6 * RESUME_GAP_THRESHOLD_MS));
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+
+    assert.deepEqual(viewRequests, [ { serialNumber: "AA" }, { serialNumber: "AA" } ], "the resume fired exactly one new view request for the viewed device");
+  });
+
+  test("P32/r2: normal cadence never probes - the view-request count does not grow across many intervals", async (t) => {
+
+    enableResumeTimers(t);
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+
+    mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    await flushImmediate();
+    assert.equal(viewRequests.length, 1, "only the initial view request fired");
+
+    // Advance many normal-cadence intervals with no wall-clock jump: every gap equals the cadence, under the threshold, so the detector never probes.
+    for(let i = 0; i < 20; i++) {
+
+      t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+    }
+
+    assert.equal(viewRequests.length, 1, "twenty normal intervals fired no probe");
+  });
+
+  test("P33/r3: throttled hidden-tab ticks stay under the threshold, then a suspension probes once", async (t) => {
+
+    enableResumeTimers(t);
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+
+    mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    await flushImmediate();
+    assert.equal(viewRequests.length, 1, "only the initial view request fired");
+
+    // A throttled hidden desktop tab fires its background ticks at roughly one-minute spacing, comfortably under the resume threshold. Model each throttled tick
+    // as a wall-clock jump one cadence forward drained by a minimal tick, so the detector's fire sees a ~sixty-second gap every time - larger than the normal cadence yet
+    // well short of a real suspension. The detector reads no visibility state, so this case is told apart from a suspension by gap magnitude alone: a throttle-range gap
+    // never probes.
+    const throttledCadenceMs = 60000;
+
+    for(let i = 0; i < 5; i++) {
+
+      t.mock.timers.setTime(Date.now() + throttledCadenceMs);
+      t.mock.timers.tick(1);
+    }
+
+    assert.equal(viewRequests.length, 1, "throttled hidden-tab ticks fired no probe - each gap stayed under the threshold");
+
+    // Then a genuine OS suspension: one multi-minute jump. Its drained fire sees a gap far past the threshold, so exactly one probe fires for the viewed device.
+    t.mock.timers.setTime(Date.now() + (6 * RESUME_GAP_THRESHOLD_MS));
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+
+    assert.deepEqual(viewRequests, [ { serialNumber: "AA" }, { serialNumber: "AA" } ], "the multi-minute suspension fired exactly one probe for the viewed device");
+  });
+
+  test("P34/r4: an aborted mount's detector is cleared - a later jump and tick neither probes nor throws", async (t) => {
+
+    enableResumeTimers(t);
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { controller } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    await flushImmediate();
+
+    // Abort the mount: the combined teardown hook clears the detector interval. A jump and tick afterward find no live interval, so nothing probes and a tick reading a
+    // torn-down document does not throw.
+    controller.abort();
+
+    t.mock.timers.setTime(Date.now() + (6 * RESUME_GAP_THRESHOLD_MS));
+    assert.doesNotThrow(() => t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS), "a tick after teardown does not throw");
+    assert.equal(viewRequests.length, 1, "the cleared detector fired no probe after abort");
+  });
+
+  test("P35/r5: a resume probe fires even when the link-lost marker is already set", (t) => {
+
+    enableResumeTimers(t);
+
+    using _dom = createTestDom();
+
+    const { deferreds, fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // View a device whose view request hangs, then trip the link-lost state on its two-second deadline. Two seconds is under the fifteen-second cadence, so the detector
+    // has not yet fired and its last-tick clock is still the mount time.
+    selectDevice(store, "AA");
+    assert.equal(deferreds.length, 1, "the initial view request is held open");
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the panel tripped to link-lost");
+
+    // Jump past the threshold and drain one cadence: the probe fires a new view request for the viewed device even though the marker is set. Counting view requests, not
+    // callback fires, keeps the backlog drain (many fires, one probe) from confusing the assertion.
+    t.mock.timers.setTime(Date.now() + (6 * RESUME_GAP_THRESHOLD_MS));
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+
+    assert.equal(deferreds.length, 2, "the resume fired one new view request even with the marker set");
+    assert.equal(deferreds[1].body.serialNumber, "AA", "the probe targeted the viewed device");
+  });
+
+  test("P36/r6: with no device viewed, a jump and tick fires no probe", (t) => {
+
+    enableResumeTimers(t);
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+
+    mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // No device is ever selected, so viewedDevice stays null. The detector's viewed-device check comes first, so a big-gap tick reads no device and skips before the
+    // serialNumber dereference could run.
+    t.mock.timers.setTime(Date.now() + (6 * RESUME_GAP_THRESHOLD_MS));
+    assert.doesNotThrow(() => t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS), "a no-device tick does not throw");
+    assert.equal(viewRequests.length, 0, "no probe fired without a viewed device");
+  });
+
+  test("P37/r7: after a trip, a hanging resume probe re-arms the watchdog and trips again on the fresh deadline", (t) => {
+
+    enableResumeTimers(t);
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ linkLostTimeoutSeconds: 30, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Trip once on the hanging initial request. A thirty-second deadline sits above the fifteen-second cadence, so the single drain tick that fires the resume probe
+    // cannot also reach the fresh deadline the probe arms - the probe and the follow-on trip land in separate advances (the tick-sizing note).
+    selectDevice(store, "AA");
+    t.mock.timers.tick(30001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the initial hanging request tripped the link-lost state");
+
+    // A connecting push clears the marker so the follow-on trip is observable as a fresh flip; the prior watchdog is already spent, so its cancel here is a no-op.
+    fake.observed.emitPush(STATUS_EVENT, connectingEvent("AA", 1));
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the connecting push cleared the first trip's link-lost state");
+
+    // A page resume: jump past the threshold and drain one cadence. The first drained fire probes with a hanging request and re-arms the watchdog; the drain reach stays
+    // short of the thirty-second fresh deadline, so no trip yet.
+    t.mock.timers.setTime(Date.now() + (6 * RESUME_GAP_THRESHOLD_MS));
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the resume probe fired but its fresh deadline has not elapsed");
+
+    // The fresh deadline elapses in a separate advance: the re-armed watchdog trips again, proving the detector composes with the shipped re-arm machinery.
+    t.mock.timers.tick(30001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the re-armed watchdog tripped again on the resume probe's fresh deadline");
   });
 });

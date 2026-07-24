@@ -103,10 +103,15 @@ const resolveErrorCopy = (reason, overrides) => {
 };
 
 // The default copy for the browser-detected link-lost state: the host bridge stopped answering the panel's requests and pushing its events, so the panel renders this
-// honest state in place of a silent, permanent "Connecting...". Host-neutral and mechanism-neutral in the error copy's voice - it names the lost connection and the one
-// recovery the iframe can offer, a page reload, without naming the socket relay or the helper process beneath it. A plugin merges a { label?, message? } override over
-// this field-by-field through the same shape resolveErrorCopy uses; the state is one state, not a reason-keyed vocabulary, so the override is a single object.
-const DEFAULT_LINK_LOST_COPY = { label: "Link lost", message: "The connection to the Homebridge UI was lost. Reload the page to reconnect." };
+// honest state in place of a silent, permanent "Connecting...". Host-neutral and mechanism-neutral in the error copy's voice - it names the lost connection without
+// naming the socket relay or the helper process beneath it, and leaves the one recovery the iframe can offer to the reload action rendered beside it. A plugin merges a
+// { label?, message? } override over this field-by-field through the same shape resolveErrorCopy uses; the state is one state, not a reason-keyed vocabulary, so the
+// override is a single object.
+const DEFAULT_LINK_LOST_COPY = { label: "Link lost", message: "The connection to the Homebridge UI was lost." };
+
+// The link-lost reload action's text. The whole sentence is itself the tappable element rather than a small trailing anchor, so the recovery reads as one prominent line
+// beneath the message. It is a plain constant, not part of the override table, because the action is fixed browser behavior a plugin does not re-word.
+const LINK_LOST_RELOAD_TEXT = "Reload page to reconnect";
 
 // The default deadline, in seconds, before a watched request that has produced no liveness reads as a lost link. It sits well above a healthy bridge's millisecond-scale
 // round trip, so a live relay never trips, and low enough that a dead one surfaces promptly. A plugin overrides it through the config's Seconds-suffixed field; a
@@ -310,9 +315,10 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
   /* Build the panel: ONE bordered grid whose cells wrap into two rows - the identity cells with the live "Status" cell closing the top row, then one cell per state
    * row - inside a single box. The `.fo-status-grid` theme variant owns the wrap, the row gap, and the per-cell flex; the row break is a full-width zero-height
-   * spacer at the semantic boundary. A classified message, when present, renders as a full-width wrapping line inside the same box, and in the link-lost state that line
-   * also carries the reload action. Values come from the caller's harvest map so a rebuild preserves live cell state; statusText, currentRowSet, linkLost, and
-   * panelMessage are read from mount state. statusValueEl and rowValueEls are rebuilt here, so a value-cell reference never outlives its own panel.
+   * spacer at the semantic boundary. A classified message, when present, renders as a full-width wrapping line inside the same box; in the link-lost state that message
+   * line takes a prominence modifier and a second full-width line below it carries the reload action. Values come from the caller's harvest map so a rebuild preserves
+   * live cell state; statusText, currentRowSet, linkLost, and panelMessage are read from mount state. statusValueEl and rowValueEls are rebuilt here, so a value-cell
+   * reference never outlives its own panel.
    */
   const buildPanel = (device, values = new Map()) => {
 
@@ -357,7 +363,9 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
       const messageLine = document.createElement("div");
 
-      messageLine.className = "fo-status-message";
+      // In the link-lost state the message line takes a prominence modifier - centered and colored by the theme - so the lost-connection state reads at a glance; an
+      // error message renders the base line unchanged. Gating on the marker rather than the message text keeps a copy override from ever colliding with the treatment.
+      messageLine.className = linkLost ? "fo-status-message fo-status-linklost" : "fo-status-message";
 
       const messageSpan = document.createElement("span");
 
@@ -365,18 +373,22 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
       messageSpan.textContent = panelMessage;
 
       messageLine.append(messageSpan);
+      grid.append(messageLine);
 
-      // In the link-lost state - and ONLY then, gated on the marker rather than the message text so a copy override can never collide with it - the message line carries
-      // the reload action: an anchor whose `{ signal }`-scoped click reloads the top frame, turning the honest state into one-tap recovery. Same-origin holds because
-      // the host serves this iframe from its own origin (the CSP's frame-ancestors merely reflects that embedding relationship), so the top frame is reachable; the
-      // action is user-initiated only.
+      // In the link-lost state - and ONLY then, gated on the marker rather than the message text so a copy override can never collide with it - a second full-width line
+      // renders below the message: its whole sentence is the tappable reload action, an anchor whose `{ signal }`-scoped click reloads the top frame and turns the honest
+      // state into one-tap recovery. Same-origin holds because the host serves this iframe from its own origin (the CSP's frame-ancestors merely reflects that embedding
+      // relationship), so the top frame is reachable; the action is user-initiated only. The error-message path renders no action line.
       if(linkLost) {
+
+        const reloadLine = document.createElement("div");
+
+        reloadLine.className = "fo-status-reload";
 
         const reloadAction = document.createElement("a");
 
-        reloadAction.className = "fo-status-reload";
         reloadAction.href = "#";
-        reloadAction.textContent = "Reload";
+        reloadAction.textContent = LINK_LOST_RELOAD_TEXT;
 
         reloadAction.addEventListener("click", (clickEvent) => {
 
@@ -384,10 +396,9 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
           window.top.location.reload();
         }, { signal });
 
-        messageLine.append(reloadAction);
+        reloadLine.append(reloadAction);
+        grid.append(reloadLine);
       }
-
-      grid.append(messageLine);
     }
 
     return grid;
@@ -444,9 +455,9 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
   // The watchdog fired: the deadline elapsed with no settlement and no push, so the host relay is unresponsive. Null the pending handle FIRST - mirroring the latch fire
   // callback's first-statement self-delete - so detection re-arms for the next watched request rather than staying dead after this one fire. Then set the link-lost
-  // marker and render the honest state through the same idiom an error render uses: the link-lost label in the Status cell, the link-lost instruction on the message
-  // line, rebuilt from the live row values. When no panel is mounted, setStatus's null-guarded write and refreshPanel's mount guard leave the trip inert until a device
-  // is viewed.
+  // marker and render the honest state through the same idiom an error render uses: the link-lost label in the Status cell and the link-lost message with its reload
+  // action below it, rebuilt from the live row values. When no panel is mounted, setStatus's null-guarded write and refreshPanel's mount guard leave the trip inert until
+  // a device is viewed.
   const tripLinkLost = () => {
 
     pendingWatchdog = null;
@@ -460,7 +471,7 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
   };
 
   // Clear the link-lost marker as a real render's first act. When the marker WAS set, the arriving render proves the relay is live again, so the lingering link-lost
-  // instruction on the message line is now dishonest: nulling the message and rebuilding drops it even for the kinds ("connecting", "availability", "row") that do not
+  // message and its reload action are now dishonest: nulling the message and rebuilding drops them even for the kinds ("connecting", "availability", "row") that do not
   // otherwise touch the message line. When the marker was already clear this is a no-op, so every per-kind render can call it unconditionally.
   const clearLinkLost = () => {
 

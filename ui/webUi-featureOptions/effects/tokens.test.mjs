@@ -37,6 +37,7 @@ describe("registerTokensEffect", () => {
     assert.match(text, /--fo-space-sm:\s*0\.5rem/);
     assert.match(text, /--fo-accent-bg:\s*AccentColor/);
     assert.match(text, /--fo-font-monospace:/);
+    assert.match(text, /--fo-text-attention:\s*var\(--bs-danger,/);
   });
 
   test("aborting the signal releases the stylesheet from the document", () => {
@@ -79,5 +80,6 @@ describe("registerTokensEffect", () => {
 
     assert.match(text, /:root\.fo-dark/);
     assert.match(text, /--fo-surface-bg:\s*#242424/);
+    assert.match(text, /--fo-text-attention:\s*var\(--bs-danger-text-emphasis,/);
   });
 });

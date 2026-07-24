@@ -97,6 +97,9 @@ const buildTokenCss = () => [
   "  --fo-border-subtle: rgba(0, 0, 0, 0.1);",
 
   // Text.
+  // The attention color for a state that must read as a warning - the link-lost message and its reload action. References Bootstrap's danger color so it tracks the host
+  // palette, with the standard danger red as the literal fallback when Bootstrap has not loaded.
+  "  --fo-text-attention: var(--bs-danger, #dc3545);",
   "  --fo-text-muted: var(--bs-gray-600, #6c757d);",
   "  --fo-text-on-elevated: var(--bs-body-color, #212529);",
 
@@ -129,6 +132,9 @@ const buildTokenCss = () => [
   "  --fo-elevated-bg: #1A1A1A;",
   "  --fo-border-strong: #444;",
   "  --fo-border-subtle: rgba(255, 255, 255, 0.1);",
+  // A lighter red than the light danger color: Bootstrap's dark danger-emphasis tone reads clearly on the dark surface where the saturated danger red sits heavy, so the
+  // attention color is genuinely mode-dependent like the surface tokens. Falls back to that same lighter red when Bootstrap has not loaded.
+  "  --fo-text-attention: var(--bs-danger-text-emphasis, #ea868f);",
   "  --fo-text-muted: #999;",
   "  --fo-text-on-elevated: #F8F9FA;",
   "  --fo-form-control-bg: #1A1A1A;",

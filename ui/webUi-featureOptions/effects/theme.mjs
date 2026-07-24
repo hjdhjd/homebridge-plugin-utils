@@ -345,6 +345,15 @@ const buildThemeCss = () => [
   ".fo-status-message { flex-basis: 100%; }",
   ".fo-status-message .stat-value { white-space: normal; }",
 
+  // Link-lost prominence. The message line's modifier centers it and colors its value span with the attention token, so the lost-connection state reads at a glance and
+  // stands apart from the neutral error message that shares the base line above. The reload action is its own full-width centered line below the message, its anchor
+  // colored to match so the whole sentence reads as one prominent tap target. The base `.fo-status-message` rules still supply the message line's width and wrapping;
+  // the modifier adds only the centering and color.
+  ".fo-status-message.fo-status-linklost { text-align: center; }",
+  ".fo-status-message.fo-status-linklost .stat-value { color: var(--fo-text-attention); }",
+  ".fo-status-reload { flex-basis: 100%; text-align: center; }",
+  ".fo-status-reload a { color: var(--fo-text-attention); }",
+
   // Responsive hiding for device stats grid. `@container` (not `@media`) so the breakpoints fire on the panel's actual width, not the viewport. Progressive
   // degradation: as the container narrows, the last stat hides first, then the second-to-last, etc., so the most-important left-most stat (Firmware) stays visible
   // longest. Each rule qualifies the grid with `:not(.fo-status-grid)` so the status panel is exempt: the status grid reserves every column at its maximum width and

@@ -5,6 +5,7 @@
 "use strict";
 
 import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "../../webui-status.js";
+import { buildRecoveryButton } from "../utils.mjs";
 import { defaultIdentityFields } from "./deviceInfo.mjs";
 import { effect } from "../store.mjs";
 import { selectedDevice } from "../selectors.mjs";
@@ -109,9 +110,9 @@ const resolveErrorCopy = (reason, overrides) => {
 // override is a single object.
 const DEFAULT_LINK_LOST_COPY = { label: "Link lost", message: "The connection to the Homebridge UI was lost." };
 
-// The link-lost reload action's text. The whole sentence is itself the tappable element rather than a small trailing anchor, so the recovery reads as one prominent line
-// beneath the message. It is a plain constant, not part of the override table, because the action is fixed browser behavior a plugin does not re-word.
-const LINK_LOST_RELOAD_TEXT = "Reload page to reconnect";
+// The link-lost reload action's label, carried by the shared recovery button on its own full-width line beneath the message. The refresh glyph rides the builder, so this
+// constant is the bare label without it. It is a plain constant, not part of the override table, because the action is fixed browser behavior a plugin does not re-word.
+const LINK_LOST_RELOAD_TEXT = "Refresh Homebridge UI";
 
 // The default deadline, in seconds, before a watched request that has produced no liveness reads as a lost link. It sits well above a healthy bridge's millisecond-scale
 // round trip, so a live relay never trips, and low enough that a dead one surfaces promptly. A plugin overrides it through the config's Seconds-suffixed field; a
@@ -398,27 +399,21 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
       grid.append(messageLine);
 
       // In the link-lost state - and ONLY then, gated on the marker rather than the message text so a copy override can never collide with it - a second full-width line
-      // renders below the message: its whole sentence is the tappable reload action, an anchor whose `{ signal }`-scoped click reloads the top frame and turns the honest
-      // state into one-tap recovery. Same-origin holds because the host serves this iframe from its own origin (the CSP's frame-ancestors merely reflects that embedding
-      // relationship), so the top frame is reachable; the action is user-initiated only. The error-message path renders no action line.
+      // renders below the message: the shared recovery button, whose `{ signal }`-scoped click reloads the top frame and turns the honest state into one-tap recovery.
+      // Same-origin holds because the host serves this iframe from its own origin (the CSP's frame-ancestors merely reflects that embedding relationship), so the top
+      // frame is reachable; the action is user-initiated only. A type-button element navigates nowhere, so the click has no default to prevent. The error-message path
+      // renders no action line.
       if(linkLost) {
 
         const reloadLine = document.createElement("div");
 
         reloadLine.className = "fo-status-reload";
 
-        const reloadAction = document.createElement("a");
+        const reloadButton = buildRecoveryButton(LINK_LOST_RELOAD_TEXT);
 
-        reloadAction.href = "#";
-        reloadAction.textContent = LINK_LOST_RELOAD_TEXT;
+        reloadButton.addEventListener("click", () => window.top.location.reload(), { signal });
 
-        reloadAction.addEventListener("click", (clickEvent) => {
-
-          clickEvent.preventDefault();
-          window.top.location.reload();
-        }, { signal });
-
-        reloadLine.append(reloadAction);
+        reloadLine.append(reloadButton);
         grid.append(reloadLine);
       }
     }

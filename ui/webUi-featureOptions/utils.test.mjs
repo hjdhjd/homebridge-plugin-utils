@@ -8,6 +8,7 @@
 import {
 
   applyCategoryStates,
+  buildRecoveryButton,
   captureCategoryStates,
   createElement,
   delay,
@@ -137,6 +138,28 @@ describe("createElement - attribute vs. property routing", () => {
     assert.equal(el.getAttribute("role"), "button", "role property reflects through to the attribute so CSS [role=\"button\"] selectors match");
     assert.equal(el.name, "Global Options", "name property is accessible via property-read (nav identity uses this path)");
     assert.equal(el.children[0]?.tagName, "STRONG", "innerHTML must parse into child elements");
+  });
+});
+
+describe("buildRecoveryButton - the shared family recovery button", () => {
+
+  test("builds a type-button element wearing exactly the family recovery classes", () => {
+
+    using _dom = createTestDom();
+
+    const button = buildRecoveryButton("Retry");
+
+    assert.equal(button.tagName, "BUTTON");
+    assert.equal(button.getAttribute("type"), "button", "the recovery button is a type-button so it navigates nowhere");
+    assert.deepEqual([...button.classList], [ "btn", "btn-warning", "btn-sm" ], "the button wears exactly the family recovery classes, no more");
+  });
+
+  test("prepends the refresh glyph to the supplied label so consumers pass a glyph-free label", () => {
+
+    using _dom = createTestDom();
+
+    // The glyph is U+21BB CLOCKWISE OPEN CIRCLE ARROW, prepended by the builder so a consumer's label - and its own text constant - carries no glyph of its own.
+    assert.equal(buildRecoveryButton("Refresh Homebridge UI").textContent, "↻ Refresh Homebridge UI");
   });
 });
 

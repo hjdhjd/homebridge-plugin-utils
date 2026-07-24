@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { createElement, delay } from "../utils.mjs";
+import { buildRecoveryButton, createElement, delay } from "../utils.mjs";
 import { effect } from "../store.mjs";
 
 /**
@@ -95,17 +95,15 @@ const renderError = ({ guidance, headline, message, onRetry, retryDelayMs, retry
     createElement("br"),
     guidance,
     createElement("br"),
-    createElement("code", { classList: ["text-danger"] }, [message]),
+    createElement("code", { classList: ["fo-failure-text"] }, [message]),
     createElement("br")
   ]);
 
-  const retryButton = createElement("button", {
+  // The shared builder owns what a recovery button is - the glyph, the warning variant, the small size - so this site adds only what it owns: its own vertical spacing
+  // and the initial disabled state that the retry window clears when it arms.
+  const retryButton = buildRecoveryButton("Retry");
 
-    classList: [ "btn", "btn-warning", "btn-sm", "mt-3" ],
-    textContent: "↻ Retry",
-    type: "button"
-  });
-
+  retryButton.classList.add("mt-3");
   retryButton.disabled = true;
 
   const barWrap = createElement("div", {

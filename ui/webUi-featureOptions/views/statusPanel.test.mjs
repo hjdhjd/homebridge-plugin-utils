@@ -32,11 +32,11 @@ const DEVICE_B = { firmwareRevision: "2.0.0", manufacturer: "Beta", model: "Mode
 // The encrypted "Connected" label: the U+1F512 lock plus U+FE0E text-presentation selector, then " Connected".
 const LOCKED_CONNECTED = "\u{1F512}\u{FE0E} Connected";
 
-// The component's default link-lost copy, reload-action text, and default deadline, mirrored here so a test can assert the exact rendered strings and tick the real clock
-// past the deadline.
+// The component's default link-lost copy, reload-action label, and default deadline, mirrored here so a test can assert the exact rendered strings and tick the real
+// clock past the deadline. The reload button renders this label with the shared "↻ " glyph prepended, so a text assertion composes the two.
 const LINK_LOST_LABEL = "Link lost";
 const LINK_LOST_MESSAGE = "The connection to the Homebridge UI was lost.";
-const LINK_LOST_RELOAD_TEXT = "Reload page to reconnect";
+const LINK_LOST_RELOAD_TEXT = "Refresh Homebridge UI";
 const LINK_LOST_DEADLINE_MS = 10000;
 
 // The resume detector's check cadence and gap threshold in milliseconds, mirrored from statusPanel.mjs's RESUME_CHECK_INTERVAL_SECONDS and RESUME_GAP_THRESHOLD_SECONDS
@@ -192,7 +192,7 @@ const phantomsFor = (root, label) => {
 const labelsIn = (root) => [...root.querySelectorAll(".stat-item .stat-label")].map((el) => el.textContent);
 const messageText = (root) => root.querySelector(".fo-status-message .stat-value")?.textContent ?? null;
 const reloadLineIn = (root) => root.querySelector(".fo-status-reload");
-const reloadAnchorIn = (root) => root.querySelector(".fo-status-reload a");
+const reloadAnchorIn = (root) => root.querySelector(".fo-status-reload button");
 
 // Payload builders for each status event kind.
 const connectingEvent = (serialNumber, session) => ({ kind: "connecting", serialNumber, session });
@@ -1516,7 +1516,7 @@ describe("statusPanel - the link-lost watchdog", () => {
     assert.equal(messageText(root), null, "no link-lost message carried into the fresh view");
   });
 
-  test("P29: the reload action is its own full-width line whose whole sentence is the anchor, clicks without throwing, and is absent from an error render", (t) => {
+  test("P29: the reload action is its own full-width line rendering the family recovery button, clicks without throwing, and is absent from an error render", (t) => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
@@ -1533,21 +1533,23 @@ describe("statusPanel - the link-lost watchdog", () => {
     t.mock.timers.tick(2001);
 
     const reloadLine = reloadLineIn(root);
-    const anchor = reloadAnchorIn(root);
+    const button = reloadAnchorIn(root);
 
     assert.ok(reloadLine, "the reload action renders as its own line in the link-lost state");
-    assert.ok(anchor, "the reload action's anchor renders");
-    assert.equal(anchor.textContent, LINK_LOST_RELOAD_TEXT, "the whole sentence is the anchor text");
+    assert.ok(button, "the reload action's button renders");
+    assert.equal(button.tagName, "BUTTON", "the reload action renders as the family recovery button element");
+    assert.deepEqual([...button.classList], [ "btn", "btn-warning", "btn-sm" ], "the button wears the shared recovery classes");
+    assert.equal(button.textContent, "↻ " + LINK_LOST_RELOAD_TEXT, "the button carries the glyph-prefixed recovery label");
 
-    // The action line is its own full-width line below the message, not an anchor trailing inside the message line.
-    assert.equal(anchor.parentElement, reloadLine, "the anchor is the reload line's own element");
-    assert.equal(root.querySelector(".fo-status-message a"), null, "the reload anchor is not inside the message line");
+    // The action line is its own full-width line below the message, not a control trailing inside the message line.
+    assert.equal(button.parentElement, reloadLine, "the button is the reload line's own element");
+    assert.equal(root.querySelector(".fo-status-message button"), null, "the reload button is not inside the message line");
 
     // Clicking the reload action does not throw. The reload targets the top frame, a seat-read concern: happy-dom's standalone window has window.top === window, so
     // top-versus-self is not structurally distinguishable in the harness - stated honestly rather than dressed up in a weak assertion.
-    assert.doesNotThrow(() => anchor.click(), "clicking the reload action does not throw");
+    assert.doesNotThrow(() => button.click(), "clicking the reload action does not throw");
 
-    // An error render after the trip carries NO reload action line: the marker gates the anchor, not the message string.
+    // An error render after the trip carries NO reload action line: the marker gates the button, not the message string.
     fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 1, "unreachable"));
     assert.equal(valueFor(root, "Status"), "Unreachable", "the error push rendered the error copy");
     assert.equal(reloadAnchorIn(root), null, "the error render omits the reload action");

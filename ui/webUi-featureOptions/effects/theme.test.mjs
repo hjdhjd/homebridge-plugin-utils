@@ -186,19 +186,28 @@ describe("buildThemeCss - status panel variant rules", () => {
     assert.match(text, /\.fo-status-message\s+\.stat-value\s*\{[^}]*white-space:\s*normal/);
   });
 
-  test("the link-lost message centers and colors, and the reload action is its own full-width centered line", async () => {
+  test("the link-lost message centers and renders semibold in the attention token, and the reload action is its own full-width centered line", async () => {
 
     using _dom = createTestDom();
 
     const text = await themeCss();
 
-    // The message-line modifier centers the line and colors its value span with the attention token; the reload action is a full-width centered line whose anchor
-    // carries the same attention color.
+    // The message-line modifier centers the line and renders its value span semibold in the attention token; the reload action is a full-width centered line, and the
+    // recovery button on it wears its own Bootstrap styling rather than a theme color rule.
     assert.match(text, /\.fo-status-message\.fo-status-linklost\s*\{[^}]*text-align:\s*center/);
     assert.match(text, /\.fo-status-message\.fo-status-linklost\s+\.stat-value\s*\{[^}]*color:\s*var\(--fo-text-attention\)/);
+    assert.match(text, /\.fo-status-message\.fo-status-linklost\s+\.stat-value\s*\{[^}]*font-weight:\s*600/);
     assert.match(text, /\.fo-status-reload\s*\{[^}]*flex-basis:\s*100%/);
     assert.match(text, /\.fo-status-reload\s*\{[^}]*text-align:\s*center/);
-    assert.match(text, /\.fo-status-reload\s+a\s*\{[^}]*color:\s*var\(--fo-text-attention\)/);
+  });
+
+  test("the connection-error failure text takes the shared attention token", async () => {
+
+    using _dom = createTestDom();
+
+    // The failure-text class colors the connection-error view's `code` element from the attention token rather than Bootstrap's text-danger, so failure emphasis has
+    // one source.
+    assert.match(await themeCss(), /\.fo-failure-text\s*\{[^}]*color:\s*var\(--fo-text-attention\)/);
   });
 
   test("each responsive hide rule exempts the status grid on the grid token", async () => {

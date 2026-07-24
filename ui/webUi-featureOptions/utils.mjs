@@ -103,6 +103,23 @@ export function createElement(tag, props = {}, children = []) {
 }
 
 /**
+ * Build a recovery button in the webUI's shared family idiom: a small warning-variant Bootstrap button whose label is prefixed with the refresh glyph (U+21BB, the
+ * clockwise open circle arrow) and a space. Both the connection-error view's retry action and the status panel's link-lost reload action construct their button here, so
+ * what a recovery button looks like - the glyph, the variant, and the size - is defined in exactly one place. The consumer owns where the button sits (its layout
+ * spacing) and what it does (its click wiring and its disabled state); this builder owns only what the button is.
+ *
+ * Where Bootstrap has not applied, the button degrades to an unstyled but fully functional native button - the family's accepted posture, since the recovery action
+ * stays clickable regardless of whether the host stylesheet has painted it.
+ *
+ * @param {string} label - The button's action label. The refresh glyph is prepended here, so callers pass the bare label without it.
+ * @returns {HTMLButtonElement} A `<button type="button">` wearing the small warning-variant recovery classes and carrying the glyph-prefixed label.
+ */
+export function buildRecoveryButton(label) {
+
+  return createElement("button", { classList: [ "btn", "btn-warning", "btn-sm" ], textContent: "↻ " + label, type: "button" });
+}
+
+/**
  * Capture the current expansion state of every category in the supplied container as a plain `{ [categoryName]: isCollapsed }` map. Symmetric counterpart to
  * {@link applyCategoryStates}; both sit alongside {@link setCategoryExpanded} as the SSOT for category reads and writes, so the persistence layer can stay
  * DOM-agnostic.

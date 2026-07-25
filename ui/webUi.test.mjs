@@ -10,6 +10,7 @@
 
 import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installWebUiBoot } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
+import { STATUS_VIEW_ROUTE } from "./webui-status.js";
 import assert from "node:assert/strict";
 import { setImmediate as flushPending } from "node:timers/promises";
 import { webUi } from "./webUi.mjs";
@@ -890,5 +891,117 @@ describe("webUi.liveness - the public plugin surface", () => {
     using harness = makeWebUiHarness({ config: [] });
 
     assert.deepEqual(Object.keys(harness.ui.liveness), ["onResume"], "a second path to withDeadline would be a second source of truth for it");
+  });
+});
+
+describe("webUi - the resume detector threads end to end", () => {
+
+  // The detector's default cadence and gap threshold in milliseconds, mirrored so a test can jump the clock clear past the threshold.
+  const INTERVAL_MS = 15000;
+  const THRESHOLD_MS = 90000;
+
+  // Drain queued async work until the predicate answers, so each step waits on the state it needs rather than on a fixed number of cycles.
+  const drainUntil = async (predicate) => {
+
+    for(let i = 0; i < 400; i++) {
+
+      const found = predicate();
+
+      if(found) {
+
+        return found;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await flushPending();
+    }
+
+    return null;
+  };
+
+  test("a resume reaches the status panel's probe through all three hops: webUi, the feature-options orchestrator, and the mounted panel", async (t) => {
+
+    // Enable the clocks before constructing webUi: the detector seeds its last-tick clock when it arms, and arming against a real-epoch seed under a zeroed mock clock
+    // would read every gap as negative and silently kill the probe.
+    t.mock.timers.enable({ apis: [ "Date", "setInterval", "setTimeout" ] });
+
+    // A device in the accessory cache so the panel has something to view, and a status route whose requests are captured so a probe is countable.
+    const accessories = [{
+
+      displayName: "Device A",
+      services: [{
+
+        characteristics: [
+
+          { constructorName: "FirmwareRevision", value: "1.0.0" },
+          { constructorName: "Manufacturer", value: "Acme" },
+          { constructorName: "Model", value: "Model-A" },
+          { constructorName: "SerialNumber", value: "AA" }
+        ],
+        constructorName: "AccessoryInformation"
+      }]
+    }];
+
+    using harness = makeWebUiHarness({
+
+      accessories,
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+
+      // A statusPanel-configured page is what mounts the panel that subscribes; the detector reaches it only if every hop of the wiring is connected.
+      featureOptions: { statusPanel: { placeholderRows: [] } },
+      firstRun: { isRequired: () => false },
+      requestResponses: new Map([[ "/getOptions", {
+
+        categories: [{ description: "Motion Options", name: "Motion" }],
+        options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+      } ]]),
+      unstubbed: true
+    });
+
+    const viewRequests = [];
+
+    harness.fake.request = async (path, body) => {
+
+      if(path === "/getOptions") {
+
+        return {
+
+          categories: [{ description: "Motion Options", name: "Motion" }],
+          options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+        };
+      }
+
+      if(path === STATUS_VIEW_ROUTE) {
+
+        viewRequests.push(body);
+      }
+
+      return null;
+    };
+
+    await harness.ui.show();
+
+    // Drain until the sidebar has rendered the cached device, then select it the way a user does. The panel mounts against a viewed device, and device-only mode opens
+    // on global scope, so the click is what puts a device on screen for the probe to target.
+    const deviceLink = await drainUntil(() => document.getElementById("devicesContainer").querySelector(".nav-link[data-device-serial='AA']"));
+
+    assert.ok(deviceLink, "precondition: the sidebar rendered the cached device");
+
+    deviceLink.click();
+
+    assert.ok(await drainUntil(() => document.getElementById("deviceStatsContainer").querySelector(".stat-item")),
+      "precondition: the status panel mounted against the viewed device");
+
+    const probesBefore = viewRequests.length;
+
+    assert.ok(probesBefore > 0, "precondition: the selection fired the panel's own view request");
+
+    // Simulate an OS suspension: jump the wall clock far past the threshold WITHOUT running timers, then drain one cadence. The detector webUi constructed must notice
+    // it, walk its subscription, and land on the probe the panel registered - proving the whole chain is connected rather than merely present at each end.
+    t.mock.timers.setTime(Date.now() + (6 * THRESHOLD_MS));
+    t.mock.timers.tick(INTERVAL_MS);
+
+    assert.equal(viewRequests.length, probesBefore + 1, "the page-level resume reached the mounted panel's probe");
+    assert.equal(viewRequests.at(-1).serialNumber, "AA", "and the probe targeted the device on screen");
   });
 });

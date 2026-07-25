@@ -14,6 +14,7 @@ import { initialState, reducer } from "../state.mjs";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
+import { createResumeDetector } from "../../webUi-liveness.mjs";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { mountStatusPanelView } from "./statusPanel.mjs";
 
@@ -39,8 +40,9 @@ const LINK_LOST_MESSAGE = "The connection to the Homebridge UI was lost.";
 const LINK_LOST_RELOAD_TEXT = "Refresh Homebridge UI";
 const LINK_LOST_DEADLINE_MS = 10000;
 
-// The resume detector's check cadence and gap threshold in milliseconds, mirrored from statusPanel.mjs's RESUME_CHECK_INTERVAL_SECONDS and RESUME_GAP_THRESHOLD_SECONDS
-// so a resume test can advance the mock clock in cadence-sized steps and jump it clear past the threshold.
+// The resume detector's check cadence and gap threshold in milliseconds, mirrored from the defaults createResumeDetector applies in webUi-liveness.mjs, so a resume
+// test can advance the mock clock in cadence-sized steps and jump it clear past the threshold. The panel owns no cadence of its own - it subscribes to the page's
+// detector and supplies only the policy of when a probe is worth firing.
 const RESUME_CHECK_INTERVAL_MS = 15000;
 const RESUME_GAP_THRESHOLD_MS = 90000;
 
@@ -150,8 +152,10 @@ const deferred = () => {
 const mountControllers = [];
 
 // Mount the panel into a fresh root appended to the document body. The caller owns the DOM and homebridge disposables. The minted controller is recorded in
-// `mountControllers` so the suite-wide afterEach reclaims this mount's detector interval even when the test itself never aborts.
-const mountPanel = (config, store) => {
+// `mountControllers` so the suite-wide afterEach reclaims this mount's resume subscription - and with it the detector's sampling interval - even when the test itself
+// never aborts. A page-level detector is threaded by default so every test drives the production wiring; a test that needs the detector-less shape (a page that
+// supplied none, which every plain mountStatusPanelView caller is) passes `resumeDetector: null`.
+const mountPanel = (config, store, { resumeDetector = createResumeDetector() } = {}) => {
 
   const root = document.createElement("div");
 
@@ -161,7 +165,7 @@ const mountPanel = (config, store) => {
 
   mountControllers.push(controller);
 
-  const handle = mountStatusPanelView({ config, root, signal: controller.signal, store });
+  const handle = mountStatusPanelView({ config, resumeDetector: resumeDetector ?? undefined, root, signal: controller.signal, store });
 
   return { controller, handle, root };
 };
@@ -1796,5 +1800,288 @@ describe("statusPanel - the page-resume detector", () => {
     // The fresh deadline elapses in a separate advance: the re-armed watchdog trips again, proving the detector composes with the shipped re-arm machinery.
     t.mock.timers.tick(30001);
     assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the re-armed watchdog tripped again on the resume probe's fresh deadline");
+  });
+});
+
+describe("statusPanel - the shared liveness delegation", () => {
+
+  test("the resume probe is registered through the injected detector by reference, gated on a viewed device and scoped to the mount signal", () => {
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    // A stand-in for the page's detector that records exactly what the panel registered. This is the delegation's own boundary: the panel holds no cadence, no clock,
+    // and no interval of its own, so whatever arrives here IS the whole of its resume mechanism.
+    const registrations = [];
+    const spyDetector = { subscribe: (callback, options) => registrations.push({ callback, options }) };
+
+    const store = readyStore([DEVICE_A]);
+    const { controller } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store, { resumeDetector: spyDetector });
+
+    assert.equal(registrations.length, 1, "the panel registers exactly one resume subscriber");
+
+    const { callback, options } = registrations[0];
+
+    assert.equal(options.signal, controller.signal, "the subscription is scoped to the mount signal, so teardown ends it without the panel unsubscribing");
+    assert.equal(options.shouldProbe(), false, "with no device viewed the panel's gate is shut");
+
+    selectDevice(store, "AA");
+
+    const requestsAfterSelection = viewRequests.length;
+
+    assert.equal(options.shouldProbe(), true, "with a device viewed the gate opens");
+
+    // Firing the registered callback is what the page's detector does on a resume, so driving it directly proves the panel's end of the contract without a clock.
+    callback();
+
+    assert.equal(viewRequests.length, requestsAfterSelection + 1, "the registered callback fires the panel's own view request");
+    assert.equal(viewRequests.at(-1).serialNumber, "AA", "the probe targets the viewed device");
+  });
+
+  test("a page that supplies no detector registers nothing and still behaves normally between resumes", async (t) => {
+
+    t.mock.timers.enable({ apis: [ "Date", "setInterval", "setTimeout" ] });
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store, { resumeDetector: null });
+
+    // Heal the selection's own view request so the mount carries no pending deadline into the clock advance below.
+    selectDevice(store, "AA");
+    await flushImmediate();
+    assert.equal(viewRequests.length, 1, "the selection still fires its own view request");
+
+    // A resume-sized wall-clock jump reaches nothing: with no detector there is no subscription and no sampler to notice it.
+    t.mock.timers.setTime(Date.now() + (6 * RESUME_GAP_THRESHOLD_MS));
+    t.mock.timers.tick(RESUME_CHECK_INTERVAL_MS);
+
+    assert.equal(viewRequests.length, 1, "no resume probe fires without a detector");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "and the panel is otherwise entirely normal");
+  });
+
+  test("the delegated watchdog keeps the shared-timer schedule: a second watched request does NOT push the first's deadline out", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 10, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Heal the initial view request so the mount starts with no pending deadline.
+    selectDevice(store, "AA");
+
+    handle.watchRequest(hangingPromise());
+
+    // Advance most of the way to the first arm's deadline, THEN feed a second request. A hand-rolled implementation that re-armed on every feed would push the trip out
+    // to eight seconds from here; the shared timer must still fire on the FIRST arm's schedule, two seconds from here. This is the semantic that tells the delegation
+    // apart from a re-implementation that merely looks the same in the simple cases.
+    t.mock.timers.tick(8000);
+    handle.watchRequest(hangingPromise());
+
+    t.mock.timers.tick(1999);
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the shared deadline has not elapsed yet");
+
+    t.mock.timers.tick(2);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the trip landed on the FIRST arm's schedule - one shared timer, not one per request");
+  });
+
+  test("teardown retires the pending deadline through the primitive's own abort contract - the component registers no cancel of its own", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { deferreds, fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { controller, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    assert.equal(deferreds.length, 1, "precondition: a view request is pending with the deadline armed");
+
+    // The component's own teardown hook clears latch timers and nothing else, so if the watchdog were still component-owned this deadline would survive the abort and
+    // trip against a torn-down mount. It does not, because the primitive retires it on the same signal.
+    controller.abort();
+    t.mock.timers.tick(LINK_LOST_DEADLINE_MS + 1);
+
+    assert.equal(valueFor(root, "Status"), "Connecting...", "no trip fired after teardown");
+  });
+
+  test("a watched request that resolves cancels detection but does NOT clear an already-tripped render", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    await flushImmediate();
+
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "precondition: the panel tripped to link-lost");
+
+    // A settling probe is liveness for DETECTION, not evidence for the RENDER: only a real push - or a fresh server hello - retires the honest lost-link state, because
+    // only those prove the feed behind the relay is alive again.
+    const probe = deferred();
+
+    handle.watchRequest(probe.promise);
+    probe.resolve(null);
+    await flushImmediate();
+
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "the tripped Status stands");
+    assert.equal(messageText(root), LINK_LOST_MESSAGE, "and so does its message");
+    assert.ok(reloadAnchorIn(root), "and its reload action");
+  });
+});
+
+describe("statusPanel - a fresh server hello retires a lost-link presentation", () => {
+
+  // Trip the panel to link-lost on a hanging probe, so each test below starts from a fully rendered lost-link presentation.
+  const tripped = (t, { onServerHello } = {}) => {
+
+    const { fake } = fakeWithViewCapture();
+    const hb = installHomebridge(fake);
+    const store = readyStore([DEVICE_A]);
+    const mounted = mountPanel({ linkLostTimeoutSeconds: 2, onServerHello, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    mounted.handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+
+    return { fake, hb, ...mounted };
+  };
+
+  test("B-HELLO: a fresh-generation hello clears the message AND restores the Status cell, then notifies the plugin", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    // Record the Status text as the callback sees it: the local restore must be complete before the plugin is notified, so a callback that immediately re-elicits
+    // pushes races nothing.
+    const seenByCallback = [];
+    const { fake, hb, root } = tripped(t, { onServerHello: () => seenByCallback.push(valueFor(root, "Status")) });
+
+    using _hb = hb;
+
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "precondition: the Status cell carries the link-lost label");
+    assert.equal(messageText(root), LINK_LOST_MESSAGE, "precondition: the link-lost message is rendered");
+    assert.ok(reloadAnchorIn(root), "precondition: the reload action is rendered");
+
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(7));
+
+    // A hello proves the relay and the adapter alive, so the whole lost-link presentation goes - both halves of it. The Status cell returns to the connecting
+    // placeholder rather than to a connected label: the relay is proven, the device's own state is not, and the re-elicited pushes are what will say more.
+    assert.equal(messageText(root), null, "the lost-link message is cleared");
+    assert.equal(reloadAnchorIn(root), null, "and its reload action with it");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the Status cell returns to the connecting placeholder rather than staying stuck on the link-lost label");
+
+    assert.deepEqual(seenByCallback, ["Connecting..."], "onServerHello fired exactly once, AFTER the local restore had completed");
+  });
+
+  test("B-HELLO: a same-generation hello leaves a tripped presentation exactly as it was", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    let callbacks = 0;
+    const { fake, handle, hb, root } = tripped(t, { onServerHello: () => callbacks++ });
+
+    using _hb = hb;
+
+    // Adopt generation 7, which retires the first trip, then trip again and re-send the SAME generation. A duplicate hello is not evidence of anything new, so it
+    // must not touch the presentation the second trip rendered.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(7));
+    assert.equal(callbacks, 1, "the first hello was a fresh generation");
+
+    fake.observed.emitPush(STATUS_EVENT, connectingEvent("AA", 1));
+
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "precondition: the panel is tripped again");
+
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(7));
+
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "a duplicate generation leaves the Status cell tripped");
+    assert.equal(messageText(root), LINK_LOST_MESSAGE, "and leaves its message rendered");
+    assert.ok(reloadAnchorIn(root), "and leaves its reload action rendered");
+    assert.equal(callbacks, 1, "and notifies the plugin no second time");
+  });
+
+  test("B-HELLO: a hello after a trip with no device viewed restores the no-device state, so a later selection still renders Connecting...", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Trip with nothing on screen: the marker and the Status text are set, but no panel is mounted for them to render into.
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+
+    // The hello retires that inert trip. With no device viewed there is no connecting state to return to, so the Status text goes back to the empty no-device state
+    // rather than to a placeholder describing a device that is not being viewed.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(4));
+
+    selectDevice(store, "AA");
+
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the later selection renders its own connecting placeholder, not a stale link-lost label");
+    assert.equal(messageText(root), null, "and carries no lingering lost-link message");
+    assert.equal(reloadAnchorIn(root), null, "and no lingering reload action");
+  });
+
+  test("B-HELLO: a hello with nothing tripped is inert - it touches neither the Status cell nor the panel", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }], true));
+    assert.equal(valueFor(root, "Status"), LOCKED_CONNECTED, "precondition: the panel is connected, not tripped");
+
+    const panelBefore = root.firstChild;
+
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(9));
+
+    assert.equal(valueFor(root, "Status"), LOCKED_CONNECTED, "a hello against an untripped panel leaves the Status cell alone");
+    assert.equal(root.firstChild, panelBefore, "and rebuilds nothing - the restore is a no-op when nothing is tripped");
+    assert.equal(valueFor(root, "Door"), "Open", "the live row value stands");
   });
 });

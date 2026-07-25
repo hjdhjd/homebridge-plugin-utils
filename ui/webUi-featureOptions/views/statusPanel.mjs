@@ -6,6 +6,7 @@
 
 import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "../../webui-status.js";
 import { buildRecoveryButton } from "../utils.mjs";
+import { createRequestWatchdog } from "../../webUi-liveness.mjs";
 import { defaultIdentityFields } from "./deviceInfo.mjs";
 import { effect } from "../store.mjs";
 import { selectedDevice } from "../selectors.mjs";
@@ -123,20 +124,10 @@ const DEFAULT_LINK_LOST_TIMEOUT_SECONDS = 10;
 // narrowing posture the hello handler shares) - falls back to the module default.
 const resolveLinkLostSeconds = (configured) => (Number.isFinite(configured) && (configured > 0)) ? configured : DEFAULT_LINK_LOST_TIMEOUT_SECONDS;
 
-// The resume detector's tick cadence, in seconds. The interval notes the wall-clock time on each tick; a tick that observes far more elapsed time than this cadence is
-// the signature of a frozen-then-resumed page. Fifteen seconds keeps the idle cost negligible while sampling often enough that a resume is noticed within one cadence
-// of the page waking.
-const RESUME_CHECK_INTERVAL_SECONDS = 15;
-
-// The elapsed-wall-clock gap, in seconds, above which a tick reads as a page resume rather than an ordinary tick. The threshold does two jobs at once: it stays a jank
-// margin of several check intervals above the cadence, so scheduler jitter never crosses it, and it clears the roughly-once-a-minute cadence a throttled hidden desktop
-// tab fires its background ticks at - each throttled tick stores its own timestamp, so its gap stays bounded near that cadence and well under the threshold, while any
-// genuine OS suspension runs to minutes and clears it comfortably. The gap is read from the wall clock via Date.now DELIBERATELY: the wall clock is what accrues while JS
-// is frozen, whereas a monotonic performance.now is not guaranteed to advance across an OS suspension - a clock that freezes with the page cannot measure the freeze. Two
-// honest costs ride the threshold: a suspension shorter than it that still killed the helper goes unseen until the next trigger (the plugin's visibility belt where it
-// is delivered, or an interaction), and a forward system-clock step (an NTP correction, a manual change) larger than the threshold fires one false probe - benign,
-// identical to a tap on a live bridge - while a backward step masks one real resume until the next tick.
-const RESUME_GAP_THRESHOLD_SECONDS = 90;
+// The Status cell's text while the panel is waiting on a device's first push. It is a named constant because three paths write it - a fresh selection, a "connecting"
+// push, and the hello-driven recovery below - and they must agree: a placeholder that drifted between them would leave the cell reading one thing after a selection and
+// another after a recovery.
+const CONNECTING_STATUS_TEXT = "Connecting...";
 
 // The widest candidates for the Status cell's column, living beside the vocabulary they measure. "Disconnected", the encrypted "Connected" label, and the link-lost
 // label are within a few pixels of each other depending on the platform font stack, so the column reserves every candidate through the phantom sizer and takes their
@@ -209,20 +200,22 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
  * Mount the live device-status panel into the device-stats region.
  *
  * All render state is closure-local to this mount, so it is fresh for every show() cycle: the viewed device object (its serialNumber always read from that one
- * object), the per-serialNumber highest-token guard, the current row template set, the status text and panel message, the live node references, one latch timer per row
- * id, the pending link-lost watchdog, and the page-resume detector's last-tick clock and interval. The panel subscribes to selection changes and to the host's status
- * push events; every listener is `{ signal }`-scoped, and the one abort listener the mount registers clears every pending latch timer, cancels the pending watchdog, and
- * stops the resume detector on teardown. The returned handle exposes {@link resetStaleGuards} and the plugin-facing watchRequest.
+ * object), the per-serialNumber highest-token guard, the current row template set, the status text and panel message, the live node references, and one latch timer per
+ * row id. The panel subscribes to selection changes, to the host's status push events, and - when the page supplied a resume detector - to page resumes; every listener
+ * is `{ signal }`-scoped, and the one abort listener the mount registers clears every pending latch timer. Liveness detection is the shared watchdog primitive, whose
+ * own abort contract retires its timer on the same signal. The returned handle exposes {@link resetStaleGuards} and the plugin-facing watchRequest.
  *
  * @param {Object} args
  * @param {StatusPanelConfig} args.config - The plugin's panel configuration (identity, placeholder rows, error-copy overrides, link-lost copy and deadline).
+ * @param {{ subscribe: Function }} [args.resumeDetector] - The page's resume detector. When supplied, the panel re-probes the viewed device after the browser wakes from
+ *   a freeze; when absent, no resume subscription is registered and the panel behaves exactly as it does between resumes.
  * @param {HTMLElement} args.root - The `#deviceStatsContainer` element.
- * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down every listener, clears every pending latch timer, cancels the pending watchdog, and stops the
- *   resume detector.
+ * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down every listener, clears every pending latch timer, retires the watchdog's pending deadline, and
+ *   ends the resume subscription.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  * @returns {{ resetStaleGuards: () => void, watchRequest: (request: (Promise<unknown> | unknown)) => void }} The panel handle.
  */
-export const mountStatusPanelView = ({ config, root, signal, store }) => {
+export const mountStatusPanelView = ({ config, resumeDetector, root, signal, store }) => {
 
   // Resolve the configured surface once at mount, defaulting each part the plugin did not supply. `identity` and `placeholderRows` fall back to the shared identity
   // quartet and an empty skeleton; `errorMessages` stays possibly-undefined and is consulted only when an error renders; `onServerHello` likewise stays
@@ -255,17 +248,6 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
   // One clear-back timer per row id. A row's latch is independent of every other row's, so each holds its own timer here; arming a row clears only that row's own
   // pending timer.
   const latchTimers = new Map();
-
-  // The single pending link-lost watchdog timer, or null when disarmed. One timer serves every in-flight request because the host relay is one socket with one liveness
-  // truth: a single answered probe proves the socket for all. Distinct from `linkLost` throughout - this is the timer reference the arm/cancel logic touches, `linkLost`
-  // is the render state the trip sets.
-  let pendingWatchdog = null;
-
-  // The page-resume detector's state: the wall-clock time of the last tick, seeded at mount, and the running interval handle, or null until armed. The interval reads
-  // its own clock each tick and fires the panel's view request when it observes a gap far larger than its cadence - the signature of a page an OS app-switch froze and
-  // has just resumed - so a resume trips the link-lost state hands-free even where the browser never delivers a visibilitychange to this iframe.
-  let lastResumeTick = Date.now();
-  let resumeInterval = null;
 
   // Clear one row's pending latch timer, if any.
   const clearLatch = (rowId) => {
@@ -459,25 +441,11 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     panelEl = rebuilt;
   };
 
-  // Cancel the pending watchdog and null its handle - the one liveness action. Any settled watched request (either way) and any delivered status push call this: the
-  // relay answered, so the shared deadline is moot, and the next watched request arms a fresh one. A no-op when nothing is pending.
-  const cancelWatchdog = () => {
-
-    if(pendingWatchdog !== null) {
-
-      clearTimeout(pendingWatchdog);
-      pendingWatchdog = null;
-    }
-  };
-
-  // The watchdog fired: the deadline elapsed with no settlement and no push, so the host relay is unresponsive. Null the pending handle FIRST - mirroring the latch fire
-  // callback's first-statement self-delete - so detection re-arms for the next watched request rather than staying dead after this one fire. Then set the link-lost
-  // marker and render the honest state through the same idiom an error render uses: the link-lost label in the Status cell and the link-lost message with its reload
-  // action below it, rebuilt from the live row values. When no panel is mounted, setStatus's null-guarded write and refreshPanel's mount guard leave the trip inert until
-  // a device is viewed.
+  // The watchdog fired: the deadline elapsed with no settlement and no push, so the host relay is unresponsive. Set the link-lost marker and render the honest state
+  // through the same idiom an error render uses: the link-lost label in the Status cell and the link-lost message with its reload action below it, rebuilt from the live
+  // row values. When no panel is mounted, setStatus's null-guarded write and refreshPanel's mount guard leave the trip inert until a device is viewed.
   const tripLinkLost = () => {
 
-    pendingWatchdog = null;
     linkLost = true;
 
     setStatus(linkLostCopy.label);
@@ -487,9 +455,21 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     refreshPanel(harvestRowValues());
   };
 
+  // Liveness detection for this mount, on the shared primitive: one timer across every in-flight request, because the host relay is one socket with one liveness truth -
+  // a single answered probe proves it for all. The primitive owns arming, the two-armed settlement hook, and the abort contract that retires a pending deadline on
+  // teardown; the component owns only what a trip means here, which is the render above.
+  const watchdog = createRequestWatchdog({ onTrip: tripLinkLost, signal, timeoutSeconds: linkLostTimeoutSeconds });
+
+  // Cancel the pending deadline - the one liveness action. Any settled watched request (either way) and any delivered status push call this: the relay answered, so the
+  // shared deadline is moot, and the next watched request arms a fresh one. A no-op when nothing is pending.
+  const cancelWatchdog = () => watchdog.cancel();
+
   // Clear the link-lost marker as a real render's first act. When the marker WAS set, the arriving render proves the relay is live again, so the lingering link-lost
   // message and its reload action are now dishonest: nulling the message and rebuilding drops them even for the kinds ("connecting", "availability", "row") that do not
   // otherwise touch the message line. When the marker was already clear this is a no-op, so every per-kind render can call it unconditionally.
+  //
+  // It clears the message line alone and leaves the Status cell to its caller, because every one of its call sites is a push that sets that cell itself with the state
+  // the push carries. The hello path has no such push behind it, so it uses the dedicated restore below rather than widening this.
   const clearLinkLost = () => {
 
     if(!linkLost) {
@@ -503,36 +483,35 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     refreshPanel(harvestRowValues());
   };
 
-  /**
-   * Watch one bridge request for the liveness of the host relay - the single chokepoint every watched promise passes, whether the panel's own view request or a request
-   * the plugin feeds through the handle. Its first act reads `signal.aborted` DIRECTLY (never a mirrored local flag, which would reopen the window between abort and
-   * this check) and returns before attaching anything, so a stale handle's feed after teardown leaves no chain on a dead closure. The input is normalized through
-   * `Promise.resolve()` so a non-promise or a thenable feed still tracks as a settled or pending promise - boundary hardening for the plugin-facing half. One watchdog
-   * timer serves every in-flight request, because the relay is one socket with one liveness truth: a single answered probe proves the socket for all, so the timer arms
-   * only when none is pending and the next watched request re-arms once a settlement cancels it. The settlement hook is two-armed - a resolution AND a rejection both
-   * report liveness and are both consumed here, so a rejecting probe counts as a live relay and never surfaces as an unhandled rejection.
-   *
-   * @param {Promise<unknown> | unknown} request - The request promise to observe, or any value, normalized to a settled promise.
-   * @returns {void} Nothing; the watch runs on its own timer and settlement hook, and no caller awaits it.
-   */
-  const watchRequest = (request) => {
+  // Retire a lost-link presentation on the strength of a fresh server hello. A hello proves the relay and the adapter alive, so a message telling the user the
+  // connection is lost may not outlive it - and the Status cell must come back too, since the trip wrote the link-lost label there and no push is arriving behind this
+  // to correct it. The cell returns to the connecting placeholder rather than to a connected label because that is exactly what is true at this moment: the relay is
+  // proven, the device's own state is not, and the pushes the plugin's re-elicitation produces are what will say more. A no-op when nothing is tripped.
+  const restoreFromLinkLost = () => {
 
-    if(signal.aborted) {
+    if(!linkLost) {
 
       return;
     }
 
-    const promise = Promise.resolve(request);
+    linkLost = false;
+    panelMessage = null;
 
-    if(pendingWatchdog === null) {
-
-      pendingWatchdog = setTimeout(tripLinkLost, linkLostTimeoutSeconds * 1000);
-    }
-
-    // Two-armed settlement hook: a resolution and a rejection both report liveness and are both consumed here, so a rejecting probe never surfaces as an unhandled
-    // rejection. A one-armed `.then` or a `.finally` would leave the rejection unconsumed.
-    promise.then(cancelWatchdog, cancelWatchdog);
+    setStatus(viewedDevice ? CONNECTING_STATUS_TEXT : null);
+    refreshPanel(harvestRowValues());
   };
+
+  /**
+   * Watch one bridge request for the liveness of the host relay - the single chokepoint every watched promise passes, whether the panel's own view request or a request
+   * the plugin feeds through the handle. The shared watchdog owns the mechanism: it reads the mount signal directly at call time (never a mirrored local flag, which
+   * would reopen the window between abort and the check), so a stale handle's feed after teardown arms nothing; it normalizes any input through `Promise.resolve()`, so
+   * a non-promise or a thenable still tracks as a settled or pending promise - boundary hardening for the plugin-facing half; and its settlement hook is two-armed, so a
+   * rejecting probe counts as a live relay and never surfaces as an unhandled rejection.
+   *
+   * @param {Promise<unknown> | unknown} request - The request promise to observe, or any value, normalized to a settled promise.
+   * @returns {void} Nothing; the watch runs on its own timer and settlement hook, and no caller awaits it.
+   */
+  const watchRequest = (request) => watchdog.watch(request);
 
   // Fire the view request as its own liveness probe. The RAW promise feeds the watchdog on one chain, while the console diagnostic rides a SEPARATE chain off the same
   // promise: the watch must observe the raw promise so a rejection reaches its two-armed hook as a rejection - composing the watch after the .catch would convert every
@@ -588,7 +567,7 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
 
     viewedDevice = device;
     currentRowSet = placeholderRows;
-    statusText = "Connecting...";
+    statusText = CONNECTING_STATUS_TEXT;
     panelMessage = null;
     linkLost = false;
 
@@ -629,9 +608,9 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
     // The server-scoped hello is handled before the per-device guard. A hello carries no serialNumber, so the guard's floor comparison could not stop it (an undefined
     // session is never below a floor) and it would otherwise fall through to pollute the token map under an undefined key and then die silently. A generation that is
     // not a finite number is ignored entirely - the browser-boundary narrowing posture - because an undefined generation would collide with the null unseen sentinel
-    // and falsely read as a fresh server. A generation the panel has already adopted is a duplicate: no re-clear, no re-notify. An unseen finite generation is a fresh
-    // adapter process, so the panel adopts it, clears the per-device floors, and notifies the plugin to re-elicit its feed. No DOM, render state, or latch is touched -
-    // the visible recovery arrives with the pushes the plugin's re-elicitation produces.
+    // and falsely read as a fresh server. A generation the panel has already adopted is a duplicate: no re-clear, no re-notify, and no touch to a tripped presentation.
+    // An unseen finite generation is a fresh adapter process, so the panel adopts it, clears the per-device floors, retires any lost-link presentation, and notifies the
+    // plugin to re-elicit its feed. No latch is touched - the rest of the visible recovery arrives with the pushes the plugin's re-elicitation produces.
     if(payload.kind === "hello") {
 
       const generation = payload.generation;
@@ -649,6 +628,7 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
       serverGeneration = generation;
 
       clearStaleGuards();
+      restoreFromLinkLost();
       onServerHello?.();
 
       return;
@@ -673,7 +653,7 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
       case "connecting":
 
         clearLinkLost();
-        setStatus("Connecting...");
+        setStatus(CONNECTING_STATUS_TEXT);
 
         return;
 
@@ -761,49 +741,18 @@ export const mountStatusPanelView = ({ config, root, signal, store }) => {
   // signal tears it down.
   homebridge.addEventListener(STATUS_EVENT, handleStatusEvent, { signal });
 
-  /* The page-resume detector's tick. WebKit does not reliably deliver visibilitychange to an embedded iframe's document on an app-switch resume, so the panel cannot
-   * trust that event to notice a wake - it reads its own clock instead. Each tick notes the wall-clock time and compares it against the previous tick: a gap far larger
-   * than the check cadence is the signature of a page that was frozen while the OS suspended it and has just resumed. The new tick time is stored UNCONDITIONALLY before
-   * any probe decision, so a tick that decides not to probe never inflates the next tick's measured gap. The detector consults no visibility state at all: a resumed
-   * embedded frame reports its visibility unreliably, since the same WebKit plumbing that drops the change event also leaves the reported state stale, so the gap
-   * magnitude alone separates the two cases - a throttled hidden tab's ticks are cadence-bounded and stay under the threshold, while a genuine suspension runs to
-   * minutes and clears it. The probe therefore fires whenever a device is viewed (checked FIRST, so the serialNumber read sits behind it and a no-device tick cannot
-   * throw) and the gap exceeds the resume threshold. The probe is the panel's own view request - the existing watched chokepoint - fired REGARDLESS of the link-lost
-   * marker: on a healed bridge it answers and refreshes the panel after the nap, on a dead one it re-trips the same honest state. A probe landing while a pre-suspension
-   * watchdog is already pending rides that overdue deadline; with none pending it arms a fresh full deadline.
+  /* Re-probe the viewed device after the browser wakes from a freeze. The page's resume detector owns the mechanism - the wall-clock sampling, the gap threshold, and
+   * the reason it reads a clock rather than trusting visibilitychange - and the panel supplies only the policy: probe when a device is on screen. The gate is what makes
+   * a no-device wake silent, and it is evaluated immediately before the callback, so the serialNumber read below can never run without one. The probe is the panel's own
+   * view request - the existing watched chokepoint - fired REGARDLESS of the link-lost marker: on a healed bridge it answers and refreshes the panel after the nap, on a
+   * dead one it re-trips the same honest state. A probe landing while a pre-suspension deadline is already pending rides that overdue deadline; with none pending it arms
+   * a fresh full one. The subscription is `{ signal }`-scoped like every other listener here, and a page that supplied no detector simply has no subscription.
    */
-  const checkResume = () => {
+  resumeDetector?.subscribe(() => requestView(viewedDevice.serialNumber), { shouldProbe: () => Boolean(viewedDevice), signal });
 
-    const now = Date.now();
-    const gap = now - lastResumeTick;
-
-    lastResumeTick = now;
-
-    if(viewedDevice && (gap > (RESUME_GAP_THRESHOLD_SECONDS * 1000))) {
-
-      requestView(viewedDevice.serialNumber);
-    }
-  };
-
-  // Arm the resume detector, but ONLY when the mount signal is not already aborted. setInterval accepts no { signal } option, and the combined abort hook below is
-  // registered `{ once: true }` - so on a pre-aborted mount that hook never fires, and an unguarded arm would leak an interval nothing could ever clear. The guard leaves
-  // a pre-aborted mount with no interval at all, matching the effect and push listener that likewise stand down on an aborted signal.
-  if(!signal.aborted) {
-
-    resumeInterval = setInterval(checkResume, RESUME_CHECK_INTERVAL_SECONDS * 1000);
-  }
-
-  // Clear every pending latch timer, cancel the pending watchdog, and stop the resume detector on teardown - one teardown home for all three. This is the only explicit
-  // teardown the mount registers; every other listener is `{ signal }`-scoped. On a same-realm re-show (the menu path reuses the iframe, and show() awaits hide() whose
-  // abort fires this hook synchronously before the next mount arms) clearing the interval here is the SOLE reclamation - the iframe's realm dying with the frame is the
-  // backstop only for the frame-teardown path. A settlement hook arriving after abort finds no pending watchdog and touches nothing; a watchRequest call on an
-  // already-aborted mount returns before arming; and clearInterval on the null handle a pre-aborted mount leaves is a safe no-op.
-  signal.addEventListener("abort", () => {
-
-    clearAllLatches();
-    cancelWatchdog();
-    clearInterval(resumeInterval);
-  }, { once: true });
+  // Clear every pending latch timer on teardown. This is the only explicit teardown the mount registers; every other listener is `{ signal }`-scoped, and the watchdog's
+  // own abort contract retires its pending deadline on this same signal.
+  signal.addEventListener("abort", clearAllLatches, { once: true });
 
   return {
 

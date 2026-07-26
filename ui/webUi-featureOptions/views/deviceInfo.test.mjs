@@ -29,7 +29,7 @@ describe("defaultInfoPanel", () => {
 
     const root = document.createElement("div");
 
-    defaultInfoPanel(root, DEVICE);
+    defaultInfoPanel({ device: DEVICE, panel: root });
 
     const items = [...root.querySelectorAll(".stat-item")];
 
@@ -49,7 +49,7 @@ describe("defaultInfoPanel", () => {
     const root = document.createElement("div");
 
     root.textContent = "stale";
-    defaultInfoPanel(root, undefined);
+    defaultInfoPanel({ device: undefined, panel: root });
 
     assert.equal(root.textContent, "");
   });
@@ -60,7 +60,7 @@ describe("defaultInfoPanel", () => {
 
     const root = document.createElement("div");
 
-    defaultInfoPanel(root, { name: "Bare", serialNumber: "bare-1" });
+    defaultInfoPanel({ device: { name: "Bare", serialNumber: "bare-1" }, panel: root });
 
     const values = [...root.querySelectorAll(".stat-value")].map((s) => s.textContent);
 
@@ -88,7 +88,7 @@ describe("mountDeviceInfoView", () => {
 
     mountDeviceInfoView({
 
-      infoPanel: (panel, device) => { calls.push(device?.serialNumber ?? null); panel.textContent = device?.name ?? ""; },
+      infoPanel: ({ device, panel }) => { calls.push(device?.serialNumber ?? null); panel.textContent = device?.name ?? ""; },
       root,
       signal: controller.signal,
       store

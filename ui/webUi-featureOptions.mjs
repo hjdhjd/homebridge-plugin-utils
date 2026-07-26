@@ -91,7 +91,13 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   scope exclusively; any device- or controller-scoped entries already in the config remain there untouched and are not editable through this page. The page markup
  *   must keep the revealed content regions (`deviceStatsContainer`, `optionsContainer`, `search`) OUTSIDE the `#sidebar` and `#headerInfo` subtrees (the standard
  *   template's sibling layout): a region nested under a permanently-hidden ancestor cannot become visible, and the reveal path warns by name when it detects that shape.
- * @property {Function} [infoPanel] - Handler to display device information.
+ * @property {(args: { device: (Device|undefined), panel: HTMLElement, signal: AbortSignal }) => void} [infoPanel] - Renders the device-stats region for the current
+ *   selection. It receives ONE options bag: `device` is the selection (undefined at global scope, and always undefined under
+ *   {@link FeatureOptionsConfig.globalOnly}), `panel` is the `#deviceStatsContainer` element to render into, and `signal` is the mount's lifecycle signal. A hook
+ *   written against two positional parameters `(device, panel)` is NOT compatible with this contract - it receives the bag as its first argument and reads undefined
+ *   for both names, so it renders nothing rather than failing loudly; this is a documented breaking change to the published hook contract. The hook is re-invoked on
+ *   every render of a mount while the bag's `signal` stays one identity for that mount's life, so a hook that registers listeners or subscriptions registers them
+ *   once against that signal and they die with the mount.
  * @property {() => void} [onOptionsEdited] - Invoked after the store state has transitioned for any option mutation (an option set or cleared, the options reset,
  *   or the model reverted), so a consumer reading editedConfig from inside the callback sees the post-edit state. Invoked once per mutation with no arguments and no
  *   debounce; a consumer that needs coalescing applies its own.
@@ -987,19 +993,14 @@ export class webUiFeatureOptions {
       const { infoPanel, statusPanel } = this.#config;
 
       // One region, one owner. The constructor already rejected supplying both, so a configured statusPanel mounts the live status view and stores its handle on the
-      // public field; otherwise the static device-info view mounts, adapting the plugin's (device, root) infoPanel to the view's (root, device) argument order.
+      // public field; otherwise the static device-info view mounts and the plugin's hook travels straight through to it, because both sides name the bag's keys and
+      // named keys cannot disagree about argument order the way two positional signatures can.
       if(statusPanel) {
 
         this.statusPanel = mountStatusPanelView({ config: statusPanel, resumeDetector: this.#resumeDetector, root: deviceStatsContainer, signal, store });
       } else {
 
-        mountDeviceInfoView({
-
-          infoPanel: infoPanel ? (panel, device) => infoPanel.call(this, device, panel) : undefined,
-          root: deviceStatsContainer,
-          signal,
-          store
-        });
+        mountDeviceInfoView({ infoPanel, root: deviceStatsContainer, signal, store });
       }
     }
 

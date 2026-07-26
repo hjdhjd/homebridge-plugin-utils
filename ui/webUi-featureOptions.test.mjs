@@ -1161,6 +1161,74 @@ describe("webUiFeatureOptions - device info panel", () => {
 
     orchestrator.cleanup();
   });
+
+  test("a plugin hook receives one bag per render, carrying the live selection and the mount's own signal", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // The hook shape the contract documents: it renders from the bag, and it registers a mount-scoped listener exactly once by keying its own once-ness on the
+    // signal it was handed - the pattern a re-invoked-per-render hook needs, and the one the JSDoc tells a plugin author to write.
+    const bags = [];
+    const abortsSeen = [];
+    let registeredFor = null;
+
+    const infoPanel = ({ device, panel, signal }) => {
+
+      bags.push({ device, panel, signal });
+
+      panel.textContent = device?.serialNumber ?? "";
+
+      if(registeredFor === signal) {
+
+        return;
+      }
+
+      registeredFor = signal;
+
+      signal.addEventListener("abort", () => abortsSeen.push(1), { once: true });
+    };
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      infoPanel
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(bags.length > 0, "the hook rendered the device view");
+    assert.equal(bags.at(-1).device?.serialNumber, "CTRL-1", "the bag's device is the current selection");
+    assert.equal(bags.at(-1).panel, skeleton.deviceStatsContainer, "the bag's panel is the device-stats root");
+
+    const rendersBefore = bags.length;
+
+    // Drive a real scope change so the same mount renders again. The device moves between the two renders; the signal must not.
+    skeleton.controllersContainer.querySelector("[data-navigation='global']").click();
+    await flush();
+
+    assert.ok(bags.length > rendersBefore, "the scope change drove another render of the same mount");
+    assert.equal(bags.at(-1).device, undefined, "the bag's device followed the selection to global scope");
+    assert.equal(bags.at(-1).signal, bags[0].signal, "the signal is one identity for the mount's life, which is what a once-per-mount registration can key on");
+    assert.equal(abortsSeen.length, 0, "the mount is live, so nothing the hook scoped to that signal has been released yet");
+
+    // Navigate away through the real path: hide() drains any pending edit and then tears the cycle down.
+    await orchestrator.hide();
+
+    assert.equal(abortsSeen.length, 1, "a subscription the hook scoped to the bag's signal dies when the page navigates away");
+  });
 });
 
 describe("webUiFeatureOptions - detached-operation error contract", () => {
@@ -2955,9 +3023,9 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
       return [];
     };
 
-    // A supplied infoPanel records its arguments so the test can assert it was invoked with an undefined device and the device-stats root.
-    let infoPanelArgs;
-    const infoPanel = (device, panel) => { infoPanelArgs = { device, panel }; };
+    // A supplied infoPanel records every argument it is handed, so the test can assert both the bag's contents and that the hook is called with exactly one.
+    const infoPanelCalls = [];
+    const infoPanel = (...args) => { infoPanelCalls.push(args); };
 
     // Spy console.warn via the test runner's mock so the compliant layout can assert zero misnesting diagnostics; the mock records every call and is restored below.
     const warnMock = mock.method(console, "warn", () => {});
@@ -3005,10 +3073,17 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
     // (f) The options table rendered from model:loaded alone, without any devices:loaded.
     assert.ok(skeleton.configTable.querySelector("details[data-category]"), "the options table rendered at global scope without any device fetch");
 
-    // (g) The infoPanel was invoked with an undefined device and the device-stats root.
-    assert.ok(infoPanelArgs, "the supplied infoPanel was invoked");
-    assert.equal(infoPanelArgs.device, undefined, "the infoPanel receives an undefined device in global-only mode");
-    assert.equal(infoPanelArgs.panel, skeleton.deviceStatsContainer, "the infoPanel receives the device-stats root");
+    // (g) The infoPanel was invoked with a single options bag carrying an undefined device, the device-stats root, and the mount's lifecycle signal.
+    assert.ok(infoPanelCalls.length > 0, "the supplied infoPanel was invoked");
+
+    const [ bag, ...extraArgs ] = infoPanelCalls.at(-1);
+
+    assert.deepEqual(extraArgs, [], "the hook receives exactly one argument - the bag is the whole contract, with nothing trailing it");
+    assert.deepEqual(Object.keys(bag).toSorted(), [ "device", "panel", "signal" ], "the bag carries exactly device, panel, and signal");
+    assert.equal(bag.device, undefined, "the infoPanel receives an undefined device in global-only mode");
+    assert.equal(bag.panel, skeleton.deviceStatsContainer, "the infoPanel receives the device-stats root");
+    assert.ok(bag.signal instanceof AbortSignal, "the infoPanel receives the mount's lifecycle signal");
+    assert.equal(bag.signal.aborted, false, "which is live while the mount is");
 
     // The compliant sibling layout produces no misnesting warnings.
     const misnestWarnings = warnMock.mock.calls.filter((call) => String(call.arguments[0]).includes("content region"));
@@ -3016,6 +3091,8 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
     assert.equal(misnestWarnings.length, 0, "a compliant sibling layout produces no misnesting warnings");
 
     orchestrator.cleanup();
+
+    assert.equal(bag.signal.aborted, true, "the bag's signal aborts when the mount is torn down, so a hook that scoped anything to it is released");
   });
 
   test("a failed config sync renders the connection-error view, and a successful retry clears and re-hides #headerInfo", async () => {

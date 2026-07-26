@@ -18,16 +18,22 @@ import { selectedDevice } from "../selectors.mjs";
  * The container is shown when any device is in scope (controller-as-device or regular device) and cleared when the scope is global (no specific device to show
  * stats for - the global view aggregates options across every device).
  *
+ * The renderer receives one options bag, minted fresh on each render. What is per-render and what is per-mount inside that bag differ, and a hook that registers
+ * anything depends on the distinction: `device` is per-render data, since the selection moves between renders of a single mount, while `signal` is the mount's own
+ * identity - the same AbortSignal object arrives on every render of one mount, and it aborts when the page navigates away or is torn down. A hook that must register
+ * a listener or a subscription exactly once, despite being re-invoked per render, therefore keys that once-ness on the signal (or on a flag of its own), and scopes
+ * whatever it registers to the signal so the registration dies with the mount.
+ *
  * @param {Object} args
- * @param {((root: HTMLElement, device: import("../state.mjs").Device | undefined) => void) | undefined} args.infoPanel - Optional plugin-provided renderer. When
- *                                                                                                                          omitted, {@link defaultInfoPanel} is used.
+ * @param {((args: { device: (import("../state.mjs").Device | undefined), panel: HTMLElement, signal: AbortSignal }) => void) | undefined} args.infoPanel - Optional
+ *                                                          plugin-provided renderer. When omitted, {@link defaultInfoPanel} is used.
  * @param {HTMLElement} args.root - The `#deviceStatsContainer` element.
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
 export const mountDeviceInfoView = ({ infoPanel = defaultInfoPanel, root, signal, store }) => {
 
-  const render = (panelFn) => (panelFn ?? defaultInfoPanel)(root, selectedDevice(store.state));
+  const render = (panelFn) => (panelFn ?? defaultInfoPanel)({ device: selectedDevice(store.state), panel: root, signal });
 
   effect({
 
@@ -73,14 +79,18 @@ export const defaultIdentityFields = (device) => [
  * Untrusted device fields flow through `textContent` (via createElement's text-node path) so any markup-shaped fragments surface as literal text rather than
  * rendered HTML. Container is rebuilt on every call - replaceChildren handles both the initial render and any subsequent device switch.
  *
- * @param {HTMLElement} root - The container element.
- * @param {import("../state.mjs").Device | undefined} device - The device to render stats for, or undefined for global view.
+ * Takes the same options bag a plugin's own renderer does, so the internal default and the plugin-facing contract are one signature rather than two shapes an
+ * adapter has to bridge. It reads only the two keys it needs; the bag's `signal` is for a renderer that registers something, and this one registers nothing.
+ *
+ * @param {Object} args
+ * @param {import("../state.mjs").Device | undefined} args.device - The device to render stats for, or undefined for global view.
+ * @param {HTMLElement} args.panel - The container element.
  */
-export const defaultInfoPanel = (root, device) => {
+export const defaultInfoPanel = ({ device, panel }) => {
 
   if(!device) {
 
-    root.textContent = "";
+    panel.textContent = "";
 
     return;
   }
@@ -91,5 +101,5 @@ export const defaultInfoPanel = (root, device) => {
     createElement("span", { classList: ["stat-value"] }, [value])
   ]));
 
-  root.replaceChildren(createElement("div", { classList: ["device-stats-grid"] }, cells));
+  panel.replaceChildren(createElement("div", { classList: ["device-stats-grid"] }, cells));
 };

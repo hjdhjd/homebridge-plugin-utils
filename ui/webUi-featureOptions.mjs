@@ -172,6 +172,10 @@ export class webUiFeatureOptions {
   // returns.
   #config;
 
+  // The page epoch, supplied by the orchestrator that owns the page lifetime. It aborts when a newer page copy claims the window, which is the one supersession this
+  // instance cannot observe for itself. Every cycle show() mints composes itself into it; a directly-constructed instance holds undefined and the composition no-ops.
+  #epochSignal;
+
   // The persist effect's flush handle, captured when the effect is registered in show(). hide() awaits it (bounded) to drain any debounced-but-unwritten edit to disk
   // before tearing the page down; the visibilitychange handler fires it best-effort on browser background/close. Recreated on every show(); nulled out on cleanup().
   #flushPersist;
@@ -206,10 +210,12 @@ export class webUiFeatureOptions {
    *
    * @param {FeatureOptionsConfig} options - Configuration options for the webUI.
    * @param {Object} [wiring] - Framework wiring supplied by the page orchestrator.
+   * @param {AbortSignal} [wiring.epochSignal] - The page epoch, aborted when a newer page copy claims the window. Every show() cycle composes itself into it, so a
+   *                                             superseded copy tears down whole. Absent means no cycle is epoch-bounded.
    * @param {{ subscribe: Function }} [wiring.resumeDetector] - The page's resume detector, threaded to the views that probe on a resume. Absent means no view
    *                                                            subscribes to resumes.
    */
-  constructor(options = {}, { resumeDetector = undefined } = {}) {
+  constructor(options = {}, { epochSignal = undefined, resumeDetector = undefined } = {}) {
 
     const {
 
@@ -252,6 +258,11 @@ export class webUiFeatureOptions {
       },
       {
 
+        message: "epochSignal is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
+        violated: "epochSignal" in options
+      },
+      {
+
         message: "resumeDetector is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
         violated: "resumeDetector" in options
       }
@@ -288,6 +299,7 @@ export class webUiFeatureOptions {
       }
     };
 
+    this.#epochSignal = epochSignal;
     this.#flushPersist = null;
     this.#pageAbort = null;
     this.#resumeDetector = resumeDetector;
@@ -352,6 +364,14 @@ export class webUiFeatureOptions {
    */
   async show(session) {
 
+    // A superseded copy can still reach this method: its launch was stalled on a session open when the reopen replaced it, and the open settles - healed or expired -
+    // long afterwards and calls through. Every statement below is a side effect on shared page DOM the successor has already rendered into, clearContainers() above
+    // all, so the bail is the first thing here rather than a check further down: a zombie cycle must do nothing at all, not do less.
+    if(this.#epochSignal?.aborted) {
+
+      return;
+    }
+
     this.#session = session;
 
     homebridge.hideSchemaForm();
@@ -366,6 +386,18 @@ export class webUiFeatureOptions {
 
     // Fresh page-level abort controller for this show() cycle.
     this.#pageAbort = new AbortController();
+
+    /* Compose this cycle into the page epoch, so a supersession tears the whole cycle down through the machinery every effect and view already rides rather than
+     * through any new signal plumbing. What that reaches matters most for the listeners registered on objects that OUTLIVE a module copy - statusPanel's
+     * STATUS_EVENT subscription on the `homebridge` host object above all - because an un-retired cycle keeps rendering pushes into detached DOM and arming latch
+     * timers for as long as the frame lives.
+     *
+     * The forwarding is minted per cycle rather than once at construction because #pageAbort is a per-cycle resource: it is null until the first show(), and an
+     * AbortController dispatches abort exactly once, so a construction-time listener would spend itself against null whenever supersession landed in the pre-launch
+     * window - which is precisely the window a stalled session open holds open. Registering it on the cycle's own signal is what keeps each listener to the one
+     * generation it guards: it dies with that generation, and the next show() mints a fresh one.
+     */
+    this.#epochSignal?.addEventListener("abort", () => this.#pageAbort?.abort(), { once: true, signal: this.#pageAbort.signal });
 
     const signal = this.#pageAbort.signal;
 

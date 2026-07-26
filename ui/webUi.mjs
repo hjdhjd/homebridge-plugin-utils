@@ -34,6 +34,16 @@ const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the pl
  */
 
 /**
+ * The resume-subscription handle this instance hands down to the feature-options orchestrator and the views it mounts.
+ *
+ * The shape is the resume detector's own `subscribe` contract, documented on `createResumeDetector` in the liveness module; what this wrapper adds is the epoch
+ * bound, so a subscription registered through it also ends when a successor supersedes this copy. Stated once here because the wrapper and the wiring both name it.
+ *
+ * @typedef {Object} EpochScopedResumeHandle
+ * @property {(callback: () => void, options?: { shouldProbe?: () => boolean, signal?: AbortSignal }) => void} subscribe - Register a resume subscriber.
+ */
+
+/**
  * webUi - Top-level plugin webUI orchestrator.
  *
  * Owns the page-level menu state, the first-run flow, and the {@link webUiFeatureOptions} instance that renders the feature options page. The orchestrator is the
@@ -54,6 +64,9 @@ export class webUi {
    * The deadline helpers are NOT re-exposed here. A plugin that wants to bound its own awaits imports `withDeadline` from the liveness module directly, so there is one
    * path to that function rather than a field that shadows it.
    *
+   * Every subscription is bounded by the page epoch as well as by whatever signal the caller supplies: it never outlives the newest `webUi` construction in this
+   * window, so a plugin holding a subscription in a settings frame that gets reopened does not need to retire it itself.
+   *
    * @example
    *
    * // Refresh a price poll when the page wakes, but only while this plugin's panel is the one on screen.
@@ -63,6 +76,7 @@ export class webUi {
    */
   liveness;
 
+  #epochSignal;
   #firstRun;
   #menuBound = false;
   #name;
@@ -76,10 +90,34 @@ export class webUi {
    * Caller-supplied first-run hooks are merged in a single spread over the default no-op handlers, so partial overrides work naturally - a caller can supply only
    * `onSubmit` and the unspecified slots stay at the defaults that keep the flow driveable.
    *
+   * Construction is also the page's retirement chokepoint: it aborts the epoch of whichever copy held the window and claims the window for this one, which retires
+   * the abandoned copy whole - its liveness subscriptions, its orchestrator cycle and every view effect and host listener that cycle scopes, its menu handlers, and
+   * any late launch settlement that would otherwise repaint shared chrome.
+   *
    * @param {WebUiConfig} [options] - Configuration options for the webUI. All fields are optional; firstRun's hooks fall back to no-op handlers, and
    * featureOptions/name simply default to undefined.
    */
   constructor({ featureOptions, firstRun = {}, name } = {}) {
+
+    /* Retire the predecessor and claim the window. The settings frame is reused across panel opens and each open imports a fresh cache-busted module copy, so the
+     * copy under construction here is the only party that knows the previous one is dead: no teardown event reaches an abandoned copy - the same silence that makes
+     * the clock-gap resume detector necessary in the first place - so nothing else can tell it to stand down, and its timers, listeners, and handlers would go on
+     * running in the reused window against DOM the successor now owns. Construction is the one moment a successor provably exists, which is what makes it the place
+     * to do this.
+     *
+     * The boot monitor's `webUiBoot` global is the precedent for holding state across module copies in one window; its own semantics are first-wins, while the
+     * newest-wins supersession here is this design's own. The duck-typed guard is the browser-boundary narrowing posture: a foreign value squatting on the property
+     * degrades to replacement rather than a constructor throw, so a page that renders is never traded for a page that does not. A window's first construction finds
+     * no predecessor and no-ops.
+     */
+    if(typeof globalThis.webUiPageEpoch?.abort === "function") {
+
+      globalThis.webUiPageEpoch.abort();
+    }
+
+    globalThis.webUiPageEpoch = new AbortController();
+
+    this.#epochSignal = globalThis.webUiPageEpoch.signal;
 
     // First-run handlers default to no-ops; caller-supplied entries override per-key. The single-statement spread lands `#firstRun` in its final shape on first
     // assignment, so there is no intermediate object that gets discarded a line later.
@@ -90,9 +128,30 @@ export class webUi {
     // configuration. Its sampling timer is demand-driven, so a page whose views never subscribe pays nothing for holding one.
     this.#resumeDetector = createResumeDetector();
 
-    this.featureOptions = new webUiFeatureOptions(featureOptions, { resumeDetector: this.#resumeDetector });
-    this.liveness = { onResume: (callback, options) => this.#resumeDetector.subscribe(callback, options) };
+    /** @type {EpochScopedResumeHandle} */
+    const resumeDetector = { subscribe: (callback, options) => this.#resumeDetector.subscribe(callback, this.#scopedToEpoch(options)) };
+
+    this.featureOptions = new webUiFeatureOptions(featureOptions, { epochSignal: this.#epochSignal, resumeDetector });
+    this.liveness = { onResume: (callback, options) => this.#resumeDetector.subscribe(callback, this.#scopedToEpoch(options)) };
     this.#name = name;
+  }
+
+  /**
+   * Bound a liveness subscription's options by the page epoch.
+   *
+   * The one home for the composition rule, applied at both points this instance hands a subscription out: the public `liveness.onResume` surface and the detector
+   * handle threaded down to the views. The options default keeps the documented single-argument `onResume(callback)` call shape working, and the spread carries
+   * every sibling key through by construction rather than by enumeration, so a key the detector grows later needs no edit here. `AbortSignal.any` means whichever
+   * of the caller's own signal and the epoch aborts first removes the subscription, which is the same demand-driven disarm the detector already implements - the
+   * detector itself stays page-ignorant, since deciding what supersedes a page is this object's job and not the primitive's.
+   *
+   * @param {{ shouldProbe?: () => boolean, signal?: AbortSignal }} [options] - The caller's own subscription options.
+   * @returns {{ shouldProbe?: () => boolean, signal: AbortSignal }} The caller's options with the lifecycle signal bounded by the epoch.
+   * @private
+   */
+  #scopedToEpoch(options = {}) {
+
+    return { ...options, signal: options.signal ? AbortSignal.any([ options.signal, this.#epochSignal ]) : this.#epochSignal };
   }
 
   /**
@@ -113,6 +172,15 @@ export class webUi {
       await this.#launchWebUI();
     } catch(err) {
 
+      // A superseded copy settles its launch late - the stalled session open it was holding expires or heals long after a reopen replaced it - and the toast and the
+      // menu below are shared chrome the successor now owns. Bail before touching either: the failure belongs to a page nobody is looking at any more, so reporting
+      // it would put a stale diagnostic over the successor's working page. This is the #unlessStale discipline the feature-options cycle already runs on, applied at
+      // this layer against this layer's own lifetime.
+      if(this.#epochSignal.aborted) {
+
+        return;
+      }
+
       // The outermost user-facing diagnostic in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape, so the shared
       // toastError normalization extracts a useful message regardless of what bubbled out of `#launchWebUI`.
       this.#toastLaunchFailure(err);
@@ -130,12 +198,18 @@ export class webUi {
       }
     } finally {
 
-      homebridge.hideSpinner();
+      // The spinner and the boot monitor are the same shared chrome the catch above guards, so a superseded copy's settlement leaves both alone: hiding the spinner
+      // would pull it out from under the successor's own in-flight launch, and standing the boot monitor down would retract a panel raised for a page this copy no
+      // longer speaks for.
+      if(!this.#epochSignal.aborted) {
 
-      // Stand the boot monitor down. Once show() settles the app owns the surface either way - on success the UI rendered, on failure the toast above displayed the
-      // diagnostic - so any earlier boot-phase error the monitor may have caught was non-fatal, and it should retract any panel it raised. The optional chain tolerates
-      // a stamped region that carries no boot monitor.
-      globalThis.webUiBoot?.ready?.();
+        homebridge.hideSpinner();
+
+        // Stand the boot monitor down. Once show() settles the app owns the surface either way - on success the UI rendered, on failure the toast above displayed the
+        // diagnostic - so any earlier boot-phase error the monitor may have caught was non-fatal, and it should retract any panel it raised. The optional chain tolerates
+        // a stamped region that carries no boot monitor.
+        globalThis.webUiBoot?.ready?.();
+      }
     }
   }
 
@@ -368,6 +442,10 @@ export class webUi {
    * teardown. A one-shot guard keeps a repeated #launchWebUI from stacking a second handler on each button, which would fire every tab switch twice. Each arrow reads
    * the current this.#session through its #show* method, so a single persistent listener always acts on the latest session even after a re-launch replaces it.
    *
+   * The epoch signal is what bounds them. The buttons themselves outlive any single module copy - they are elements of the reused frame, not of the copy that bound
+   * them - so a copy that is superseded and whose handlers stayed attached would answer every click alongside the successor's, running each tab switch twice against
+   * two different sessions. Binding on the epoch retires this copy's set at the moment the successor claims the window.
+   *
    * Menu click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
    * async handler's promise is dropped; the handlers own their error handling so the drop carries no unobserved rejection. #showFeatureOptions wraps
    * featureOptions.show() in a try/catch that toasts a failed re-entry - the show pipeline can reject (a plugin getDevices hook that resolves the wrong shape trips
@@ -386,9 +464,11 @@ export class webUi {
 
     this.#menuBound = true;
 
-    document.getElementById("menuHome").addEventListener("click", () => this.#showSupport());
-    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.#showFeatureOptions());
-    document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings());
+    const signal = this.#epochSignal;
+
+    document.getElementById("menuHome").addEventListener("click", () => this.#showSupport(), { signal });
+    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.#showFeatureOptions(), { signal });
+    document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings(), { signal });
   }
 
   /**

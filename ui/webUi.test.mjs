@@ -8,9 +8,9 @@
  */
 "use strict";
 
-import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installWebUiBoot } from "./ui.helpers.mjs";
+import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "./webui-status.js";
+import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installPageEpoch, installWebUiBoot } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
-import { STATUS_VIEW_ROUTE } from "./webui-status.js";
 import assert from "node:assert/strict";
 import { setImmediate as flushPending } from "node:timers/promises";
 import { webUi } from "./webUi.mjs";
@@ -24,6 +24,10 @@ function makeWebUiHarness({ name = "TestPlatform", config = [], firstRun, reques
   const skeleton = createSkeletonFeatureOptionsDom();
   const fake = createFakeHomebridge({ cachedAccessories: accessories, config, requestResponses });
   const homebridgeGuard = installHomebridge(fake);
+
+  // Snapshot the page epoch before the construction below installs its own, so the harness leaves the global table as it found it - the same courtesy the DOM
+  // globals and the homebridge install already get.
+  const epochGuard = installPageEpoch();
   const ui = new webUi({ featureOptions, firstRun, name });
 
   const featureOptionsCalls = [];
@@ -54,6 +58,7 @@ function makeWebUiHarness({ name = "TestPlatform", config = [], firstRun, reques
 
     [Symbol.dispose]() {
 
+      epochGuard[Symbol.dispose]();
       homebridgeGuard[Symbol.dispose]();
       dom[Symbol.dispose]();
     }
@@ -96,6 +101,61 @@ describe("webUi.constructor", () => {
 
     // featureOptions is the inner instance; it must be defined and constructed (sidebar merging is tested in the inner suite, here we only verify forwarding).
     assert.ok(ui.featureOptions, "featureOptions must be constructed when the options bag is provided");
+  });
+
+  test("the first construction in a window claims the epoch, and a foreign value squatting on it degrades to replacement", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _epoch = installPageEpoch();
+
+    // No predecessor to retire: the retirement is a no-op and the construction claims the window for itself.
+    const first = new webUi({ name: "First" });
+
+    assert.ok(first.featureOptions, "a construction with no predecessor completes");
+    assert.ok(globalThis.webUiPageEpoch instanceof AbortController, "and installs its own epoch on the window");
+    assert.equal(globalThis.webUiPageEpoch.signal.aborted, false, "which starts live");
+
+    // Anything at all can be sitting on a window property in a frame the plugin does not own, so the guard duck-types the handle rather than trusting it. A value that
+    // cannot be aborted is skipped and replaced: refusing to construct would trade a page that renders for a page that does not.
+    globalThis.webUiPageEpoch = { abort: "not callable" };
+
+    const afterSquat = new webUi({ name: "AfterSquat" });
+
+    assert.ok(afterSquat.featureOptions, "a foreign value on the property does not throw the constructor");
+    assert.ok(globalThis.webUiPageEpoch instanceof AbortController, "and is replaced rather than honored");
+  });
+
+  test("the page-epoch fixture hands over a clean window and restores what it found", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const priorEpoch = { marker: "the value the window carried before the fixture ran" };
+
+    globalThis.webUiPageEpoch = priorEpoch;
+
+    const epochGuard = installPageEpoch();
+
+    try {
+
+      assert.equal(globalThis.webUiPageEpoch, undefined, "the fixture hands the test a window carrying no epoch");
+
+      const constructed = new webUi({ name: "InsideTheFixture" });
+
+      assert.ok(constructed.featureOptions, "a construction inside the fixture completes");
+      assert.ok(globalThis.webUiPageEpoch instanceof AbortController, "and installs its own epoch over the clean slate");
+    } finally {
+
+      epochGuard[Symbol.dispose]();
+    }
+
+    assert.equal(globalThis.webUiPageEpoch, priorEpoch, "disposal restores exactly the value the window carried before");
+
+    delete globalThis.webUiPageEpoch;
   });
 });
 
@@ -440,6 +500,37 @@ describe("webUi.show - menu listener idempotence across repeated launches", () =
 
     assert.deepEqual(harness.featureOptionsCalls, ["show"],
       "a menu click must fire its handler exactly once even after repeated show() cycles");
+  });
+
+  test("a superseded copy's menu handlers stop answering the shared buttons", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false }
+    });
+
+    await harness.ui.show();
+
+    // Isolate the click-driven invocations from the routing show above.
+    harness.featureOptionsCalls.length = 0;
+
+    // The control. Without proving this copy's handler answers first, the silence after supersession could mean nothing more than a click that never landed.
+    harness.skeleton.menuFeatureOptions.click();
+    await flushPending();
+
+    assert.deepEqual(harness.featureOptionsCalls, ["show"], "precondition: the copy holding the window answers the shared button");
+
+    // The buttons are elements of the reused frame rather than of the copy that bound them, so a copy whose handlers survived supersession would answer every click
+    // alongside the successor's - two tab switches per click, against two different sessions.
+    const _successor = new webUi({ name: "Successor" });
+
+    harness.featureOptionsCalls.length = 0;
+
+    harness.skeleton.menuFeatureOptions.click();
+    await flushPending();
+
+    assert.deepEqual(harness.featureOptionsCalls, [], "the superseded copy's handlers died with its epoch rather than firing beside the successor's");
   });
 });
 
@@ -844,6 +935,144 @@ describe("webUi - the launch-time session open is deadline-bounded", () => {
     assert.ok(harness.skeleton.configTable.querySelector("details[data-category='Motion']"),
       "the Feature Options click after the heal re-ran the launch through to a full render");
   });
+
+  /* Drive the pre-launch supersession race and hand the assertions the state they need.
+   *
+   * The ordering is the point. One copy's launch stalls on the session open - the frozen-first-load shape the deadline above exists for - a reopen of the reused
+   * frame constructs a second copy mid-stall, and that copy renders the page whole. Only then does the first copy's open settle, whichever way the caller chooses.
+   * Everything the settling copy would go on to do lands on DOM and chrome the successor now owns, so the window between the supersession and the settlement is
+   * exactly where a retirement that only covered live cycles would leave a hole: the abandoned copy has no cycle yet, so there is nothing for a cycle-scoped
+   * teardown to catch, and its launch would mount a fresh one afterwards.
+   *
+   * @param {Object} args
+   * @param {(context: Object) => Promise<void>} args.assertions - Runs after the stalled copy settles, with the recorded before-state.
+   * @param {(context: Object) => void} args.settle - Settles the stalled copy's session open: heal it, or let its deadline expire.
+   * @param {Object} args.t - The node:test context, for the mock clock.
+   */
+  const withPreLaunchRace = async ({ assertions, settle, t }) => {
+
+    // setInterval joins setTimeout here because the successor mounts a status panel, and a mounted panel's resume subscription arms the detector's sampler. Left on
+    // Node's own implementation that is a live ref'd interval nothing in this test ever reclaims, which holds the test process open indefinitely.
+    t.mock.timers.enable({ apis: [ "setInterval", "setTimeout" ] });
+
+    const accessories = [{
+
+      displayName: "Device A",
+      services: [{
+
+        characteristics: [
+
+          { constructorName: "FirmwareRevision", value: "1.0.0" },
+          { constructorName: "Manufacturer", value: "Acme" },
+          { constructorName: "Model", value: "Model-A" },
+          { constructorName: "SerialNumber", value: "AA" }
+        ],
+        constructorName: "AccessoryInformation"
+      }]
+    }];
+
+    const featureOptions = { statusPanel: { placeholderRows: [] } };
+    const requestResponses = new Map([[ "/getOptions", {
+
+      categories: [{ description: "Motion Options", name: "Motion" }],
+      options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+    } ]]);
+
+    using harness = makeWebUiHarness({
+
+      accessories,
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+      featureOptions,
+      firstRun: { isRequired: () => false },
+      requestResponses,
+      unstubbed: true
+    });
+
+    let readyCalls = 0;
+
+    using _boot = installWebUiBoot({ fail: () => {}, ready: () => { readyCalls++; } });
+
+    // Drain queued async work until the predicate answers, so each step waits on the state it needs rather than on a fixed number of cycles.
+    const drainUntil = async (predicate) => {
+
+      for(let i = 0; i < 400; i++) {
+
+        const found = predicate();
+
+        if(found) {
+
+          return found;
+        }
+
+        // eslint-disable-next-line no-await-in-loop
+        await flushPending();
+      }
+
+      return null;
+    };
+
+    const healthyRead = harness.fake.getPluginConfig;
+
+    // Stall the first copy's session open on a promise the test owns, so either settlement leg is reachable on demand.
+    let releaseOpen;
+
+    harness.fake.getPluginConfig = () => new Promise((resolve) => {
+
+      releaseOpen = () => resolve(healthyRead());
+    });
+
+    const stalledShow = harness.ui.show();
+
+    await drainUntil(() => releaseOpen);
+
+    assert.ok(releaseOpen, "precondition: the first copy is parked on its session open");
+
+    // The reopen: a fresh copy constructs mid-stall against a healthy host and renders the page whole.
+    harness.fake.getPluginConfig = healthyRead;
+
+    const successor = new webUi({ featureOptions, firstRun: { isRequired: () => false }, name: "TestPlatform" });
+
+    await successor.show();
+
+    assert.ok(await drainUntil(() => harness.skeleton.configTable.querySelector("details[data-category='Motion']")), "precondition: the successor rendered the page");
+    assert.ok(await drainUntil(() => document.getElementById("devicesContainer").querySelector(".nav-link[data-device-serial='AA']")),
+      "precondition: the successor rendered its device sidebar");
+
+    const renderedPage = document.getElementById("pageFeatureOptions").innerHTML;
+    const toastsBefore = harness.fake.observed.toasts.length;
+    const readyCallsBefore = readyCalls;
+
+    assert.ok(readyCallsBefore > 0, "precondition: the successor stood the boot monitor down for itself");
+
+    // Now let the abandoned copy's launch settle, and drain everything it queues.
+    settle({ releaseOpen });
+
+    await stalledShow;
+    await drainUntil(() => false);
+
+    await assertions({ harness, readyCalls: () => readyCalls, readyCallsBefore, renderedPage, successor, toastsBefore });
+  };
+
+  // The assertions both settlement legs share: the abandoned copy performed no side effect at all.
+  const assertNoZombieSideEffect = async ({ harness, readyCalls, readyCallsBefore, renderedPage, toastsBefore }) => {
+
+    assert.equal(document.getElementById("pageFeatureOptions").innerHTML, renderedPage,
+      "the successor's rendered page is untouched - the abandoned launch never reached clearContainers");
+    assert.equal(harness.ui.featureOptions.statusPanel, null,
+      "the abandoned copy mounted no view, so it registered no listener on the host object that outlives it");
+    assert.equal(harness.fake.observed.toasts.length, toastsBefore, "and raised no toast over the page the successor now owns");
+    assert.equal(readyCalls(), readyCallsBefore, "and left the boot monitor to the copy that speaks for the page");
+  };
+
+  test("a copy superseded while its launch is stalled does nothing when the open finally heals", async (t) => {
+
+    await withPreLaunchRace({ assertions: assertNoZombieSideEffect, settle: ({ releaseOpen }) => releaseOpen(), t });
+  });
+
+  test("a copy superseded while its launch is stalled does nothing when its open instead expires", async (t) => {
+
+    await withPreLaunchRace({ assertions: assertNoZombieSideEffect, settle: () => t.mock.timers.tick(LAUNCH_DEADLINE_MS + 1), t });
+  });
 });
 
 describe("webUi.liveness - the public plugin surface", () => {
@@ -891,6 +1120,108 @@ describe("webUi.liveness - the public plugin surface", () => {
     using harness = makeWebUiHarness({ config: [] });
 
     assert.deepEqual(Object.keys(harness.ui.liveness), ["onResume"], "a second path to withDeadline would be a second source of truth for it");
+  });
+
+  // Advance the wall clock clear past the gap threshold WITHOUT running timers, then drain one sampling cadence, which is what a detector reads as a resume.
+  const resume = (t) => {
+
+    t.mock.timers.setTime(Date.now() + (6 * THRESHOLD_MS));
+    t.mock.timers.tick(INTERVAL_MS);
+  };
+
+  test("a successor's construction retires the predecessor's subscriptions and disarms its sampler", (t) => {
+
+    // Enable the clocks before constructing webUi: the detector seeds its last-tick clock when it arms, and arming against a real-epoch seed under a zeroed mock clock
+    // would read every gap as negative and silently kill the probe.
+    t.mock.timers.enable({ apis: [ "Date", "setInterval" ] });
+
+    using harness = makeWebUiHarness({ config: [] });
+
+    const fires = [];
+
+    harness.ui.liveness.onResume(() => fires.push(1));
+
+    // The control that makes the silence below attributable: without proving the subscription was live and delivering first, its later quiet could mean it had never
+    // been registered at all.
+    resume(t);
+    assert.equal(fires.length, 1, "precondition: the predecessor's subscription is live and delivering");
+
+    // A fresh module copy constructs in the same window while the predecessor's subscription is still registered - the reused settings frame's own shape, and the one
+    // ordering that convicts the chokepoint rather than some unrelated teardown.
+    const successor = new webUi({ name: "Successor" });
+
+    resume(t);
+    assert.equal(fires.length, 1, "the predecessor's subscription died at the successor's construction");
+
+    resume(t);
+    assert.equal(fires.length, 1, "and stays dead - the predecessor's sampler disarmed rather than skipping a single tick");
+
+    const successorFires = [];
+
+    successor.liveness.onResume(() => successorFires.push(1));
+
+    resume(t);
+    assert.equal(successorFires.length, 1, "the successor's own subscription is the live one - newest wins");
+  });
+
+  test("both halves of the composition bound a subscription: the caller's own signal, and the epoch", (t) => {
+
+    t.mock.timers.enable({ apis: [ "Date", "setInterval" ] });
+
+    using harness = makeWebUiHarness({ config: [] });
+
+    // The caller's half, with no supersession involved at all.
+    const callerScoped = new AbortController();
+    const callerFires = [];
+
+    harness.ui.liveness.onResume(() => callerFires.push(1), { signal: callerScoped.signal });
+
+    resume(t);
+    assert.equal(callerFires.length, 1, "precondition: a caller-scoped subscription delivers");
+
+    callerScoped.abort();
+    resume(t);
+    assert.equal(callerFires.length, 1, "the caller's own signal ends its subscription");
+
+    // The epoch's half: the same call shape, ended by a successor instead of by the caller.
+    const stillLive = new AbortController();
+    const epochFires = [];
+
+    harness.ui.liveness.onResume(() => epochFires.push(1), { signal: stillLive.signal });
+
+    resume(t);
+    assert.equal(epochFires.length, 1, "precondition: the second caller-scoped subscription delivers");
+
+    const _successor = new webUi({ name: "Successor" });
+
+    resume(t);
+    assert.equal(epochFires.length, 1, "a successor ends a subscription whose caller signal is still live - the epoch is the other half");
+    assert.equal(stillLive.signal.aborted, false, "and it did so without touching the caller's own signal");
+  });
+
+  test("the composition preserves the documented call shapes - a bare callback subscribes, and a shouldProbe gate still gates", (t) => {
+
+    t.mock.timers.enable({ apis: [ "Date", "setInterval" ] });
+
+    using harness = makeWebUiHarness({ config: [] });
+
+    const bare = [];
+    const gated = [];
+    let gateOpen = false;
+
+    // The documented single-argument shape passes no options object at all, so the composition has to supply one rather than read through a missing bag.
+    harness.ui.liveness.onResume(() => bare.push(1));
+    harness.ui.liveness.onResume(() => gated.push(1), { shouldProbe: () => gateOpen });
+
+    resume(t);
+
+    assert.equal(bare.length, 1, "the single-argument call shape subscribes and fires");
+    assert.equal(gated.length, 0, "a shut gate still gates - the sibling key survived the composition rather than being dropped for the signal");
+
+    gateOpen = true;
+    resume(t);
+
+    assert.equal(gated.length, 1, "and an open gate delivers");
   });
 });
 
@@ -1003,5 +1334,116 @@ describe("webUi - the resume detector threads end to end", () => {
 
     assert.equal(viewRequests.length, probesBefore + 1, "the page-level resume reached the mounted panel's probe");
     assert.equal(viewRequests.at(-1).serialNumber, "AA", "and the probe targeted the device on screen");
+  });
+
+  test("a successor retires the whole abandoned copy - its threaded probe subscription and its cycle's listener on the persistent host object", async (t) => {
+
+    t.mock.timers.enable({ apis: [ "Date", "setInterval", "setTimeout" ] });
+
+    const accessories = [{
+
+      displayName: "Device A",
+      services: [{
+
+        characteristics: [
+
+          { constructorName: "FirmwareRevision", value: "1.0.0" },
+          { constructorName: "Manufacturer", value: "Acme" },
+          { constructorName: "Model", value: "Model-A" },
+          { constructorName: "SerialNumber", value: "AA" }
+        ],
+        constructorName: "AccessoryInformation"
+      }]
+    }];
+
+    using harness = makeWebUiHarness({
+
+      accessories,
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+      featureOptions: { statusPanel: { placeholderRows: [] } },
+      firstRun: { isRequired: () => false },
+      requestResponses: new Map([[ "/getOptions", {
+
+        categories: [{ description: "Motion Options", name: "Motion" }],
+        options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+      } ]]),
+      unstubbed: true
+    });
+
+    const viewRequests = [];
+
+    harness.fake.request = async (path, body) => {
+
+      if(path === "/getOptions") {
+
+        return {
+
+          categories: [{ description: "Motion Options", name: "Motion" }],
+          options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+        };
+      }
+
+      if(path === STATUS_VIEW_ROUTE) {
+
+        viewRequests.push(body);
+      }
+
+      return null;
+    };
+
+    await harness.ui.show();
+
+    const deviceLink = await drainUntil(() => document.getElementById("devicesContainer").querySelector(".nav-link[data-device-serial='AA']"));
+
+    assert.ok(deviceLink, "precondition: the sidebar rendered the cached device");
+
+    deviceLink.click();
+
+    const statsRoot = document.getElementById("deviceStatsContainer");
+
+    assert.ok(await drainUntil(() => statsRoot.querySelector(".stat-item")), "precondition: the status panel mounted against the viewed device");
+
+    // Read a cell's value by its label so the assertions never address cells by child position.
+    const doorValue = () => [...statsRoot.querySelectorAll(".stat-item")]
+      .find((item) => item.querySelector(".stat-label")?.textContent === "Door")?.querySelector(".stat-value:not(.fo-phantom)")?.textContent ?? null;
+
+    // The fire-first control for the host listener. A push has to render into this copy BEFORE supersession, or the silence afterwards would be attributable to a
+    // fixture that never delivered rather than to the retirement.
+    harness.fake.observed.emitPush(STATUS_EVENT, {
+
+      encrypted: false,
+      kind: "snapshot",
+      online: true,
+      rows: [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }],
+      serialNumber: "AA",
+      session: 1
+    });
+
+    assert.equal(doorValue(), "Open", "precondition: a status push renders into the copy that holds the window");
+
+    const probesBefore = viewRequests.length;
+
+    assert.ok(probesBefore > 0, "precondition: the selection fired the panel's own view request");
+
+    // Supersede. The copy above keeps its rendered DOM, its store, and its mounted views; nothing but the epoch tells it that it is finished.
+    const _successor = new webUi({ name: "Successor" });
+
+    // The threaded handle's half: the panel's probe subscription rode the wrapper, so it dies with the epoch exactly as the public surface's do.
+    t.mock.timers.setTime(Date.now() + (6 * THRESHOLD_MS));
+    t.mock.timers.tick(INTERVAL_MS);
+
+    assert.equal(viewRequests.length, probesBefore, "the abandoned copy's probe no longer answers a resume");
+
+    // The whole-copy half. The STATUS_EVENT listener lives on the `homebridge` host object, which outlives every module copy, so nothing but the cycle's own abort
+    // removes it - an un-retired copy would go on rendering pushes into detached DOM and arming latch timers for as long as the frame lives.
+    harness.fake.observed.emitPush(STATUS_EVENT, {
+
+      kind: "row",
+      row: { id: "door", value: "Closed" },
+      serialNumber: "AA",
+      session: 2
+    });
+
+    assert.equal(doorValue(), "Open", "the abandoned copy's host listener died with its cycle - the later push rendered nothing");
   });
 });

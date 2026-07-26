@@ -441,6 +441,39 @@ export function installWebUiBoot(fake) {
 }
 
 /**
+ * Hand the test a window with no page epoch on it, and restore whatever was there on cleanup. Mirrors {@link installWebUiBoot}'s snapshot/restore shape, for the
+ * other global the webUI keeps on the window: `webUiPageEpoch`, the handle a `webUi` construction uses to retire the copy that held the window before it.
+ *
+ * It takes no fake, because there is nothing useful to install: the value is an AbortController a real construction creates, and what a supersession test needs is
+ * a known starting point rather than a stub. Tests that construct a `webUi` at all do NOT need this - the chokepoint REPLACES the global at every construction, so
+ * a leftover epoch from a finished test is superseded rather than consulted, and replacement is the isolation. It exists so the tests that assert ON the epoch can
+ * say where they started from, and so the shared webUi harness leaves the global table as it found it, the same courtesy the DOM globals get.
+ *
+ * @returns {{ [Symbol.dispose](): void }} A disposable handle.
+ */
+export function installPageEpoch() {
+
+  const previous = globalThis.webUiPageEpoch;
+
+  delete globalThis.webUiPageEpoch;
+
+  return {
+
+    [Symbol.dispose]() {
+
+      if(previous === undefined) {
+
+        delete globalThis.webUiPageEpoch;
+
+        return;
+      }
+
+      globalThis.webUiPageEpoch = previous;
+    }
+  };
+}
+
+/**
  * Simulate a user clicking a category disclosure's header. Happy-DOM implements the native `<details>`/`<summary>` toggle contract: clicking the summary mutates
  * `details.open` AND fires the `toggle` event the orchestrator's capture-phase delegated handler listens for. This helper is the single idiom for "drive a category
  * toggle from a test," shared across every webUI test file so the contract under exercise is uniform regardless of which suite the test lives in.

@@ -1225,6 +1225,146 @@ describe("webUi.liveness - the public plugin surface", () => {
   });
 });
 
+describe("webUi.epochSignal - the page-copy lifetime surface", () => {
+
+  test("the getter is live at construction and hands out the epoch's own signal, unwritable and off the enumerable surface", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _epoch = installPageEpoch();
+
+    const ui = new webUi({ name: "Plugin" });
+
+    assert.ok(ui.epochSignal instanceof AbortSignal, "the surface is the platform's own lifetime primitive");
+    assert.equal(ui.epochSignal.aborted, false, "and it is live the moment construction returns");
+
+    // Reference identity rather than equivalent behavior: a getter handing back a similar-looking signal would satisfy a behavioral assertion while being an object
+    // no framework path ever aborts.
+    assert.equal(ui.epochSignal, globalThis.webUiPageEpoch.signal, "the signal handed out is the one the construction installed on the window");
+
+    // An accessor with no setter rejects a write in a module's strict mode, so a plugin cannot swap out the value every retirement path reads.
+    assert.throws(() => { ui.epochSignal = null; }, TypeError, "a write through the surface throws rather than replacing the value");
+
+    // A class accessor is a non-enumerable prototype property, so the instance's own enumerable surface - Object.keys, JSON.stringify, spread - is untouched by it.
+    assert.ok(!Object.keys(ui).includes("epochSignal"), "the accessor adds no own enumerable property to the instance");
+  });
+
+  test("a successor's construction aborts the predecessor's signal and leaves its own live", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _epoch = installPageEpoch();
+
+    const first = new webUi({ name: "First" });
+    const firstSignal = first.epochSignal;
+
+    // The control that makes the abort below attributable: without proving the signal was live first, an aborted reading afterwards could mean it arrived that way.
+    assert.equal(firstSignal.aborted, false, "precondition: the predecessor's signal is live before any successor exists");
+
+    const second = new webUi({ name: "Second" });
+
+    assert.equal(firstSignal.aborted, true, "the successor's construction ends the predecessor's copy lifetime");
+
+    // The predecessor's getter reads the signal its own construction captured rather than the window's current epoch, so a superseded copy reports its own end
+    // instead of the successor's liveness.
+    assert.equal(first.epochSignal.aborted, true, "and the predecessor's getter reports that end rather than the window's live epoch");
+    assert.equal(second.epochSignal.aborted, false, "while the successor's own signal is live - newest wins");
+  });
+
+  test("a consumer's abort listener, registered as the surface documents, runs when a successor claims the window", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _epoch = installPageEpoch();
+
+    const ui = new webUi({ name: "Plugin" });
+    const teardowns = [];
+
+    // The registration shape the getter's own @example prescribes, so what the documentation teaches is what this suite exercises.
+    ui.epochSignal.addEventListener("abort", () => teardowns.push(1), { once: true });
+
+    assert.equal(teardowns.length, 0, "precondition: nothing has retired this copy yet");
+
+    const _successor = new webUi({ name: "Successor" });
+
+    // The call count rather than the signal's own `aborted` reading, because the two are separable - a dispatched abort event fires listeners without setting
+    // `aborted` - and the point of the surface is that a consumer's teardown actually runs.
+    assert.equal(teardowns.length, 1, "the consumer's teardown ran exactly once at the supersession");
+  });
+
+  // Drain queued async work until the predicate answers, so the row below waits on the state it needs rather than on a fixed number of cycles.
+  const drainUntil = async (predicate) => {
+
+    for(let i = 0; i < 400; i++) {
+
+      if(predicate()) {
+
+        return true;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await flushPending();
+    }
+
+    return false;
+  };
+
+  test("a feature-options teardown ends the mount's signal and leaves the module copy's own signal live", async () => {
+
+    const mountSignals = [];
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+
+      /* Global-only is part of the specification here rather than incidental: the cycle returns before the device machinery, so model:loaded is the only trigger
+       * that reaches the hook, and it is the mode a plugin scoping a poll to its module copy actually runs.
+       *
+       * The unstubbed harness is what keeps the row from being vacuous. The default harness replaces featureOptions.show / hide with tracking stubs, so no real
+       * page abort would ever exist for the mount half of the assertion to observe.
+       */
+      featureOptions: { globalOnly: true, infoPanel: ({ signal }) => mountSignals.push(signal) },
+      firstRun: { isRequired: () => false },
+      requestResponses: new Map([[ "/getOptions", {
+
+        categories: [{ description: "Motion Options", name: "Motion" }],
+        options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+      } ]]),
+      unstubbed: true
+    });
+
+    // The consumer positive control, armed on the module copy's own signal: a teardown that reached this lifetime would run the handler.
+    const teardowns = [];
+
+    harness.ui.epochSignal.addEventListener("abort", () => teardowns.push(1), { once: true });
+
+    await harness.ui.show();
+
+    assert.ok(await drainUntil(() => mountSignals.length > 0), "precondition: the real pipeline mounted and invoked the plugin's infoPanel");
+
+    /* How many renders a cycle produces is the page's mode's business, so the row takes the identity every invocation shares rather than asserting a call count.
+     * Global-only reaches the hook exactly once, which makes the check below a guard rather than a proof: it keeps the row honest if the mode ever widens, and it
+     * is deliberately not this row's evidence for the mount signal's per-render stability - that property belongs to the device-info view's own contract.
+     */
+    const [mountSignal] = mountSignals;
+
+    assert.ok(mountSignals.every((signal) => signal === mountSignal), "every invocation received the same mount signal - one identity for the mount's life");
+    assert.equal(mountSignal.aborted, false, "precondition: the mount's signal is live while its panel is on screen");
+
+    await harness.ui.featureOptions.hide();
+
+    assert.equal(mountSignal.aborted, true, "the navigate-away teardown ends the mount's lifetime");
+    assert.equal(harness.ui.epochSignal.aborted, false, "and leaves the module copy's lifetime untouched - nothing but a successor ends that one");
+    assert.equal(teardowns.length, 0, "so a consumer's copy-scoped teardown never ran");
+  });
+});
+
 describe("webUi - the resume detector threads end to end", () => {
 
   // The detector's default cadence and gap threshold in milliseconds, mirrored so a test can jump the clock clear past the threshold.

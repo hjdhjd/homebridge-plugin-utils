@@ -98,6 +98,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   for both names, so it renders nothing rather than failing loudly; this is a documented breaking change to the published hook contract. The hook is re-invoked on
  *   every render of a mount while the bag's `signal` stays one identity for that mount's life, so a hook that registers listeners or subscriptions registers them
  *   once against that signal and they die with the mount.
+ *   That signal is the mount's lifetime, so a resource belonging to the module copy rather than to this panel is scoped to {@link webUi.epochSignal} instead when
+ *   the page is driven by a `webUi` instance - a standalone instance of this class has no page epoch and therefore no copy lifetime to scope to. The rule for
+ *   choosing between the two lives on that getter.
  * @property {() => void} [onOptionsEdited] - Invoked after the store state has transitioned for any option mutation (an option set or cleared, the options reset,
  *   or the model reverted), so a consumer reading editedConfig from inside the callback sees the post-edit state. Invoked once per mutation with no arguments and no
  *   debounce; a consumer that needs coalescing applies its own.

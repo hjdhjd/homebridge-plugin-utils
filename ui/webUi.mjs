@@ -137,6 +137,43 @@ export class webUi {
   }
 
   /**
+   * The lifetime of this module copy's claim on the window, as an `AbortSignal`. It aborts when a newer `webUi` construction in this window supersedes this copy,
+   * and at no other time. The retirement itself belongs to {@link webUi.constructor}, which documents what a supersession reaches, so the mechanism stays described
+   * in one place.
+   *
+   * Which signal a resource is scoped to is the question this surface exists to answer. A plugin holds resources with two different lifetimes and each has its own
+   * signal. The mount signal a render hook receives - the infoPanel bag's `signal` - ends when the panel it drew into is torn down, by a navigation away or by a
+   * re-show, and is the right scope for anything that serves the panel currently on screen. This signal ends only when a successor copy claims the window, and is
+   * the right scope for anything belonging to the module copy itself and meant to outlive any one panel: a recurring poll whose cache survives a navigation, or a
+   * listener registered on an object the frame keeps across copies.
+   *
+   * Published as a getter rather than a public field so the implementation is free to change without breaking callers; the observable shape is what plugins might
+   * consume, and the field behind it stays the class's own. What a consumer receives is the signal and never the controller, so a plugin can observe the end of its
+   * copy but can never declare it. It is deliberately not a teardown notification for the feature-options page either - that lifetime is the mount signal's.
+   *
+   * Adding an abort listener to a signal that has already aborted never fires it. A registration made synchronously in a render hook's own body cannot reach that
+   * state - the mount signal aborts with the epoch, so no render runs after a supersession - which is why the example below needs no guard for it. The framework
+   * calls a render hook un-awaited, so a hook that awaits and then registers from a deferred continuation can land on an already-aborted signal; that registration,
+   * like any made outside a render hook, checks `aborted` first.
+   *
+   * @example
+   *
+   * // A poll that outlives any single panel: armed once for this module copy, and ended only when a newer copy claims the window.
+   * if(refreshTimer === undefined) {
+   *
+   *   refreshTimer = setInterval(() => void refreshPrices(), REFRESH_INTERVAL_MS);
+   *
+   *   ui.epochSignal.addEventListener("abort", () => clearInterval(refreshTimer), { once: true });
+   * }
+   *
+   * @returns {AbortSignal}
+   */
+  get epochSignal() {
+
+    return this.#epochSignal;
+  }
+
+  /**
    * Bound a liveness subscription's options by the page epoch.
    *
    * The one home for the composition rule, applied at both points this instance hands a subscription out: the public `liveness.onResume` surface and the detector

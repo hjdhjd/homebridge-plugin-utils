@@ -12,16 +12,43 @@ The module exports two complementary surfaces:
 
   - **Pure functional core.** Catalog and config indices ([CatalogIndex](#catalogindex), [ConfigIndex](#configindex)) carry every derived view of the catalog and configured options;
     pure builders ([buildCatalogIndex](#buildcatalogindex), [buildConfigIndex](#buildconfigindex)) construct them from raw inputs; pure transforms ([applySetOption](#applysetoption),
-    [applyClearOption](#applyclearoption)) compute new configured-options arrays without mutation; pure queries ([resolveScope](#resolvescope), [getDefaultValue](#getdefaultvalue),
-    [isValueOption](#isvalueoption), [optionExists](#optionexists), [isDependencyMet](#isdependencymet-1), [expandOption](#expandoption-1)) answer scope-aware questions over those indices. This is the
-    single source of truth for option-array semantics, consumed wherever immutable state is the discipline (reducer-driven UIs, server-side renderers, time-travel
-    debuggers, future consumers we have not built yet).
+    [applyClearOption](#applyclearoption), [normalizeConfiguredOptions](#normalizeconfiguredoptions)) compute new configured-options arrays without mutation; pure queries ([resolveScope](#resolvescope),
+    [getDefaultValue](#getdefaultvalue), [isValueOption](#isvalueoption), [optionExists](#optionexists), [isDependencyMet](#isdependencymet-1), [expandOption](#expandoption-1)) answer scope-aware questions over those
+    indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the discipline (reducer-driven UIs, server-side
+    renderers, time-travel debuggers, future consumers we have not built yet).
 
   - **Imperative class façade.** [FeatureOptions](#featureoptions) bundles a [CatalogIndex](#catalogindex), a configured-options array, and a [ConfigIndex](#configindex) into one object whose
     mutating methods (`setOption` / `clearOption` / the setters) delegate to the pure transforms internally. This is the legacy-friendly surface used by every
     plugin's Node-side code; the class's public API surface is identical to the pure-function core it delegates to.
 
 Two surfaces, one set of semantics. The class is a convenience over the pure functions, not a parallel implementation.
+
+### The configured-options entry grammar
+
+A configured option is one string. `Enable.Motion.Detect` and `Disable.Motion.Detect.ABC123` address a boolean option globally and at a scope; the segment after
+the option name, when present, is a device or controller id.
+
+A value-centric option carries its value behind a payload delimiter, which is the canonical form and the only form written by
+[setOption](#setoption):
+
+```
+Enable.Audio.Volume=50                          a global value
+Enable.Audio.Volume.Kitchen=St. Cecilia's Mix   a scoped value
+```
+
+Everything ahead of the first "=" is the address and everything behind it is the value, so a value is free-form: periods, interior spaces, and further "="
+characters all pass through untouched, and only the first "=" splits. Giving the payload its own delimiter is what lets dots address and nothing else.
+
+Whitespace around the delimiter is tolerated - `Enable.Audio.Volume.Kitchen = 50` reads exactly as the tight form - because the address is right-trimmed and
+the value trimmed. The one thing this puts out of reach is a value with leading or trailing spaces, which the writer already excludes by trimming what it
+composes. The tolerance reaches only around "="; dots stay exact, so a space after a dot is part of the id.
+
+A value-centric option written at a scope always carries the delimiter, even with no value: `Enable.Audio.Volume.ABC123=` says "enabled at ABC123, value
+unspecified", where the bare `Enable.Audio.Volume.ABC123` would put ABC123 where the legacy grammar reads a global value and resolve as the option set to the
+literal text "ABC123".
+
+The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
+[normalizeConfiguredOptions](#normalizeconfiguredoptions) rewrites entries into the canonical form as configurations are saved.
 
 ## Feature Options
 
@@ -274,8 +301,8 @@ clearOption(args): void;
 Remove every configured-options entry addressing the given option at the given scope.
 
 Callers express intent ("forget any configuration for option X at scope Y") and the model owns the entry-format end-to-end. The match is value-aware: for
-value-centric options it covers both the bare scoped entry and any entry carrying a single trailing value segment, so a subsequent [setOption](#setoption) cleanly
-replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
+value-centric options it covers the bare scoped entry and any entry carrying a value, in either the canonical or the legacy form, so a subsequent
+[setOption](#setoption) cleanly replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
 
 ###### Parameters
 
@@ -290,7 +317,7 @@ replaces whatever was there. No-op when no entry addresses the target scope, so 
 ###### Example
 
 ```ts
-// Remove any configured value for "Audio.Volume" on device ABC123 (drops both `Enable.Audio.Volume.ABC123` and `Enable.Audio.Volume.ABC123.50`).
+// Remove any configured value for "Audio.Volume" on device ABC123 (drops both `Enable.Audio.Volume.ABC123` and `Enable.Audio.Volume.ABC123=50`).
 featureOpts.clearOption({ option: "Audio.Volume", id: "ABC123" });
 ```
 
@@ -604,8 +631,13 @@ Set the enabled state (and optionally the value) for an option at a given scope,
 
 This is the single mutation primitive for individual feature options. Callers express intent ("enable option X at scope Y, with value Z") and the model owns
 both the encoding and the prior-entry replacement - the configured-options array is canonical, the lookup index is rebuilt automatically, and the entry-string
-format never leaks past this method. Value segments are emitted only when `enabled` is true and the option is value-centric; passing `value` for a non-value or
-disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules.
+format never leaks past this method. Values are emitted only when `enabled` is true and the option is value-centric; passing `value` for a non-value or
+disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules. A value is free-form at either scope - it is
+written behind a payload delimiter and trimmed of surrounding whitespace. A value-centric option set at a scope keeps that delimiter even with no value, as
+`Enable.Option.id=`, so its id is never mistaken for the value; at the global scope an empty value composes the bare entry.
+
+Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See
+[normalizeConfiguredOptions](#normalizeconfiguredoptions) for what that does and does not touch.
 
 ###### Parameters
 
@@ -791,7 +823,7 @@ and optional value for value-centric options.
 | <a id="enabled-1"></a> `enabled` | `boolean` | True to enable, false to disable. |
 | <a id="id-1"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. |
 | <a id="option-1"></a> `option` | `string` | Feature option to set (case-insensitive). |
-| <a id="value-1"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. |
+| <a id="value-1"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace. |
 
 ***
 
@@ -805,7 +837,7 @@ type ConfigIndex = ReadonlyMap<string, Readonly<{
 ```
 
 Immutable lookup index over the configured-options array. Each lookup key is either the raw lowercased tail of an Enable/Disable entry (always present) or a
-derived value-key for value-centric Enable entries that carry a trailing value segment. First-write-wins semantics on collision so the earliest entry in the
+derived value-key for value-centric Enable entries that carry a value. First-write-wins semantics on collision so the earliest entry in the
 configured-options array takes precedence over later duplicates - a user hand-editing config and accidentally listing an option twice gets the natural
 "first one is canonical" semantic.
 
@@ -831,11 +863,12 @@ function applyClearOption(options): readonly string[];
 ```
 
 Compute the new configured-options array after clearing every entry addressing an option at a given scope. The match is value-aware: for value-centric options
-it covers both the bare scoped entry and any entry carrying a single trailing value segment, so a subsequent [applySetOption](#applysetoption) cleanly replaces whatever
-was there.
+it covers the bare scoped entry and any entry carrying a value, in either the canonical or the legacy form, so a subsequent [applySetOption](#applysetoption) cleanly
+replaces whatever was there.
 
-Pure: does not mutate the input array. When no entry matched the target, returns the input array reference unchanged so reference-equality consumers can detect
-a no-op without a contents comparison.
+Pure: does not mutate the input array. When no entry matched the target and none needed modernizing, returns the input array reference unchanged so
+reference-equality consumers can detect a no-op without a contents comparison. Surviving entries are normalized on the way through, so a clear carries the same
+upgrade-on-save behavior a set does. See [normalizeConfiguredOptions](#normalizeconfiguredoptions).
 
 #### Parameters
 
@@ -850,7 +883,7 @@ a no-op without a contents comparison.
 
 readonly `string`[]
 
-The new configured-options array, or the input array reference itself when nothing matched.
+The new configured-options array, or the input array reference itself when nothing matched and nothing needed rewriting.
 
 ***
 
@@ -865,8 +898,15 @@ the same option-at-scope so the new entry is the sole survivor, then appends the
 returned array is a fresh allocation.
 
 The composed entry's action segment is canonical "Enable" / "Disable"; the option and id segments preserve the caller's casing for readability since the
-lookup-index keys are case-insensitive anyway. Value tails are emitted only when meaningful - disabled or non-value options never carry one - so a subsequent
-[applyClearOption](#applyclearoption) or [applySetOption](#applysetoption) addressing the same scope cleanly replaces whatever was there.
+lookup-index keys are case-insensitive anyway. Values are emitted only when meaningful - disabled or non-value options never carry one - so a subsequent
+[applyClearOption](#applyclearoption) or [applySetOption](#applysetoption) addressing the same scope cleanly replaces whatever was there, in either the canonical or the legacy form,
+because the matcher decodes entries through the same parser.
+
+A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
+need no escaping. Surrounding whitespace is trimmed first. A value-centric option written at a scope keeps the delimiter even when no value survives the trim,
+composing `Enable.Option.id=`, because the bare form would leave the id where the legacy grammar reads a global value; at the global scope, where there is no id
+to misread, an empty value composes the bare form. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes
+anything still in the legacy scoped form.
 
 #### Parameters
 
@@ -874,7 +914,7 @@ lookup-index keys are case-insensitive anyway. Value tails are emitted only when
 | ------ | ------ | ------ |
 | `options` | \{ `args`: [`SetOptionArgs`](#setoptionargs); `catalog`: [`CatalogIndex`](#catalogindex); `configuredOptions`: readonly `string`[]; \} | - |
 | `options.args` | [`SetOptionArgs`](#setoptionargs) | The mutation intent: option key, optional scope id, enabled state, optional value. See [SetOptionArgs](#setoptionargs). |
-| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index that defines what counts as a value-centric option (which determines whether to emit a value segment). |
+| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index that defines what counts as a value-centric option (which determines whether to emit a value at all). |
 | `options.configuredOptions` | readonly `string`[] | The current configured-options array. |
 
 #### Returns
@@ -1048,6 +1088,45 @@ catalog's `valueOptions` map is the SSOT for this predicate.
 `boolean`
 
 True for value-centric options, false otherwise.
+
+***
+
+### normalizeConfiguredOptions()
+
+```ts
+function normalizeConfiguredOptions(catalog, configuredOptions): readonly string[];
+```
+
+Rewrite every entry that decodes as a value form of a catalog option into the canonical `Enable.Option[.id]=value` shape, leaving every other entry exactly as
+it was found. Pure: does not mutate the input array, and returns the input reference itself when no entry needed rewriting, so reference-equality consumers can
+detect a no-op without comparing contents.
+
+Entries pass through byte-verbatim unless the parser accounts for them completely - boolean options, options absent from the catalog, and malformed strings are
+never rewritten, because a configuration file is a user's own text and we only reshape the parts whose meaning we can state exactly. Re-composing an entry that
+is already canonical yields the identical string, so running this repeatedly is stable.
+
+The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) is deliberately left alone for the same reason. That segment does double duty - the lookup
+index registers it as the option's global value and, through the primary key, as an enable at a scope carrying that same name - and no single canonical entry
+expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written.
+
+[applySetOption](#applysetoption) and [applyClearOption](#applyclearoption) run their results through this, which is the whole of the upgrade path: a stored configuration modernizes as
+part of a save the user already asked for, and never merely because something read it. One consequence is worth stating plainly, since it becomes visible in the
+saved file: a legacy entry whose dotted tail the engine reads as an id plus a value is rewritten to say so outright, so `Enable.Audio.Volume.St. Andrews` (read
+as the id "St" carrying the value " Andrews") normalizes to `Enable.Audio.Volume.St= Andrews`. Resolution is unchanged either way - the reading a user may not
+have intended stops being latent and becomes something they can see and correct.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `catalog` | [`CatalogIndex`](#catalogindex) | The catalog index that defines which option names are value-centric. |
+| `configuredOptions` | readonly `string`[] | The configured-options array to normalize. |
+
+#### Returns
+
+readonly `string`[]
+
+The normalized array, or the input array reference itself when every entry was already canonical.
 
 ***
 

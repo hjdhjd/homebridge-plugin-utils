@@ -4,7 +4,7 @@
  * and the in-place marker splice (spliceMarkedRegion).
  *
  * Coverage focuses on the contract that is hard to see from the code alone: the index/detail structure, the per-row deep-link anchors, the value/toggle distinction
- * signaled by the ".<value>" placeholder, the raw (never formatted) default cell with its empty-string -> "none" substitution proven non-mutating, the two scope
+ * signaled by the "=<value>" placeholder, the raw (never formatted) default cell with its empty-string -> "none" substitution proven non-mutating, the two scope
  * hooks (string inserted, `undefined` omitted cleanly), the category-level bare-key option, and the splice's happy path, repeatability, prose preservation, and
  * malformed-marker throws. The canonical worked example is reproduced verbatim as the contract test.
  */
@@ -40,7 +40,7 @@ const WORKED_OUTPUT = [
   " * [Audio](#audio): Audio",
   " * [Nvr](#nvr): Recording",
   "",
-  "Options whose key ends in `.<value>` take a value - replace `.<value>` with your setting; all other options are simple on/off toggles. The default shown for each " +
+  "Options whose key ends in `=<value>` take a value - replace `=<value>` with your setting; all other options are simple on/off toggles. The default shown for each " +
     "option is what applies when you leave it unset.",
   "",
   "#### <A NAME=\"audio\"></A>Audio",
@@ -54,7 +54,7 @@ const WORKED_OUTPUT = [
   "",
   "| Option                                                                   | Description",
   "|--------------------------------------------------------------------------|-------------------------------------------------------------",
-  "| <A NAME=\"Nvr.Recording.Retention\"></A>`Nvr.Recording.Retention.<value>`  | Days of recordings to retain. **(default: 10)**.",
+  "| <A NAME=\"Nvr.Recording.Retention\"></A>`Nvr.Recording.Retention=<value>`  | Days of recordings to retain. **(default: 10)**.",
   ""
 ].join("\n");
 
@@ -95,7 +95,7 @@ describe("renderFeatureOptionsReference - index pass", () => {
 
     // The two index bullets, exactly one blank line, the value-notation legend (the worked example has a value option), one blank line, then the first detail heading.
     assert.equal(lines[2], "");
-    assert.ok(lines[3]?.startsWith("Options whose key ends in `.<value>`"));
+    assert.ok(lines[3]?.startsWith("Options whose key ends in `=<value>`"));
     assert.equal(lines[4], "");
     assert.equal(lines[5], "#### <A NAME=\"audio\"></A>Audio");
   });
@@ -127,7 +127,7 @@ describe("renderFeatureOptionsReference - detail headings and anchors", () => {
 
     // The anchor preserves the catalog casing so deep links are stable; the code span follows immediately.
     assert.ok(output.includes("<A NAME=\"Audio.TwoWay\"></A>`Audio.TwoWay`"));
-    assert.ok(output.includes("<A NAME=\"Nvr.Recording.Retention\"></A>`Nvr.Recording.Retention.<value>`"));
+    assert.ok(output.includes("<A NAME=\"Nvr.Recording.Retention\"></A>`Nvr.Recording.Retention=<value>`"));
   });
 });
 
@@ -141,22 +141,22 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
     assert.ok(output.includes("Two-way audio. **(default: disabled)**."));
   });
 
-  test("renders a value option with the .<value> placeholder and its raw declared default", () => {
+  test("renders a value option with the =<value> placeholder and its raw declared default", () => {
 
     const output = renderFeatureOptionsReference({ categories: WORKED_CATEGORIES, options: WORKED_OPTIONS });
 
-    // The ".<value>" suffix is the lexical signal of value-ness; the default is the raw "10", never formatted.
-    assert.ok(output.includes("`Nvr.Recording.Retention.<value>`"));
+    // The "=<value>" suffix is the lexical signal of value-ness; the default is the raw "10", never formatted.
+    assert.ok(output.includes("`Nvr.Recording.Retention=<value>`"));
     assert.ok(output.includes("Days of recordings to retain. **(default: 10)**."));
   });
 
-  test("does not append the .<value> placeholder to a plain toggle option", () => {
+  test("does not append the =<value> placeholder to a plain toggle option", () => {
 
     const output = renderFeatureOptionsReference({ categories: WORKED_CATEGORIES, options: WORKED_OPTIONS });
 
     // A toggle's key span must be the bare key with no placeholder suffix.
     assert.ok(output.includes("`Audio.TwoWay`"));
-    assert.ok(!output.includes("`Audio.TwoWay.<value>`"));
+    assert.ok(!output.includes("`Audio.TwoWay=<value>`"));
   });
 
   test("substitutes an empty-string default to \"none\" at render time without mutating the entry", () => {
@@ -174,13 +174,13 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
 
   test("treats a value option declared with an undefined defaultValue as value-centric, rendering \"none\"", () => {
 
-    // The defaultValue key is present (so the option is value-centric and gets the .<value> placeholder) but its value is undefined; the default cell collapses to
+    // The defaultValue key is present (so the option is value-centric and gets the =<value> placeholder) but its value is undefined; the default cell collapses to
     // "none" via the same empty-default path.
     const categories: FeatureCategoryEntry[] = [{ description: "Configuration", name: "Cfg" }];
     const options: Record<string, FeatureOptionEntry[]> = { Cfg: [{ default: false, defaultValue: undefined, description: "Token.", name: "Token" }] };
     const output = renderFeatureOptionsReference({ categories, options });
 
-    assert.ok(output.includes("`Cfg.Token.<value>`"));
+    assert.ok(output.includes("`Cfg.Token=<value>`"));
     assert.ok(output.includes("Token. **(default: none)**."));
   });
 
@@ -282,7 +282,7 @@ describe("renderFeatureOptionsReference - conditional legend", () => {
 
     // The worked example carries a value option, so the legend appears between the index's trailing blank line and the first heading, followed by its own blank line.
     const output = renderFeatureOptionsReference({ categories: WORKED_CATEGORIES, options: WORKED_OPTIONS });
-    const legend = "Options whose key ends in `.<value>` take a value - replace `.<value>` with your setting; all other options are simple on/off toggles. The default " +
+    const legend = "Options whose key ends in `=<value>` take a value - replace `=<value>` with your setting; all other options are simple on/off toggles. The default " +
       "shown for each option is what applies when you leave it unset.";
 
     assert.ok(output.includes(legend));
@@ -291,7 +291,7 @@ describe("renderFeatureOptionsReference - conditional legend", () => {
 
   test("omits the legend entirely - and emits no stray blank line - for a toggle-only catalog", () => {
 
-    // A catalog with no value options never renders the ".<value>" placeholder, so the legend that documents it is suppressed. The index's single blank line must lead
+    // A catalog with no value options never renders the "=<value>" placeholder, so the legend that documents it is suppressed. The index's single blank line must lead
     // directly into the first heading with no extra blank line where the legend would have been.
     const categories: FeatureCategoryEntry[] = [{ description: "Configuration", name: "Cfg" }];
     const options: Record<string, FeatureOptionEntry[]> = { Cfg: [{ default: true, description: "A toggle.", name: "Toggle" }] };

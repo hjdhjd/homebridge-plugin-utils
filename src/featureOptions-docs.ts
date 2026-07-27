@@ -63,7 +63,7 @@ const EMPTY_DEFAULT_LABEL = "none";
 // a phantom table column) and the HTML-significant "&", "<", ">" (which would otherwise be parsed as markup and swallowed). "&" is replaced first so the entities we
 // introduce are not themselves re-escaped. This is applied ONLY to catalog-derived plain text (descriptions and the rendered default value); it is deliberately NOT
 // applied to the dotted key (a constrained identifier that also lives inside a code span where entities would not decode), to the renderer's own structural HTML
-// (the per-row/heading anchors) or the ".<value>" placeholder, nor to the scope-hook return values (the plugin owns that markup - e.g. a "<BR>" line break).
+// (the per-row/heading anchors) or the "=<value>" placeholder, nor to the scope-hook return values (the plugin owns that markup - e.g. a "<BR>" line break).
 function escapeCellText(text: string): string {
 
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("|", "\\|");
@@ -71,9 +71,9 @@ function escapeCellText(text: string): string {
 
 /**
  * Render a feature-options catalog into the markdown reference fragment a plugin embeds in its `docs/FeatureOptions.md`. The output is a category index (one bullet per
- * category, deep-linking to its detail section), an optional one-line legend explaining the `.<value>` notation, and then one detail section per category, each carrying
+ * category, deep-linking to its detail section), an optional one-line legend explaining the `=<value>` notation, and then one detail section per category, each carrying
  * an optional device-scope line and a flat table of option rows. The legend is emitted only when the catalog has at least one value option, since a toggle-only catalog
- * never renders the `.<value>` placeholder the legend describes.
+ * never renders the `=<value>` placeholder the legend describes.
  *
  * The renderer owns all base-shaped scaffolding - the index, headings, per-row deep-link anchors, the key cell with its value/toggle placeholder, the default cell, the
  * description cell, and the column math - purely from the base {@link FeatureOptionEntry} / {@link FeatureCategoryEntry} fields. The two optional hooks own *only* the
@@ -128,13 +128,13 @@ export function renderFeatureOptionsReference<TOptionMeta = unknown, TCategoryMe
   // A single blank line separates the index from the detail sections.
   lines.push("");
 
-  // Conditional legend. When the catalog has at least one value option, we explain the renderer's own ".<value>" notation - the suffix it appends to value-option keys -
+  // Conditional legend. When the catalog has at least one value option, we explain the renderer's own "=<value>" notation - the suffix it appends to value-option keys -
   // so a reader knows to substitute their setting rather than typing the literal placeholder, and that every other option is a simple on/off toggle. The legend is
-  // suppressed for a toggle-only catalog (no value options) where the ".<value>" notation never appears, so the explanation would document a notation the reader never
+  // suppressed for a toggle-only catalog (no value options) where the "=<value>" notation never appears, so the explanation would document a notation the reader never
   // sees. It sits after the index's trailing blank line and is itself followed by a blank line, keeping it cleanly framed before the first detail heading.
   if(catalog.sortedValueOptionNames.length > 0) {
 
-    lines.push("Options whose key ends in `.<value>` take a value - replace `.<value>` with your setting; all other options are simple on/off toggles. " +
+    lines.push("Options whose key ends in `=<value>` take a value - replace `=<value>` with your setting; all other options are simple on/off toggles. " +
       "The default shown for each option is what applies when you leave it unset.");
     lines.push("");
   }
@@ -173,8 +173,8 @@ export function renderFeatureOptionsReference<TOptionMeta = unknown, TCategoryMe
       const key = expandOption(category, option);
 
       // The key cell pairs an invisible per-row anchor (key case preserved, so deep links are stable) with a single backtick code span. Value-ness is signaled
-      // lexically by appending the universal ".<value>" placeholder inside the same span - no mixed HTML, faithful to the template the user fills in.
-      const keyCell = "<A NAME=\"" + key + "\"></A>`" + key + (isValueOption(catalog, key) ? ".<value>" : "") + "`";
+      // lexically by appending the universal "=<value>" placeholder inside the same span - no mixed HTML, faithful to the template the user fills in.
+      const keyCell = "<A NAME=\"" + key + "\"></A>`" + key + (isValueOption(catalog, key) ? "=<value>" : "") + "`";
 
       // The default cell. A value option shows its raw declared default in the form the user would type - never formatted, since a formatted value (e.g. "30s") is an
       // invalid config value. The empty-string default substitutes to "none" at render time, without mutating the entry. A toggle shows enabled / disabled.

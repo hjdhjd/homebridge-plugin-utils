@@ -416,7 +416,7 @@ describe("reducer - option:set", () => {
     const loaded = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
     const next = reducer(loaded, { args: { enabled: true, id: "ABC123", option: "Audio.Volume", value: 75 }, type: "option:set" });
 
-    assert.deepEqual(next.configuredOptions, ["Enable.Audio.Volume.ABC123.75"]);
+    assert.deepEqual(next.configuredOptions, ["Enable.Audio.Volume.ABC123=75"]);
   });
 });
 

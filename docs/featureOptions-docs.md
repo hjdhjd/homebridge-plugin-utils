@@ -58,9 +58,9 @@ function renderFeatureOptionsReference<TOptionMeta, TCategoryMeta>(input): strin
 ```
 
 Render a feature-options catalog into the markdown reference fragment a plugin embeds in its `docs/FeatureOptions.md`. The output is a category index (one bullet per
-category, deep-linking to its detail section), an optional one-line legend explaining the `.<value>` notation, and then one detail section per category, each carrying
+category, deep-linking to its detail section), an optional one-line legend explaining the `=<value>` notation, and then one detail section per category, each carrying
 an optional device-scope line and a flat table of option rows. The legend is emitted only when the catalog has at least one value option, since a toggle-only catalog
-never renders the `.<value>` placeholder the legend describes.
+never renders the `=<value>` placeholder the legend describes.
 
 The renderer owns all base-shaped scaffolding - the index, headings, per-row deep-link anchors, the key cell with its value/toggle placeholder, the default cell, the
 description cell, and the column math - purely from the base [FeatureOptionEntry](featureOptions.md#featureoptionentry) / [FeatureCategoryEntry](featureOptions.md#featurecategoryentry) fields. The two optional hooks own *only* the

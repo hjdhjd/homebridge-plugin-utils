@@ -10,16 +10,43 @@
  *
  *   - **Pure functional core.** Catalog and config indices ({@link CatalogIndex}, {@link ConfigIndex}) carry every derived view of the catalog and configured options;
  *     pure builders ({@link buildCatalogIndex}, {@link buildConfigIndex}) construct them from raw inputs; pure transforms ({@link applySetOption},
- *     {@link applyClearOption}) compute new configured-options arrays without mutation; pure queries ({@link resolveScope}, {@link getDefaultValue},
- *     {@link isValueOption}, {@link optionExists}, {@link isDependencyMet}, {@link expandOption}) answer scope-aware questions over those indices. This is the
- *     single source of truth for option-array semantics, consumed wherever immutable state is the discipline (reducer-driven UIs, server-side renderers, time-travel
- *     debuggers, future consumers we have not built yet).
+ *     {@link applyClearOption}, {@link normalizeConfiguredOptions}) compute new configured-options arrays without mutation; pure queries ({@link resolveScope},
+ *     {@link getDefaultValue}, {@link isValueOption}, {@link optionExists}, {@link isDependencyMet}, {@link expandOption}) answer scope-aware questions over those
+ *     indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the discipline (reducer-driven UIs, server-side
+ *     renderers, time-travel debuggers, future consumers we have not built yet).
  *
  *   - **Imperative class façade.** {@link FeatureOptions} bundles a {@link CatalogIndex}, a configured-options array, and a {@link ConfigIndex} into one object whose
  *     mutating methods (`setOption` / `clearOption` / the setters) delegate to the pure transforms internally. This is the legacy-friendly surface used by every
  *     plugin's Node-side code; the class's public API surface is identical to the pure-function core it delegates to.
  *
  * Two surfaces, one set of semantics. The class is a convenience over the pure functions, not a parallel implementation.
+ *
+ * ### The configured-options entry grammar
+ *
+ * A configured option is one string. `Enable.Motion.Detect` and `Disable.Motion.Detect.ABC123` address a boolean option globally and at a scope; the segment after
+ * the option name, when present, is a device or controller id.
+ *
+ * A value-centric option carries its value behind a payload delimiter, which is the canonical form and the only form written by
+ * {@link FeatureOptions.setOption | setOption}:
+ *
+ * ```
+ * Enable.Audio.Volume=50                          a global value
+ * Enable.Audio.Volume.Kitchen=St. Cecilia's Mix   a scoped value
+ * ```
+ *
+ * Everything ahead of the first "=" is the address and everything behind it is the value, so a value is free-form: periods, interior spaces, and further "="
+ * characters all pass through untouched, and only the first "=" splits. Giving the payload its own delimiter is what lets dots address and nothing else.
+ *
+ * Whitespace around the delimiter is tolerated - `Enable.Audio.Volume.Kitchen = 50` reads exactly as the tight form - because the address is right-trimmed and
+ * the value trimmed. The one thing this puts out of reach is a value with leading or trailing spaces, which the writer already excludes by trimming what it
+ * composes. The tolerance reaches only around "="; dots stay exact, so a space after a dot is part of the id.
+ *
+ * A value-centric option written at a scope always carries the delimiter, even with no value: `Enable.Audio.Volume.ABC123=` says "enabled at ABC123, value
+ * unspecified", where the bare `Enable.Audio.Volume.ABC123` would put ABC123 where the legacy grammar reads a global value and resolve as the option set to the
+ * literal text "ABC123".
+ *
+ * The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
+ * {@link normalizeConfiguredOptions} rewrites entries into the canonical form as configurations are saved.
  *
  * @module
  */
@@ -190,7 +217,7 @@ export interface CatalogIndex {
 
 /**
  * Immutable lookup index over the configured-options array. Each lookup key is either the raw lowercased tail of an Enable/Disable entry (always present) or a
- * derived value-key for value-centric Enable entries that carry a trailing value segment. First-write-wins semantics on collision so the earliest entry in the
+ * derived value-key for value-centric Enable entries that carry a value. First-write-wins semantics on collision so the earliest entry in the
  * configured-options array takes precedence over later duplicates - a user hand-editing config and accidentally listing an option twice gets the natural
  * "first one is canonical" semantic.
  *
@@ -206,7 +233,8 @@ export type ConfigIndex = ReadonlyMap<string, Readonly<{ enabled: boolean; value
  * @property enabled - True to enable, false to disable.
  * @property id      - Optional device or controller scope identifier. Omit to address the global scope.
  * @property option  - Feature option to set (case-insensitive).
- * @property value   - Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric.
+ * @property value   - Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope:
+ *                     the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace.
  */
 export interface SetOptionArgs {
 
@@ -230,11 +258,12 @@ export interface ClearOptionArgs {
 }
 
 // Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail (always registered on the index). `valueKey` and `value`
-// appear only when the tail decomposes as a known value-centric option plus a value segment - they tell the index where to also register the extracted value for
-// O(1) lookups. Shared between buildConfigIndex (writer) and entryAddressesScope (reader) so the two cannot disagree on what any given entry "means" under the
-// storage format.
+// appear only when the tail decomposes as a known value-centric option plus a value - they tell the index where to also register the extracted value for O(1)
+// lookups, and `canonicalEntry` carries the same decoding re-composed in the canonical form. Shared between buildConfigIndex (writer), entryAddressesScope
+// (reader), and normalizeConfiguredOptions (rewriter) so none of the three can disagree on what any given entry "means" under the storage format.
 interface ParsedConfigEntry {
 
+  canonicalEntry?: string;
   enabled: boolean;
   primaryKey: string;
   value?: string;
@@ -272,11 +301,29 @@ function targetKey(option: string, id: string | undefined): string {
   return id?.length ? option.toLowerCase() + "." + id.toLowerCase() : option.toLowerCase();
 }
 
+// Compose a configured-options entry from its parts, and the single place in this module that knows how to write one. Everything up to the payload delimiter is
+// the address - the canonical action, the option name, and an optional scope id, joined by dots - and everything after it is the value. An absent value composes
+// the bare address; a value that is present but empty still composes the delimiter, which is how a value-centric option carrying no value at a scope says so
+// without its id segment being read as the value instead. Leading and trailing whitespace comes off the value, so the canonical value domain excludes edge
+// whitespace and the tolerant parse of a hand-spaced entry lands on exactly this form. Pairing this with parseEntry as the single decoder keeps the reader and
+// the writer of the storage format from drifting apart.
+function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: string; option: string; value?: string }): string {
+
+  const address = (enabled ? "Enable" : "Disable") + "." + option + (id?.length ? ("." + id) : "");
+  const payload = value?.trim();
+
+  return (payload === undefined) ? address : (address + "=" + payload);
+}
+
 // Parse a single configured-options entry into the lookup keys it would register on the index. Returns null for non-canonical entries (no action prefix, or an
 // unknown action). Otherwise returns the primary (raw-tail) key, optionally accompanied by a derived value key with the extracted value for value-centric Enable
-// entries. This is the SSOT for entry decoding - both buildConfigIndex (which uses it to populate the index) and entryAddressesScope (which uses it to decide
-// whether a mutation should replace this entry) consume the same result, so the writer and the reader of the storage format cannot disagree about what any given
-// entry "means."
+// entries. This is the SSOT for entry decoding - buildConfigIndex (which uses it to populate the index), entryAddressesScope (which uses it to decide whether a
+// mutation should replace this entry), and normalizeConfiguredOptions (which uses it to rewrite an entry into canonical form) all consume the same result, so no
+// reader or writer of the storage format can disagree about what any given entry "means."
+//
+// Two value forms decode here. The canonical one is `Enable.Option[.id]=value`, where the first "=" ends the address and everything behind it is the value: dots
+// address and "=" carries the payload, each delimiter with a single job. A legacy dot form is also accepted, for configurations hand-authored before the payload
+// delimiter existed - there a single trailing segment is a global value and a multi-segment tail is an id followed by a value.
 //
 // Greedy longest-prefix matching against the value-option registry handles the case where a shorter value-centric option name is a prefix of a longer option in
 // the catalog - the longer match wins, so an entry like `Enable.Audio.Volume.50` (when both `Audio` and `Audio.Volume` are value-centric) is unambiguously parsed
@@ -325,6 +372,52 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
       break;
     }
 
+    const optionOriginal = tailOriginal.slice(0, optName.length);
+    const remainderOriginal = tailOriginal.slice(optName.length);
+    const payloadIndex = remainder.indexOf("=");
+
+    // The payload delimiter gives the value a separator of its own, so dots are left to do one job: addressing. Everything ahead of the first "=" addresses the
+    // option, everything behind it is the value - periods, further "=" characters, and interior spaces all ride through verbatim, which is why this is the form
+    // the composer writes and the form entries normalize into.
+    if(payloadIndex !== -1) {
+
+      // Whitespace around the delimiter is tolerated: the address is right-trimmed and the value trimmed, so a hand-authored `Option.id = value` reads exactly as
+      // the tight form the composer writes. The tolerance reaches only around "=" - dots stay exact, so a space after a dot belongs to the id. The one thing this
+      // costs is a value with leading or trailing spaces, which the composer already rules out of the value domain by trimming what it writes.
+      const address = remainder.slice(0, payloadIndex).trimEnd();
+      const value = remainderOriginal.slice(payloadIndex + 1).trim();
+
+      if(!address.length) {
+
+        // Global form: the option name is the whole address.
+        parsed.canonicalEntry = composeEntry({ enabled, option: optionOriginal, value });
+        parsed.valueKey = optName;
+        parsed.value = value;
+
+        break;
+      }
+
+      // A leading character other than the dot means this option name is merely a prefix of a longer unrelated token, so we keep trying shorter candidates.
+      if(!address.startsWith(".")) {
+
+        continue;
+      }
+
+      const idLower = address.slice(1);
+
+      // Scoped form: exactly one dot-free, non-empty segment sits between the option name and the delimiter. Anything else is malformed, and we leave the entry
+      // to its primary key rather than guess which segment was meant to be the id. The lookup key lowercases the id while the re-composition keeps the casing
+      // the entry carried, matching what the composer writes - the two have to agree, or normalizing a composed entry would rewrite it.
+      if(idLower.length && !idLower.includes(".")) {
+
+        parsed.canonicalEntry = composeEntry({ enabled, id: remainderOriginal.slice(1, address.length), option: optionOriginal, value });
+        parsed.valueKey = optName + "." + idLower;
+        parsed.value = value;
+      }
+
+      break;
+    }
+
     // The next character must be a dot separator. Otherwise this option name is merely a prefix of a longer unrelated token, and we should continue trying shorter
     // candidates.
     if(!remainder.startsWith(".")) {
@@ -333,12 +426,17 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
     }
 
     const extra = remainder.slice(1);
-    const extraOriginal = tailOriginal.slice(optName.length + 1);
+    const extraOriginal = remainderOriginal.slice(1);
     const separatorIndex = extra.indexOf(".");
 
+    // The legacy dot form, accepted for configurations hand-authored before the payload delimiter existed. A single trailing segment is the global value; a
+    // multi-segment tail reads as an id followed by a free-form value. The legacy global form has to stay single-segment, because with no id to anchor on a
+    // dotted tail cannot be told apart from an id-and-value pair - expressing that unambiguously is exactly what the "=" form is for.
     if(separatorIndex === -1) {
 
-      // Single trailing segment: global value form.
+      // No re-composition for this one. Its single trailing segment does double duty: the index registers it as this option's global value AND, through the
+      // primary key, as an enable at a scope named by that same segment. Both readings are live, no canonical entry can carry both, and rewriting it would settle
+      // an ambiguity in the user's file that only the user can settle. It stays exactly as written.
       parsed.valueKey = optName;
       parsed.value = extraOriginal;
     } else {
@@ -346,18 +444,23 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
       const idLower = extra.slice(0, separatorIndex);
       const valueOriginal = extraOriginal.slice(separatorIndex + 1);
 
-      // Only register if the value portion is a single segment (no additional dots) - otherwise the tail is unstructured and we leave it for the primary key.
-      if(!valueOriginal.includes(".")) {
-
-        parsed.valueKey = optName + "." + idLower;
-        parsed.value = valueOriginal;
-      }
+      parsed.canonicalEntry = composeEntry({ enabled, id: extraOriginal.slice(0, separatorIndex), option: optionOriginal, value: valueOriginal });
+      parsed.valueKey = optName + "." + idLower;
+      parsed.value = valueOriginal;
     }
 
     break;
   }
 
   return parsed;
+}
+
+// Re-compose a single entry into the canonical form when it decodes as a value form of a catalog option, and hand back the original string when it does not.
+// Entries the parser cannot fully account for - boolean options, options absent from the catalog, malformed strings - come through byte-verbatim, because
+// rewriting what we do not fully understand is how a configuration file loses information a user put there deliberately.
+function normalizeEntry(catalog: CatalogIndex, rawEntry: string): string {
+
+  return parseEntry(catalog, rawEntry)?.canonicalEntry ?? rawEntry;
 }
 
 // Decide whether a configured-options entry addresses a target lookup key. Used by applySetOption/applyClearOption to find replaceable entries without exposing
@@ -411,7 +514,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
 
       defaults[entry.toLowerCase()] = option.default;
 
-      // Track value-centric options separately so the lookup index built later knows which entries can carry a trailing value segment.
+      // Track value-centric options separately so the lookup index built later knows which entries can carry a value.
       if("defaultValue" in option) {
 
         valueOptions[entry.toLowerCase()] = option.defaultValue;
@@ -500,17 +603,70 @@ export function buildConfigIndex(catalog: CatalogIndex, configuredOptions: reado
 }
 
 /**
+ * Rewrite every entry that decodes as a value form of a catalog option into the canonical `Enable.Option[.id]=value` shape, leaving every other entry exactly as
+ * it was found. Pure: does not mutate the input array, and returns the input reference itself when no entry needed rewriting, so reference-equality consumers can
+ * detect a no-op without comparing contents.
+ *
+ * Entries pass through byte-verbatim unless the parser accounts for them completely - boolean options, options absent from the catalog, and malformed strings are
+ * never rewritten, because a configuration file is a user's own text and we only reshape the parts whose meaning we can state exactly. Re-composing an entry that
+ * is already canonical yields the identical string, so running this repeatedly is stable.
+ *
+ * The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) is deliberately left alone for the same reason. That segment does double duty - the lookup
+ * index registers it as the option's global value and, through the primary key, as an enable at a scope carrying that same name - and no single canonical entry
+ * expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written.
+ *
+ * {@link applySetOption} and {@link applyClearOption} run their results through this, which is the whole of the upgrade path: a stored configuration modernizes as
+ * part of a save the user already asked for, and never merely because something read it. One consequence is worth stating plainly, since it becomes visible in the
+ * saved file: a legacy entry whose dotted tail the engine reads as an id plus a value is rewritten to say so outright, so `Enable.Audio.Volume.St. Andrews` (read
+ * as the id "St" carrying the value " Andrews") normalizes to `Enable.Audio.Volume.St= Andrews`. Resolution is unchanged either way - the reading a user may not
+ * have intended stops being latent and becomes something they can see and correct.
+ *
+ * @param catalog           - The catalog index that defines which option names are value-centric.
+ * @param configuredOptions - The configured-options array to normalize.
+ *
+ * @returns The normalized array, or the input array reference itself when every entry was already canonical.
+ */
+export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOptions: readonly string[]): readonly string[] {
+
+  let normalized: string[] | undefined;
+
+  for(const [ index, entry ] of configuredOptions.entries()) {
+
+    const canonical = normalizeEntry(catalog, entry);
+
+    if(canonical === entry) {
+
+      continue;
+    }
+
+    // Copy on the first entry that actually changes. An array that is already canonical - the common case by far, since the composer only ever writes canonical
+    // entries - costs a parse per entry and no allocation at all.
+    normalized ??= [...configuredOptions];
+    normalized[index] = canonical;
+  }
+
+  return normalized ?? configuredOptions;
+}
+
+/**
  * Compute the new configured-options array after setting an option's enabled state (and optionally its value) at a given scope. Drops any prior entry addressing
  * the same option-at-scope so the new entry is the sole survivor, then appends the freshly composed entry string. Pure: does not mutate the input array; the
  * returned array is a fresh allocation.
  *
  * The composed entry's action segment is canonical "Enable" / "Disable"; the option and id segments preserve the caller's casing for readability since the
- * lookup-index keys are case-insensitive anyway. Value tails are emitted only when meaningful - disabled or non-value options never carry one - so a subsequent
- * {@link applyClearOption} or {@link applySetOption} addressing the same scope cleanly replaces whatever was there.
+ * lookup-index keys are case-insensitive anyway. Values are emitted only when meaningful - disabled or non-value options never carry one - so a subsequent
+ * {@link applyClearOption} or {@link applySetOption} addressing the same scope cleanly replaces whatever was there, in either the canonical or the legacy form,
+ * because the matcher decodes entries through the same parser.
+ *
+ * A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
+ * need no escaping. Surrounding whitespace is trimmed first. A value-centric option written at a scope keeps the delimiter even when no value survives the trim,
+ * composing `Enable.Option.id=`, because the bare form would leave the id where the legacy grammar reads a global value; at the global scope, where there is no id
+ * to misread, an empty value composes the bare form. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes
+ * anything still in the legacy scoped form.
  *
  * @param options
  * @param options.args              - The mutation intent: option key, optional scope id, enabled state, optional value. See {@link SetOptionArgs}.
- * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which determines whether to emit a value segment).
+ * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which determines whether to emit a value at all).
  * @param options.configuredOptions - The current configured-options array.
  *
  * @returns The new configured-options array. A fresh allocation, never a shared reference with the input.
@@ -518,41 +674,39 @@ export function buildConfigIndex(catalog: CatalogIndex, configuredOptions: reado
 export function applySetOption({ args, catalog, configuredOptions }: { args: SetOptionArgs; catalog: CatalogIndex; configuredOptions: readonly string[] }): string[] {
 
   const target = targetKey(args.option, args.id);
-  const filtered = configuredOptions.filter((entry) => !entryAddressesScope({ catalog, rawEntry: entry, target }));
 
-  // Compose the new entry. The action segment is canonical "Enable"/"Disable"; the rest preserves the caller's casing for readability since the index is
-  // case-insensitive anyway. Value tails are emitted only when meaningful - disabled or non-value options never carry one.
-  const segments = [ args.enabled ? "Enable" : "Disable", args.option ];
+  // The entries that survive the replacement modernize as part of the save the caller already asked for. The entry composed below is canonical by construction, so
+  // it needs no pass of its own.
+  const surviving = normalizeConfiguredOptions(catalog, configuredOptions.filter((entry) => !entryAddressesScope({ catalog, rawEntry: entry, target })));
 
-  if(args.id?.length) {
+  // A value is meaningful only on an Enable of a value-centric option; everything else composes the bare address.
+  const valued = args.enabled && isValueOption(catalog, args.option);
+  const trimmed = (valued && (args.value !== undefined)) ? args.value.toString().trim() : "";
 
-    segments.push(args.id);
-  }
+  // The delimiter is emitted when there is a value to carry, and also whenever a value-centric option is written at a scope even with no value: the bare form
+  // would put the id in the position the legacy grammar reads as a global value, so `Option.id` would resolve as this option set to the literal id. Writing
+  // `Option.id=` keeps the id addressing a scope and says the value is unspecified.
+  const scoped = (args.id !== undefined) && (args.id.length > 0);
+  const value = (valued && (scoped || (trimmed.length > 0))) ? trimmed : undefined;
 
-  if(args.enabled && isValueOption(catalog, args.option) && (args.value !== undefined)) {
-
-    segments.push(args.value.toString());
-  }
-
-  filtered.push(segments.join("."));
-
-  return filtered;
+  return [ ...surviving, composeEntry({ enabled: args.enabled, id: args.id, option: args.option, value }) ];
 }
 
 /**
  * Compute the new configured-options array after clearing every entry addressing an option at a given scope. The match is value-aware: for value-centric options
- * it covers both the bare scoped entry and any entry carrying a single trailing value segment, so a subsequent {@link applySetOption} cleanly replaces whatever
- * was there.
+ * it covers the bare scoped entry and any entry carrying a value, in either the canonical or the legacy form, so a subsequent {@link applySetOption} cleanly
+ * replaces whatever was there.
  *
- * Pure: does not mutate the input array. When no entry matched the target, returns the input array reference unchanged so reference-equality consumers can detect
- * a no-op without a contents comparison.
+ * Pure: does not mutate the input array. When no entry matched the target and none needed modernizing, returns the input array reference unchanged so
+ * reference-equality consumers can detect a no-op without a contents comparison. Surviving entries are normalized on the way through, so a clear carries the same
+ * upgrade-on-save behavior a set does. See {@link normalizeConfiguredOptions}.
  *
  * @param options
  * @param options.args              - The addressing intent: option key, optional scope id. See {@link ClearOptionArgs}.
  * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which the matcher consults via the shared parser).
  * @param options.configuredOptions - The current configured-options array.
  *
- * @returns The new configured-options array, or the input array reference itself when nothing matched.
+ * @returns The new configured-options array, or the input array reference itself when nothing matched and nothing needed rewriting.
  */
 export function applyClearOption(
   { args, catalog, configuredOptions }: { args: ClearOptionArgs; catalog: CatalogIndex; configuredOptions: readonly string[] }
@@ -560,9 +714,10 @@ export function applyClearOption(
 
   const target = targetKey(args.option, args.id);
   const filtered = configuredOptions.filter((entry) => !entryAddressesScope({ catalog, rawEntry: entry, target }));
+  const normalized = normalizeConfiguredOptions(catalog, filtered);
 
-  // Reference-stable no-op: nothing matched, so callers comparing references see no change without inspecting contents.
-  return (filtered.length === configuredOptions.length) ? configuredOptions : filtered;
+  // Reference-stable no-op: nothing matched the target and no survivor needed rewriting, so callers comparing references see no change without inspecting contents.
+  return ((normalized === filtered) && (filtered.length === configuredOptions.length)) ? configuredOptions : normalized;
 }
 
 /**
@@ -1065,15 +1220,15 @@ export class FeatureOptions {
    * Remove every configured-options entry addressing the given option at the given scope.
    *
    * Callers express intent ("forget any configuration for option X at scope Y") and the model owns the entry-format end-to-end. The match is value-aware: for
-   * value-centric options it covers both the bare scoped entry and any entry carrying a single trailing value segment, so a subsequent {@link setOption} cleanly
-   * replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
+   * value-centric options it covers the bare scoped entry and any entry carrying a value, in either the canonical or the legacy form, so a subsequent
+   * {@link setOption} cleanly replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
    *
    * @param args - The addressing intent: option key and optional scope id. See {@link ClearOptionArgs}.
    *
    * @example
    *
    * ```ts
-   * // Remove any configured value for "Audio.Volume" on device ABC123 (drops both `Enable.Audio.Volume.ABC123` and `Enable.Audio.Volume.ABC123.50`).
+   * // Remove any configured value for "Audio.Volume" on device ABC123 (drops both `Enable.Audio.Volume.ABC123` and `Enable.Audio.Volume.ABC123=50`).
    * featureOpts.clearOption({ option: "Audio.Volume", id: "ABC123" });
    * ```
    */
@@ -1099,8 +1254,13 @@ export class FeatureOptions {
    *
    * This is the single mutation primitive for individual feature options. Callers express intent ("enable option X at scope Y, with value Z") and the model owns
    * both the encoding and the prior-entry replacement - the configured-options array is canonical, the lookup index is rebuilt automatically, and the entry-string
-   * format never leaks past this method. Value segments are emitted only when `enabled` is true and the option is value-centric; passing `value` for a non-value or
-   * disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules.
+   * format never leaks past this method. Values are emitted only when `enabled` is true and the option is value-centric; passing `value` for a non-value or
+   * disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules. A value is free-form at either scope - it is
+   * written behind a payload delimiter and trimmed of surrounding whitespace. A value-centric option set at a scope keeps that delimiter even with no value, as
+   * `Enable.Option.id=`, so its id is never mistaken for the value; at the global scope an empty value composes the bare entry.
+   *
+   * Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See
+   * {@link normalizeConfiguredOptions} for what that does and does not touch.
    *
    * @param args - The mutation intent: option key, optional scope id, enabled state, and optional value. See {@link SetOptionArgs}.
    *

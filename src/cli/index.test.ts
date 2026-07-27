@@ -498,7 +498,7 @@ describe("prepareUi - webUI loader stamp", () => {
 });
 
 // A minimal well-formed catalog module body: two categories, one of which carries a value option, sufficient to render a non-trivial fragment (including the
-// `.<value>` legend) so the splice has substantive content to verify. Held as a module-scope constant rather than inlined as a parameter default so the multi-line
+// `=<value>` legend) so the splice has substantive content to verify. Held as a module-scope constant rather than inlined as a parameter default so the multi-line
 // ESM source stays out of the destructuring signature.
 const VALID_CATALOG_BODY = "export const featureOptionCategories = [ { description: \"Audio\", name: \"Audio\" }, { description: \"Recording\", name: \"Nvr\" } ];\n" +
   "export const featureOptions = { Audio: [ { default: true, description: \"Audio support.\", name: \"\" } ], Nvr: [ { default: true, defaultValue: 10, " +
@@ -571,7 +571,7 @@ describe("prepareDocs", () => {
     assert.match(first, /Hand-written footer\./, "the hand-written footer must be preserved");
     assert.equal(first.includes("stale content to be replaced"), false, "the stale marked-region content must be replaced");
     assert.match(first, /\* \[Audio\]\(#audio\): Audio/, "the rendered category index must appear in the marked region");
-    assert.match(first, /`Nvr\.Recording\.Retention\.<value>`/, "the value option must render with the .<value> placeholder");
+    assert.match(first, /`Nvr\.Recording\.Retention=<value>`/, "the value option must render with the =<value> placeholder");
 
     // Re-running against the now-spliced doc must reproduce it byte-for-byte: the renderer is a pure projection of the unchanged catalog and the splice is
     // repeatable, so a second pass is a no-op. This is the property the plugin's build-docs script relies on to stay diff-free across rebuilds.
@@ -891,7 +891,7 @@ describe("runCli", () => {
     const doc = await readFile(join(cwd, "docs", "FeatureOptions.md"), "utf8");
 
     assert.equal(doc.includes("stale"), false, "the stale marked-region content must be replaced");
-    assert.match(doc, /`Nvr\.Recording\.Retention\.<value>`/, "the rendered reference must land in the default docs/FeatureOptions.md");
+    assert.match(doc, /`Nvr\.Recording\.Retention=<value>`/, "the rendered reference must land in the default docs/FeatureOptions.md");
   });
 
   test("prepare-docs honors --doc to target a non-default reference path, and surfaces prepareDocs errors as exit 1", async () => {

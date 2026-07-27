@@ -9,7 +9,7 @@
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
 import { applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, expandOption, getDefaultValue, isDependencyMet, isValueOption,
-  optionExists, resolveScope } from "./featureOptions.ts";
+  normalizeConfiguredOptions, optionExists, resolveScope } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
@@ -927,7 +927,7 @@ describe("FeatureOptions.setOption - encoded entry composition", () => {
 
     fo.setOption({ enabled: true, option: "Audio.Volume", value: 75 });
 
-    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.75"]);
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume=75"]);
     assert.equal(fo.value("Audio.Volume"), "75");
   });
 
@@ -959,7 +959,7 @@ describe("FeatureOptions.setOption - encoded entry composition", () => {
 
     fo.setOption({ enabled: true, id: "ABC123", option: "Audio.Volume", value: 75 });
 
-    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.ABC123.75"]);
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.ABC123=75"]);
     assert.equal(fo.value("Audio.Volume", "ABC123"), "75");
   });
 
@@ -970,7 +970,7 @@ describe("FeatureOptions.setOption - encoded entry composition", () => {
 
     fo.setOption({ enabled: true, id: "ABC123", option: "Audio.Volume", value: 50 });
 
-    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.ABC123.50"], "prior scoped entries for the same option must be removed before the new one is written");
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.ABC123=50"], "prior scoped entries for the same option must be removed before the new one is written");
   });
 
   test("a prior entry at a different scope is preserved when setOption writes a different scope", () => {
@@ -1031,7 +1031,7 @@ describe("FeatureOptions.clearOption - addresses entries by intent", () => {
 
     fo.clearOption({ id: "ABC123", option: "Audio.Volume" });
 
-    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.XYZ789.30"], "only entries addressing the target scope are removed");
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.XYZ789=30"], "only entries addressing the target scope are removed, and the survivor modernizes");
   });
 
   test("is a no-op fast path when no entry addresses the target - the configuredOptions reference is unchanged", () => {
@@ -1136,7 +1136,7 @@ describe("FeatureOptions - shared parser correctness", () => {
     // "Audio" and "Volume" both expand to bare category names; setOption against "Volume" must replace only the Volume entry.
     fo.setOption({ enabled: true, option: "Volume", value: 75 });
 
-    assert.deepEqual(fo.configuredOptions, [ "Enable.Audio.10", "Enable.Volume.75" ],
+    assert.deepEqual(fo.configuredOptions, [ "Enable.Audio.10", "Enable.Volume=75" ],
       "the Audio entry is left untouched - it addresses a different lookup target than Volume");
   });
 
@@ -1160,6 +1160,265 @@ describe("FeatureOptions - shared parser correctness", () => {
     fo.setOption({ enabled: false, option: "Motion.Detect" });
 
     assert.equal(fo.groups, groupsBefore, "the groups reference must be the same object after a config mutation - the catalog was not rebuilt");
+  });
+});
+
+// The payload delimiter gives a value its own separator, so dots are left to address and nothing else. These tests pin the reader and the writer against each
+// other across both accepted forms: what the canonical "=" grammar decodes to, what the legacy dot grammar still decodes to for configurations authored before
+// it, and what the composer writes.
+describe("FeatureOptions - the value payload delimiter", () => {
+
+  test("a global value round-trips verbatim with periods and spaces intact", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume=St. Andrews"]);
+
+    assert.equal(fo.value("Audio.Volume"), "St. Andrews", "everything behind the delimiter is the value, punctuation and original casing preserved");
+  });
+
+  test("a scoped value round-trips verbatim, with the id read from the segment ahead of the delimiter", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.123=Mr. Smith's Garden"]);
+
+    assert.equal(fo.value("Audio.Volume", "123"), "Mr. Smith's Garden");
+    assert.equal(fo.value("Audio.Volume"), null, "a scoped value must not leak up to the global lookup");
+  });
+
+  test("only the first delimiter splits, so a value may contain further ones", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.Kitchen=EQ=flat"]);
+
+    assert.equal(fo.value("Audio.Volume", "Kitchen"), "EQ=flat", "the address ends at the first delimiter and the rest is value, delimiters included");
+  });
+
+  test("an empty value behind the delimiter reads as unspecified", () => {
+
+    // The engine already treats an empty value as "no value given" wherever it appears, and the delimiter form is no exception.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume="]);
+
+    assert.equal(fo.test("Audio.Volume"), true, "the option is still explicitly enabled");
+    assert.equal(fo.value("Audio.Volume"), undefined, "enabled at an explicit scope with no value to report");
+  });
+
+  test("the legacy global form reads a single trailing segment as the value", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.50"]);
+
+    assert.equal(fo.value("Audio.Volume"), "50");
+  });
+
+  test("a legacy scoped value round-trips verbatim with periods, spaces, and apostrophes intact", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.Kitchen.St. Cecilia's 7.1 Mix"]);
+
+    assert.equal(fo.value("Audio.Volume", "Kitchen"), "St. Cecilia's 7.1 Mix",
+      "everything past the id segment is the value, with punctuation and original casing preserved");
+  });
+
+  test("a legacy trailing period and a legacy multi-dot value both survive the round-trip", () => {
+
+    // Under the legacy form the value is whatever follows the id's dot, so neither a terminal period nor interior ones need escaping.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, [ "Enable.Audio.Volume.Kitchen.Zone 1.", "Enable.Network.Mtu.Attic.a.b.c" ]);
+
+    assert.equal(fo.value("Audio.Volume", "Kitchen"), "Zone 1.");
+    assert.equal(fo.value("Network.Mtu", "Attic"), "a.b.c");
+  });
+
+  test("a legacy dotted remainder reads as id-and-value rather than as a global value", () => {
+
+    // The documented reading of the ambiguity the legacy form cannot settle: with no id segment to anchor on, a global value containing a period is
+    // indistinguishable from a scope id followed by a value, and the scoped reading wins. Expressing that unambiguously is what the delimiter form is for. The
+    // value keeps the space that trailed the period in the authored text.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.St. Andrews"]);
+
+    assert.equal(fo.value("Audio.Volume", "St"), " Andrews", "the first segment is the scope id and the remainder is the value");
+    assert.equal(fo.value("Audio.Volume"), null, "no global value is registered - Audio.Volume is default-off and unset at the global scope");
+  });
+
+  test("a multi-segment address ahead of the delimiter is malformed and registers no value", () => {
+
+    // Two candidate id segments and no way to tell which was meant. We leave the entry to its primary key rather than guess, which keeps a typo inert instead of
+    // quietly binding it to a scope the author never wrote.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.a.b=x"]);
+
+    assert.equal(fo.value("Audio.Volume", "a"), null, "no value is registered against the first segment");
+    assert.equal(fo.value("Audio.Volume"), null, "and none against the global scope either");
+    assert.equal(fo.test("Audio.Volume", "a"), false, "the malformed entry addresses no scope the resolver can find");
+  });
+
+  test("the greedy longest-prefix match holds across the delimiter form", () => {
+
+    // The same discipline the legacy form gets: with both "Audio" and "Audio.Volume" value-centric, `Enable.Audio.Volume=50` must bind to the longer option name
+    // rather than to "Audio" carrying the value "Volume=50".
+    const categories: FeatureCategoryEntry[] = [{ description: "Audio", name: "Audio" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Audio: [
+
+        { default: false, defaultValue: 10, description: "Audio top-level value.", name: "" },
+        { default: false, defaultValue: 50, description: "Audio volume sub-value.", name: "Volume" }
+      ]
+    };
+    const fo = new FeatureOptions(categories, options, ["Enable.Audio.Volume=50"]);
+
+    assert.equal(fo.value("Audio.Volume"), "50", "the longer value-option name wins");
+    assert.equal(fo.value("Audio"), null, "the shorter option must not claim the entry");
+  });
+
+  test("the composer writes the delimiter form at both scopes, and the bare form when there is no value", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+
+    fo.setOption({ enabled: true, option: "Audio.Volume", value: "St. Andrews" });
+    fo.setOption({ enabled: true, id: "Kitchen", option: "Network.Mtu", value: "9000" });
+    fo.setOption({ enabled: true, option: "Motion.Detect" });
+
+    assert.deepEqual(fo.configuredOptions, [ "Enable.Audio.Volume=St. Andrews", "Enable.Network.Mtu.Kitchen=9000", "Enable.Motion.Detect" ]);
+    assert.equal(fo.value("Audio.Volume"), "St. Andrews", "a free-form global value round-trips through the composer");
+    assert.equal(fo.value("Network.Mtu", "Kitchen"), "9000");
+  });
+
+  test("the composer trims a value, and composes the bare form when nothing survives the trim", () => {
+
+    // Trimming belongs to the writer, not the parser: this is the framework's only writer, while a hand-authored entry is taken exactly as the grammar reads it.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+
+    fo.setOption({ enabled: true, option: "Audio.Volume", value: "  St. Andrews  " });
+
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume=St. Andrews"], "surrounding whitespace is trimmed before composing");
+    assert.equal(fo.value("Audio.Volume"), "St. Andrews");
+
+    fo.setOption({ enabled: true, option: "Audio.Volume", value: "   " });
+
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume"], "a value that is only whitespace composes the bare form, never an empty payload");
+    assert.equal(fo.value("Audio.Volume"), undefined, "enabled at an explicit scope with no value to report");
+  });
+
+  test("whitespace around the delimiter is tolerated, and normalization emits the tight form", () => {
+
+    // A hand-authored entry with the delimiter padded out reads exactly as the tight form the composer writes, at either scope. The address is right-trimmed and
+    // the value trimmed; dots stay exact, so this tolerance never reaches the address separators.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const padded = [ "Enable.Audio.Volume = 50", "Enable.Network.Mtu.Kitchen = 9000" ];
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, padded);
+
+    assert.equal(fo.value("Audio.Volume"), "50", "the padded global form resolves as the tight form does");
+    assert.equal(fo.value("Network.Mtu", "Kitchen"), "9000", "the padded scoped form resolves as the tight form does");
+
+    assert.deepEqual(normalizeConfiguredOptions(catalog, padded), [ "Enable.Audio.Volume=50", "Enable.Network.Mtu.Kitchen=9000" ],
+      "saving converges the padded form on the tight canonical one");
+  });
+
+  test("a value-centric option set at a scope with no value keeps the delimiter", () => {
+
+    // Without it the id would sit exactly where the legacy grammar reads a global value, so `Enable.Audio.Volume.ABC123` resolves as the option set to the literal
+    // text "ABC123". The trailing delimiter keeps the id addressing a scope and says the value is unspecified. This is reachable from the webUI, which enables a
+    // value option at a device while the value input is still empty.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+
+    fo.setOption({ enabled: true, id: "ABC123", option: "Audio.Volume" });
+
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.ABC123="]);
+    assert.equal(fo.test("Audio.Volume", "ABC123"), true, "enabled at the device scope");
+    assert.equal(fo.scope("Audio.Volume", "ABC123"), "device", "and addressed at the device scope, not the global one");
+    assert.equal(fo.value("Audio.Volume", "ABC123"), undefined, "with no value to report");
+    assert.equal(fo.value("Audio.Volume"), null, "and no global value invented out of the id");
+  });
+
+  test("the legacy bare-with-id form keeps its global-value reading", () => {
+
+    // Pinned as it has always resolved, for configurations that predate the delimiter: the single trailing segment is read as this option's global value, while the
+    // primary key registers the same text as a scope. Both readings are live at once, which is the ambiguity the delimiter form exists to avoid.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.ABC123"]);
+
+    assert.equal(fo.value("Audio.Volume"), "ABC123", "the trailing segment reads as the global value");
+    assert.equal(fo.test("Audio.Volume", "ABC123"), true, "and the same text registers a scope through the primary key");
+    assert.equal(fo.value("Audio.Volume", "ABC123"), undefined, "which carries no value of its own");
+  });
+
+  test("a write replaces a legacy-form entry addressing the same scope, leaving one surviving entry", () => {
+
+    // Cross-form replacement has to fall out of the shared parser rather than any special-casing: the matcher decodes the legacy entry to the same option-at-scope
+    // the new write addresses, so a webUI edit overwrites it instead of leaving a duplicate behind.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const before = [ "Enable.Audio.Volume.Kitchen.St. Cecilia's 7.1 Mix", "Enable.Motion.Detect" ];
+    const after = applySetOption({ args: { enabled: true, id: "Kitchen", option: "Audio.Volume", value: "Zone 1.2" }, catalog, configuredOptions: before });
+
+    assert.deepEqual(after, [ "Enable.Motion.Detect", "Enable.Audio.Volume.Kitchen=Zone 1.2" ], "the legacy entry at that scope is replaced, not accumulated");
+  });
+});
+
+// Saving a configuration also modernizes it. The mutation transforms run their results through the normalizer, so entries still in the legacy form are rewritten
+// into the canonical one as part of a save the user already asked for - and never merely because something read the configuration.
+describe("FeatureOptions - normalization on save", () => {
+
+  test("an edit to one option modernizes a legacy value entry for another", () => {
+
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const before = [ "Enable.Audio.Volume.Kitchen.St. Cecilia's Mix", "Disable.Motion.Detect", "Enable.Network.Mtu = 9000" ];
+    const after = applySetOption({ args: { enabled: true, option: "Motion.Sensitivity" }, catalog, configuredOptions: before });
+
+    assert.deepEqual(after, [
+
+      "Enable.Audio.Volume.Kitchen=St. Cecilia's Mix",
+      "Disable.Motion.Detect",
+      "Enable.Network.Mtu=9000",
+      "Enable.Motion.Sensitivity"
+    ], "value entries modernize, the boolean entry is untouched, and the caller's own edit lands last");
+
+    assert.deepEqual(before, [ "Enable.Audio.Volume.Kitchen.St. Cecilia's Mix", "Disable.Motion.Detect", "Enable.Network.Mtu = 9000" ],
+      "the input array is never mutated");
+  });
+
+  test("the legacy single-trailing-segment form is deliberately left as written", () => {
+
+    // Its trailing segment does double duty - the index registers it as the option's global value AND, through the primary key, as an enable at a scope of that
+    // same name - and no one canonical entry carries both readings. Rewriting it would settle an ambiguity that belongs to the user, so a save leaves it alone
+    // even while modernizing everything around it.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const before = [ "Enable.Audio.Volume.ABC123", "Enable.Network.Mtu.Attic.1500" ];
+    const after = applySetOption({ args: { enabled: true, option: "Motion.Detect" }, catalog, configuredOptions: before });
+
+    assert.deepEqual(after, [ "Enable.Audio.Volume.ABC123", "Enable.Network.Mtu.Attic=1500", "Enable.Motion.Detect" ],
+      "the ambiguous single-segment entry survives verbatim while the unambiguous scoped one modernizes");
+
+    // The reading it would have lost had it been rewritten: the scope registration the primary key carries.
+    assert.equal(new FeatureOptions(CATEGORIES, OPTIONS, [...after]).test("Audio.Volume", "ABC123"), true, "the scope reading survives the save");
+  });
+
+  test("entries the parser cannot fully account for pass through byte-verbatim", () => {
+
+    // Boolean options, options absent from the catalog, disabled entries, and outright malformed strings are a user's own text. We only reshape what we can state
+    // the meaning of exactly.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const before = [
+
+      "Enable.Motion.Detect",
+      "Disable.Audio.Volume.ABC123",
+      "Enable.Unknown.Option.50",
+      "Garbage.Motion.Detect",
+      "NoDotsAtAll"
+    ];
+
+    assert.equal(normalizeConfiguredOptions(catalog, before), before, "nothing needed rewriting, so the input reference comes back unchanged");
+  });
+
+  test("normalizing an already-normalized array changes nothing", () => {
+
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const once = normalizeConfiguredOptions(catalog, [ "Enable.Audio.Volume.Kitchen.St. Cecilia's Mix", "Enable.Network.Mtu = 9000" ]);
+
+    assert.deepEqual(once, [ "Enable.Audio.Volume.Kitchen=St. Cecilia's Mix", "Enable.Network.Mtu=9000" ]);
+    assert.equal(normalizeConfiguredOptions(catalog, once), once, "a second pass finds nothing to change and returns the same reference");
+  });
+
+  test("a legacy entry read as an id plus a value is rewritten to say so", () => {
+
+    // The disclosure that makes normalization worth doing: `Enable.Audio.Volume.St. Andrews` resolves as the id "St" carrying the value " Andrews", and rewriting
+    // it in the canonical form puts that reading in front of the user instead of leaving it latent. The value arrives trimmed, since the canonical value domain
+    // has no room for edge whitespace.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Audio.Volume.St. Andrews"]), ["Enable.Audio.Volume.St=Andrews"]);
   });
 });
 
@@ -1278,7 +1537,7 @@ describe("FeatureOptions - pure functional core", () => {
       const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
       const after = applySetOption({ args: { enabled: true, id: "ABC123", option: "Audio.Volume", value: 75 }, catalog, configuredOptions: [] });
 
-      assert.deepEqual(after, ["Enable.Audio.Volume.ABC123.75"]);
+      assert.deepEqual(after, ["Enable.Audio.Volume.ABC123=75"]);
     });
 
     test("drops any prior entry addressing the same option-at-scope before appending the new entry", () => {

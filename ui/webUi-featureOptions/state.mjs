@@ -84,6 +84,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {Readonly<Record<string, readonly string[]>>} groups
  * @property {Readonly<Record<string, readonly import("../featureOptions.js").FeatureOptionEntry[]>>} options
  * @property {Readonly<Record<string, (value: string) => string>>} renderers
+ * @property {Readonly<Record<string, readonly import("../featureOptions.js").FeatureOptionScope[]>>} scopes
  * @property {readonly string[]} sortedValueOptionNames
  * @property {Validators} validators
  * @property {Readonly<Record<string, number | string | undefined>>} valueOptions

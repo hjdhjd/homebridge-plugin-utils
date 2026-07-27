@@ -50,6 +50,13 @@ literal text "ABC123".
 The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
 [normalizeConfiguredOptions](#normalizeconfiguredoptions) rewrites entries into the canonical form as configurations are saved.
 
+### Declared scopes
+
+A catalog entry may name the levels it belongs to through [FeatureOptionEntry.scopes](#scopes-1), in the `controller | device | global` vocabulary this module
+already speaks. The declaration is enforced at every framework-owned surface: [resolveScope](#resolvescope) walks only the declared levels, the webUI renders an option's
+row only on views the declaration admits, and the webUI's inheritance probe consults it too, so a click-time prediction and resolution always agree. An entry
+that declares nothing is valid at every level, which is what lets a plugin narrow its catalog one entry at a time.
+
 ## Feature Options
 
 ### FeatureOptionFormatter
@@ -348,6 +355,9 @@ exists(option, id?): boolean;
 ```
 
 Return whether the option explicitly exists in the list of configured options.
+
+This reads the configured entries alone and is blind to [FeatureOptionEntry.scopes](#scopes-1): it reports what the user configured, not what takes effect. Ask
+[FeatureOptions.test](#test) when the question is whether the option applies at a given scope.
 
 ###### Parameters
 
@@ -731,6 +741,7 @@ directly hold it as state and reuse it across every dispatch that does not touch
 | <a id="groups-1"></a> `groups` | `readonly` | `Readonly`\<`Record`\<`string`, readonly `string`[]\>\> | Forward index from a parent group's expanded name to its child options' expanded names. |
 | <a id="options-1"></a> `options` | `readonly` | `Readonly`\<`Record`\<`string`, readonly [`FeatureOptionEntry`](#featureoptionentry)[]\>\> | The raw options map, preserved alongside categories for the same reason. |
 | <a id="renderers"></a> `renderers` | `readonly` | `Readonly`\<`Record`\<`string`, (`value`) => `string`\>\> | Lowercased-key map from canonical option name to its resolved value renderer (built-in or inline function). Built-in names that fail to resolve throw at index-build time rather than degrading silently at log time. |
+| <a id="scopes"></a> `scopes` | `readonly` | `Readonly`\<`Record`\<`string`, readonly [`FeatureOptionScope`](#featureoptionscope)[]\>\> | Lowercased-key map from canonical option name to the scope levels its catalog entry declares. An option that declares nothing has no key here, which is how the absent-means-every-level default stays free: the lookup returns `undefined` and every consumer reads that as "no restriction." See [FeatureOptionEntry.scopes](#scopes-1). |
 | <a id="sortedvalueoptionnames"></a> `sortedValueOptionNames` | `readonly` | readonly `string`[] | The keys of `valueOptions`, sorted longest-first, cached so the parser can do its greedy-prefix match without re-sorting on every Enable-entry parse. |
 | <a id="valueoptions"></a> `valueOptions` | `readonly` | `Readonly`\<`Record`\<`string`, `number` \| `string` \| `undefined`\>\> | Lowercased-key map from canonical option name to its declared default value. The presence of a key in this map is the SSOT for "this option is value-centric." |
 
@@ -774,6 +785,21 @@ Entry describing a feature option category.
 
 Entry describing a feature option.
 
+#### Example
+
+```ts
+// An irrigation plugin whose controllers own zones. Exposing a zone is meaningful for the controller as a whole and for each zone beneath it; a per-zone runtime
+// cap is a zone-level concern, so declaring it device-only keeps it off the account-wide page where one save would have applied it to every zone at once.
+const options: Record<string, FeatureOptionEntry[]> = {
+
+  Zone: [
+
+    { default: true, description: "Expose this zone in HomeKit.", name: "Enable", scopes: [ "controller", "device" ] },
+    { default: false, defaultValue: 300, description: "Maximum zone runtime, in seconds.", name: "Runtime", scopes: ["device"] }
+  ]
+};
+```
+
 #### Type Parameters
 
 | Type Parameter | Default type | Description |
@@ -792,6 +818,7 @@ Entry describing a feature option.
 | <a id="meta-1"></a> `meta?` | `TMeta` | Optional. An opaque, plugin-private annotation channel the core never interprets. HBPU's types deliberately cannot see inside `TMeta`; the value is carried verbatim through the catalog and forwarded to the documentation renderer's closures (the only surface that knows its concrete shape). This mirrors the OpenAPI `x-*` extension discipline, made type-safe: a plugin parameterizes the entry with its own annotation type, the core treats it as `unknown`, and the round-trip stays structurally unchanged rather than a naming convention. |
 | <a id="name-1"></a> `name` | `string` | Name of the feature option (used in option strings). |
 | <a id="render"></a> `render?` | \| [`FeatureOptionFormatter`](#featureoptionformatter) \| ((`value`) => `string`) | Optional. Maps the raw stored value of a value-centric option to a display string. Either a [FeatureOptionFormatter](#featureoptionformatter) string naming a built-in formatter (preferred when the format already exists in the registry, since this keeps the enclosing catalog JSON-serializable and lets every plugin share one implementation) or an inline function for bespoke formatting the registry does not cover. Consulted by [FeatureOptions.logFeature](#logfeature) when emitting deviation lines so the catalog stays the single source of truth for how an option's value renders; ignored for plain boolean options. When absent, values render as the raw string returned by [FeatureOptions.value](#value). An unrecognized formatter name throws at catalog-rebuild time, surfacing the misconfiguration loudly rather than silently producing the raw-value fallback. |
+| <a id="scopes-1"></a> `scopes?` | readonly \[[`FeatureOptionScope`](#featureoptionscope), [`FeatureOptionScope`](#featureoptionscope)\] | Optional. The scope levels this option may be configured at - one or more of them, named in the [FeatureOptionScope](#featureoptionscope) vocabulary. Absent means every level, which is what an entry that declares nothing gets. Declared, it is true at every surface the framework owns: the option renders only on views the declaration admits - a global view needs `"global"`, a controller view needs `"controller"`, and a device view needs either `"controller"` or `"device"` - it resolves only at the declared levels, and a row inherits from a higher scope only through them. What you cannot resolve, you are neither offered nor promised through inheritance. Which devices see a device-view row stays with the plugin's `validOption`, refining the rows the declaration already admits. Declare consistent levels across a group: a child's dependency check resolves the PARENT's option, so a parent declared narrower than its children ignores parent configuration at exactly the levels the children are still editable from. The tuple is non-empty by construction, since an option declaring no level at all would render nowhere and resolve nowhere. |
 
 ***
 
@@ -846,13 +873,26 @@ scope-aware questions in O(1).
 
 ***
 
+### FeatureOptionScope
+
+```ts
+type FeatureOptionScope = "controller" | "device" | "global";
+```
+
+The scope levels at which a feature option may be configured, and the vocabulary a catalog entry uses to declare where it belongs. These are the same levels
+[resolveScope](#resolvescope) walks: [OptionScope](#optionscope) is this union plus the `"none"` outcome resolution reports when nothing was configured anywhere, so the
+declaration side and the resolution side read from one vocabulary and cannot drift apart.
+
+***
+
 ### OptionScope
 
 ```ts
-type OptionScope = "controller" | "device" | "global" | "none";
+type OptionScope = FeatureOptionScope | "none";
 ```
 
-Describes all possible scope hierarchy locations for a feature option.
+Describes all possible scope hierarchy locations for a feature option. The configurable levels are [FeatureOptionScope](#featureoptionscope), shared with the catalog entry's
+`scopes` declaration; `"none"` is the resolution-only outcome saying no configured entry matched at any level and the catalog default applied.
 
 ***
 
@@ -1139,6 +1179,10 @@ function optionExists(args): boolean;
 Return whether an option has been explicitly configured at the given scope. Distinct from [resolveScope](#resolvescope), which walks the hierarchy; this predicate
 answers only "did the user set this entry at THIS scope?" without consulting any higher or lower scopes.
 
+It reads the configured entries alone and so is blind to [FeatureOptionEntry.scopes](#scopes-1): "is this configured" and "does this apply" are different questions,
+and an entry written at a level the option does not declare is still an entry the user typed. Ask [resolveScope](#resolvescope) when the question is whether the option
+takes effect.
+
 #### Parameters
 
 | Parameter | Type | Description |
@@ -1168,6 +1212,10 @@ for value-centric options. This is the core resolution primitive that every high
 
 Resolution precedence: device beats controller beats global beats default. An explicit entry at a higher-precedence scope short-circuits the lookup, so the
 cost is O(1) in the configured-options array size.
+
+The walk visits only the levels the option's catalog entry declares through [FeatureOptionEntry.scopes](#scopes-1). An option that declares nothing is valid
+everywhere and walks every level; one that names its levels resolves at those and skips a configured entry sitting at any other, so an entry written where the
+option was never meant to apply cannot reach the accessories it was never meant to reach.
 
 #### Parameters
 

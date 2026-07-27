@@ -204,7 +204,8 @@ export const selectedController = memoize({
  * @typedef {Object} ProjectionCounts
  * @property {number} grouped - Active options that declare a `group` (subordinate to a parent).
  * @property {number} modified - Active options with an explicit configured entry at any scope.
- * @property {number} total - Active options across every active (validator-passed) category, regardless of per-entry visibility.
+ * @property {number} total - Active options across every active category: those whose declared scopes admit the current view and whose plugin validator passes,
+ *                            regardless of per-entry visibility.
  * @property {number} visible - Active options currently visible under the search query, filter mode, and dependency state.
  */
 
@@ -218,6 +219,10 @@ export const selectedController = memoize({
  * The view projection. One pass over the active option set produces every downstream display decision: status-bar counts, per-category visibility, per-row
  * visibility, per-row dependency-badge state, and per-row resolved value for value-centric options. Memoized on `(catalog, configuredOptions, scope, filter,
  * devices)` so any dispatch that does not touch those slices returns the cached projection.
+ *
+ * The active option set is what the gates admit, in order: an option's declared scopes must admit the current view kind, and then the plugin's `validOption` must
+ * accept it for the selected device. Everything downstream - the counts, the rows, the DOM - reads from this one set, so an option the current view has no
+ * business offering is absent from every surface rather than hidden on each of them.
  *
  * Visibility rules (the three-way cascade below is authoritative for what a row shows):
  *
@@ -240,6 +245,39 @@ export const projection = memoize({
   slices: [ (s) => s.catalog, (s) => s.configuredOptions, (s) => s.scope, (s) => s.filter, (s) => s.devices ]
 });
 
+// Decide whether an option's declared scopes admit it on the current view. The framework gates on the one thing it natively knows - which view the page is showing -
+// so a global view offers only options declared global, a controller view only those declared controller, and a device view those declared at either the device or
+// the controller level, since a device page edits its own scope and displays what it inherits from its controller. An option that declares no scopes is admitted
+// everywhere. Which KIND of device sees a given row is knowledge the framework cannot have, and stays with the plugin's validOption.
+const viewAdmitsOption = (scopes, viewKind) => {
+
+  if(!scopes) {
+
+    return true;
+  }
+
+  switch(viewKind) {
+
+    case "controller":
+
+      return scopes.includes("controller");
+
+    case "device":
+
+      return scopes.includes("controller") || scopes.includes("device");
+
+    case "global":
+
+      return scopes.includes("global");
+
+    default:
+
+      // The Scope DU admits no other kind, so this is unreachable while the switch and the DU stay in sync. Rendering the row is the safe reading of an
+      // unrecognized view: the declaration narrows what a known view offers and should never blank a view the framework failed to recognize.
+      return true;
+  }
+};
+
 // The projection's compute path. Walks the catalog once, applies validators, resolves each option through the scope hierarchy, computes per-entry flags and the
 // overall counts. Pulled out of the memoize call site for readability - the function body is too long to inline in a property value.
 const computeProjection = (state) => {
@@ -251,6 +289,7 @@ const computeProjection = (state) => {
   const deviceId = selectedDeviceId(state) ?? undefined;
   const query = filter.query.toLowerCase();
   const filterActive = (query.length > 0) || (filter.mode === "modified");
+  const viewKind = state.scope.kind;
 
   const categories = [];
   const counts = { grouped: 0, modified: 0, total: 0, visible: 0 };
@@ -266,6 +305,14 @@ const computeProjection = (state) => {
     let categoryHasVisible = false;
 
     for(const option of (catalog.options[category.name] ?? [])) {
+
+      // The framework's own gate runs first: an option is offered here only at a view its declared scopes admit, so a row the engine would refuse to resolve at
+      // this level is never composed. The plugin's validator then refines what survives, which is why it runs second - it answers a device-kind question about
+      // rows the framework has already accepted, and never has to re-derive the scope rule to do it.
+      if(!viewAdmitsOption(option.scopes, viewKind)) {
+
+        continue;
+      }
 
       if(!catalog.validators.validOption(device, option)) {
 

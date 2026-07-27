@@ -48,6 +48,13 @@
  * The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
  * {@link normalizeConfiguredOptions} rewrites entries into the canonical form as configurations are saved.
  *
+ * ### Declared scopes
+ *
+ * A catalog entry may name the levels it belongs to through {@link FeatureOptionEntry.scopes}, in the `controller | device | global` vocabulary this module
+ * already speaks. The declaration is enforced at every framework-owned surface: {@link resolveScope} walks only the declared levels, the webUI renders an option's
+ * row only on views the declaration admits, and the webUI's inheritance probe consults it too, so a click-time prediction and resolution always agree. An entry
+ * that declares nothing is valid at every level, which is what lets a plugin narrow its catalog one entry at a time.
+ *
  * @module
  */
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
@@ -108,6 +115,13 @@ function resolveBuiltInFormatter(name: string): ((value: string) => string) | un
 }
 
 /**
+ * The scope levels at which a feature option may be configured, and the vocabulary a catalog entry uses to declare where it belongs. These are the same levels
+ * {@link resolveScope} walks: {@link OptionScope} is this union plus the `"none"` outcome resolution reports when nothing was configured anywhere, so the
+ * declaration side and the resolution side read from one vocabulary and cannot drift apart.
+ */
+export type FeatureOptionScope = "controller" | "device" | "global";
+
+/**
  * Entry describing a feature option.
  *
  * @property default         - Default enabled/disabled state for this feature option.
@@ -127,9 +141,33 @@ function resolveBuiltInFormatter(name: string): ((value: string) => string) | un
  *                             value renders; ignored for plain boolean options. When absent, values render as the raw string returned by {@link FeatureOptions.value}.
  *                             An unrecognized formatter name throws at catalog-rebuild time, surfacing the misconfiguration loudly rather than silently producing the
  *                             raw-value fallback.
+ * @property scopes          - Optional. The scope levels this option may be configured at - one or more of them, named in the {@link FeatureOptionScope} vocabulary.
+ *                             Absent means every level, which is what an entry that declares nothing gets. Declared, it is true at every surface the framework
+ *                             owns: the option renders only on views the declaration admits - a global view needs `"global"`, a controller view needs `"controller"`,
+ *                             and a device view needs either `"controller"` or `"device"` - it resolves only at the declared levels, and a row inherits from a higher
+ *                             scope only through them. What you cannot resolve, you are neither offered nor promised through inheritance. Which devices see a
+ *                             device-view row stays with the plugin's `validOption`, refining the rows the declaration already admits. Declare consistent levels
+ *                             across a group: a child's dependency check resolves the PARENT's option, so a parent declared narrower than its children ignores parent
+ *                             configuration at exactly the levels the children are still editable from. The tuple is non-empty by construction, since an option
+ *                             declaring no level at all would render nowhere and resolve nowhere.
  *
  * @typeParam TMeta - The concrete type of the opaque {@link FeatureOptionEntry.meta} annotation. Defaults to `unknown`, so a bare `FeatureOptionEntry` (the form every
  *                    existing core consumer uses) resolves to `FeatureOptionEntry<unknown>` and stays assignable to the parameterized form, keeping the core non-generic.
+ *
+ * @example
+ *
+ * ```ts
+ * // An irrigation plugin whose controllers own zones. Exposing a zone is meaningful for the controller as a whole and for each zone beneath it; a per-zone runtime
+ * // cap is a zone-level concern, so declaring it device-only keeps it off the account-wide page where one save would have applied it to every zone at once.
+ * const options: Record<string, FeatureOptionEntry[]> = {
+ *
+ *   Zone: [
+ *
+ *     { default: true, description: "Expose this zone in HomeKit.", name: "Enable", scopes: [ "controller", "device" ] },
+ *     { default: false, defaultValue: 300, description: "Maximum zone runtime, in seconds.", name: "Runtime", scopes: ["device"] }
+ *   ]
+ * };
+ * ```
  */
 export interface FeatureOptionEntry<TMeta = unknown> {
 
@@ -141,6 +179,7 @@ export interface FeatureOptionEntry<TMeta = unknown> {
   meta?: TMeta;
   name: string;
   render?: FeatureOptionFormatter | ((value: string) => string);
+  scopes?: readonly [FeatureOptionScope, ...FeatureOptionScope[]];
 }
 
 /**
@@ -163,9 +202,10 @@ export interface FeatureCategoryEntry<TMeta = unknown> {
 }
 
 /**
- * Describes all possible scope hierarchy locations for a feature option.
+ * Describes all possible scope hierarchy locations for a feature option. The configurable levels are {@link FeatureOptionScope}, shared with the catalog entry's
+ * `scopes` declaration; `"none"` is the resolution-only outcome saying no configured entry matched at any level and the catalog default applied.
  */
-export type OptionScope =  "controller" | "device" | "global" | "none";
+export type OptionScope = FeatureOptionScope | "none";
 
 /**
  * Resolved view of a feature option through the scope hierarchy. Captures the scope where the option was found, whether it's enabled, and the raw string value for
@@ -198,6 +238,9 @@ export interface ResolvedOptionEntry {
  * @property options                - The raw options map, preserved alongside categories for the same reason.
  * @property renderers              - Lowercased-key map from canonical option name to its resolved value renderer (built-in or inline function). Built-in names
  *                                    that fail to resolve throw at index-build time rather than degrading silently at log time.
+ * @property scopes                 - Lowercased-key map from canonical option name to the scope levels its catalog entry declares. An option that declares nothing
+ *                                    has no key here, which is how the absent-means-every-level default stays free: the lookup returns `undefined` and every
+ *                                    consumer reads that as "no restriction." See {@link FeatureOptionEntry.scopes}.
  * @property sortedValueOptionNames - The keys of `valueOptions`, sorted longest-first, cached so the parser can do its greedy-prefix match without re-sorting on
  *                                    every Enable-entry parse.
  * @property valueOptions           - Lowercased-key map from canonical option name to its declared default value. The presence of a key in this map is the SSOT
@@ -211,6 +254,7 @@ export interface CatalogIndex {
   readonly groups: Readonly<Record<string, readonly string[]>>;
   readonly options: Readonly<Record<string, readonly FeatureOptionEntry[]>>;
   readonly renderers: Readonly<Record<string, (value: string) => string>>;
+  readonly scopes: Readonly<Record<string, readonly FeatureOptionScope[]>>;
   readonly sortedValueOptionNames: readonly string[];
   readonly valueOptions: Readonly<Record<string, number | string | undefined>>;
 }
@@ -497,6 +541,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
   const groupParents: Record<string, string> = {};
   const groups: Record<string, string[]> = {};
   const renderers: Record<string, (value: string) => string> = {};
+  const scopes: Record<string, readonly FeatureOptionScope[]> = {};
   const valueOptions: Record<string, number | string | undefined> = {};
 
   for(const category of categories) {
@@ -542,6 +587,13 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
         }
       }
 
+      // Register the declared scope levels so resolution and the webUI can consult them in O(1) without reaching back into the raw options map. Only a declaring
+      // entry gets a key: an option that says nothing about its scopes leaves the lookup empty, which every consumer reads as "valid at every level."
+      if(option.scopes) {
+
+        scopes[entry.toLowerCase()] = option.scopes;
+      }
+
       if(option.group !== undefined) {
 
         const expandedGroup = category.name + (option.group.length ? ("." + option.group) : "");
@@ -559,7 +611,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
   // this method to keep the two views consistent.
   const sortedValueOptionNames = Object.keys(valueOptions).sort((a, b) => b.length - a.length);
 
-  return { categories, defaults, groupParents, groups, options, renderers, sortedValueOptionNames, valueOptions };
+  return { categories, defaults, groupParents, groups, options, renderers, scopes, sortedValueOptionNames, valueOptions };
 }
 
 /**
@@ -728,6 +780,10 @@ export function applyClearOption(
  * Resolution precedence: device beats controller beats global beats default. An explicit entry at a higher-precedence scope short-circuits the lookup, so the
  * cost is O(1) in the configured-options array size.
  *
+ * The walk visits only the levels the option's catalog entry declares through {@link FeatureOptionEntry.scopes}. An option that declares nothing is valid
+ * everywhere and walks every level; one that names its levels resolves at those and skips a configured entry sitting at any other, so an entry written where the
+ * option was never meant to apply cannot reach the accessories it was never meant to reach.
+ *
  * @param args
  * @param args.catalog            - The catalog index (consulted for the default when no scope matched).
  * @param args.configIndex        - The configured-options lookup index.
@@ -750,8 +806,13 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
 
   const normalizedOption = option.toLowerCase();
 
+  // The option's declared levels, looked up once and consulted by each of the level checks below. Undefined means the entry declared nothing, in which case every
+  // level is walked. A configured entry at a level the option does not declare is skipped and the walk continues downward, exactly as though the user had never
+  // written it - which is what makes the declaration true for every query built on this one traversal.
+  const declaredScopes = catalog.scopes[normalizedOption];
+
   // Check to see if we have a device-level option first.
-  if(device) {
+  if(device && (!declaredScopes || declaredScopes.includes("device"))) {
 
     const deviceEntry = configIndex.get(normalizedOption + "." + device.toLowerCase());
 
@@ -762,7 +823,7 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
   }
 
   // Now check to see if we have a controller-level option.
-  if(controller) {
+  if(controller && (!declaredScopes || declaredScopes.includes("controller"))) {
 
     const controllerEntry = configIndex.get(normalizedOption + "." + controller.toLowerCase());
 
@@ -773,15 +834,19 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
   }
 
   // Finally, we check for a global-level value.
-  const globalEntry = configIndex.get(normalizedOption);
+  if(!declaredScopes || declaredScopes.includes("global")) {
 
-  if(globalEntry) {
+    const globalEntry = configIndex.get(normalizedOption);
 
-    return { enabled: globalEntry.enabled, optionValue: globalEntry.value, scope: "global" };
+    if(globalEntry) {
+
+      return { enabled: globalEntry.enabled, optionValue: globalEntry.value, scope: "global" };
+    }
   }
 
-  // The option hasn't been set at any scope, return the catalog default. The defaultReturnValue parameter covers the case where the option is not in the catalog
-  // at all - typically a misspelling or a stale call site referring to an option that was removed from the catalog.
+  // The option hasn't been set at any scope it is valid at, so return the catalog default. A default belongs to the option itself rather than to any level, so it
+  // applies whatever the declaration says - an option whose only configured entry sits at an undeclared level lands here. The defaultReturnValue parameter covers
+  // the case where the option is not in the catalog at all - typically a misspelling or a stale call site referring to an option that was removed from the catalog.
   return { enabled: getDefaultValue({ catalog, defaultReturnValue, option }), scope: "none" };
 }
 
@@ -822,6 +887,10 @@ export function isValueOption(catalog: CatalogIndex, option: string): boolean {
 /**
  * Return whether an option has been explicitly configured at the given scope. Distinct from {@link resolveScope}, which walks the hierarchy; this predicate
  * answers only "did the user set this entry at THIS scope?" without consulting any higher or lower scopes.
+ *
+ * It reads the configured entries alone and so is blind to {@link FeatureOptionEntry.scopes}: "is this configured" and "does this apply" are different questions,
+ * and an entry written at a level the option does not declare is still an entry the user typed. Ask {@link resolveScope} when the question is whether the option
+ * takes effect.
  *
  * @param args
  * @param args.configIndex - The configured-options lookup index.
@@ -988,6 +1057,9 @@ export class FeatureOptions {
 
   /**
    * Return whether the option explicitly exists in the list of configured options.
+   *
+   * This reads the configured entries alone and is blind to {@link FeatureOptionEntry.scopes}: it reports what the user configured, not what takes effect. Ask
+   * {@link FeatureOptions.test} when the question is whether the option applies at a given scope.
    *
    * @param option        - Feature option to check.
    * @param id            - Optional device or controller scope identifier to check.

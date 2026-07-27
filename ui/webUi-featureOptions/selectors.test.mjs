@@ -385,6 +385,96 @@ describe("projection - validators", () => {
   });
 });
 
+describe("projection - the declared-scopes view gate", () => {
+
+  // The matrix asserts the SAME declared options at every view, so a gate wired to the wrong view kind cannot pass by fixture accident: whichever kind it read,
+  // some view would report the wrong set. "Anywhere" declares nothing and has to appear at every view.
+  const SCOPED_CATEGORIES = [
+
+    { description: "Scoped Options", name: "Scoped" },
+    { description: "Account Options", name: "Account" }
+  ];
+
+  const SCOPED_OPTIONS = {
+
+    Account: [
+
+      { default: false, description: "Account-wide only.", name: "Wide", scopes: ["global"] }
+    ],
+
+    Scoped: [
+
+      { default: false, description: "Controller and device option.", name: "Local", scopes: [ "controller", "device" ] },
+      { default: false, description: "Account-wide option.", name: "Account", scopes: ["global"] },
+      { default: false, description: "Option that declares nothing.", name: "Anywhere" }
+    ]
+  };
+
+  const DEVICE = { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
+
+  // Build a ready state over the scoped catalog at the requested view. The validator defaults to permissive so the framework gate is the only thing shaping the row
+  // set, except where a test supplies its own to check that the plugin's validator still refines what the gate admits.
+  const scopedState = ({ scope, validOption = () => true } = {}) => {
+
+    const catalog = {
+
+      ...buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS),
+
+      validators: { isController: () => false, validOption, validOptionCategory: () => true }
+    };
+
+    const controllers = [{ address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" }];
+    const base = reducer(initialState(), { catalog, configuredOptions: [], controllers, mode: "controller-based", type: "model:loaded" });
+    const requested = reducer(base, { controllerId: "ctrl-a", type: "devices:requested" });
+    const withDevices = reducer(requested, { controllerId: "ctrl-a", devices: [DEVICE], error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    return scope ? reducer(withDevices, { scope, type: "scope:changed" }) : withDevices;
+  };
+
+  const scopedNames = (state) => projection(state).categories.flatMap((c) => c.entries).map((e) => e.name);
+
+  test("the global view offers global-declared options and hides those declared only at narrower levels", () => {
+
+    assert.deepEqual(scopedNames(scopedState({ scope: { kind: "global" } })), [ "Account", "Anywhere", "Wide" ]);
+  });
+
+  test("a controller view offers controller-declared options and hides the global-only ones", () => {
+
+    assert.deepEqual(scopedNames(scopedState({ scope: { controllerId: "ctrl-a", kind: "controller" } })), [ "Local", "Anywhere" ]);
+  });
+
+  test("a device view offers both device-declared and controller-declared options, and hides the global-only ones", () => {
+
+    // A device page edits its own scope and displays what it inherits from its controller, so a controller-declared option belongs here too.
+    assert.deepEqual(scopedNames(scopedState({ scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" } })), [ "Local", "Anywhere" ]);
+  });
+
+  test("the plugin's validator refines the rows the gate admits, and runs only over those", () => {
+
+    const seen = [];
+    const state = scopedState({
+
+      scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" },
+      validOption: (_device, option) => {
+
+        seen.push(option.name);
+
+        return option.name !== "Local";
+      }
+    });
+
+    assert.deepEqual(scopedNames(state), ["Anywhere"], "the validator drops one of the rows the gate admitted");
+    assert.deepEqual(seen, [ "Local", "Anywhere" ], "and never saw the global-only options, which the gate had already refused");
+  });
+
+  test("a category whose every option is gated out is omitted entirely, through the existing empty-category rule", () => {
+
+    const state = scopedState({ scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" } });
+
+    assert.deepEqual(projection(state).categories.map((c) => c.name), ["Scoped"], "Account holds only a global-declared option, so a device view drops the header");
+  });
+});
+
 describe("projection - memoization", () => {
 
   test("two calls with the same state reference return the same projection reference", () => {

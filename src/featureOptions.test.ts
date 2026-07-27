@@ -45,6 +45,48 @@ const OPTIONS: Record<string, FeatureOptionEntry[]> = {
   ]
 };
 
+// Catalog fixture for the declared-scopes tests: one option per declaration shape plus an undeclared control, so each level's guard is exercised against an entry
+// that is configured and an entry that is skipped. The DeviceOnly variants carry opposite defaults, which is what lets the default-fallback tests tell a
+// correctly-resolved default apart from a disallowed entry leaking through: each fixture's default is the opposite of what its disallowed global entry encodes.
+const SCOPED_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Scoped Options", name: "Scoped" }];
+
+const SCOPED_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+  Scoped: [
+
+    { default: false, description: "Device-only option.", name: "DeviceOnly", scopes: ["device"] },
+    { default: true, description: "Device-only option, default on.", name: "DeviceOnlyDefaultOn", scopes: ["device"] },
+    { default: false, description: "Controller-only option.", name: "ControllerOnly", scopes: ["controller"] },
+    { default: false, description: "Global-only option.", name: "GlobalOnly", scopes: ["global"] },
+    { default: false, description: "Option declared at every level.", name: "Everywhere", scopes: [ "controller", "device", "global" ] },
+    { default: false, description: "Option that declares nothing.", name: "Undeclared" },
+    { default: false, defaultValue: 50, description: "Device-only value option.", name: "DeviceValue", scopes: ["device"] }
+  ]
+};
+
+/* Compile-time shape exercises for the scopes declaration. These never run - the function is voided at module scope rather than called - so they add nothing to the
+ * runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming
+ * plugin. The negative cases use `@ts-expect-error`, which fails the build if the error it expects ever stops occurring.
+ */
+const scopeDeclarationShapeExercises = (): void => {
+
+  // A declaration names one level or several, in any combination.
+  const deviceOnly: FeatureOptionEntry = { default: false, description: "Device-only.", name: "DeviceOnly", scopes: ["device"] };
+  const controllerAndDevice: FeatureOptionEntry = { default: false, description: "Controller and device.", name: "Local", scopes: [ "controller", "device" ] };
+
+  // An option declaring no level at all would render nowhere and resolve nowhere, so the non-empty tuple puts that state out of reach.
+  // @ts-expect-error - an empty scopes declaration is rejected.
+  const nowhere: FeatureOptionEntry = { default: false, description: "Nothing declared.", name: "Nowhere", scopes: [] };
+
+  // "none" is what resolution reports when nothing matched, not a level an entry can be written at, so the declaration vocabulary excludes it.
+  // @ts-expect-error - "none" is not a member of FeatureOptionScope.
+  const resolutionOutcome: FeatureOptionEntry = { default: false, description: "Not a level.", name: "Outcome", scopes: ["none"] };
+
+  void [ deviceOnly, controllerAndDevice, nowhere, resolutionOutcome ];
+};
+
+void scopeDeclarationShapeExercises;
+
 describe("FeatureOptions - construction and defaults", () => {
 
   test("indexes defaults from the options catalog keyed on lowercased expanded names", () => {
@@ -227,6 +269,114 @@ describe("FeatureOptions - scope hierarchy", () => {
 
     assert.equal(fo.test("Motion.Detect"), true);
     assert.equal(fo.exists("Motion.Detect"), true);
+  });
+});
+
+describe("FeatureOptions - declared option scopes", () => {
+
+  test("a device-declared option resolves its device entry and skips configured entries at every other level", () => {
+
+    const catalog = buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, [ "Enable.Scoped.DeviceOnly.dev1", "Enable.Scoped.DeviceOnly.ctrl1", "Enable.Scoped.DeviceOnly" ]);
+    const atDevice = resolveScope({ catalog, configIndex, controller: "ctrl1", device: "dev1", option: "Scoped.DeviceOnly" });
+    const atController = resolveScope({ catalog, configIndex, controller: "ctrl1", option: "Scoped.DeviceOnly" });
+
+    assert.equal(atDevice.scope, "device");
+    assert.equal(atDevice.enabled, true);
+    assert.equal(atController.scope, "none", "the controller and global entries sit at levels the option does not declare");
+    assert.equal(atController.enabled, false, "so the catalog default answers, not the enabled state those entries carry");
+  });
+
+  test("a controller-declared option resolves its controller entry and skips the device and global entries", () => {
+
+    const catalog = buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, [ "Enable.Scoped.ControllerOnly.dev1", "Enable.Scoped.ControllerOnly.ctrl1", "Enable.Scoped.ControllerOnly" ]);
+    const atDevice = resolveScope({ catalog, configIndex, controller: "ctrl1", device: "dev1", option: "Scoped.ControllerOnly" });
+    const global = resolveScope({ catalog, configIndex, option: "Scoped.ControllerOnly" });
+
+    assert.equal(atDevice.scope, "controller", "the device entry is skipped and the walk continues to the level the option declares");
+    assert.equal(atDevice.enabled, true);
+    assert.equal(global.scope, "none", "with no controller in view the global entry is still undeclared, so the default answers");
+    assert.equal(global.enabled, false);
+  });
+
+  test("a global-declared option resolves its global entry and skips the device and controller entries", () => {
+
+    const catalog = buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, [ "Enable.Scoped.GlobalOnly.dev1", "Enable.Scoped.GlobalOnly.ctrl1", "Enable.Scoped.GlobalOnly" ]);
+    const resolved = resolveScope({ catalog, configIndex, controller: "ctrl1", device: "dev1", option: "Scoped.GlobalOnly" });
+
+    assert.equal(resolved.scope, "global");
+    assert.equal(resolved.enabled, true);
+  });
+
+  test("an option declaring every level walks the full device -> controller -> global precedence", () => {
+
+    const catalog = buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, [ "Enable.Scoped.Everywhere.dev1", "Enable.Scoped.Everywhere.ctrl1", "Enable.Scoped.Everywhere" ]);
+
+    assert.equal(resolveScope({ catalog, configIndex, controller: "ctrl1", device: "dev1", option: "Scoped.Everywhere" }).scope, "device");
+    assert.equal(resolveScope({ catalog, configIndex, controller: "ctrl1", option: "Scoped.Everywhere" }).scope, "controller");
+    assert.equal(resolveScope({ catalog, configIndex, option: "Scoped.Everywhere" }).scope, "global");
+  });
+
+  test("an option that declares no scopes resolves at every level, as the shared fixtures throughout this suite do", () => {
+
+    // The compatibility contract, asserted against the same catalog the rest of the suite resolves through: nothing in it declares scopes, so the walk is the full
+    // device -> controller -> global -> default precedence.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const configIndex = buildConfigIndex(catalog, [ "Enable.Motion.Detect.dev1", "Disable.Motion.Detect.ctrl1", "Disable.Motion.Detect" ]);
+
+    assert.deepEqual(catalog.scopes, {}, "no entry in the shared fixture declares a scope");
+    assert.equal(resolveScope({ catalog, configIndex, controller: "ctrl1", device: "dev1", option: "Motion.Detect" }).scope, "device");
+    assert.equal(resolveScope({ catalog, configIndex, controller: "ctrl1", option: "Motion.Detect" }).scope, "controller");
+    assert.equal(resolveScope({ catalog, configIndex, option: "Motion.Detect" }).scope, "global");
+    assert.equal(resolveScope({ catalog, configIndex, option: "Motion.Sensitivity" }).scope, "none", "an option with no entry anywhere still falls to the default");
+  });
+
+  test("the catalog default resolves even when every configured entry sits at an undeclared level, in both directions", () => {
+
+    // A default belongs to the option rather than to a level, so the fallback is never gated. Both fixtures pin a default whose enabled state DIFFERS from the
+    // disallowed global entry's, so an implementation that leaked that entry through would fail here rather than agreeing with the default by coincidence.
+    const catalog = buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS);
+    const enabledGlobal = buildConfigIndex(catalog, ["Enable.Scoped.DeviceOnly"]);
+    const disabledGlobal = buildConfigIndex(catalog, ["Disable.Scoped.DeviceOnlyDefaultOn"]);
+    const defaultOff = resolveScope({ catalog, configIndex: enabledGlobal, device: "dev1", option: "Scoped.DeviceOnly" });
+    const defaultOn = resolveScope({ catalog, configIndex: disabledGlobal, device: "dev1", option: "Scoped.DeviceOnlyDefaultOn" });
+
+    assert.equal(defaultOff.scope, "none");
+    assert.equal(defaultOff.enabled, false, "a default-off option stays off despite a disallowed global Enable");
+    assert.equal(defaultOn.scope, "none");
+    assert.equal(defaultOn.enabled, true, "a default-on option stays on despite a disallowed global Disable");
+  });
+
+  test("test() and value() enforce the declaration; exists() answers what is configured", () => {
+
+    const fo = new FeatureOptions(SCOPED_CATEGORIES, SCOPED_OPTIONS, [ "Enable.Scoped.DeviceOnly", "Enable.Scoped.DeviceValue=75" ]);
+
+    assert.equal(fo.test("Scoped.DeviceOnly"), false, "the global entry is at an undeclared level, so the default answers");
+    assert.equal(fo.test("Scoped.DeviceOnly", "dev1"), false, "and a device view finds no device entry to apply");
+    assert.equal(fo.value("Scoped.DeviceValue", "dev1"), null, "an undeclared level carries no value either - the option resolves to its default-off state");
+    assert.equal(fo.exists("Scoped.DeviceOnly"), true, "the entry is configured, whatever resolution makes of it");
+    assert.equal(fo.exists("Scoped.DeviceValue"), true);
+  });
+
+  test("a value declared at the level the option admits resolves normally", () => {
+
+    // The other side of the enforcement above: the declaration narrows where a value is read from, it does not make a declared level unreadable.
+    const fo = new FeatureOptions(SCOPED_CATEGORIES, SCOPED_OPTIONS, ["Enable.Scoped.DeviceValue.dev1=75"]);
+
+    assert.equal(fo.value("Scoped.DeviceValue", "dev1"), "75");
+    assert.equal(fo.test("Scoped.DeviceValue", "dev1"), true);
+  });
+
+  test("buildCatalogIndex registers a scopes entry only for options that declare one", () => {
+
+    const catalog = buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS);
+
+    assert.deepEqual(catalog.scopes["scoped.deviceonly"], ["device"], "keyed on the lowercased expanded name, like every other registry");
+    assert.deepEqual(catalog.scopes["scoped.everywhere"], [ "controller", "device", "global" ]);
+    assert.equal(catalog.scopes["scoped.undeclared"], undefined, "an option that declares nothing gets no key");
   });
 });
 

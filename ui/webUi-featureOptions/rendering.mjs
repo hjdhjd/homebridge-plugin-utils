@@ -216,7 +216,7 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
 export const triStateTransition = ({ catalog, checkbox, configIndex, controllerId, deviceId, entry, inputValue }) => {
 
   const { expandedName, option } = entry;
-  const upstream = hasUpstreamOption({ configIndex, controllerId, deviceId, expandedName });
+  const upstream = hasUpstreamOption({ catalog, configIndex, controllerId, deviceId, expandedName });
 
   // Transition 1: was indeterminate (readOnly). The user clicked through to an explicit state at this scope.
   if(checkbox.readOnly) {
@@ -388,9 +388,13 @@ const createValueInput = ({ option }) => createElement("input", {
 // representation across every consumer so the input reads empty when disabled and the deviation check treats an empty input as "matches default."
 const defaultDisplay = (option) => option.defaultValue?.toString() ?? "";
 
-// Whether the option is set at a strictly higher scope than the current view. Drives the "fall back to inheritance" branch of the tri-state machine: a checked
-// checkbox that goes unchecked returns to indeterminate when upstream is set, otherwise stays explicitly unchecked.
-const hasUpstreamOption = ({ configIndex, controllerId, deviceId, expandedName }) => {
+// Whether the option is set at a strictly higher scope that the current view actually inherits from. Drives the "fall back to inheritance" branch of the tri-state
+// machine: a checked checkbox that goes unchecked returns to indeterminate when upstream is set, otherwise stays explicitly unchecked.
+//
+// Each level counts only when the option's declared scopes admit it, because this is a prediction of what resolution will do once the local entry is gone and it has
+// to agree with resolution exactly. Counting an entry the engine would skip would promise the user an inheritance that never arrives: the click would dispatch a
+// clear, resolution would land on the catalog default instead of the entry the probe saw, and the checkbox would spring back against the click.
+const hasUpstreamOption = ({ catalog, configIndex, controllerId, deviceId, expandedName }) => {
 
   // Global view (no device) is the top - nothing above it. A device view where the device IS the controller-as-device collapses to "controller view" which only
   // inherits from global; the controllerIsUpstream check below handles that case.
@@ -399,14 +403,15 @@ const hasUpstreamOption = ({ configIndex, controllerId, deviceId, expandedName }
     return false;
   }
 
-  const controllerIsUpstream = (controllerId !== null) && (deviceId !== controllerId);
+  const declaredScopes = catalog.scopes[expandedName.toLowerCase()];
+  const controllerIsUpstream = (controllerId !== null) && (deviceId !== controllerId) && (!declaredScopes || declaredScopes.includes("controller"));
 
   if(controllerIsUpstream && optionExists({ configIndex, id: controllerId, option: expandedName })) {
 
     return true;
   }
 
-  return optionExists({ configIndex, option: expandedName });
+  return (!declaredScopes || declaredScopes.includes("global")) && optionExists({ configIndex, option: expandedName });
 };
 
 // Decide whether the post-transition state warrants writing a new entry, or whether clearing the option falls back to the default. We write when the user's intent

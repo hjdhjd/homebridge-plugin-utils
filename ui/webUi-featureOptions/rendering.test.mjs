@@ -485,6 +485,96 @@ describe("triStateTransition - was unchecked, just checked", () => {
   });
 });
 
+describe("triStateTransition - the upstream probe honors declared scopes", () => {
+
+  // A declared option and an undeclared one, differing in nothing else, so any difference in the probe's verdict is attributable to the declaration alone. Both
+  // default on, and each test configures a single GLOBAL entry - the level the declared option does not admit - on a device view, the shape the regression turns on.
+  const PROBE_CATEGORIES = [{ description: "Probe Options", name: "Probe" }];
+
+  const PROBE_OPTIONS = {
+
+    Probe: [
+
+      { default: true, description: "Zone runtime enable.", name: "Declared", scopes: ["device"] },
+      { default: true, description: "Zone runtime enable.", name: "Undeclared" }
+    ]
+  };
+
+  const probeState = (optionName) => {
+
+    const catalog = {
+
+      ...buildCatalogIndex(PROBE_CATEGORIES, PROBE_OPTIONS),
+
+      validators: { isController: () => false, validOption: () => true, validOptionCategory: () => true }
+    };
+
+    const devices = [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const base = reducer(initialState(), { catalog, configuredOptions: ["Enable.Probe." + optionName], controllers: [], mode: "device-only", type: "model:loaded" });
+    const requested = reducer(base, { controllerId: null, type: "devices:requested" });
+    const withDevices = reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    return reducer(withDevices, { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+  };
+
+  // Simulate the click that takes a checked box to unchecked, and hand back the action the machine chose.
+  const uncheck = (state, optionName) => {
+
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = false;
+
+    return triStateTransition({
+
+      catalog: state.catalog,
+      checkbox,
+      configIndex: buildConfigIndex(state.catalog, state.configuredOptions),
+      controllerId: null,
+      deviceId: "dev-a",
+      entry: findEntry(state, "Probe", optionName),
+      inputValue: null
+    });
+  };
+
+  test("a declared option treats a disallowed higher-scope entry as no inheritance and writes the disable at this scope", () => {
+
+    using _dom = createTestDom();
+
+    const state = probeState("Declared");
+    const entry = findEntry(state, "Probe", "Declared");
+
+    // The row reads as checked by the catalog default rather than as an inherited value: resolution skipped the global entry, because the option declares only the
+    // device level.
+    assert.equal(entry.scope, "none");
+    assert.equal(entry.enabled, true);
+
+    const result = uncheck(state, "Declared");
+
+    // A clear would be a no-op here - there is no device entry to remove - so resolution would land back on the default-on state and the checkbox would spring back
+    // against the click. The write is what makes the user's intent stick.
+    assert.equal(result.action.type, "option:set");
+    assert.equal(result.action.args.enabled, false);
+    assert.equal(result.action.args.id, "dev-a");
+  });
+
+  test("an undeclared option treats the same entry as inheritance and clears, falling back to the higher scope", () => {
+
+    using _dom = createTestDom();
+
+    const state = probeState("Undeclared");
+    const entry = findEntry(state, "Probe", "Undeclared");
+
+    // With nothing declared the global entry is live at this view, so the row is showing an inherited value.
+    assert.equal(entry.scope, "global");
+
+    const result = uncheck(state, "Undeclared");
+
+    assert.equal(result.action.type, "option:cleared", "the clear returns the row to the inheritance the entry genuinely provides");
+    assert.equal(result.action.args.id, "dev-a");
+  });
+});
+
 describe("applyRowState - re-derivation on the update path", () => {
 
   test("a row whose option becomes modified re-colors its label to text-info in place, and reverting restores text-body", () => {

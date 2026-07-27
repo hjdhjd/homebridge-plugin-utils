@@ -685,3 +685,210 @@ describe("webUi.show - boot monitor handshake", () => {
     await assert.doesNotReject(async () => harness.ui.show(), "a region without a boot monitor must not break show()");
   });
 });
+
+describe("webUi - real menu-path re-entry (the full pipeline through webUi's own listeners)", () => {
+
+  // The catalog the real show() pulls. Two categories so a full render is unmistakable from a partial one.
+  const RE_ENTRY_FEATURES = {
+
+    categories: [ { description: "Motion Options", name: "Motion" }, { description: "Audio Options", name: "Audio" } ],
+    options: {
+
+      Audio: [{ default: false, description: "Audio volume.", name: "Volume" }],
+      Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }]
+    }
+  };
+
+  // Seed a Bootstrap-shaped stylesheet so the theme probe resolves promptly rather than running out its own window.
+  const seedBootstrapProbeShim = () => {
+
+    const sheet = new CSSStyleSheet();
+
+    sheet.replaceSync(".d-none { display: none; }");
+
+    document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
+  };
+
+  // True once the options page has rendered whole - one category disclosure per configured category.
+  const isFullyRendered = (skeleton) => skeleton.configTable.querySelectorAll("details[data-category]").length === RE_ENTRY_FEATURES.categories.length;
+
+  // Wait for the page to come up, so each leg of the walk asserts on a settled render rather than a fixed number of drained cycles.
+  const waitForRender = async (skeleton, leg) => {
+
+    for(let i = 0; i < 400; i++) {
+
+      if(isFullyRendered(skeleton)) {
+
+        return;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await flushPending();
+    }
+
+    assert.fail("the page did not render on " + leg);
+  };
+
+  // Walk the real menu the way a user does, through webUi's own click listeners, asserting a full re-render on every return to Feature Options. The S1-era gap this
+  // closes is that a stubbed inner instance can only prove the handler fired - it cannot prove the page came back.
+  const walkTheMenu = async ({ featureOptions }) => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+      featureOptions,
+      firstRun: { isRequired: () => false },
+      requestResponses: new Map([[ "/getOptions", RE_ENTRY_FEATURES ]]),
+      unstubbed: true
+    });
+
+    seedBootstrapProbeShim();
+
+    await harness.ui.show();
+    await waitForRender(harness.skeleton, "the initial launch");
+
+    // Feature Options -> Support -> Feature Options.
+    harness.skeleton.menuHome.click();
+    await flushPending();
+
+    harness.skeleton.menuFeatureOptions.click();
+    await waitForRender(harness.skeleton, "the return from Support");
+
+    // Feature Options -> Settings -> Feature Options.
+    harness.skeleton.menuSettings.click();
+    await flushPending();
+
+    harness.skeleton.menuFeatureOptions.click();
+    await waitForRender(harness.skeleton, "the return from Settings");
+
+    assert.equal(harness.skeleton.pageFeatureOptions.style.display, "block", "the feature-options page is the visible one at the end of the walk");
+  };
+
+  test("device-only: every return to Feature Options renders the page whole", async () => {
+
+    await walkTheMenu({ featureOptions: {} });
+  });
+
+  test("global-only: every return to Feature Options renders the page whole", async () => {
+
+    await walkTheMenu({ featureOptions: { globalOnly: true } });
+  });
+});
+
+describe("webUi - the launch-time session open is deadline-bounded", () => {
+
+  // The bound the launch carries, mirrored so a test can advance the mock clock exactly past it.
+  const LAUNCH_DEADLINE_MS = 30000;
+
+  test("a stalled config read at launch toasts the failure, drops the spinner, and leaves a menu that re-runs the launch once the host heals", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false },
+      requestResponses: new Map([[ "/getOptions", {
+
+        categories: [{ description: "Motion Options", name: "Motion" }],
+        options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+      } ]]),
+      unstubbed: true
+    });
+
+    const sheet = new CSSStyleSheet();
+
+    sheet.replaceSync(".d-none { display: none; }");
+
+    document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
+
+    const healthyRead = harness.fake.getPluginConfig;
+
+    // The page's very first bridge call never answers - the frozen-first-load shape of the symptom class.
+    harness.fake.getPluginConfig = () => new Promise(() => {});
+
+    const showPromise = harness.ui.show();
+
+    await flushPending();
+    t.mock.timers.tick(LAUNCH_DEADLINE_MS + 1);
+    await showPromise;
+    await flushPending();
+
+    assert.deepEqual(harness.fake.observed.toasts.at(-1), {
+
+      message: "The Homebridge server did not respond, so the plugin configuration could not be read. Select Feature Options to try again.",
+      title: "Error",
+      variant: "error"
+    }, "the launch expiry toasts copy that names the recovery rather than the raw deadline message");
+
+    assert.equal(harness.fake.observed.state.spinnerCount, 0, "the spinner comes down however the launch settled");
+    assert.equal(harness.skeleton.menuWrapper.style.display, "inline-flex", "the menu is revealed, since it is the only affordance a failed launch leaves");
+
+    // Heal the host and take the one affordance the page offers. The click must re-run the LAUNCH - there is no session for a plain re-show to use.
+    harness.fake.getPluginConfig = healthyRead;
+
+    harness.skeleton.menuFeatureOptions.click();
+
+    for(let i = 0; i < 400; i++) {
+
+      if(harness.skeleton.configTable.querySelector("details[data-category]")) {
+
+        break;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await flushPending();
+    }
+
+    assert.ok(harness.skeleton.configTable.querySelector("details[data-category='Motion']"),
+      "the Feature Options click after the heal re-ran the launch through to a full render");
+  });
+});
+
+describe("webUi.liveness - the public plugin surface", () => {
+
+  // The detector's default cadence and gap threshold in milliseconds, mirrored so a test can advance in cadence-sized steps and jump clear past the threshold.
+  const INTERVAL_MS = 15000;
+  const THRESHOLD_MS = 90000;
+
+  test("onResume subscribes a plugin callback to page resumes, honors its gate, and dies with its signal", (t) => {
+
+    // Enable the clocks before constructing webUi: the detector seeds its last-tick clock when it arms, and arming against a real-epoch seed under a zeroed mock clock
+    // would read every gap as negative and silently kill the probe.
+    t.mock.timers.enable({ apis: [ "Date", "setInterval" ] });
+
+    using harness = makeWebUiHarness({ config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }] });
+
+    // Exactly how a plugin uses it: a callback, an optional gate, an optional lifecycle signal.
+    const controller = new AbortController();
+    const fires = [];
+    let gateOpen = true;
+
+    harness.ui.liveness.onResume(() => fires.push(1), { shouldProbe: () => gateOpen, signal: controller.signal });
+
+    const resume = () => {
+
+      t.mock.timers.setTime(Date.now() + (6 * THRESHOLD_MS));
+      t.mock.timers.tick(INTERVAL_MS);
+    };
+
+    resume();
+    assert.equal(fires.length, 1, "a page resume reaches the plugin's callback");
+
+    gateOpen = false;
+    resume();
+    assert.equal(fires.length, 1, "a shut gate skips the plugin's callback");
+
+    gateOpen = true;
+    controller.abort();
+    resume();
+    assert.equal(fires.length, 1, "an aborted subscription receives nothing further");
+  });
+
+  test("the surface is onResume alone - the deadline helpers are imported from the liveness module, not re-exposed here", () => {
+
+    using harness = makeWebUiHarness({ config: [] });
+
+    assert.deepEqual(Object.keys(harness.ui.liveness), ["onResume"], "a second path to withDeadline would be a second source of truth for it");
+  });
+});

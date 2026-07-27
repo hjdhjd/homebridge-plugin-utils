@@ -4,9 +4,10 @@
  */
 "use strict";
 
+import { DeadlineExpiredError, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
+import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { delay, errorMessage, toastError } from "./webUi-featureOptions/utils.mjs";
-import { initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
@@ -27,6 +28,18 @@ import { registerTokensEffect } from "./webUi-featureOptions/effects/tokens.mjs"
  * indefinitely. On timeout the in-flight commit continues independently and still lands if the host recovers; we simply stop blocking the UI on it.
  */
 const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
+
+/**
+ * The deadline, in seconds, on every host await the page makes. The Homebridge UI bridge has no timeout of its own, so a relay that dies mid-flight leaves a call
+ * pending forever and the page simply stops - a blank tab with no error, no console signal, and nothing to click. This bound is what makes that failure reachable.
+ *
+ * Thirty seconds is generous enough that a slow controller probe on a busy network never false-trips, and short enough that a dead bridge surfaces while the user is
+ * still looking at the page. The asymmetry is what sets it: a false trip lands on the connection-error view's retry affordance and costs one click, while never
+ * tripping costs the blank page. Deadlines clock per await site rather than against one shared boot budget, so a pathologically slow-but-alive boot can take several
+ * consecutive windows - accepted, because each window ends in either progress or the retry view, and a shared budget would couple every await to every other one for a
+ * case the retry view already bounds.
+ */
+export const BOOT_AWAIT_DEADLINE_SECONDS = 30;
 
 // The page's content regions, in alphabetical id order. hide() sets each to display:none during teardown so the user never sees a half-built page; the coordinated
 // end-of-load reveal restores them together. Both the teardown-hide loop and the reveal read this single list so the two can never drift.
@@ -166,6 +179,10 @@ export class webUiFeatureOptions {
   // The page-level abort controller. Aborting it tears down every effect and every view in one operation. Recreated on every show(); nulled out on cleanup().
   #pageAbort;
 
+  // The page's resume detector, supplied by the orchestrator that owns the page lifetime. Threaded to the views that probe on a resume and otherwise untouched; when
+  // it is absent - a directly-constructed instance, as every test call site is - no view subscribes and no resume timer ever runs.
+  #resumeDetector;
+
   // The plugin-config session, supplied by the orchestrator on show(). The single owner of the persisted config: the page reads its base config and persists option
   // edits through it. Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(), and re-used across show() cycles.
   #session;
@@ -183,9 +200,16 @@ export class webUiFeatureOptions {
   /**
    * Initialize the feature options webUI with customizable configuration.
    *
+   * Framework wiring arrives through the SECOND parameter rather than the plugin's options bag, because the two are different kinds of thing: the first parameter is
+   * what a plugin author writes, the second is what the page orchestrator hands down. Keeping them apart means a plugin's option surface never grows a slot only the
+   * framework can fill, and the wiring stays optional - an instance constructed without it simply subscribes to nothing.
+   *
    * @param {FeatureOptionsConfig} options - Configuration options for the webUI.
+   * @param {Object} [wiring] - Framework wiring supplied by the page orchestrator.
+   * @param {{ subscribe: Function }} [wiring.resumeDetector] - The page's resume detector, threaded to the views that probe on a resume. Absent means no view
+   *                                                            subscribes to resumes.
    */
-  constructor(options = {}) {
+  constructor(options = {}, { resumeDetector = undefined } = {}) {
 
     const {
 
@@ -199,11 +223,11 @@ export class webUiFeatureOptions {
       ui = {}
     } = options;
 
-    // The page's construction contracts, each a contradiction that cannot be honored. Evaluated in order; the first violated row throws a TypeError naming the conflict
+    // The page's construction contracts, each a configuration that cannot be honored. Evaluated in order; the first violated row throws a TypeError naming the problem
     // at the plugin-author boundary rather than surfacing as a silent mis-mount or a dead device view, and the throw lands through the page's boot monitor. Global-only
     // mode runs the page at global scope with no device machinery, so every device- or controller-facing hook contradicts it (getDevices is destructured without a
     // default, so the un-defaulted binding being defined is the exact "explicitly supplied" test); the device-stats region has a single owner, so infoPanel and
-    // statusPanel cannot both claim it.
+    // statusPanel cannot both claim it; and framework wiring parked in the plugin bag would be silently ignored, so the misplacement is named instead.
     const contradictions = [
 
       {
@@ -225,6 +249,11 @@ export class webUiFeatureOptions {
 
         message: "infoPanel and statusPanel are mutually exclusive - the device-stats region has a single owner.",
         violated: Boolean(infoPanel) && Boolean(statusPanel)
+      },
+      {
+
+        message: "resumeDetector is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
+        violated: "resumeDetector" in options
       }
     ];
 
@@ -261,6 +290,7 @@ export class webUiFeatureOptions {
 
     this.#flushPersist = null;
     this.#pageAbort = null;
+    this.#resumeDetector = resumeDetector;
     this.#session = null;
     this.#store = null;
     this.#initialOptions = null;
@@ -357,16 +387,10 @@ export class webUiFeatureOptions {
     // views exist by now, so the page shows the retry affordance instead of stranding a blank frame.
     try {
 
-      await this.#session.sync();
+      await withDeadline({ promise: this.#session.sync(), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
     } catch(err) {
 
-      this.#store.dispatch({
-
-        guidance: "Retry once the Homebridge server is reachable again.",
-        headline: "Unable to read the plugin configuration.",
-        message: errorMessage(err),
-        type: "connection:error"
-      });
+      this.#failConnection({ err, signal, site: "sync" });
 
       return;
     }
@@ -420,8 +444,19 @@ export class webUiFeatureOptions {
       }
     }, { signal });
 
-    // Wait for controllers (if configured). Empty result in controller-based mode means "no controllers configured" - we show the helper text and bail.
-    const controllers = await controllersPromise;
+    // Wait for controllers (if configured), bounded so a plugin hook riding a dead bridge cannot strand the page. Empty result in controller-based mode means "no
+    // controllers configured" - we show the helper text and bail.
+    let controllers;
+
+    try {
+
+      controllers = await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+    } catch(err) {
+
+      this.#failConnection({ err, signal, site: "controllers" });
+
+      return;
+    }
 
     if(signal.aborted) {
 
@@ -452,9 +487,20 @@ export class webUiFeatureOptions {
       devicesPromise = this.#devicesFor(initialController);
     }
 
-    // Wait for the feature catalog. Build the catalog (catalog index + validators) and dispatch model:loaded so the store transitions to "ready" and views can mount
-    // against a populated state. The configured options come from the session's primary entry - the persisted config the orchestrator already loaded.
-    const features = await featuresPromise;
+    // Wait for the feature catalog, bounded like every other host await. Build the catalog (catalog index + validators) and dispatch model:loaded so the store
+    // transitions to "ready" and views can mount against a populated state. The configured options come from the session's primary entry - the persisted config the
+    // orchestrator already loaded.
+    let features;
+
+    try {
+
+      features = await withDeadline({ promise: featuresPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+    } catch(err) {
+
+      this.#failConnection({ err, signal, site: "features" });
+
+      return;
+    }
 
     if(signal.aborted) {
 
@@ -489,7 +535,22 @@ export class webUiFeatureOptions {
 
     // Wait for the theme's matchMedia listener registration before any user interaction can trigger a theme change. By this point, themeInitPromise has almost
     // always already resolved - it ran in parallel with every other fetch above.
-    await themeInitPromise;
+    //
+    // This await is the one whose failure is NOT fatal. The theme's host read is cosmetic: a page that cannot learn the host's lighting mode renders on the theme's
+    // own defaults and is entirely usable, so a probe that hangs or fails costs a warning and nothing else. Every other await lands the user on the retry view;
+    // making this one do the same would let a cosmetic detail take down a working page.
+    try {
+
+      await withDeadline({ promise: themeInitPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+    } catch(err) {
+
+      this.#unlessStale({ run: () => {
+
+        // console is the browser page's diagnostic transport, and a theme probe that did not answer is exactly a diagnostic - the boot continues on the defaults.
+        // eslint-disable-next-line no-console
+        console.warn("The theme could not read the Homebridge lighting mode, so the page is rendering on its default theme.", err);
+      }, signal });
+    }
 
     if(signal.aborted) {
 
@@ -515,13 +576,38 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // Wait for devices. The fetch overlapped with config + features; typically already resolved by now.
-    const { devices, error } = await devicesPromise;
+    // Wait for devices, bounded like every other host await. The fetch overlapped with config + features; typically already resolved by now. A failure folds into the
+    // devices:loaded outcome channel the nav view's click path already uses, carrying this site's own copy: the reducer drops it if a newer fetch superseded it, and
+    // otherwise renders the retry view saying what actually failed rather than the generic controller wording.
+    let outcome;
+
+    try {
+
+      outcome = await withDeadline({ promise: devicesPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+    } catch(err) {
+
+      const { guidance, headline } = connectionFailureCopy({ expired: err instanceof DeadlineExpiredError, site: "devices" });
+
+      this.#unlessStale({ run: () => this.#store.dispatch({
+
+        controllerId: initialController?.serialNumber ?? null,
+        devices: [],
+        error: errorMessage(err),
+        guidance,
+        headline,
+        seq: devicesSeq,
+        type: "devices:loaded"
+      }), signal });
+
+      return;
+    }
 
     if(signal.aborted) {
 
       return;
     }
+
+    const { devices, error } = outcome;
 
     this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, devices, error, seq: devicesSeq, type: "devices:loaded" });
 
@@ -573,9 +659,12 @@ export class webUiFeatureOptions {
    *
    * Contract:
    *
-   *   - A call before the first show() has established the session and store resolves false without dispatching - there is no sidebar to refresh yet.
+   *   - A call before the first show() has established the session and store resolves false without dispatching - there is no sidebar to refresh yet. The same holds
+   *     for a call after teardown, or one whose cycle is superseded mid-flight: the refresh belongs to the cycle it started in, so its outcome is dropped rather than
+   *     dispatched into whatever cycle replaced it.
    *   - A config re-sync failure resolves false and leaves the rendered view exactly as it was. This is a deliberate divergence from show(), which routes a sync
-   *     failure into the connection-error view: an explicit refresh must never tear down a working sidebar over a failed config read.
+   *     failure into the connection-error view: an explicit refresh must never tear down a working sidebar over a failed config read. A controller hook that fails or
+   *     never answers resolves false on the same reasoning - both awaits are bounded, so neither can leave the caller waiting on a dead bridge.
    *   - A null, absent, or empty resolved controller list resolves false and leaves the store untouched - the consumer owns the messaging for the no-controllers
    *     case, exactly as show()-time handles it through a direct message that bypasses the store.
    *   - A non-empty list dispatches controllers:loaded and resolves true once the sidebar has transitioned to the new list.
@@ -594,20 +683,43 @@ export class webUiFeatureOptions {
       return false;
     }
 
+    // Capture the live cycle's signal at entry - the one this refresh belongs to. cleanup() nulls the abort controller while leaving the store queryable, so an absent
+    // controller means there is no rendered cycle to refresh into, and an already-aborted one means this refresh's cycle is gone. Capturing rather than re-reading also
+    // means a supersession that lands mid-refresh aborts the signal this method is holding, so its awaits settle at once and its outcome is dropped instead of
+    // dispatched into the newer cycle's store.
+    const signal = this.#pageAbort?.signal;
+
+    if(!signal || signal.aborted) {
+
+      return false;
+    }
+
     // Re-read the host config into the session before we read controllers, exactly as show() does at its entry, so a refresh after a Settings-tab edit acts on the
     // current config rather than a frozen snapshot. Unlike show(), a read failure here does NOT route into the connection-error view: an explicit refresh must never
     // replace a working sidebar with the error frame over a failed config read, so we leave the store untouched and report that the refresh made no change.
     try {
 
-      await this.#session.sync();
+      await withDeadline({ promise: this.#session.sync(), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
     } catch {
 
       return false;
     }
 
-    // Re-invoke the configured getControllers hook with the same injected-config shape show() uses. A device-only plugin has no hook and thus no controllers to
-    // refresh, so its null result falls through to the no-change return below.
-    const controllers = this.#config.getControllers ? await this.#config.getControllers({ config: this.#session.platform }) : null;
+    // Re-invoke the configured getControllers hook with the same injected-config shape show() uses, bounded on the same reasoning as the sync above. A device-only
+    // plugin has no hook and thus no controllers to refresh, so its null result falls through to the no-change return below; a hook that fails or never answers
+    // reports no change too, since leaving the working sidebar alone is the honest outcome either way.
+    let controllers = null;
+
+    try {
+
+      if(this.#config.getControllers) {
+
+        controllers = await withDeadline({ promise: this.#config.getControllers({ config: this.#session.platform }), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+      }
+    } catch {
+
+      return false;
+    }
 
     // A null, absent, or empty list leaves the store untouched: the consumer owns the no-controllers messaging, so a refresh that finds none reports no change rather
     // than dispatching an empty sidebar or a connection-error frame. Only a non-empty list transitions the view.
@@ -617,10 +729,57 @@ export class webUiFeatureOptions {
     }
 
     // A non-empty list: dispatch the controllers-only refresh the nav view subscribes to. The reducer replaces state.controllers and the nav rebuilds the controllers
-    // container against it; the dispatch runs its subscribers synchronously, so the sidebar has transitioned by the time we report success.
-    this.#store.dispatch({ controllers, type: "controllers:loaded" });
+    // container against it; the dispatch runs its subscribers synchronously, so the sidebar has transitioned by the time we report success. The staleness guard owns
+    // the verdict: a refresh whose cycle was superseded while it waited dispatches nothing and reports no change.
+    return this.#unlessStale({ run: () => this.#store.dispatch({ controllers, type: "controllers:loaded" }), signal });
+  }
+
+  /**
+   * The staleness chokepoint: run an action only while the cycle it belongs to is still the live one.
+   *
+   * Every bounded await now settles - that is the whole point of the deadline - which is exactly what makes this necessary. A cycle that was superseded while it waited
+   * still reaches its own catch, and the store it would reach for is the field the NEXT show() reassigned. Routing every late outcome through one guard, closured over
+   * its own cycle's signal, is what keeps a dead cycle's failure from painting an error over a page that has already rendered.
+   *
+   * It is a method rather than a discipline for the same reason: an inline `if(signal.aborted)` at each catch is a rule that has to be remembered at every future
+   * failure path, while a single chokepoint is a rule the code enforces.
+   *
+   * @param {Object} args
+   * @param {() => void} args.run - The action to take when the cycle is still live: a store dispatch, or the theme's warning.
+   * @param {AbortSignal} args.signal - The signal of the cycle the action belongs to.
+   * @returns {boolean} True when the action ran, false when the cycle had been superseded.
+   * @private
+   */
+  #unlessStale({ run, signal }) {
+
+    if(signal.aborted) {
+
+      return false;
+    }
+
+    run();
 
     return true;
+  }
+
+  /**
+   * Route a failed page await into the connection-error view.
+   *
+   * The site names which await failed so the copy table can say the honest thing about it, and the {@link DeadlineExpiredError} test is what separates a host that went
+   * quiet from one that answered with an error - two failures a user responds to differently. The dispatch rides the staleness guard, so a superseded cycle's late
+   * failure never lands on the cycle that replaced it.
+   *
+   * @param {Object} args
+   * @param {*} args.err - The thrown value, tested for a deadline expiry and rendered as the failure's message.
+   * @param {AbortSignal} args.signal - The signal of the cycle the failure belongs to.
+   * @param {string} args.site - The await that failed, as named in the copy table.
+   * @private
+   */
+  #failConnection({ err, signal, site }) {
+
+    const { guidance, headline } = connectionFailureCopy({ expired: err instanceof DeadlineExpiredError, site });
+
+    this.#unlessStale({ run: () => this.#store.dispatch({ guidance, headline, message: errorMessage(err), type: "connection:error" }), signal });
   }
 
   /**
@@ -799,7 +958,7 @@ export class webUiFeatureOptions {
       // public field; otherwise the static device-info view mounts, adapting the plugin's (device, root) infoPanel to the view's (root, device) argument order.
       if(statusPanel) {
 
-        this.statusPanel = mountStatusPanelView({ config: statusPanel, root: deviceStatsContainer, signal, store });
+        this.statusPanel = mountStatusPanelView({ config: statusPanel, resumeDetector: this.#resumeDetector, root: deviceStatsContainer, signal, store });
       } else {
 
         mountDeviceInfoView({
@@ -831,6 +990,7 @@ export class webUiFeatureOptions {
 
       mountNavView({
 
+        deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS,
         getDevices: (controller) => this.#devicesFor(controller),
         labelControllers: this.#config.labelControllers,
         labelDevices: this.#config.labelDevices,

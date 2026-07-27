@@ -4,9 +4,14 @@
  */
 "use strict";
 
+import { BOOT_AWAIT_DEADLINE_SECONDS, webUiFeatureOptions } from "./webUi-featureOptions.mjs";
+import { DeadlineExpiredError, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
 import { toastError } from "./webUi-featureOptions/utils.mjs";
-import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
+
+// The copy a launch that timed out surfaces. The session open is the page's first bridge call, before any store, view, or retry affordance exists, so the toast is the
+// only surface available - which is why it names the recovery the menu still offers rather than leaving the user staring at an empty page.
+const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the plugin configuration could not be read. Select Feature Options to try again.";
 
 /**
  * @typedef {Object} FirstRunContext
@@ -39,9 +44,29 @@ export class webUi {
 
   featureOptions;
 
+  /**
+   * The plugin-facing liveness surface.
+   *
+   * One method, deliberately: `onResume(callback, { shouldProbe, signal })` registers a subscriber the page notifies when it detects that the browser froze and woke
+   * again - an OS app-switch, a laptop lid - which is the one liveness event a plugin cannot observe for itself, since WebKit does not reliably deliver
+   * `visibilitychange` to this embedded frame. What the subscriber does about it is plugin policy: re-elicit a feed, refresh a poll, probe a connection.
+   *
+   * The deadline helpers are NOT re-exposed here. A plugin that wants to bound its own awaits imports `withDeadline` from the liveness module directly, so there is one
+   * path to that function rather than a field that shadows it.
+   *
+   * @example
+   *
+   * // Refresh a price poll when the page wakes, but only while this plugin's panel is the one on screen.
+   * ui.liveness.onResume(() => refreshPrices(), { shouldProbe: () => panelVisible, signal });
+   *
+   * @type {{ onResume: (callback: () => void, options?: { shouldProbe?: () => boolean, signal?: AbortSignal }) => void }}
+   */
+  liveness;
+
   #firstRun;
   #menuBound = false;
   #name;
+  #resumeDetector;
   #session;
 
   /**
@@ -60,7 +85,13 @@ export class webUi {
     // assignment, so there is no intermediate object that gets discarded a line later.
     this.#firstRun = { isRequired: () => false, onStart: () => true, onSubmit: () => true, ...firstRun };
 
-    this.featureOptions = new webUiFeatureOptions(featureOptions);
+    // One resume detector for the whole page. The thing it measures - a freeze in wall-clock time - is a property of the page, not of any view that happens to be
+    // mounted, so it belongs to the object whose lifetime is the page's and is handed down to the feature-options instance as framework wiring rather than as plugin
+    // configuration. Its sampling timer is demand-driven, so a page whose views never subscribe pays nothing for holding one.
+    this.#resumeDetector = createResumeDetector();
+
+    this.featureOptions = new webUiFeatureOptions(featureOptions, { resumeDetector: this.#resumeDetector });
+    this.liveness = { onResume: (callback, options) => this.#resumeDetector.subscribe(callback, options) };
     this.#name = name;
   }
 
@@ -82,9 +113,21 @@ export class webUi {
       await this.#launchWebUI();
     } catch(err) {
 
-      // Outermost user-facing diagnostic seam in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape, so the shared
+      // The outermost user-facing diagnostic in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape, so the shared
       // toastError normalization extracts a useful message regardless of what bubbled out of `#launchWebUI`.
-      toastError(err);
+      this.#toastLaunchFailure(err);
+
+      // A launch that never established a session has rendered nothing, so the menu is the only way forward the user has - and it starts hidden. Reveal it here, and
+      // only here: the first-run route keeps it hidden on purpose until that flow completes, and a failure that happened after routing has already revealed it.
+      if(!this.#session) {
+
+        const menuWrapper = document.getElementById("menuWrapper");
+
+        if(menuWrapper) {
+
+          menuWrapper.style.display = "inline-flex";
+        }
+      }
     } finally {
 
       homebridge.hideSpinner();
@@ -166,6 +209,10 @@ export class webUi {
    * trips the device-list contract guard, for one - and the click listener drops the returned promise, so this method brackets the re-entry in a try/catch that
    * surfaces a failed re-show as an error toast rather than an unobserved rejection.
    *
+   * When no session exists, the click re-runs the launch instead. That is the recovery path for a launch whose config read never answered: the menu is bound and the
+   * user is looking at a toast, so the one affordance they have must re-attempt the open rather than hand `show()` a session that was never established. The
+   * menu-binding guard keeps the re-launch from stacking a second set of listeners.
+   *
    * @returns {Promise<void>}
    * @private
    */
@@ -173,11 +220,33 @@ export class webUi {
 
     try {
 
+      if(!this.#session) {
+
+        await this.#launchWebUI();
+
+        return;
+      }
+
       await this.featureOptions.show(this.#session);
     } catch(err) {
 
-      toastError(err);
+      this.#toastLaunchFailure(err);
     }
+  }
+
+  /**
+   * Surface a launch or re-entry failure as a toast, saying the honest thing about a host that never answered.
+   *
+   * A deadline expiry and a genuine failure read differently to a user: one means the server went quiet and the retry is worth taking, the other carries a message
+   * describing what actually went wrong. Only the session open can produce an expiry here - every feature-options await handles its own - so the substitution is
+   * unambiguous, and everything else flows through the shared toastError normalization untouched.
+   *
+   * @param {*} err - The thrown value.
+   * @private
+   */
+  #toastLaunchFailure(err) {
+
+    toastError((err instanceof DeadlineExpiredError) ? LAUNCH_TIMEOUT_MESSAGE : err);
   }
 
   /**
@@ -251,23 +320,28 @@ export class webUi {
   /**
    * Launch the webUI.
    *
-   * Opens the configuration session, wires the menu event listeners, and routes the user to either the feature-options view (when the caller's first-run gate says
+   * Wires the menu event listeners, opens the configuration session, and routes the user to either the feature-options view (when the caller's first-run gate says
    * no) or the first-run flow (when it says yes). The session loads the host config once and seeds the minimum shape, so routing and every downstream reader share
-   * one config owner rather than fetching it independently.
+   * one config owner rather than fetching it independently. The menu is wired ahead of the session because it is the recovery affordance for an open that fails.
    *
    * @returns {Promise<void>}
    * @private
    */
   async #launchWebUI() {
 
+    // Bind the persistent menu listeners before any I/O. The buttons are page chrome rather than session state - each handler reads the current `this.#session` at
+    // click time - so binding first is what leaves the user a working menu when the open below never answers. The binder is a no-op on any subsequent launch, so the
+    // recovery path's re-launch never stacks a second handler on each button.
+    this.#bindMenuListeners();
+
     // Open the configuration session: one host read, seeded to the minimum shape. Routing, the first-run flow, and the feature-options page all read their config
     // from this single owner rather than re-fetching it independently - so the routing decision lands before any UI work begins and against the same data every
     // later reader sees.
-    this.#session = await PluginConfigSession.open({ host: homebridge, name: this.#name });
-
-    // Bind the persistent menu listeners once for the page lifetime. The binder is a no-op on any subsequent launch, so a re-entry never stacks a second handler on
-    // each button.
-    this.#bindMenuListeners();
+    //
+    // This is the page's FIRST bridge call, and an unbounded one would be the worst place to hang: nothing has rendered, so the user sees a spinner over an empty
+    // frame with no diagnostic and no way forward. The deadline takes no signal because none exists to take - the launch runs once per page load with no cycle that
+    // could supersede it - and its failure surfaces through show()'s toast with the menu left usable for another attempt.
+    this.#session = await withDeadline({ promise: PluginConfigSession.open({ host: homebridge, name: this.#name }), seconds: BOOT_AWAIT_DEADLINE_SECONDS });
 
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
     // flow returns true on a fresh config (no valid credentials yet), and a plugin without one keeps the default `() => false` gate and lands straight on feature

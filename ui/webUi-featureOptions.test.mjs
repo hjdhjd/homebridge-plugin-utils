@@ -3204,3 +3204,642 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
     orchestrator.cleanup();
   });
 });
+
+describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
+
+  // The bound every page await carries, mirrored from the orchestrator so a test can advance the mock clock exactly past it.
+  const BOOT_DEADLINE_MS = 30000;
+
+  // A host call that never answers - the dead-relay shape the whole layer exists for.
+  const hangingCall = () => new Promise(() => {});
+
+  // Stand up the page skeleton, the fake bridge, and an opened session in one step, since every test in this block needs the same three. The session is opened BEFORE
+  // any stall is installed, because the launch-time open is webUi's concern rather than this orchestrator's.
+  const arrange = async ({ config = makePluginConfig(), features = FEATURES } = {}) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config, requestResponses: new Map([[ "/getOptions", features ]]) });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    return { fake, homebridgeGuard, session: await openTestSession(), skeleton };
+  };
+
+  // The connection-error view's rendered text, or null when the page is not showing one.
+  const failureTextIn = (skeleton) => skeleton.headerInfo.querySelector("button.btn-warning") ? skeleton.headerInfo.textContent : null;
+
+  // True once the full options page has rendered - one category disclosure per configured category.
+  const isFullyRendered = (skeleton) => skeleton.configTable.querySelectorAll("details[data-category]").length === FEATURES.categories.length;
+
+  // Drive a show() whose await stalls: start it, let it reach the stalled await, advance past the deadline, and let the expiry settle.
+  const expireDeadline = async (t, showPromise) => {
+
+    await flush();
+    t.mock.timers.tick(BOOT_DEADLINE_MS + 1);
+    await showPromise;
+    await flush();
+  };
+
+  test("a stalled config read expires into the connection-error view with the sync-expiry copy, and a retry after the host heals renders the page", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake, homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const healthyRead = fake.getPluginConfig;
+
+    fake.getPluginConfig = hangingCall;
+
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+
+    await expireDeadline(t, orchestrator.show(session));
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "the expiry must render the connection-error view rather than strand a blank frame");
+    assert.match(failure, /The Homebridge server stopped responding\./, "the sync site's EXPIRY copy renders, not its generic read-failure copy");
+    assert.match(failure, /Retry once the Homebridge server is reachable again\./, "the site's guidance renders with it");
+
+    // Heal the host and take the retry the view offered: the page must come up whole.
+    fake.getPluginConfig = healthyRead;
+    t.mock.timers.tick(50);
+    await flush();
+
+    skeleton.headerInfo.querySelector("button.btn-warning").click();
+    await waitFor(() => isFullyRendered(skeleton), { message: "the retry after the host healed must render the full page" });
+
+    assert.equal(failureTextIn(skeleton), null, "the healed retry leaves no connection-error behind");
+
+    orchestrator.cleanup();
+  });
+
+  test("a stalled /getOptions read expires into the connection-error view with the features-expiry copy", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake, homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    fake.request = (path) => (path === "/getOptions") ? hangingCall() : Promise.resolve(null);
+
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+
+    await expireDeadline(t, orchestrator.show(session));
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "the expiry must render the connection-error view");
+    assert.match(failure, /The plugin stopped responding while loading the feature options\./, "the features site's own expiry copy renders");
+
+    orchestrator.cleanup();
+  });
+
+  test("a stalled getControllers hook expires into the connection-error view with the controllers-expiry copy", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({ getControllers: hangingCall, ui: { controllerRetryEnableDelayMs: 20 } });
+
+    await expireDeadline(t, orchestrator.show(session));
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "the expiry must render the connection-error view");
+    assert.match(failure, /The plugin stopped responding while retrieving the controller list\./, "the controllers site's own expiry copy renders");
+
+    orchestrator.cleanup();
+  });
+
+  test("a stalled getDevices hook expires into the connection-error view with the devices-expiry copy, distinguishable from a controller failure", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({ getDevices: hangingCall, ui: { controllerRetryEnableDelayMs: 20 } });
+
+    await expireDeadline(t, orchestrator.show(session));
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "the expiry must render the connection-error view");
+    assert.match(failure, /The plugin stopped responding while retrieving the device list\./, "the devices site's own expiry copy renders");
+    assert.doesNotMatch(failure, /Unable to connect to the controller\./, "a devices expiry must never masquerade as the shared controller-failure wording");
+
+    orchestrator.cleanup();
+  });
+
+  test("a stalled theme read is NOT fatal: the page renders whole on the theme defaults and the failure is warned", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake, homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    fake.userCurrentLightingMode = hangingCall;
+
+    const warnings = [];
+
+    // console is the transport the code under test reports a subscriber failure on, so the spy has to speak the same channel.
+    // eslint-disable-next-line no-console
+    const realWarn = console.warn;
+
+    // eslint-disable-next-line no-console
+    console.warn = (...args) => warnings.push(args);
+
+    const orchestrator = new webUiFeatureOptions();
+
+    try {
+
+      await expireDeadline(t, orchestrator.show(session));
+    } finally {
+
+      // eslint-disable-next-line no-console
+      console.warn = realWarn;
+    }
+
+    assert.ok(isFullyRendered(skeleton), "a cosmetic probe that never answered must not cost the page");
+    assert.equal(failureTextIn(skeleton), null, "the theme's failure must not land the user on the retry view");
+    assert.equal(warnings.length, 1, "the theme failure is reported exactly once");
+    assert.match(warnings[0][0], /^The theme could not read the Homebridge lighting mode/, "the warning is a complete sentence naming what happened");
+
+    orchestrator.cleanup();
+  });
+
+  test("a REJECTING controllers hook lands the connection-error view without the deadline elapsing", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => Promise.reject(new Error("the controller hook blew up")),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    // No clock advance at all: a genuine rejection is a genuine rejection, and the bound has nothing to do with it.
+    await orchestrator.show(session);
+    await flush();
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "a rejecting hook renders the connection-error view");
+    assert.match(failure, /Unable to retrieve the controller list\./, "the controllers site's FAILURE copy renders, not its expiry copy");
+    assert.match(failure, /the controller hook blew up/, "the thrown message reaches the view");
+
+    orchestrator.cleanup();
+  });
+
+  test("a REJECTING /getOptions read lands the connection-error view without the deadline elapsing", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake, homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    fake.request = (path) => (path === "/getOptions") ? Promise.reject(new Error("the options route failed")) : Promise.resolve(null);
+
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+
+    await orchestrator.show(session);
+    await flush();
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "a rejecting read renders the connection-error view");
+    assert.match(failure, /Unable to load the feature options\./, "the features site's FAILURE copy renders, not its expiry copy");
+    assert.match(failure, /the options route failed/, "the thrown message reaches the view");
+
+    orchestrator.cleanup();
+  });
+
+  test("a REJECTING getDevices hook lands the connection-error view without the deadline elapsing", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: () => Promise.reject(new Error("the device hook blew up")),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    await orchestrator.show(session);
+    await flush();
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "a rejecting hook renders the connection-error view");
+    assert.match(failure, /Unable to retrieve the device list\./, "the devices site's FAILURE copy renders, not its expiry copy");
+    assert.match(failure, /the device hook blew up/, "the thrown message reaches the view");
+
+    orchestrator.cleanup();
+  });
+
+  test("a SLOW-but-successful controllers hook, advanced short of the deadline, renders the full page", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => new Promise((resolve) => setTimeout(() => resolve([{ name: "Hub", serialNumber: "CTRL-1" }]), 10000))
+    });
+
+    const showPromise = orchestrator.show(session);
+
+    await flush();
+
+    // Ten seconds is slow for a controller probe and still well inside the bound, so the page must come up whole rather than false-tripping.
+    t.mock.timers.tick(10000);
+    await showPromise;
+    await flush();
+
+    assert.ok(isFullyRendered(skeleton), "a slow-but-alive controller probe renders the full page");
+    assert.equal(failureTextIn(skeleton), null, "a slow-but-alive probe must never false-trip the retry view");
+
+    orchestrator.cleanup();
+  });
+
+  test("a SLOW-but-successful devices hook, advanced short of the deadline, renders the full page", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: () => new Promise((resolve) => setTimeout(() => resolve({ devices: [], error: "" }), 10000))
+    });
+
+    const showPromise = orchestrator.show(session);
+
+    await flush();
+
+    t.mock.timers.tick(10000);
+    await showPromise;
+    await flush();
+
+    assert.ok(isFullyRendered(skeleton), "a slow-but-alive device fetch renders the full page");
+    assert.equal(failureTextIn(skeleton), null, "a slow-but-alive fetch must never false-trip the retry view");
+
+    orchestrator.cleanup();
+  });
+
+  test("cross-cycle guard: a superseded cycle's stalled sync settles promptly and NEVER paints over the cycle that replaced it", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake, homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const healthyRead = fake.getPluginConfig;
+
+    fake.getPluginConfig = hangingCall;
+
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+
+    // Cycle one parks on the stalled config read.
+    const stalledCycle = orchestrator.show(session);
+
+    await flush();
+
+    // The user re-enters Feature Options. Cycle two's show() tears cycle one down, which aborts its signal - so cycle one's bounded await settles NOW rather than
+    // ticking out its deadline. No clock advance is required here, and that is the point: the settlement is driven by the supersession, not by the bound.
+    fake.getPluginConfig = healthyRead;
+
+    await orchestrator.show(session);
+    await flush();
+    await stalledCycle;
+    await flush();
+
+    assert.ok(isFullyRendered(skeleton), "cycle two rendered the full page");
+    assert.equal(failureTextIn(skeleton), null, "cycle one's late failure must never paint the retry view over the page cycle two rendered");
+
+    orchestrator.cleanup();
+  });
+
+  test("cross-cycle guard: a superseded cycle's stalled device fetch never lands on the newer cycle's store", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    // The first fetch hangs; every later one answers, so cycle two is healthy while cycle one is still parked.
+    let firstFetch = true;
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: () => {
+
+        if(firstFetch) {
+
+          firstFetch = false;
+
+          return hangingCall();
+        }
+
+        return Promise.resolve({ devices: [], error: "" });
+      },
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    const stalledCycle = orchestrator.show(session);
+
+    await flush();
+
+    await orchestrator.show(session);
+    await flush();
+    await stalledCycle;
+    await flush();
+
+    assert.ok(isFullyRendered(skeleton), "cycle two rendered the full page");
+    assert.equal(failureTextIn(skeleton), null, "cycle one's late device failure must never reach the store cycle two owns");
+
+    orchestrator.cleanup();
+  });
+
+  test("refreshControllers: a stalled refresh resolves false past the deadline and leaves the rendered page untouched", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    let stall = false;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => stall ? hangingCall() : [{ name: "Hub A", serialNumber: "CTRL-A" }]
+    });
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "precondition: the sidebar carries the controller");
+
+    stall = true;
+
+    const refresh = orchestrator.refreshControllers();
+
+    await flush();
+    t.mock.timers.tick(BOOT_DEADLINE_MS + 1);
+
+    assert.equal(await refresh, false, "a refresh whose hook never answered must report that it changed nothing");
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the working sidebar must survive a refresh that timed out");
+    assert.equal(failureTextIn(skeleton), null, "an explicit refresh must never tear the page down into the retry view");
+
+    orchestrator.cleanup();
+  });
+
+  test("refreshControllers: a refresh superseded mid-flight by a new show() dispatches nothing into the new cycle's store", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    // The refresh's own controller read is held open, so the supersession lands while it is still in flight; it eventually answers with a list that must never render.
+    const stale = Promise.withResolvers();
+    let calls = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => {
+
+        calls += 1;
+
+        return (calls === 2) ? stale.promise : [{ name: "Hub A", serialNumber: "CTRL-A" }];
+      }
+    });
+
+    await orchestrator.show(session);
+    await flush();
+
+    const refresh = orchestrator.refreshControllers();
+
+    await flush();
+
+    // The user re-enters the page: the refresh's captured signal aborts, so its await settles at once.
+    await orchestrator.show(session);
+    await flush();
+
+    stale.resolve([{ name: "Hub STALE", serialNumber: "CTRL-STALE" }]);
+
+    assert.equal(await refresh, false, "a superseded refresh reports that it changed nothing");
+    await flush();
+
+    assert.equal(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-STALE']"), null,
+      "the superseded refresh's late list must never reach the store the newer cycle owns");
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the newer cycle's own sidebar stands");
+
+    orchestrator.cleanup();
+  });
+
+  test("refreshControllers: a healthy refresh still transitions the sidebar to the new controller list", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    let controllers = [{ name: "Hub A", serialNumber: "CTRL-A" }];
+    const orchestrator = new webUiFeatureOptions({ getControllers: () => controllers });
+
+    await orchestrator.show(session);
+    await flush();
+
+    controllers = [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ];
+
+    assert.equal(await orchestrator.refreshControllers(), true, "a healthy refresh reports the transition");
+    await flush();
+
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), "the newly-added controller renders in the sidebar");
+
+    orchestrator.cleanup();
+  });
+
+  test("a superseded cycle's theme failure logs nothing - the warn rides the staleness guard", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake, homebridgeGuard, session } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    // Cycle one's theme read never answers; every other hook is healthy, so the cycle parks on exactly that await and nowhere else.
+    fake.userCurrentLightingMode = hangingCall;
+
+    const warnings = [];
+
+    // console is the transport the theme catch reports on, so the spy has to speak the same channel.
+    // eslint-disable-next-line no-console
+    const realWarn = console.warn;
+
+    // eslint-disable-next-line no-console
+    console.warn = (...args) => warnings.push(args);
+
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+
+    try {
+
+      const stalledCycle = orchestrator.show(session);
+
+      await flush();
+
+      // Heal the read, then re-enter the page. Cycle two's show() tears cycle one down, which aborts its signal - so cycle one's parked theme await settles at once and
+      // its catch runs, still holding the closured signal of a cycle that no longer exists.
+      fake.userCurrentLightingMode = async () => "light";
+
+      await orchestrator.show(session);
+      await flush();
+      await stalledCycle;
+      await flush();
+    } finally {
+
+      // eslint-disable-next-line no-console
+      console.warn = realWarn;
+    }
+
+    // The warn rides the staleness guard, so a superseded cycle's theme failure says nothing: the user is looking at a page that rendered fine, and a diagnostic about
+    // the cycle they already left would describe a failure that no longer has a page. A warn here is the guard's absence made visible.
+    const themeWarnings = warnings.filter(([message]) => (typeof message === "string") && message.startsWith("The theme could not read"));
+
+    assert.deepEqual(themeWarnings, [], "a superseded cycle's theme failure must log nothing");
+
+    orchestrator.cleanup();
+  });
+
+  test("a refresh that succeeds into a superseded cycle reports no change and never repaints the page that replaced it", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    // The refresh's own controller read is held open so the test controls exactly when it succeeds. Every other call answers with cycle two's list, so a stale entry in
+    // the sidebar could only have come from the refresh.
+    const stale = Promise.withResolvers();
+    let calls = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => {
+
+        calls += 1;
+
+        return (calls === 2) ? stale.promise : [{ name: "Hub A", serialNumber: "CTRL-A" }];
+      }
+    });
+
+    await orchestrator.show(session);
+    await flush();
+
+    const refresh = orchestrator.refreshControllers();
+
+    await flush();
+
+    /* The window this pins is the one the deadline's own prompt-abort settlement cannot cover. Resolving the hook BEFORE the supersession means the refresh's await wins
+     * its race and resumes with a real controller list in hand - so it never throws, never returns early, and arrives at the dispatch with nothing between it and the
+     * store. Superseding synchronously right after, without draining, puts the abort in place before that continuation runs. What remains is a live, successful refresh
+     * belonging to a cycle that no longer exists, and the staleness guard is the only thing standing between its list and the page the user is now looking at. It is
+     * also the one such path with no repaint behind it: a boot failure lands during the next cycle's own boot, which overwrites it, whereas nothing follows a refresh.
+     */
+    stale.resolve([{ name: "Hub STALE", serialNumber: "CTRL-STALE" }]);
+
+    orchestrator.cleanup();
+
+    await orchestrator.show(session);
+    await flush();
+
+    // The guard's own verdict is the return value: a successful, non-empty refresh returns false ONLY because the guard refused to dispatch it. Nothing else on this
+    // path can produce false - the list is non-empty and no exception was raised.
+    assert.equal(await refresh, false, "a refresh whose cycle was superseded after it succeeded must report that it changed nothing");
+
+    await flush();
+
+    assert.equal(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-STALE']"), null,
+      "the superseded refresh's list must never reach the sidebar the newer cycle rendered");
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the newer cycle's own sidebar stands untouched");
+
+    orchestrator.cleanup();
+  });
+
+  test("the resumeDetector wiring cannot be silently parked in the plugin options bag", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge());
+
+    assert.throws(() => new webUiFeatureOptions({ resumeDetector: { subscribe: () => {} } }), {
+
+      message: "resumeDetector is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
+      name: "TypeError"
+    }, "framework wiring in the plugin bag would be silently ignored, so it is named instead");
+
+    assert.doesNotThrow(() => new webUiFeatureOptions({}, { resumeDetector: { subscribe: () => {} } }), "the same value in the wiring parameter is accepted");
+    assert.doesNotThrow(() => new webUiFeatureOptions(), "and the wiring stays entirely optional");
+  });
+});

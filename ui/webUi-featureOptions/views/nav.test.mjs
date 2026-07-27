@@ -30,7 +30,9 @@ const DEVICES = [
   { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device B", serialNumber: "dev-b" }
 ];
 
-const setup = ({ controllers = CONTROLLERS, devices = [], getDevices, mode = "controller-based" } = {}) => {
+// The deadline the view applies to a click's device fetch. The orchestrator owns the value in production; the suite supplies its own so a hang test can name a bound it
+// can advance a mock clock past without the other tests waiting on a production-sized one.
+const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, devices = [], getDevices, mode = "controller-based" } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const rootControllers = document.createElement("div");
@@ -49,6 +51,7 @@ const setup = ({ controllers = CONTROLLERS, devices = [], getDevices, mode = "co
 
   mountNavView({
 
+    deadlineSeconds,
     getDevices,
     labelControllers: "Controllers",
     labelDevices: "Devices",
@@ -371,6 +374,55 @@ describe("mountNavView - click dispatch", () => {
     assert.equal(store.state.status.kind, "connection-error", "the failed click renders the connection-error view");
     assert.equal(store.state.status.message, "Controller unreachable.", "the rejection message reaches the connection-error status");
     assert.deepEqual(store.state.devices, [], "the stale device list is cleared by the reject path's empty-devices outcome");
+  });
+
+  test("a controller click whose fetch never answers lands the connection-error view on its deadline, exactly as a rejection does", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    // The plugin's device hook rides the same bridge every other host call does, so a click against a dead relay would otherwise leave the sidebar highlighted on a
+    // controller whose devices never arrive. The bound turns that silence into the same outcome the reject path already produces.
+    const getDevices = () => new Promise(() => {});
+    const { rootControllers, store } = setup({ deadlineSeconds: 30, devices: DEVICES, getDevices });
+
+    assert.deepEqual(store.state.devices, DEVICES, "pre-condition: the sidebar shows a device list");
+
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store.state.status.kind, "ready", "before the bound elapses the click is simply still in flight");
+
+    t.mock.timers.tick(30001);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(store.state.status.kind, "connection-error", "the elapsed bound renders the connection-error view");
+    assert.match(store.state.status.message, /did not complete within 30 seconds/, "the expiry's own message reaches the view");
+    assert.deepEqual(store.state.devices, [], "the stale device list is cleared by the expiry's empty-devices outcome, exactly as the reject path clears it");
+  });
+
+  test("a controller click superseded before its deadline dispatches nothing - the torn-down page is never written to", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const getDevices = () => new Promise(() => {});
+    const { abort, rootControllers, store } = setup({ deadlineSeconds: 30, devices: DEVICES, getDevices });
+
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // The page tears down while the click's fetch is still in flight. Its bounded await settles at once on the abort, and the handler's teardown bail keeps that
+    // settlement from reaching a store the page no longer owns.
+    abort();
+
+    t.mock.timers.tick(30001);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(store.state.status.kind, "ready", "a torn-down page must not be written to by its own in-flight click");
+    assert.deepEqual(store.state.devices, DEVICES, "and the device list it was rendering is left exactly as it was");
   });
 
   test("a devices:loaded dispatched against a store with no pending request drops (the reducer's null-check guard)", async () => {

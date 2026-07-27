@@ -37,6 +37,11 @@ export class PluginConfigSession {
   // The held config array - the session's coherent replica of the plugin configuration. Read through the getters; advanced by sync() (read) and commit() (write).
   #config;
 
+  // The monotonic config-write generation, covering both writers. A sync mints one on entry and applies its result only if the generation has not moved since; a commit
+  // moves it when it applies. The session is shared across every page cycle and its reads are bounded rather than cancellable, so a slow read from an earlier cycle can
+  // still resolve after a fresher read or a user's save has already landed - this is what keeps that late arrival from putting the replica back to what it read.
+  #generation;
+
   // The Homebridge UI host (or a test stub matching the {getPluginConfig, updatePluginConfig} surface). The session is the only place that calls its config endpoints.
   #host;
 
@@ -69,6 +74,7 @@ export class PluginConfigSession {
   constructor(host, name) {
 
     this.#config = [];
+    this.#generation = 0;
     this.#host = host;
     this.#name = name;
   }
@@ -111,6 +117,8 @@ export class PluginConfigSession {
 
     await this.#host.updatePluginConfig(next);
 
+    // Advance the write generation alongside the replica, so a read that began before this save cannot land afterwards and quietly restore the pre-save config.
+    this.#generation += 1;
     this.#config = next;
   }
 
@@ -127,14 +135,27 @@ export class PluginConfigSession {
    * reference. (The build-then-assign does not guard against a torn write here - the only I/O is the first statement - but it keeps this method's shape
    * consistent with {@link commit}.)
    *
+   * The trailing assignment is conditional on the write generation this read minted at entry. The host read is bounded but not cancellable, so a read from a page cycle
+   * the user has already left can still resolve - after a fresher read, or after the user saved an edit - and applying it then would silently roll the replica back to
+   * what the server said minutes ago. A read that finds the generation moved simply discards what it loaded; the writer that moved it holds the newer truth.
+   *
    * @returns {Promise<void>}
    */
   async sync() {
 
+    // Mint this read's generation before any I/O, so any write that lands while it is in flight is detectable when it returns.
+    this.#generation += 1;
+
+    const generation = this.#generation;
     const loaded = await this.#host.getPluginConfig();
     const next = loaded.length ? loaded : [{}];
 
     (next[0] ??= { name: this.#name }).name ??= this.#name;
+
+    if(this.#generation !== generation) {
+
+      return;
+    }
 
     this.#config = next;
   }

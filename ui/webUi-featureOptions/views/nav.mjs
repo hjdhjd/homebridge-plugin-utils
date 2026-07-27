@@ -6,6 +6,7 @@
 
 import { createElement, errorMessage } from "../utils.mjs";
 import { effect } from "../store.mjs";
+import { withDeadline } from "../../webUi-liveness.mjs";
 
 /**
  * Mount the sidebar navigation view.
@@ -33,9 +34,11 @@ import { effect } from "../store.mjs";
  * outcome only when it still answers the pending request, so the sequence is the fetch identity and the newest click owns the store: a superseded controller click's
  * outcome - whether it resolved with devices or rejected - is dropped at the reducer rather than overwriting the newer click's rendered state. A failed fetch's
  * message travels back on that same `devices:loaded` (empty devices, non-empty error), which the reducer turns into the connection-error transition. The handler
- * wraps its fetch in a try/catch so a rejected fetch becomes that same outcome rather than an unhandled rejection; the view layer never silently swallows a failure.
+ * wraps its fetch in a try/catch so a rejected fetch becomes that same outcome rather than an unhandled rejection; the view layer never silently swallows a failure. The
+ * fetch is deadline-bounded, so a click against a bridge that never answers reaches that same catch instead of leaving the sidebar waiting on a device list forever.
  *
  * @param {Object} args
+ * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.
  * @param {((controller: import("../state.mjs").Controller | null) =>
  *           Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>) | undefined} args.getDevices
  *        - Plugin-provided fetcher resolving a controller's DeviceListResult. Called on controller-link click.
@@ -46,7 +49,7 @@ import { effect } from "../store.mjs";
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountNavView = ({ getDevices, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
+export const mountNavView = ({ deadlineSeconds, getDevices, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
 
   // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - a controllers-only refresh hook not currently dispatched.
   effect({
@@ -100,7 +103,7 @@ export const mountNavView = ({ getDevices, labelControllers, labelDevices, rootC
 
   // Click delegation: one listener on each container resolves the clicked nav link's `data-navigation` and dispatches the appropriate scope-change. The
   // last-request-wins race a controller click can open is owned by the reducer's fetch sequence, so the handler holds no per-mount generation state of its own.
-  const onClick = (event) => handleNavClick({ event, getDevices, signal, store });
+  const onClick = (event) => handleNavClick({ deadlineSeconds, event, getDevices, signal, store });
 
   rootControllers.addEventListener("click", onClick, { signal });
   rootDevices.addEventListener("click", onClick, { signal });
@@ -242,7 +245,7 @@ const applyDevicesHighlight = (root, scope) => {
 
 // Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally
 // fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback.
-const handleNavClick = async ({ event, getDevices, signal, store }) => {
+const handleNavClick = async ({ deadlineSeconds, event, getDevices, signal, store }) => {
 
   const navLink = event.target.closest(".nav-link[data-navigation]");
 
@@ -285,7 +288,10 @@ const handleNavClick = async ({ event, getDevices, signal, store }) => {
       try {
 
         const controller = store.state.controllers.find((c) => c.serialNumber === deviceSerial);
-        const { devices, error } = await getDevices(controller ?? null);
+
+        // Bound the fetch. The plugin's hook rides the same bridge every other host call does, so an unanswered click would otherwise leave the sidebar highlighted on
+        // a controller whose devices never arrive - the deadline turns that into the rejection the catch below already knows how to render.
+        const { devices, error } = await withDeadline({ promise: getDevices(controller ?? null), seconds: deadlineSeconds, signal });
 
         // Bail if the page tore down; a torn-down store must not be dispatched against. Staleness itself is the reducer's job - it drops an outcome whose sequence no
         // longer answers the pending request.

@@ -28,7 +28,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `devices:requested` - a device fetch is beginning: mints the next fetch sequence into state and records it as the pending request, so the outcome that
  *     eventually answers it can be told apart from a superseded one.
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
- *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error.
+ *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error, taking the
+ *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not.
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
@@ -169,6 +170,88 @@ const CONTROLLER_FAILURE_STATUS = {
   kind: "connection-error"
 };
 
+// The connection-error display copy for every bounded await the page makes, keyed by the site that failed and then by whether the deadline elapsed or the request
+// itself failed. It lives beside CONTROLLER_FAILURE_STATUS because the two answer the same question - what does the user read when the page cannot go on - and a
+// single home is what keeps a devices expiry from silently wearing the controller-failure wording. The expiry variants matter for the same reason: "the plugin stopped
+// answering" and "the plugin answered with an error" call for different next steps, and only the failing site knows which happened.
+const CONNECTION_FAILURE_COPY = {
+
+  controllers: {
+
+    expired: {
+
+      guidance: "Retry once the plugin is responding again.",
+      headline: "The plugin stopped responding while retrieving the controller list."
+    },
+    failed: {
+
+      guidance: "Check the Settings tab to verify the controller details are correct.",
+      headline: "Unable to retrieve the controller list."
+    }
+  },
+  devices: {
+
+    expired: {
+
+      guidance: "Retry once the plugin is responding again.",
+      headline: "The plugin stopped responding while retrieving the device list."
+    },
+    failed: {
+
+      guidance: "Check the Settings tab to verify the controller details are correct.",
+      headline: "Unable to retrieve the device list."
+    }
+  },
+  features: {
+
+    expired: {
+
+      guidance: "Retry once the plugin is responding again.",
+      headline: "The plugin stopped responding while loading the feature options."
+    },
+    failed: {
+
+      guidance: "Retry once the plugin is responding again.",
+      headline: "Unable to load the feature options."
+    }
+  },
+  sync: {
+
+    expired: {
+
+      guidance: "Retry once the Homebridge server is reachable again.",
+      headline: "The Homebridge server stopped responding."
+    },
+    failed: {
+
+      guidance: "Retry once the Homebridge server is reachable again.",
+      headline: "Unable to read the plugin configuration."
+    }
+  }
+};
+
+/**
+ * Resolve the display copy for a failed await. An unregistered site throws, matching the reducer's unknown-action policy: a copy key typo is a bug at the dispatch
+ * site, and surfacing it loudly beats rendering a failure banner with two empty text slots.
+ *
+ * @param {Object} args
+ * @param {boolean} args.expired - True when the deadline elapsed, false when the request itself failed.
+ * @param {string} args.site - The await that failed: `"controllers"`, `"devices"`, `"features"`, or `"sync"`.
+ * @returns {{ guidance: string, headline: string }} The headline and guidance for that failure.
+ * @throws {Error} When no copy is registered for the supplied site.
+ */
+export const connectionFailureCopy = ({ expired, site }) => {
+
+  const copy = CONNECTION_FAILURE_COPY[site];
+
+  if(!copy) {
+
+    throw new Error("FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"" + site + "\".");
+  }
+
+  return expired ? copy.expired : copy.failed;
+};
+
 /**
  * Build the initial state. Status is `loading`; every populated-at-runtime field is set to an empty array or default value. The first {@link model:loaded}
  * dispatch transitions every field to its loaded value in one atomic update.
@@ -284,10 +367,23 @@ export const reducer = (state, action) => {
         devicesRequest: null
       };
 
+      if(!action.error.length) {
+
+        return applied;
+      }
+
       // A non-empty error is the connection-failure signal: the outcome carried an empty device list and the per-fetch failure message alongside it, so the status
-      // moves to connection-error at this, the reducer's one fetch-failure transition, layering the message onto the shared controller-failure copy. Scope is not
-      // touched here - a dispatcher moves the selection separately.
-      return action.error.length ? { ...applied, status: { ...CONTROLLER_FAILURE_STATUS, message: action.error } } : applied;
+      // moves to connection-error at this, the reducer's one fetch-failure transition, layering the message onto the failure copy. Scope is not touched here - a
+      // dispatcher moves the selection separately. The optional guidance and headline let a dispatcher name the failure it actually saw, which is how a bounded
+      // await's deadline expiry renders as itself rather than as a controller that answered with an error; an outcome carrying neither keeps the shared
+      // controller-failure wording, which is every sidebar controller click's path.
+      return { ...applied, status: {
+
+        ...CONTROLLER_FAILURE_STATUS,
+        guidance: action.guidance ?? CONTROLLER_FAILURE_STATUS.guidance,
+        headline: action.headline ?? CONTROLLER_FAILURE_STATUS.headline,
+        message: action.error
+      } };
     }
 
     case "scope:changed": {

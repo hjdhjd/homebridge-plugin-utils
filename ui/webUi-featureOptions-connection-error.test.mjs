@@ -233,14 +233,18 @@ describe("webUiFeatureOptions - connection-error view", () => {
   test("a retry whose re-show rejects surfaces an error toast instead of an unobserved rejection", async () => {
 
     // The retry button fires the orchestrator's re-show as `void onRetry()`, so a rejection there would otherwise go unobserved. We drive the first show() into the
-    // connection-error state, then make the re-show's device fetch resolve a shape that trips the device-list contract guard: the retry closure's try/catch must
-    // surface the resulting TypeError as an error toast.
+    // connection-error state, then make the re-show itself reject: the retry closure's try/catch must surface whatever it threw as an error toast.
+    //
+    // The vehicle is a replacement of the instance's own show() that returns a rejected promise, chosen for two reasons. It rejects unconditionally, standing in for
+    // the whole method, so no boot await runs and none of show()'s per-site failure folds can intercept it - the rejection reaches the closure as a rejection, which is
+    // the only shape that exercises the catch. And the closure resolves `this.show` at call time rather than capturing it at mount, so an instance-level replacement is
+    // what the closure actually invokes: that late resolution is itself part of the contract under test, since it is what lets one long-lived retry closure observe
+    // whichever re-show is current.
     using _dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    // The device fetch result is a mutable closure variable so the retry can resolve a different (invalid) shape than the initial show did.
-    let devicesResult = { devices: [], error: "transient" };
+    const devicesResult = { devices: [], error: "transient" };
     const fake = createFakeHomebridge({
 
       config: makePluginConfig(),
@@ -277,21 +281,56 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
       assert.equal(retryButton.disabled, false, "retry button must be enabled before the click");
 
-      // Make the re-show's device fetch resolve a shape missing the string error so #devicesFor's contract guard trips, rejecting the re-show. Switch to real timers
-      // for the re-show's internal awaits before the click.
-      devicesResult = { devices: [] };
+      // Make the re-show reject. Switch to real timers for the re-show's internal awaits before the click.
+      orchestrator.show = () => Promise.reject(new Error("the re-show blew up"));
       mock.timers.reset();
 
       retryButton.click();
       await delay(50);
 
-      assert.deepEqual(fake.observed.toasts.at(-1), { message: "getDevices must resolve to { devices, error }.", title: "Error", variant: "error" },
-        "a rejected re-show must surface the contract-guard failure as an error toast");
+      assert.deepEqual(fake.observed.toasts.at(-1), { message: "the re-show blew up", title: "Error", variant: "error" },
+        "a rejected re-show must surface its failure as an error toast rather than an unobserved rejection");
 
       orchestrator.cleanup();
     } finally {
 
       mock.timers.reset();
     }
+  });
+
+  test("a device fetch that trips the contract guard renders the connection-error view with a working retry, not a toast over a blank frame", async () => {
+
+    // The device-list contract guard is a genuine rejection of the boot's device await, so it lands where every other page-await failure lands: the retry view,
+    // naming the site that failed and carrying the guard's own message. The alternative - letting it propagate out of show() to a toast - leaves the user looking at
+    // an unrendered page with nothing to click, which is exactly the stranding the bounded awaits exist to close.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      // The resolved shape is missing the string `error`, so #devicesFor's contract guard throws.
+      getDevices: () => ({ devices: [] }),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(fake.observed.toasts.length, 0, "the failure surfaces inline in the retry view, not as a toast");
+    assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the device list\./, "the devices site's own failure headline renders");
+    assert.match(skeleton.headerInfo.textContent, /getDevices must resolve to \{ devices, error \}\./, "the contract guard's own message reaches the user verbatim");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the retry affordance renders with it");
+
+    orchestrator.cleanup();
   });
 });

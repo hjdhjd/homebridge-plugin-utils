@@ -163,3 +163,100 @@ describe("PluginConfigSession.sync", () => {
     assert.deepEqual(session.platform.options, ["Original"], "the held reference must not advance when the read fails");
   });
 });
+
+describe("PluginConfigSession - the config-write generation", () => {
+
+  // A host whose reads are held open by the test. Each getPluginConfig call parks a deferred keyed by the value it will eventually resolve, so a test can start two
+  // reads and settle them in whatever order the race it is pinning requires - the shape a slow page cycle's read resolving after a newer one takes in the field.
+  const makeGatedHost = () => {
+
+    const gates = [];
+    const writes = [];
+
+    return {
+
+      gates,
+      getPluginConfig: () => {
+
+        const gate = Promise.withResolvers();
+
+        gates.push(gate);
+
+        return gate.promise;
+      },
+      updatePluginConfig: async (next) => {
+
+        writes.push(next);
+      },
+      writes
+    };
+  };
+
+  test("a stale sync's late resolution never overwrites a fresher sync's config", async () => {
+
+    const host = makeGatedHost();
+    const session = new PluginConfigSession(host, "MyPlugin");
+
+    // Two overlapping reads: the first belongs to a page cycle the user has already left, the second to the cycle now on screen.
+    const stale = session.sync();
+    const fresh = session.sync();
+
+    // The fresh read lands first and owns the replica.
+    host.gates[1].resolve([{ name: "P", options: ["Fresh"], platform: "MyPlugin" }]);
+    await fresh;
+
+    assert.deepEqual(session.platform.options, ["Fresh"], "precondition: the fresher read applied");
+
+    // Then the stale read finally answers, carrying what the server said before. Applying it would roll the replica backwards.
+    host.gates[0].resolve([{ name: "P", options: ["Stale"], platform: "MyPlugin" }]);
+    await stale;
+
+    assert.deepEqual(session.platform.options, ["Fresh"], "the stale read's late resolution must be discarded, not applied over the fresher one");
+  });
+
+  test("a stale sync's late resolution never overwrites a just-committed edit", async () => {
+
+    const host = makeGatedHost();
+    const session = new PluginConfigSession(host, "MyPlugin");
+
+    // Establish the replica, then start a read that will answer late.
+    const open = session.sync();
+
+    host.gates[0].resolve([{ name: "P", options: ["Original"], platform: "MyPlugin" }]);
+    await open;
+
+    const stale = session.sync();
+
+    // The user saves an edit while that read is still in flight. The write advances the generation as it applies.
+    await session.commit({ options: ["Saved.By.The.User"] });
+
+    assert.deepEqual(session.platform.options, ["Saved.By.The.User"], "precondition: the commit applied");
+
+    // The in-flight read now answers with the pre-save config. Applying it would silently discard the user's save from the replica every later reader sees.
+    host.gates[1].resolve([{ name: "P", options: ["Original"], platform: "MyPlugin" }]);
+    await stale;
+
+    assert.deepEqual(session.platform.options, ["Saved.By.The.User"], "the read that began before the save must not roll the replica back over it");
+    assert.equal(host.writes.length, 1, "the guard changes nothing about what was written");
+  });
+
+  test("a sole sync still applies - the guard drops only reads a later write overtook", async () => {
+
+    const host = makeGatedHost();
+    const session = new PluginConfigSession(host, "MyPlugin");
+    const sole = session.sync();
+
+    host.gates[0].resolve([{ name: "P", options: ["Applied"], platform: "MyPlugin" }]);
+    await sole;
+
+    assert.deepEqual(session.platform.options, ["Applied"], "an uncontested read advances the replica exactly as it always did");
+
+    // And a second, equally uncontested read afterwards applies too, so the generation counter never starves a sequential caller.
+    const next = session.sync();
+
+    host.gates[1].resolve([{ name: "P", options: ["Applied.Again"], platform: "MyPlugin" }]);
+    await next;
+
+    assert.deepEqual(session.platform.options, ["Applied.Again"], "sequential reads each apply in turn");
+  });
+});

@@ -4,8 +4,8 @@
  */
 "use strict";
 
+import { connectionFailureCopy, initialState, reducer } from "./state.mjs";
 import { describe, test } from "node:test";
-import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../featureOptions.js";
 
@@ -253,6 +253,104 @@ describe("reducer - devices:loaded", () => {
     const next = reducer(base, { controllerId: "ctrl-a", devices: DEVICES, error: "", type: "devices:loaded" });
 
     assert.equal(next, base, "a seq-less outcome drops against a null pending request, returning the identical state reference");
+  });
+
+  test("an outcome carrying no copy overrides keeps the shared controller-failure wording - the sidebar click's path", () => {
+
+    const next = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+
+    assert.equal(next.status.headline, "Unable to connect to the controller.", "an outcome with no headline keeps the shared controller-failure headline");
+    assert.equal(next.status.guidance, "Check the Settings tab to verify the controller details are correct.", "and the shared guidance with it");
+  });
+
+  test("an outcome carrying copy overrides renders them instead, so a bounded await's failure reads as itself", () => {
+
+    // The show() path supplies its own per-site copy so a device fetch that never answered does not masquerade as a controller that answered with an error. The
+    // reducer prefers what the dispatcher supplied and falls back to the shared constant only per-field.
+    const requested = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
+    const next = reducer(requested, {
+
+      controllerId: "ctrl-a",
+      devices: [],
+      error: "The request did not complete within 30 seconds.",
+      guidance: "Retry once the plugin is responding again.",
+      headline: "The plugin stopped responding while retrieving the device list.",
+      seq: requested.devicesRequest.seq,
+      type: "devices:loaded"
+    });
+
+    assert.equal(next.status.kind, "connection-error", "the failure still transitions the status");
+    assert.equal(next.status.headline, "The plugin stopped responding while retrieving the device list.", "the supplied headline is what renders");
+    assert.equal(next.status.guidance, "Retry once the plugin is responding again.", "the supplied guidance is what renders");
+    assert.equal(next.status.message, "The request did not complete within 30 seconds.", "the per-fetch message rides along as it always did");
+  });
+
+  test("copy overrides are preferred per-field, so a headline alone keeps the shared guidance", () => {
+
+    const requested = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
+    const next = reducer(requested, {
+
+      controllerId: "ctrl-a",
+      devices: [],
+      error: "boom",
+      headline: "Unable to retrieve the device list.",
+      seq: requested.devicesRequest.seq,
+      type: "devices:loaded"
+    });
+
+    assert.equal(next.status.headline, "Unable to retrieve the device list.", "the supplied headline applies");
+    assert.equal(next.status.guidance, "Check the Settings tab to verify the controller details are correct.", "the absent guidance falls back to the shared constant");
+  });
+
+  test("a successful outcome ignores copy overrides entirely - they only ever decorate a failure", () => {
+
+    const requested = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
+    const next = reducer(requested, {
+
+      controllerId: "ctrl-a",
+      devices: DEVICES,
+      error: "",
+      guidance: "never rendered",
+      headline: "never rendered",
+      seq: requested.devicesRequest.seq,
+      type: "devices:loaded"
+    });
+
+    assert.equal(next.status.kind, "loading", "an empty error leaves the status untouched, copy fields or not");
+    assert.equal(next.devices, DEVICES, "and the devices apply normally");
+  });
+});
+
+describe("connectionFailureCopy", () => {
+
+  test("every registered site yields distinct copy for a failure and for an expiry", () => {
+
+    for(const site of [ "controllers", "devices", "features", "sync" ]) {
+
+      const failed = connectionFailureCopy({ expired: false, site });
+      const expired = connectionFailureCopy({ expired: true, site });
+
+      assert.ok(failed.guidance.length && failed.headline.length, site + " must carry both copy slots for a genuine failure");
+      assert.ok(expired.guidance.length && expired.headline.length, site + " must carry both copy slots for an expiry");
+      assert.notEqual(failed.headline, expired.headline, site + " must read differently when the host went quiet than when it answered with an error");
+    }
+  });
+
+  test("each site's failure headline is distinct from every other site's, so a failure cannot masquerade as a different one", () => {
+
+    const sites = [ "controllers", "devices", "features", "sync" ];
+    const headlines = sites.flatMap((site) => [ connectionFailureCopy({ expired: false, site }).headline, connectionFailureCopy({ expired: true, site }).headline ]);
+
+    assert.equal(new Set(headlines).size, headlines.length, "no two sites, in either failure kind, may share a headline");
+  });
+
+  test("an unregistered site throws rather than rendering a banner with empty text slots", () => {
+
+    assert.throws(() => connectionFailureCopy({ expired: false, site: "devcies" }), {
+
+      message: "FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"devcies\".",
+      name: "Error"
+    }, "a copy key typo is a bug at the dispatch site and must surface loudly, the reducer's own unknown-action policy");
   });
 });
 

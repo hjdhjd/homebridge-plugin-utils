@@ -8,8 +8,8 @@
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
-import { applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, expandOption, getDefaultValue, isDependencyMet, isValueOption,
-  normalizeConfiguredOptions, optionExists, resolveScope } from "./featureOptions.ts";
+import { applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, expandOption, getDefaultValue, hasValueContent, isDependencyMet,
+  isValueOption, normalizeConfiguredOptions, optionExists, resolveScope } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
@@ -1384,15 +1384,14 @@ describe("FeatureOptions - the value payload delimiter", () => {
     assert.equal(fo.value("Audio.Volume"), null, "no global value is registered - Audio.Volume is default-off and unset at the global scope");
   });
 
-  test("a multi-segment address ahead of the delimiter is malformed and registers no value", () => {
+  test("a dotted address ahead of the delimiter falls back to the legacy reading", () => {
 
-    // Two candidate id segments and no way to tell which was meant. We leave the entry to its primary key rather than guess, which keeps a typo inert instead of
-    // quietly binding it to a scope the author never wrote.
+    // The canonical grammar never writes a dotted address, so the delimiter cannot be claiming this entry. It reads under the legacy dot grammar instead, with
+    // the "=" as ordinary value text - the reading a configuration authored before the delimiter existed meant: an id followed by a free-form value.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.a.b=x"]);
 
-    assert.equal(fo.value("Audio.Volume", "a"), null, "no value is registered against the first segment");
-    assert.equal(fo.value("Audio.Volume"), null, "and none against the global scope either");
-    assert.equal(fo.test("Audio.Volume", "a"), false, "the malformed entry addresses no scope the resolver can find");
+    assert.equal(fo.value("Audio.Volume", "a"), "b=x", "the first segment is the scope id and the delimiter rides inside the value");
+    assert.equal(fo.value("Audio.Volume"), null, "no global value is registered");
   });
 
   test("the greedy longest-prefix match holds across the delimiter form", () => {
@@ -1458,20 +1457,20 @@ describe("FeatureOptions - the value payload delimiter", () => {
       "saving converges the padded form on the tight canonical one");
   });
 
-  test("a value-centric option set at a scope with no value keeps the delimiter", () => {
+  test("a value-centric option set at a scope without a value persists nothing", () => {
 
-    // Without it the id would sit exactly where the legacy grammar reads a global value, so `Enable.Audio.Volume.ABC123` resolves as the option set to the literal
-    // text "ABC123". The trailing delimiter keeps the id addressing a scope and says the value is unspecified. This is reachable from the webUI, which enables a
-    // value option at a device while the value input is still empty.
+    // The grammar has no scoped spelling for "enabled here, nothing given": the bare form would put the id where the legacy grammar reads a global value, and a
+    // trailing delimiter is the shape base64 padding takes in a legacy entry. So the mutation reduces to clearing the scope, and resolution falls back to
+    // inheritance - here, the catalog default.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+    const before = fo.configuredOptions;
 
     fo.setOption({ enabled: true, id: "ABC123", option: "Audio.Volume" });
 
-    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.ABC123="]);
-    assert.equal(fo.test("Audio.Volume", "ABC123"), true, "enabled at the device scope");
-    assert.equal(fo.scope("Audio.Volume", "ABC123"), "device", "and addressed at the device scope, not the global one");
-    assert.equal(fo.value("Audio.Volume", "ABC123"), undefined, "with no value to report");
-    assert.equal(fo.value("Audio.Volume"), null, "and no global value invented out of the id");
+    assert.equal(fo.configuredOptions, before, "nothing to record and nothing to drop, so the array reference is unchanged");
+    assert.equal(fo.test("Audio.Volume", "ABC123"), false, "resolution falls through to the catalog default");
+    assert.equal(fo.scope("Audio.Volume", "ABC123"), "none", "no scope claims the option");
+    assert.equal(fo.value("Audio.Volume"), null, "and no global value is invented out of the id");
   });
 
   test("the legacy bare-with-id form keeps its global-value reading", () => {
@@ -1483,6 +1482,54 @@ describe("FeatureOptions - the value payload delimiter", () => {
     assert.equal(fo.value("Audio.Volume"), "ABC123", "the trailing segment reads as the global value");
     assert.equal(fo.test("Audio.Volume", "ABC123"), true, "and the same text registers a scope through the primary key");
     assert.equal(fo.value("Audio.Volume", "ABC123"), undefined, "which carries no value of its own");
+  });
+
+  test("a legacy global value ending in base64 padding keeps its legacy reading", () => {
+
+    // The field case the content rule exists for: a base64-encoded key ends in "=" padding, which puts a bare delimiter at the end of a legacy-form entry. A
+    // contentless payload can never be canonical, so the entry stays a legacy global value with its padding intact - one or two padding characters alike.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="]);
+
+    assert.equal(fo.value("Audio.Volume"), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "the padding is part of the value, not a payload delimiter");
+    assert.equal(fo.test("Audio.Volume"), true, "the option reads as explicitly enabled at the global scope");
+
+    const doublePadded = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.AAECAwQFBgcICQoLDA0ODw=="]);
+
+    assert.equal(doublePadded.value("Audio.Volume"), "AAECAwQFBgcICQoLDA0ODw==", "double padding reads the same way");
+  });
+
+  test("a legacy scoped value ending in base64 padding keeps its legacy reading", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.Kitchen.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="]);
+
+    assert.equal(fo.value("Audio.Volume", "Kitchen"), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "the id-and-value reading survives the trailing padding");
+    assert.equal(fo.value("Audio.Volume"), null, "and nothing leaks to the global scope");
+  });
+
+  test("a value with no content never persists, at either scope", () => {
+
+    // The content rule, from the writer's side: a value that is empty or all "=" once trimmed sits outside the canonical value domain, per the hasValueContent
+    // predicate the writer and the parser share. Globally the enable persists bare; at a scope the mutation reduces to a clear.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+
+    fo.setOption({ enabled: true, option: "Audio.Volume", value: "==" });
+
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume"], "an all-delimiter value composes the bare global form");
+
+    fo.setOption({ enabled: true, id: "Kitchen", option: "Audio.Volume", value: "  =  " });
+
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume"], "an all-delimiter value at a scope persists nothing");
+  });
+
+  test("a global set replaces a legacy padding-form entry addressing the same option", () => {
+
+    // The settling moment for the base64 legacy form: the user re-saves the option and the padding-form entry is replaced by the canonical spelling rather than
+    // accumulating beside it. Cross-form replacement falls out of the shared parser, exactly as it does for every other legacy shape.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const before = ["Enable.Audio.Volume.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="];
+    const after = applySetOption({ args: { enabled: true, option: "Audio.Volume", value: "50" }, catalog, configuredOptions: before });
+
+    assert.deepEqual(after, ["Enable.Audio.Volume=50"], "one surviving entry in the canonical form");
   });
 
   test("a write replaces a legacy-form entry addressing the same scope, leaving one surviving entry", () => {
@@ -1559,6 +1606,24 @@ describe("FeatureOptions - normalization on save", () => {
 
     assert.deepEqual(once, [ "Enable.Audio.Volume.Kitchen=St. Cecilia's Mix", "Enable.Network.Mtu=9000" ]);
     assert.equal(normalizeConfiguredOptions(catalog, once), once, "a second pass finds nothing to change and returns the same reference");
+  });
+
+  test("legacy values carrying the delimiter modernize into the canonical form on save", () => {
+
+    // A base64 value's padding rules the scope reading out - the composer cannot address an id containing "=" - so both legacy shapes are unambiguous here and
+    // both modernize: the single-segment form to a global value, the dotted form to a scoped one. The rewritten entries re-read to exactly the values the
+    // originals carried, padding included.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const before = [ "Enable.Audio.Volume.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "Enable.Network.Mtu.Attic.SGVsbG8=" ];
+    const after = normalizeConfiguredOptions(catalog, before);
+
+    assert.deepEqual(after, [ "Enable.Audio.Volume=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "Enable.Network.Mtu.Attic=SGVsbG8=" ]);
+    assert.equal(normalizeConfiguredOptions(catalog, after), after, "a second pass finds nothing to change and returns the same reference");
+
+    const reread = new FeatureOptions(CATEGORIES, OPTIONS, [...after]);
+
+    assert.equal(reread.value("Audio.Volume"), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "the modernized global entry re-reads to the same value");
+    assert.equal(reread.value("Network.Mtu", "Attic"), "SGVsbG8=", "the modernized scoped entry re-reads to the same value");
   });
 
   test("a legacy entry read as an id plus a value is rewritten to say so", () => {
@@ -1697,6 +1762,41 @@ describe("FeatureOptions - pure functional core", () => {
       const after = applySetOption({ args: { enabled: false, id: "ABC123", option: "Audio.Volume" }, catalog, configuredOptions: before });
 
       assert.deepEqual(after, [ "Enable.Motion.Detect", "Disable.Audio.Volume.ABC123" ]);
+    });
+
+    test("returns the SAME input reference when a scoped enable without value content finds nothing to drop", () => {
+
+      // The scoped-enable-without-content reduction delegates to applyClearOption, so it inherits the reference-stable no-op: change-detection consumers see
+      // the mutation wrote nothing without comparing contents.
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = ["Enable.Motion.Detect"];
+      const after = applySetOption({ args: { enabled: true, id: "ABC123", option: "Audio.Volume" }, catalog, configuredOptions: before });
+
+      assert.equal(after, before, "reference-stable on no-op so change-detection consumers can compare by ===");
+    });
+
+    test("reduces a scoped enable without value content to clearing the scope", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = [ "Enable.Audio.Volume.ABC123=50", "Enable.Motion.Detect" ];
+      const after = applySetOption({ args: { enabled: true, id: "ABC123", option: "Audio.Volume", value: "  " }, catalog, configuredOptions: before });
+
+      assert.deepEqual(after, ["Enable.Motion.Detect"], "the scope's entry is dropped and nothing replaces it");
+    });
+  });
+
+  describe("hasValueContent", () => {
+
+    test("accepts any trimmed text carrying a non-delimiter character and rejects the rest", () => {
+
+      // The shared definition of "carries a value": whitespace-only and all-"=" payloads sit outside the canonical value domain, which is exactly the shape of
+      // base64 terminal padding - while padding attached to real content rides along like any other character.
+      assert.equal(hasValueContent("50"), true, "ordinary text carries content");
+      assert.equal(hasValueContent("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="), true, "a full base64 value carries content, padding included");
+      assert.equal(hasValueContent(""), false, "the empty string carries nothing");
+      assert.equal(hasValueContent("   "), false, "whitespace alone carries nothing");
+      assert.equal(hasValueContent("="), false, "a lone delimiter carries nothing");
+      assert.equal(hasValueContent(" == "), false, "delimiters and edge whitespace together still carry nothing");
     });
   });
 

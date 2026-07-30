@@ -403,8 +403,10 @@ export const reducer = (state, action) => {
 
     case "option:set": {
 
-      // Compute the new configuredOptions via the pure transform. The transform returns a fresh array so reference equality on configuredOptions detects the
-      // change; the catalog reference is unchanged so selectors that depend only on the catalog continue to hit their caches.
+      // Compute the new configuredOptions via the pure transform. The transform returns a fresh array whenever it writes or drops an entry, so reference equality
+      // on configuredOptions detects the change; a scoped enable of a value option without value content reduces to a clear and can return the input reference
+      // unchanged, which subscribers reading reference equality see as a no-op. The catalog reference is unchanged either way, so selectors that depend only on
+      // the catalog continue to hit their caches.
       return {
 
         ...state,

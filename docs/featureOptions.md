@@ -13,9 +13,9 @@ The module exports two complementary surfaces:
   - **Pure functional core.** Catalog and config indices ([CatalogIndex](#catalogindex), [ConfigIndex](#configindex)) carry every derived view of the catalog and configured options;
     pure builders ([buildCatalogIndex](#buildcatalogindex), [buildConfigIndex](#buildconfigindex)) construct them from raw inputs; pure transforms ([applySetOption](#applysetoption),
     [applyClearOption](#applyclearoption), [normalizeConfiguredOptions](#normalizeconfiguredoptions)) compute new configured-options arrays without mutation; pure queries ([resolveScope](#resolvescope),
-    [getDefaultValue](#getdefaultvalue), [isValueOption](#isvalueoption), [optionExists](#optionexists), [isDependencyMet](#isdependencymet-1), [expandOption](#expandoption-1)) answer scope-aware questions over those
-    indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the discipline (reducer-driven UIs, server-side
-    renderers, time-travel debuggers, future consumers we have not built yet).
+    [getDefaultValue](#getdefaultvalue), [isValueOption](#isvalueoption), [hasValueContent](#hasvaluecontent), [optionExists](#optionexists), [isDependencyMet](#isdependencymet-1), [expandOption](#expandoption-1)) answer
+    scope-aware questions over those indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the
+    discipline (reducer-driven UIs, server-side renderers, time-travel debuggers, future consumers we have not built yet).
 
   - **Imperative class façade.** [FeatureOptions](#featureoptions) bundles a [CatalogIndex](#catalogindex), a configured-options array, and a [ConfigIndex](#configindex) into one object whose
     mutating methods (`setOption` / `clearOption` / the setters) delegate to the pure transforms internally. This is the legacy-friendly surface used by every
@@ -43,9 +43,13 @@ Whitespace around the delimiter is tolerated - `Enable.Audio.Volume.Kitchen = 50
 the value trimmed. The one thing this puts out of reach is a value with leading or trailing spaces, which the writer already excludes by trimming what it
 composes. The tolerance reaches only around "="; dots stay exact, so a space after a dot is part of the id.
 
-A value-centric option written at a scope always carries the delimiter, even with no value: `Enable.Audio.Volume.ABC123=` says "enabled at ABC123, value
-unspecified", where the bare `Enable.Audio.Volume.ABC123` would put ABC123 where the legacy grammar reads a global value and resolve as the option set to the
-literal text "ABC123".
+The delimiter claims an entry only when the canonical reading holds together end to end: the address ahead of the "=" must be the option name alone or the
+option name plus a single dot-free id, and a scoped payload must carry content - at least one character that is not the delimiter itself (see
+[hasValueContent](#hasvaluecontent), which also explains why the value domain draws that line). An entry that fails either test reads under the legacy dot grammar
+instead, with the "=" as ordinary value text: `Enable.Security.Key.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=` ends in a bare delimiter that carries
+nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that a value-centric option enabled at a device or controller
+scope always carries a value - the grammar has no scoped spelling for "enabled here, nothing given" - so [setOption](#setoption) reduces
+that request to clearing the scope.
 
 The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
 [normalizeConfiguredOptions](#normalizeconfiguredoptions) rewrites entries into the canonical form as configurations are saved.
@@ -73,6 +77,33 @@ available for bespoke needs that the registry does not cover.
 The set targets the unit categories that recur across plugin catalogs: bitrate (in either of the two common storage conventions), data size, percentages, and
 durations. Extend the union when a new format is genuinely shared across multiple plugins. Resist adding a formatter speculatively - the function escape
 hatch already covers one-off needs, and an unused formatter is dead surface that downstream plugins still see in their IDE autocomplete.
+
+***
+
+### hasValueContent()
+
+```ts
+function hasValueContent(value): boolean;
+```
+
+Return whether a string survives as a canonical payload once trimmed: at least one character other than the payload delimiter itself must remain. This is the
+single definition of "carries a value", shared by the entry writer and the entry parser, and it is exported so a UI composing mutations can predict whether a
+given input will persist - a prediction that has to agree with [applySetOption](#applysetoption) exactly.
+
+The characters this excludes are not arbitrary. A payload that is empty or all "=" is exactly the shape a base64 value's terminal padding takes when a legacy
+dot-form entry is scanned for the delimiter, so ruling that shape out of the canonical value domain is what lets those entries keep their legacy reading.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `value` | `string` | The candidate value text. |
+
+#### Returns
+
+`boolean`
+
+True when the trimmed text carries at least one non-delimiter character, false otherwise.
 
 ## Other
 
@@ -643,8 +674,9 @@ This is the single mutation primitive for individual feature options. Callers ex
 both the encoding and the prior-entry replacement - the configured-options array is canonical, the lookup index is rebuilt automatically, and the entry-string
 format never leaks past this method. Values are emitted only when `enabled` is true and the option is value-centric; passing `value` for a non-value or
 disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules. A value is free-form at either scope - it is
-written behind a payload delimiter and trimmed of surrounding whitespace. A value-centric option set at a scope keeps that delimiter even with no value, as
-`Enable.Option.id=`, so its id is never mistaken for the value; at the global scope an empty value composes the bare entry.
+written behind a payload delimiter and trimmed of surrounding whitespace - and persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)).
+At the global scope an enable without content composes the bare entry; at a device or controller scope it reduces to clearing the scope, because a scoped
+entry always carries a value.
 
 Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See
 [normalizeConfiguredOptions](#normalizeconfiguredoptions) for what that does and does not touch.
@@ -850,7 +882,7 @@ and optional value for value-centric options.
 | <a id="enabled-1"></a> `enabled` | `boolean` | True to enable, false to disable. |
 | <a id="id-1"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. |
 | <a id="option-1"></a> `option` | `string` | Feature option to set (case-insensitive). |
-| <a id="value-1"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace. |
+| <a id="value-1"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry always carries a value. |
 
 ***
 
@@ -930,12 +962,11 @@ The new configured-options array, or the input array reference itself when nothi
 ### applySetOption()
 
 ```ts
-function applySetOption(options): string[];
+function applySetOption(options): readonly string[];
 ```
 
 Compute the new configured-options array after setting an option's enabled state (and optionally its value) at a given scope. Drops any prior entry addressing
-the same option-at-scope so the new entry is the sole survivor, then appends the freshly composed entry string. Pure: does not mutate the input array; the
-returned array is a fresh allocation.
+the same option-at-scope so the new entry is the sole survivor, then appends the freshly composed entry string. Pure: does not mutate the input array.
 
 The composed entry's action segment is canonical "Enable" / "Disable"; the option and id segments preserve the caller's casing for readability since the
 lookup-index keys are case-insensitive anyway. Values are emitted only when meaningful - disabled or non-value options never carry one - so a subsequent
@@ -943,10 +974,11 @@ lookup-index keys are case-insensitive anyway. Values are emitted only when mean
 because the matcher decodes entries through the same parser.
 
 A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
-need no escaping. Surrounding whitespace is trimmed first. A value-centric option written at a scope keeps the delimiter even when no value survives the trim,
-composing `Enable.Option.id=`, because the bare form would leave the id where the legacy grammar reads a global value; at the global scope, where there is no id
-to misread, an empty value composes the bare form. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes
-anything still in the legacy scoped form.
+need no escaping. Surrounding whitespace is trimmed first, and a value persists only when content survives the trim - see [hasValueContent](#hasvaluecontent). At the
+global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope there is
+no such spelling - a scoped entry always carries a value - so an enable without content reduces to clearing the scope: any entry addressing it is dropped and
+resolution falls back to inheritance. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes anything still
+in the legacy form.
 
 #### Parameters
 
@@ -959,9 +991,10 @@ anything still in the legacy scoped form.
 
 #### Returns
 
-`string`[]
+readonly `string`[]
 
-The new configured-options array. A fresh allocation, never a shared reference with the input.
+The new configured-options array - a fresh allocation whenever an entry was written or removed, or the input array reference itself when a scoped
+         enable without value content found nothing to drop, mirroring [applyClearOption](#applyclearoption)'s reference-stable no-op.
 
 ***
 
@@ -1147,13 +1180,15 @@ is already canonical yields the identical string, so running this repeatedly is 
 
 The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) is deliberately left alone for the same reason. That segment does double duty - the lookup
 index registers it as the option's global value and, through the primary key, as an enable at a scope carrying that same name - and no single canonical entry
-expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written.
+expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written. A segment containing "=" is the
+exception: the composer cannot address a scope whose id carries the delimiter, so only the global-value reading is live there, and the entry modernizes like
+any other unambiguous legacy form.
 
 [applySetOption](#applysetoption) and [applyClearOption](#applyclearoption) run their results through this, which is the whole of the upgrade path: a stored configuration modernizes as
 part of a save the user already asked for, and never merely because something read it. One consequence is worth stating plainly, since it becomes visible in the
 saved file: a legacy entry whose dotted tail the engine reads as an id plus a value is rewritten to say so outright, so `Enable.Audio.Volume.St. Andrews` (read
-as the id "St" carrying the value " Andrews") normalizes to `Enable.Audio.Volume.St= Andrews`. Resolution is unchanged either way - the reading a user may not
-have intended stops being latent and becomes something they can see and correct.
+as the id "St" carrying the value " Andrews") normalizes to `Enable.Audio.Volume.St=Andrews`, the value trimmed to the canonical domain. Resolution is unchanged
+either way - the reading a user may not have intended stops being latent and becomes something they can see and correct.
 
 #### Parameters
 

@@ -11,9 +11,9 @@
  *   - **Pure functional core.** Catalog and config indices ({@link CatalogIndex}, {@link ConfigIndex}) carry every derived view of the catalog and configured options;
  *     pure builders ({@link buildCatalogIndex}, {@link buildConfigIndex}) construct them from raw inputs; pure transforms ({@link applySetOption},
  *     {@link applyClearOption}, {@link normalizeConfiguredOptions}) compute new configured-options arrays without mutation; pure queries ({@link resolveScope},
- *     {@link getDefaultValue}, {@link isValueOption}, {@link optionExists}, {@link isDependencyMet}, {@link expandOption}) answer scope-aware questions over those
- *     indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the discipline (reducer-driven UIs, server-side
- *     renderers, time-travel debuggers, future consumers we have not built yet).
+ *     {@link getDefaultValue}, {@link isValueOption}, {@link hasValueContent}, {@link optionExists}, {@link isDependencyMet}, {@link expandOption}) answer
+ *     scope-aware questions over those indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the
+ *     discipline (reducer-driven UIs, server-side renderers, time-travel debuggers, future consumers we have not built yet).
  *
  *   - **Imperative class façade.** {@link FeatureOptions} bundles a {@link CatalogIndex}, a configured-options array, and a {@link ConfigIndex} into one object whose
  *     mutating methods (`setOption` / `clearOption` / the setters) delegate to the pure transforms internally. This is the legacy-friendly surface used by every
@@ -41,9 +41,13 @@
  * the value trimmed. The one thing this puts out of reach is a value with leading or trailing spaces, which the writer already excludes by trimming what it
  * composes. The tolerance reaches only around "="; dots stay exact, so a space after a dot is part of the id.
  *
- * A value-centric option written at a scope always carries the delimiter, even with no value: `Enable.Audio.Volume.ABC123=` says "enabled at ABC123, value
- * unspecified", where the bare `Enable.Audio.Volume.ABC123` would put ABC123 where the legacy grammar reads a global value and resolve as the option set to the
- * literal text "ABC123".
+ * The delimiter claims an entry only when the canonical reading holds together end to end: the address ahead of the "=" must be the option name alone or the
+ * option name plus a single dot-free id, and a scoped payload must carry content - at least one character that is not the delimiter itself (see
+ * {@link hasValueContent}, which also explains why the value domain draws that line). An entry that fails either test reads under the legacy dot grammar
+ * instead, with the "=" as ordinary value text: `Enable.Security.Key.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=` ends in a bare delimiter that carries
+ * nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that a value-centric option enabled at a device or controller
+ * scope always carries a value - the grammar has no scoped spelling for "enabled here, nothing given" - so {@link FeatureOptions.setOption | setOption} reduces
+ * that request to clearing the scope.
  *
  * The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
  * {@link normalizeConfiguredOptions} rewrites entries into the canonical form as configurations are saved.
@@ -278,7 +282,9 @@ export type ConfigIndex = ReadonlyMap<string, Readonly<{ enabled: boolean; value
  * @property id      - Optional device or controller scope identifier. Omit to address the global scope.
  * @property option  - Feature option to set (case-insensitive).
  * @property value   - Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope:
- *                     the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace.
+ *                     the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the
+ *                     trim (see {@link hasValueContent}). At a device or controller scope an enable without value content reduces to clearing the scope, because
+ *                     a scoped entry always carries a value.
  */
 export interface SetOptionArgs {
 
@@ -345,12 +351,31 @@ function targetKey(option: string, id: string | undefined): string {
   return id?.length ? option.toLowerCase() + "." + id.toLowerCase() : option.toLowerCase();
 }
 
+/**
+ * Return whether a string survives as a canonical payload once trimmed: at least one character other than the payload delimiter itself must remain. This is the
+ * single definition of "carries a value", shared by the entry writer and the entry parser, and it is exported so a UI composing mutations can predict whether a
+ * given input will persist - a prediction that has to agree with {@link applySetOption} exactly.
+ *
+ * The characters this excludes are not arbitrary. A payload that is empty or all "=" is exactly the shape a base64 value's terminal padding takes when a legacy
+ * dot-form entry is scanned for the delimiter, so ruling that shape out of the canonical value domain is what lets those entries keep their legacy reading.
+ *
+ * @param value - The candidate value text.
+ *
+ * @returns True when the trimmed text carries at least one non-delimiter character, false otherwise.
+ *
+ * @category Feature Options
+ */
+export function hasValueContent(value: string): boolean {
+
+  return /[^=]/.test(value.trim());
+}
+
 // Compose a configured-options entry from its parts, and the single place in this module that knows how to write one. Everything up to the payload delimiter is
 // the address - the canonical action, the option name, and an optional scope id, joined by dots - and everything after it is the value. An absent value composes
-// the bare address; a value that is present but empty still composes the delimiter, which is how a value-centric option carrying no value at a scope says so
-// without its id segment being read as the value instead. Leading and trailing whitespace comes off the value, so the canonical value domain excludes edge
-// whitespace and the tolerant parse of a hand-spaced entry lands on exactly this form. Pairing this with parseEntry as the single decoder keeps the reader and
-// the writer of the storage format from drifting apart.
+// the bare address; a present value composes behind the delimiter, trimmed first, so the canonical value domain excludes edge whitespace and the tolerant parse
+// of a hand-spaced entry lands on exactly this form. A present-but-empty value composes the bare delimiter, which only the global form produces - the scoped
+// callers all guard on hasValueContent first, because a scoped entry without value content is not part of the grammar. Pairing this with parseEntry as the
+// single decoder keeps the reader and the writer of the storage format from drifting apart.
 function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: string; option: string; value?: string }): string {
 
   const address = (enabled ? "Enable" : "Disable") + "." + option + (id?.length ? ("." + id) : "");
@@ -366,8 +391,11 @@ function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: s
 // reader or writer of the storage format can disagree about what any given entry "means."
 //
 // Two value forms decode here. The canonical one is `Enable.Option[.id]=value`, where the first "=" ends the address and everything behind it is the value: dots
-// address and "=" carries the payload, each delimiter with a single job. A legacy dot form is also accepted, for configurations hand-authored before the payload
-// delimiter existed - there a single trailing segment is a global value and a multi-segment tail is an id followed by a value.
+// address and "=" carries the payload, each delimiter with a single job. The delimiter claims an entry only when that reading holds together end to end - the
+// address must be the option name alone or the option name plus one dot-free id segment, and a scoped payload must carry content per hasValueContent, which
+// documents why the value domain draws that line. Anything else containing "=" reads under the legacy dot grammar with the delimiter as ordinary value text,
+// keeping such an entry on the reading it was authored under. The legacy form, accepted for configurations hand-authored before the payload delimiter existed,
+// reads a single trailing segment as a global value and a multi-segment tail as an id followed by a value.
 //
 // Greedy longest-prefix matching against the value-option registry handles the case where a shorter value-centric option name is a prefix of a longer option in
 // the catalog - the longer match wins, so an entry like `Enable.Audio.Volume.50` (when both `Audio` and `Audio.Volume` are value-centric) is unambiguously parsed
@@ -422,7 +450,9 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
 
     // The payload delimiter gives the value a separator of its own, so dots are left to do one job: addressing. Everything ahead of the first "=" addresses the
     // option, everything behind it is the value - periods, further "=" characters, and interior spaces all ride through verbatim, which is why this is the form
-    // the composer writes and the form entries normalize into.
+    // the composer writes and the form entries normalize into. The delimiter only claims the entry when the canonical reading holds, though: a shape it cannot
+    // account for falls through to the legacy dot grammar below, so an entry authored before the delimiter existed keeps its original meaning even when its
+    // value happens to contain "=".
     if(payloadIndex !== -1) {
 
       // Whitespace around the delimiter is tolerated: the address is right-trimmed and the value trimmed, so a hand-authored `Option.id = value` reads exactly as
@@ -433,7 +463,8 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
 
       if(!address.length) {
 
-        // Global form: the option name is the whole address.
+        // Global form: the option name is the whole address. The payload may be empty here - `Enable.Option=` reads as "enabled globally, no value given" -
+        // because no legacy value can sit against the option name without a dot ahead of it, so there is no competing reading to protect.
         parsed.canonicalEntry = composeEntry({ enabled, option: optionOriginal, value });
         parsed.valueKey = optName;
         parsed.value = value;
@@ -441,25 +472,25 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
         break;
       }
 
-      // A leading character other than the dot means this option name is merely a prefix of a longer unrelated token, so we keep trying shorter candidates.
-      if(!address.startsWith(".")) {
+      const idLower = address.startsWith(".") ? address.slice(1) : "";
 
-        continue;
-      }
-
-      const idLower = address.slice(1);
-
-      // Scoped form: exactly one dot-free, non-empty segment sits between the option name and the delimiter. Anything else is malformed, and we leave the entry
-      // to its primary key rather than guess which segment was meant to be the id. The lookup key lowercases the id while the re-composition keeps the casing
-      // the entry carried, matching what the composer writes - the two have to agree, or normalizing a composed entry would rewrite it.
-      if(idLower.length && !idLower.includes(".")) {
+      // Scoped form: exactly one dot-free, non-empty segment sits between the option name and the delimiter, and the payload carries content. The content
+      // requirement is what disambiguates against a legacy value ending in "=": such a tail puts the delimiter at the very end, where this reading would
+      // otherwise see an id followed by an empty payload, so a contentless payload sends the entry to the legacy grammar below instead. The
+      // lookup key lowercases the id while the re-composition keeps the casing the entry carried, matching what the composer writes - the two have to agree,
+      // or normalizing a composed entry would rewrite it.
+      if(idLower.length && !idLower.includes(".") && hasValueContent(value)) {
 
         parsed.canonicalEntry = composeEntry({ enabled, id: remainderOriginal.slice(1, address.length), option: optionOriginal, value });
         parsed.valueKey = optName + "." + idLower;
         parsed.value = value;
+
+        break;
       }
 
-      break;
+      // Every other "="-bearing shape - an address the composer never writes, or a contentless payload - reads under the legacy dot grammar below. The guard
+      // beneath this block also preserves the greedy-prefix discipline: when the remainder opens with anything but a dot, this option name was merely a prefix
+      // of a longer unrelated token and shorter candidates still get their turn.
     }
 
     // The next character must be a dot separator. Otherwise this option name is merely a prefix of a longer unrelated token, and we should continue trying shorter
@@ -478,9 +509,16 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
     // dotted tail cannot be told apart from an id-and-value pair - expressing that unambiguously is exactly what the "=" form is for.
     if(separatorIndex === -1) {
 
-      // No re-composition for this one. Its single trailing segment does double duty: the index registers it as this option's global value AND, through the
-      // primary key, as an enable at a scope named by that same segment. Both readings are live, no canonical entry can carry both, and rewriting it would settle
-      // an ambiguity in the user's file that only the user can settle. It stays exactly as written.
+      // A single trailing segment usually does double duty: the index registers it as this option's global value AND, through the primary key, as an enable at a
+      // scope named by that same segment. Both readings are live at once, no canonical entry can carry both, and rewriting would settle an ambiguity in the
+      // user's file that only the user can settle - so the entry stays exactly as written. A segment containing "=" is the exception: the composer cannot
+      // address a scope whose id carries the delimiter, so the scope reading is unwritable, the global-value reading is the only live one, and the entry can
+      // modernize into the form that states it outright.
+      if(extra.includes("=")) {
+
+        parsed.canonicalEntry = composeEntry({ enabled, option: optionOriginal, value: extraOriginal });
+      }
+
       parsed.valueKey = optName;
       parsed.value = extraOriginal;
     } else {
@@ -488,7 +526,13 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
       const idLower = extra.slice(0, separatorIndex);
       const valueOriginal = extraOriginal.slice(separatorIndex + 1);
 
-      parsed.canonicalEntry = composeEntry({ enabled, id: extraOriginal.slice(0, separatorIndex), option: optionOriginal, value: valueOriginal });
+      // The id-and-value reading always registers on the index; it re-composes canonically only when the value carries content, because the canonical grammar
+      // has no scoped spelling for a contentless payload and a rewrite has to re-read as exactly what it replaced.
+      if(hasValueContent(valueOriginal)) {
+
+        parsed.canonicalEntry = composeEntry({ enabled, id: extraOriginal.slice(0, separatorIndex), option: optionOriginal, value: valueOriginal });
+      }
+
       parsed.valueKey = optName + "." + idLower;
       parsed.value = valueOriginal;
     }
@@ -665,13 +709,15 @@ export function buildConfigIndex(catalog: CatalogIndex, configuredOptions: reado
  *
  * The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) is deliberately left alone for the same reason. That segment does double duty - the lookup
  * index registers it as the option's global value and, through the primary key, as an enable at a scope carrying that same name - and no single canonical entry
- * expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written.
+ * expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written. A segment containing "=" is the
+ * exception: the composer cannot address a scope whose id carries the delimiter, so only the global-value reading is live there, and the entry modernizes like
+ * any other unambiguous legacy form.
  *
  * {@link applySetOption} and {@link applyClearOption} run their results through this, which is the whole of the upgrade path: a stored configuration modernizes as
  * part of a save the user already asked for, and never merely because something read it. One consequence is worth stating plainly, since it becomes visible in the
  * saved file: a legacy entry whose dotted tail the engine reads as an id plus a value is rewritten to say so outright, so `Enable.Audio.Volume.St. Andrews` (read
- * as the id "St" carrying the value " Andrews") normalizes to `Enable.Audio.Volume.St= Andrews`. Resolution is unchanged either way - the reading a user may not
- * have intended stops being latent and becomes something they can see and correct.
+ * as the id "St" carrying the value " Andrews") normalizes to `Enable.Audio.Volume.St=Andrews`, the value trimmed to the canonical domain. Resolution is unchanged
+ * either way - the reading a user may not have intended stops being latent and becomes something they can see and correct.
  *
  * @param catalog           - The catalog index that defines which option names are value-centric.
  * @param configuredOptions - The configured-options array to normalize.
@@ -702,8 +748,7 @@ export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOpti
 
 /**
  * Compute the new configured-options array after setting an option's enabled state (and optionally its value) at a given scope. Drops any prior entry addressing
- * the same option-at-scope so the new entry is the sole survivor, then appends the freshly composed entry string. Pure: does not mutate the input array; the
- * returned array is a fresh allocation.
+ * the same option-at-scope so the new entry is the sole survivor, then appends the freshly composed entry string. Pure: does not mutate the input array.
  *
  * The composed entry's action segment is canonical "Enable" / "Disable"; the option and id segments preserve the caller's casing for readability since the
  * lookup-index keys are case-insensitive anyway. Values are emitted only when meaningful - disabled or non-value options never carry one - so a subsequent
@@ -711,35 +756,42 @@ export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOpti
  * because the matcher decodes entries through the same parser.
  *
  * A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
- * need no escaping. Surrounding whitespace is trimmed first. A value-centric option written at a scope keeps the delimiter even when no value survives the trim,
- * composing `Enable.Option.id=`, because the bare form would leave the id where the legacy grammar reads a global value; at the global scope, where there is no id
- * to misread, an empty value composes the bare form. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes
- * anything still in the legacy scoped form.
+ * need no escaping. Surrounding whitespace is trimmed first, and a value persists only when content survives the trim - see {@link hasValueContent}. At the
+ * global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope there is
+ * no such spelling - a scoped entry always carries a value - so an enable without content reduces to clearing the scope: any entry addressing it is dropped and
+ * resolution falls back to inheritance. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes anything still
+ * in the legacy form.
  *
  * @param options
  * @param options.args              - The mutation intent: option key, optional scope id, enabled state, optional value. See {@link SetOptionArgs}.
  * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which determines whether to emit a value at all).
  * @param options.configuredOptions - The current configured-options array.
  *
- * @returns The new configured-options array. A fresh allocation, never a shared reference with the input.
+ * @returns The new configured-options array - a fresh allocation whenever an entry was written or removed, or the input array reference itself when a scoped
+ *          enable without value content found nothing to drop, mirroring {@link applyClearOption}'s reference-stable no-op.
  */
-export function applySetOption({ args, catalog, configuredOptions }: { args: SetOptionArgs; catalog: CatalogIndex; configuredOptions: readonly string[] }): string[] {
+export function applySetOption(
+  { args, catalog, configuredOptions }: { args: SetOptionArgs; catalog: CatalogIndex; configuredOptions: readonly string[] }
+): readonly string[] {
+
+  // A value is meaningful only on an Enable of a value-centric option, and only when it carries content; everything else composes the bare address.
+  const valued = args.enabled && isValueOption(catalog, args.option);
+  const trimmed = (valued && (args.value !== undefined)) ? args.value.toString().trim() : "";
+  const value = (valued && hasValueContent(trimmed)) ? trimmed : undefined;
+
+  // A value-centric option enabled at a scope persists only with a value. The grammar has no scoped spelling for "enabled here, nothing given" - the bare form
+  // would put the id where the legacy grammar reads a global value - so the request reduces to its observable meaning: any entry addressing the scope is dropped
+  // and resolution falls back to inheritance. Delegating states that reduction literally, and carries applyClearOption's reference-stable no-op with it.
+  if(valued && (value === undefined) && args.id?.length) {
+
+    return applyClearOption({ args: { id: args.id, option: args.option }, catalog, configuredOptions });
+  }
 
   const target = targetKey(args.option, args.id);
 
   // The entries that survive the replacement modernize as part of the save the caller already asked for. The entry composed below is canonical by construction, so
   // it needs no pass of its own.
   const surviving = normalizeConfiguredOptions(catalog, configuredOptions.filter((entry) => !entryAddressesScope({ catalog, rawEntry: entry, target })));
-
-  // A value is meaningful only on an Enable of a value-centric option; everything else composes the bare address.
-  const valued = args.enabled && isValueOption(catalog, args.option);
-  const trimmed = (valued && (args.value !== undefined)) ? args.value.toString().trim() : "";
-
-  // The delimiter is emitted when there is a value to carry, and also whenever a value-centric option is written at a scope even with no value: the bare form
-  // would put the id in the position the legacy grammar reads as a global value, so `Option.id` would resolve as this option set to the literal id. Writing
-  // `Option.id=` keeps the id addressing a scope and says the value is unspecified.
-  const scoped = (args.id !== undefined) && (args.id.length > 0);
-  const value = (valued && (scoped || (trimmed.length > 0))) ? trimmed : undefined;
 
   return [ ...surviving, composeEntry({ enabled: args.enabled, id: args.id, option: args.option, value }) ];
 }
@@ -1328,8 +1380,9 @@ export class FeatureOptions {
    * both the encoding and the prior-entry replacement - the configured-options array is canonical, the lookup index is rebuilt automatically, and the entry-string
    * format never leaks past this method. Values are emitted only when `enabled` is true and the option is value-centric; passing `value` for a non-value or
    * disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules. A value is free-form at either scope - it is
-   * written behind a payload delimiter and trimmed of surrounding whitespace. A value-centric option set at a scope keeps that delimiter even with no value, as
-   * `Enable.Option.id=`, so its id is never mistaken for the value; at the global scope an empty value composes the bare entry.
+   * written behind a payload delimiter and trimmed of surrounding whitespace - and persists only when content survives the trim (see {@link hasValueContent}).
+   * At the global scope an enable without content composes the bare entry; at a device or controller scope it reduces to clearing the scope, because a scoped
+   * entry always carries a value.
    *
    * Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See
    * {@link normalizeConfiguredOptions} for what that does and does not touch.
@@ -1348,7 +1401,16 @@ export class FeatureOptions {
    */
   public setOption(args: SetOptionArgs): void {
 
-    this.#configuredOptions = applySetOption({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
+    const next = applySetOption({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
+
+    // Reference-stable no-op: a scoped enable without value content that found nothing to drop leaves the array and the index already coherent. Skip the rebuild
+    // and preserve the array reference so callers holding a snapshot see a stable identity for unchanged state.
+    if(next === this.#configuredOptions) {
+
+      return;
+    }
+
+    this.#configuredOptions = next as string[];
 
     // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
     this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);

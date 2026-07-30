@@ -221,3 +221,27 @@ The provided `value`.
 ```ts
 InstanceType.use
 ```
+
+***
+
+### createSuppressedError()
+
+```ts
+function createSuppressedError(error, suppressed): unknown;
+```
+
+Build a `SuppressedError` linking a newer disposal failure to the error it supersedes. Shared with the async stack in `async-disposable-stack.ts`, which owes its
+callers the identical multi-failure aggregation.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `error` | `unknown` | The newest failure. |
+| `suppressed` | `unknown` | The failure it supersedes. |
+
+#### Returns
+
+`unknown`
+
+The chained error.

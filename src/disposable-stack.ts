@@ -16,14 +16,24 @@
  * @module
  */
 import type { Nullable } from "./util.ts";
+import { SuppressedError } from "./suppressed-error.ts";
 
-// Build a `SuppressedError` that links a newer disposal failure to the error it supersedes, matching the spec's multi-failure aggregation shape. We read the platform
-// `SuppressedError` global fresh on every call rather than caching a reference, because that constructor is itself part of the Node 24 explicit-resource-management
-// surface and can be absent on the engines floor this module exists to serve. When it is missing we synthesize a structurally-identical stand-in - an `Error` whose
-// name is "SuppressedError" carrying `error` and `suppressed` - so multi-failure aggregation is observably identical whether or not the global is present. The typed
-// optional read tells the truth the platform lib cannot: on this engines floor the global may not exist.
-function createSuppressedError(error: unknown, suppressed: unknown): unknown {
+/**
+ * Build a `SuppressedError` linking a newer disposal failure to the error it supersedes. Shared with the async stack in `async-disposable-stack.ts`, which owes its
+ * callers the identical multi-failure aggregation.
+ *
+ * @param error      - The newest failure.
+ * @param suppressed - The failure it supersedes.
+ *
+ * @returns The chained error.
+ *
+ * @category Utilities
+ */
+export function createSuppressedError(error: unknown, suppressed: unknown): unknown {
 
+  // Read the platform `SuppressedError` global fresh on every call rather than caching a reference, because that constructor is itself part of the Node 24
+  // explicit-resource-management surface and can be absent on the engines floor this module exists to serve. The typed optional read tells the truth the platform lib
+  // cannot: on this engines floor the global may not exist.
   const suppressedErrorConstructor = (globalThis as { SuppressedError?: typeof globalThis.SuppressedError }).SuppressedError;
 
   if(suppressedErrorConstructor !== undefined) {
@@ -31,13 +41,9 @@ function createSuppressedError(error: unknown, suppressed: unknown): unknown {
     return new suppressedErrorConstructor(error, suppressed);
   }
 
-  const synthesized = new Error() as Error & { error: unknown; suppressed: unknown };
-
-  synthesized.error = error;
-  synthesized.name = "SuppressedError";
-  synthesized.suppressed = suppressed;
-
-  return synthesized;
+  // Without the global, the in-package constructor answers instead. It is the same spec-shaped constructor the polyfill installs, so multi-failure aggregation is
+  // observably identical whether or not the platform ships one.
+  return new SuppressedError(error, suppressed);
 }
 
 /**

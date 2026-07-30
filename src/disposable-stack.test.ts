@@ -2,10 +2,11 @@
  *
  * disposable-stack.test.ts: Unit tests for the internal DisposableStack shim - the TC39 Explicit Resource Management contract (last-in-first-out disposal,
  * use()-time dispose-method capture, null/undefined passthrough, registration and move guards, single- and multi-failure aggregation), a forced-fallback control
- * that exercises the synthesized-SuppressedError branch Node 22 relies on, and a differential oracle that compares the shim against the platform global.
+ * that exercises the in-package SuppressedError branch Node 22 relies on, and a differential oracle that compares the shim against the platform global.
  */
 import { describe, test } from "node:test";
 import { DisposableStack } from "./disposable-stack.ts";
+import { SuppressedError } from "./suppressed-error.ts";
 import assert from "node:assert/strict";
 
 // A factory that produces a fresh stack. The differential oracle drives the same scenario through two factories - one over the shim, one over the platform global -
@@ -350,9 +351,9 @@ describe("DisposableStack - contract", () => {
   });
 
   // The multi-failure aggregation branch that a runtime without the SuppressedError global relies on cannot run on any environment that ships the global, so we force
-  // it: save and delete the global, drive a multi-throw disposal, assert the synthesized fallback has the correct shape and that every disposer ran, and restore the
-  // global in a finally so the deletion never leaks to another test. Without this control the synthesized branch would ship unexercised by any gate.
-  test("synthesizes a SuppressedError-shaped fallback when the platform global is absent", () => {
+  // it: save and delete the global, drive a multi-throw disposal, assert the in-package constructor answered with the correct shape and that every disposer ran, and
+  // restore the global in a finally so the deletion never leaks to another test. Without this control the fallback branch would ship unexercised by any gate.
+  test("falls back to the in-package SuppressedError when the platform global is absent", () => {
 
     const savedSuppressedError = globalThis.SuppressedError;
 
@@ -389,11 +390,12 @@ describe("DisposableStack - contract", () => {
         caught = error;
       }
 
-      assert.ok(caught instanceof Error, "the synthesized fallback is an Error");
+      assert.ok(caught instanceof SuppressedError, "the fallback is the in-package SuppressedError");
+      assert.ok(caught instanceof Error, "the fallback is an Error through the wired prototype chain");
 
       const suppressed = caught as Error & { error: unknown; suppressed: unknown };
 
-      assert.equal(suppressed.name, "SuppressedError", "the synthesized fallback is named SuppressedError");
+      assert.equal(suppressed.name, "SuppressedError", "the fallback is named SuppressedError");
       assert.equal(suppressed.error, firstError, "the newest failure is carried as error");
       assert.equal(suppressed.suppressed, secondError, "the accumulated failure is carried as suppressed");
       assert.deepEqual(order, [ "c", "b", "a" ], "every disposer ran despite the failures");

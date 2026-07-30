@@ -23,6 +23,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 
 | Module | Description |
 | ------ | ------ |
+| [async-disposable-stack](async-disposable-stack.md) | A drop-in implementation of the TC39 Explicit Resource Management `AsyncDisposableStack`. |
 | [backpressure](backpressure.md) | AsyncDisposable write queue that serializes Buffer writes onto a Node [Writable](https://nodejs.org/api/stream.html#class-streamwritable), respects backpressure via the stream's `drain` event, and composes into the library's `AbortSignal`-driven lifecycle so a parent signal can tear the writer down uniformly with every other HBPU resource class. |
 | [clock](clock.md) | An injectable wall-clock time seam. |
 | [clock-double](clock-double.md) | A reusable, controllable [Clock](clock.md#clock) test double. |
@@ -65,8 +66,10 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [logclient/time-window](logclient/time-window.md) | The internal time-window stream transform for the `hblog` CLI. |
 | [logclient/types](logclient/types.md) | Shared, dependency-light type definitions for the Homebridge UI log client. |
 | [mqttClient](mqttClient.md) | AsyncDisposable MQTT client whose connection lifetime is a composed [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). |
+| [polyfills](polyfills.md) | The explicit-resource-management floor bridge: a side-effect module that installs `AsyncDisposableStack`, `DisposableStack`, and `SuppressedError` as globals on any runtime that does not already ship them. |
 | [rate-budget](rate-budget.md) | A sliding-window rate budget: at most `capacity` grants inside any trailing `window` milliseconds. |
 | [service](service.md) | Homebridge service helper utilities. |
+| [suppressed-error](suppressed-error.md) | A drop-in implementation of the TC39 Explicit Resource Management `SuppressedError`. |
 | [timer-registry](timer-registry.md) | A lifetime-bounded registry of callback timers. |
 | [util](util.md) | TypeScript Utilities. |
 | [webui-loader](webui-loader.md) | The webUI boot-region stamp. A plugin's `index.html` carries a marker-fenced region that homebridge-plugin-utils generates and every build re-stamps. The region reports its own boot failures on the page, injects an importmap mapping the bare package specifier to the hashed-versioned subdir the `prepare-ui` CLI mirrors into place, and dynamically imports the plugin's entry module. It is identical across the family, so this module renders it from one template: the plugin declares its entry and cache-bust list in a config comment, and `prepare-ui` stamps the rendered region into the marker-fenced block on every build. |

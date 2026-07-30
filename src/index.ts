@@ -10,6 +10,7 @@ export * from "./featureOptions.ts";
 export * from "./featureOptions-docs.ts";
 export * from "./homebridge-enums.ts";
 export * from "./mqttClient.ts";
+export * from "./rate-budget.ts";
 export * from "./service.ts";
 export * from "./timer-registry.ts";
 export * from "./util.ts";

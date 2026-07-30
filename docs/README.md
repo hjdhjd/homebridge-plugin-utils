@@ -65,6 +65,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [logclient/time-window](logclient/time-window.md) | The internal time-window stream transform for the `hblog` CLI. |
 | [logclient/types](logclient/types.md) | Shared, dependency-light type definitions for the Homebridge UI log client. |
 | [mqttClient](mqttClient.md) | AsyncDisposable MQTT client whose connection lifetime is a composed [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). |
+| [rate-budget](rate-budget.md) | A sliding-window rate budget: at most `capacity` grants inside any trailing `window` milliseconds. |
 | [service](service.md) | Homebridge service helper utilities. |
 | [timer-registry](timer-registry.md) | A lifetime-bounded registry of callback timers. |
 | [util](util.md) | TypeScript Utilities. |

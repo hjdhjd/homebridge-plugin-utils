@@ -791,6 +791,9 @@ across plugins that share no ancestor - the same "no shared home, so a free func
 The wording is specific to that bound-to-shutdown, no-respawn lifecycle. A consumer whose loops recover on their own - reconnecting, re-arming, respawning - has
 different news to deliver and should pass its own `onError` to [superviseLoop](#superviseloop) rather than this reporter.
 
+[superviseStream](#supervisestream) is the second envelope this reporter serves: it delivers a fault through the same `(error) => void` handler, so a supervised value stream
+reports exactly as a supervised loop does.
+
 #### Parameters
 
 | Parameter | Type | Description |
@@ -1162,6 +1165,73 @@ void superviseLoop({
   onError: (error) => this.log.error("The membership observer stopped unexpectedly and will not restart until the next reload: %s", formatErrorMessage(error)),
   signal: this.signal
 });
+```
+
+***
+
+### superviseStream()
+
+```ts
+function superviseStream<T>(options): AsyncGenerator<T, void, undefined>;
+```
+
+Supervise a signal-bound async stream: iterate a source, yield every value through to the consumer, end quietly when the source ends or its signal aborts, and route
+any genuine fault to a caller-supplied handler exactly once.
+
+This is [superviseLoop](#superviseloop)'s guarantees translated to the value path. `superviseLoop` supervises a loop that keeps its results to itself; `superviseStream`
+supervises one that has values to hand back, so a caller can feed several sinks from a single source, or transform what it receives, without owning the
+swallow-on-abort-versus-surface-once rule itself. That rule is identical here: a throw is a *fault* only when we did not cause it. With the bound signal aborted, a
+throw is the orderly unwinding of a source the caller already tore down, so it is swallowed and the stream simply ends. Any other throw is genuine, is handed to
+`onError` exactly once, and then the stream ends. The stream NEVER throws a source-originated failure at its consumer - a `for await` over it exits normally in
+every one of those cases - so the consumer writes no error handling for the faults this envelope already owns. A throw from `onError` is a defect in the handler and
+propagates: the never-throws guarantee covers the source, not the handler.
+
+A signal that is already aborted ends the stream before `source` is invoked at all, so a caller that has already torn down never pays for the setup its source would
+do. A consumer that stops early - `break`, `return`, or a throw from its own loop body - drives this generator's return path, which unwinds the `for await` and runs
+the source's own `finally`, so a source holding a subscription or a handle releases it with nothing arranged by the consumer.
+
+The envelope is unicast by design: it supervises one consumer's iteration. Fan-out is composition the consumer owns - hand each value to the sinks it has - because a
+broadcast primitive would have to decide buffering and slow-consumer policy, which belongs to the caller rather than to a supervision envelope.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` | The type of value the source yields. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `onError`: (`error`) => `void`; `signal`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); `source`: (`signal`) => `AsyncIterable`\<`T`\>; \} | Supervision inputs. |
+| `options.onError` | (`error`) => `void` | Invoked at most once, with the thrown value unchanged, when the source faults while the signal is NOT aborted. It carries the caller's entire fault policy (logging, wording, recovery), which is why the primitive itself stays logging-free. A throw from `onError` propagates to the consumer. |
+| `options.signal` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The signal the stream is bound to. Its aborted state is the single source of truth for "did we cause this throw?": aborted means swallow, not aborted means surface. |
+| `options.source` | (`signal`) => `AsyncIterable`\<`T`\> | Builds the async iterable to supervise, receiving the bound [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) so it can wire cancellation into whatever it reads. It is not invoked at all when the signal is already aborted. |
+
+#### Returns
+
+`AsyncGenerator`\<`T`, `void`, `undefined`\>
+
+An async generator yielding the source's values in order, completing when the source completes, when the signal aborts, or once a fault has been delivered
+         to `onError`.
+
+#### Example
+
+```ts
+import { loopFaultReporter, superviseStream } from "homebridge-plugin-utils";
+
+// A supervised poll whose values feed both HomeKit and MQTT. Tearing down `this.signal` ends the loop silently; any other failure is reported once and the stream
+// ends, so this `for await` never has to catch.
+for await (const reading of superviseStream({
+
+  onError: loopFaultReporter(this.log, "sensor"),
+  signal: this.signal,
+  source: (signal) => this.poll(signal)
+})) {
+
+  this.updateHomeKit(reading);
+  this.publishMqtt(reading);
+}
 ```
 
 ***

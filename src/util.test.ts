@@ -1,12 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, onAbort, waitWithSignal,
- * markHandled, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, loopFaultReporter, Watchdog, and the string/number helpers
- * (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
+ * markHandled, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream, loopFaultReporter, Watchdog, and the
+ * string/number helpers (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase,
+ * sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds,
   guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort, sanitizeName,
-  superviseLoop,
+  superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing.helpers.ts";
@@ -1079,6 +1080,256 @@ describe("superviseLoop", () => {
     });
 
     assert.equal(onErrorCalls, 1, "the detached loop's fault must have been delivered to onError exactly once");
+  });
+});
+
+describe("superviseStream", () => {
+
+  // Drain a supervised stream into an array. Every scenario below consumes through this helper, so "the consumer's for-await exits without throwing" is asserted by the
+  // helper simply returning: a stream that surfaced a source failure would reject here and fail the test before any assertion ran.
+  async function drain<T>(stream: AsyncIterable<T>): Promise<T[]> {
+
+    const received: T[] = [];
+
+    for await (const value of stream) {
+
+      received.push(value);
+    }
+
+    return received;
+  }
+
+  test("yields every value in order and completes when the source completes", async () => {
+
+    const controller = new AbortController();
+    let onErrorCalls = 0;
+
+    const received = await drain(superviseStream({
+
+      onError: () => { onErrorCalls++; },
+      signal: controller.signal,
+      source: async function *(): AsyncGenerator<number> {
+
+        yield 1;
+        yield 2;
+        yield 3;
+      }
+    }));
+
+    assert.deepEqual(received, [ 1, 2, 3 ], "values pass through in source order");
+    assert.equal(onErrorCalls, 0, "a source that simply ends is not a fault");
+  });
+
+  test("preserves yielded value identity rather than cloning", async () => {
+
+    const controller = new AbortController();
+    const payload = { readings: [1] };
+
+    const received = await drain(superviseStream({
+
+      onError: () => undefined,
+      signal: controller.signal,
+      source: async function *(): AsyncGenerator<object> {
+
+        yield payload;
+      }
+    }));
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0], payload, "the consumer receives the very object the source yielded");
+  });
+
+  test("passes the bound signal into the source by identity", async () => {
+
+    const controller = new AbortController();
+    const seen: AbortSignal[] = [];
+
+    await drain(superviseStream({
+
+      onError: () => undefined,
+      signal: controller.signal,
+      source: async function *(signal: AbortSignal): AsyncGenerator<number> {
+
+        seen.push(signal);
+
+        yield 1;
+      }
+    }));
+
+    assert.deepEqual(seen, [controller.signal], "the source receives the caller's own signal, not a derived one");
+  });
+
+  test("delivers a mid-stream fault to onError exactly once and ends the stream without throwing", async () => {
+
+    const controller = new AbortController();
+    const boom = new Error("the source failed");
+    const observed: unknown[] = [];
+
+    // The stream is drained without a try/catch: a source-originated failure that reached the consumer would fail this test as a thrown await, which is the
+    // never-throws guarantee stated as an assertion.
+    const received = await assertNoUnhandledRejections(async () => await drain(superviseStream({
+
+      onError: (error) => { observed.push(error); },
+      signal: controller.signal,
+      source: async function *(): AsyncGenerator<number> {
+
+        yield 1;
+
+        throw boom;
+      }
+    })));
+
+    assert.deepEqual(received, [1], "the values yielded before the fault still reached the consumer");
+    assert.deepEqual(observed, [boom], "the fault reached onError exactly once, with the thrown value unchanged");
+  });
+
+  test("swallows a mid-stream throw silently when the signal is aborted, leaving onError uncalled", async () => {
+
+    const controller = new AbortController();
+    let onErrorCalls = 0;
+
+    const received = await drain(superviseStream({
+
+      onError: () => { onErrorCalls++; },
+      signal: controller.signal,
+      // Abort from inside the source, then throw the reason - the orderly teardown path, where the throw is the source unwinding because we tore it down.
+      source: async function *(signal: AbortSignal): AsyncGenerator<number> {
+
+        yield 1;
+
+        controller.abort(new HbpuAbortError("shutdown"));
+
+        throw signal.reason;
+      }
+    }));
+
+    assert.deepEqual(received, [1], "the values yielded before teardown still reached the consumer");
+    assert.equal(onErrorCalls, 0, "an abort-driven throw is orderly teardown, not a fault, so onError must not be called");
+  });
+
+  test("a pre-aborted signal yields nothing and never invokes the source", async () => {
+
+    const controller = new AbortController();
+    let sourceInvoked = false;
+    let onErrorCalls = 0;
+
+    controller.abort(new HbpuAbortError("shutdown"));
+
+    const received = await drain(superviseStream({
+
+      onError: () => { onErrorCalls++; },
+      signal: controller.signal,
+      source: (): AsyncGenerator<number> => {
+
+        // The flag flips in the FACTORY, before any iterable exists, so it catches a source that was called and merely never iterated - the setup cost a torn-down
+        // caller must not pay.
+        sourceInvoked = true;
+
+        return (async function *(): AsyncGenerator<number> {
+
+          yield 1;
+        })();
+      }
+    }));
+
+    assert.deepEqual(received, [], "a pre-aborted stream yields nothing");
+    assert.equal(sourceInvoked, false, "the source is never invoked on a pre-aborted signal");
+    assert.equal(onErrorCalls, 0, "a pre-aborted signal is teardown, not a fault");
+  });
+
+  test("a consumer that breaks early runs the source's own cleanup", async () => {
+
+    const controller = new AbortController();
+    let cleanedUp = false;
+
+    const stream = superviseStream({
+
+      onError: () => undefined,
+      signal: controller.signal,
+      source: async function *(): AsyncGenerator<number> {
+
+        try {
+
+          yield 1;
+          yield 2;
+          yield 3;
+        } finally {
+
+          cleanedUp = true;
+        }
+      }
+    });
+
+    for await (const value of stream) {
+
+      assert.equal(value, 1);
+
+      break;
+    }
+
+    // Breaking out of the consumer's loop drives this generator's return path, which unwinds its own `for await` and closes the source iterator... so the source's
+    // `finally` runs even though it never reached its last yield.
+    assert.equal(cleanedUp, true, "the source's cleanup ran when the consumer stopped early");
+  });
+
+  test("a throw from onError propagates to the consumer", async () => {
+
+    const controller = new AbortController();
+    const handlerDefect = new Error("the fault handler itself failed");
+
+    // The never-throws guarantee covers the source, not the handler: a broken onError is the caller's own defect and must not be swallowed into silence.
+    await assert.rejects(() => drain(superviseStream({
+
+      onError: () => { throw handlerDefect; },
+      signal: controller.signal,
+      source: async function *(): AsyncGenerator<number> {
+
+        yield 1;
+
+        throw new Error("the source failed");
+      }
+    })), (error: unknown) => error === handlerDefect);
+  });
+
+  test("supervises a source factory that throws before returning an iterable", async () => {
+
+    const controller = new AbortController();
+    const boom = new Error("the source could not be built");
+    const observed: unknown[] = [];
+
+    const received = await drain(superviseStream({
+
+      onError: (error) => { observed.push(error); },
+      signal: controller.signal,
+      source: (): AsyncGenerator<number> => {
+
+        throw boom;
+      }
+    }));
+
+    assert.deepEqual(received, []);
+    assert.deepEqual(observed, [boom], "a factory that throws before yielding anything is supervised like any other fault");
+  });
+
+  test("composes with loopFaultReporter: a genuine fault logs exactly once", async () => {
+
+    const controller = new AbortController();
+    const log = capturingLog();
+
+    await drain(superviseStream({
+
+      onError: loopFaultReporter(log, "sensor"),
+      signal: controller.signal,
+      source: async function *(): AsyncGenerator<number> {
+
+        yield 1;
+
+        throw new Error("upstream failed");
+      }
+    }));
+
+    assert.equal(log.entries.length, 1, "the reporter serves this envelope exactly as it serves superviseLoop");
+    assert.equal(expectAt(log.entries, 0, "the logged fault").level, "error");
   });
 });
 

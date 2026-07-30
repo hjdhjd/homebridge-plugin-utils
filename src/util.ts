@@ -962,6 +962,9 @@ export async function superviseLoop(options: { loop: (signal: AbortSignal) => Pr
  * The wording is specific to that bound-to-shutdown, no-respawn lifecycle. A consumer whose loops recover on their own - reconnecting, re-arming, respawning - has
  * different news to deliver and should pass its own `onError` to {@link superviseLoop} rather than this reporter.
  *
+ * {@link superviseStream} is the second envelope this reporter serves: it delivers a fault through the same `(error) => void` handler, so a supervised value stream
+ * reports exactly as a supervised loop does.
+ *
  * @param log   - The plugin logger the report is written to; its `error` method receives the canonical format string and arguments.
  * @param label - The loop's name, interpolated as the `%s` in `"HomeKit updates for %s ..."` so anyone reading the log can tell which supervised loop died.
  *
@@ -989,6 +992,94 @@ export function loopFaultReporter(log: HomebridgePluginLogging, label: string): 
   // period is normalized to one and the wording matches every other error log in the package rather than being re-derived at this call site.
   return (error: unknown): void => log.error("HomeKit updates for %s stopped unexpectedly and will not resume until the Homebridge plugin restarts: %s.", label,
     formatErrorMessage(error));
+}
+
+/**
+ * Supervise a signal-bound async stream: iterate a source, yield every value through to the consumer, end quietly when the source ends or its signal aborts, and route
+ * any genuine fault to a caller-supplied handler exactly once.
+ *
+ * This is {@link superviseLoop}'s guarantees translated to the value path. `superviseLoop` supervises a loop that keeps its results to itself; `superviseStream`
+ * supervises one that has values to hand back, so a caller can feed several sinks from a single source, or transform what it receives, without owning the
+ * swallow-on-abort-versus-surface-once rule itself. That rule is identical here: a throw is a *fault* only when we did not cause it. With the bound signal aborted, a
+ * throw is the orderly unwinding of a source the caller already tore down, so it is swallowed and the stream simply ends. Any other throw is genuine, is handed to
+ * `onError` exactly once, and then the stream ends. The stream NEVER throws a source-originated failure at its consumer - a `for await` over it exits normally in
+ * every one of those cases - so the consumer writes no error handling for the faults this envelope already owns. A throw from `onError` is a defect in the handler and
+ * propagates: the never-throws guarantee covers the source, not the handler.
+ *
+ * A signal that is already aborted ends the stream before `source` is invoked at all, so a caller that has already torn down never pays for the setup its source would
+ * do. A consumer that stops early - `break`, `return`, or a throw from its own loop body - drives this generator's return path, which unwinds the `for await` and runs
+ * the source's own `finally`, so a source holding a subscription or a handle releases it with nothing arranged by the consumer.
+ *
+ * The envelope is unicast by design: it supervises one consumer's iteration. Fan-out is composition the consumer owns - hand each value to the sinks it has - because a
+ * broadcast primitive would have to decide buffering and slow-consumer policy, which belongs to the caller rather than to a supervision envelope.
+ *
+ * @typeParam T           - The type of value the source yields.
+ * @param options         - Supervision inputs.
+ * @param options.onError - Invoked at most once, with the thrown value unchanged, when the source faults while the signal is NOT aborted. It carries the caller's
+ *                          entire fault policy (logging, wording, recovery), which is why the primitive itself stays logging-free. A throw from `onError` propagates to
+ *                          the consumer.
+ * @param options.signal  - The signal the stream is bound to. Its aborted state is the single source of truth for "did we cause this throw?": aborted means swallow,
+ *                          not aborted means surface.
+ * @param options.source  - Builds the async iterable to supervise, receiving the bound {@link AbortSignal} so it can wire cancellation into whatever it reads. It is
+ *                          not invoked at all when the signal is already aborted.
+ *
+ * @returns An async generator yielding the source's values in order, completing when the source completes, when the signal aborts, or once a fault has been delivered
+ *          to `onError`.
+ *
+ * @example
+ *
+ * ```ts
+ * import { loopFaultReporter, superviseStream } from "homebridge-plugin-utils";
+ *
+ * // A supervised poll whose values feed both HomeKit and MQTT. Tearing down `this.signal` ends the loop silently; any other failure is reported once and the stream
+ * // ends, so this `for await` never has to catch.
+ * for await (const reading of superviseStream({
+ *
+ *   onError: loopFaultReporter(this.log, "sensor"),
+ *   signal: this.signal,
+ *   source: (signal) => this.poll(signal)
+ * })) {
+ *
+ *   this.updateHomeKit(reading);
+ *   this.publishMqtt(reading);
+ * }
+ * ```
+ *
+ * @category Utilities
+ */
+export async function *superviseStream<T>(options: { onError: (error: unknown) => void; signal: AbortSignal;
+  source: (signal: AbortSignal) => AsyncIterable<T>; }): AsyncGenerator<T, void, undefined> {
+
+  // An already-aborted signal ends the stream before `source` is ever invoked. This early return has no counterpart in `superviseLoop`, where a loop that immediately
+  // throws its own reason is swallowed anyway; a source, by contrast, may open a subscription or a handle before it yields anything, and a caller that has already
+  // torn down should pay for none of that.
+  if(options.signal.aborted) {
+
+    return;
+  }
+
+  const { onError, signal, source } = options;
+
+  try {
+
+    // `source` is invoked inside the try, not merely awaited there, so a factory that throws before it ever returns an iterable is supervised exactly like one that
+    // fails mid-stream. A consumer that stops early unwinds through this `for await`, which drives the source iterator's own return path and its `finally`.
+    for await (const value of source(signal)) {
+
+      yield value;
+    }
+  } catch(error: unknown) {
+
+    // The one rule this primitive centralizes, identical to superviseLoop's: distinguish orderly teardown from a genuine fault. An aborted signal means this throw is
+    // the source unwinding in response to a teardown we initiated, so it is expected and the stream simply ends. Otherwise the source faulted on its own and we
+    // surface it through `onError` exactly once. Either branch ENDS the stream rather than rethrowing, so the consumer's iteration exits normally.
+    if(signal.aborted) {
+
+      return;
+    }
+
+    onError(error);
+  }
 }
 
 /**

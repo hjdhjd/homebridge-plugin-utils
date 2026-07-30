@@ -5,7 +5,7 @@
 "use strict";
 
 import { applyCategoryStates, captureCategoryStates } from "../utils.mjs";
-import { applyRowState, categoryShell, optionRow, triStateTransition } from "../rendering.mjs";
+import { applyRowState, categoryShell, optionRow, triStateTransition, valueCommitTransition } from "../rendering.mjs";
 import { projection, scopeCacheKey, selectedControllerId, selectedDeviceId } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { buildConfigIndex } from "../../featureOptions.js";
@@ -24,8 +24,8 @@ import { effect } from "../store.mjs";
  *      materialized row's full state (tri-state, value-input, label color, visibility, dependency badge) in place through the shared `applyRowState` writer. No DOM
  *      rebuild - just attribute and class swaps on existing rows, run through the same writer construction uses so the two paths cannot diverge.
  *   5. **Visibility updates** on `filter:changed`: the same projection walk re-derives each row, which includes its visibility and the "requires parent" badge.
- *   6. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), text-input changes (forward to
- *      checkbox).
+ *   6. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), text-input changes (value-commit
+ *      transition + action dispatch). A gesture the model rejects restores the row through the shared applyRowState writer instead of dispatching.
  *   7. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
  *
  * The per-device DOM cache lets navigating from device A to device B and back return to A's previously-rendered DOM without re-running the projection or
@@ -470,58 +470,81 @@ const applyProjectionToDom = ({ configTable, state }) => {
 // unavailable in some DOM environments (including the test harness), so a manual regex fallback covers those cases.
 const cssEscape = (value) => ((typeof CSS !== "undefined") && CSS.escape) ? CSS.escape(value) : value.replace(/[^\w-]/g, "\\$&");
 
-// Handle a change event on the config table. Checkboxes get the tri-state transition; text inputs re-fire as a checkbox change so the same path handles both.
-const handleChange = ({ event, store }) => {
-
-  const target = event.target;
-
-  if(target.matches("input[type='text']")) {
-
-    target.closest(".fo-option-row")?.querySelector("input[type='checkbox']")?.dispatchEvent(new Event("change", { bubbles: true }));
-
-    return;
-  }
-
-  if(!target.matches("input[type='checkbox']")) {
-
-    return;
-  }
+// Resolve the row element and its projection entry for any input element inside an option row. Shared by the two gesture handlers in handleChange so the checkbox
+// and the value input work from the same projection state. The checkbox's id carries the option's expanded name for both, since the value input has no identity of
+// its own. Returns null when the element sits outside a materialized row or the projection no longer carries the option.
+const rowContext = ({ state, target }) => {
 
   const row = target.closest(".fo-option-row");
   const categoryName = target.closest("details[data-category]")?.getAttribute("data-category");
+  const expandedName = row?.querySelector("input[type='checkbox']")?.id;
 
-  if(!row || !categoryName) {
+  if(!row || !categoryName || !expandedName) {
 
-    return;
+    return null;
   }
 
-  const expandedName = target.id;
-  const state = store.state;
-  const p = projection(state);
-  const categoryProjection = p.categories.find((c) => c.name === categoryName);
+  const categoryProjection = projection(state).categories.find((c) => c.name === categoryName);
   const entry = categoryProjection?.entries.find((e) => e.expandedName === expandedName);
 
-  if(!entry) {
+  return entry ? { entry, row } : null;
+};
+
+// Handle a change event on the config table. Checkboxes run the tri-state transition; text inputs run the value-commit transition. Either way the pure state
+// machine computes the action, the dispatch drives the reactive re-projection, and applyRowState re-derives the affected rows - one DOM-writing path, the same
+// one construction uses, rather than an imperative apply here plus a re-derive on update that could drift apart.
+//
+// A gesture the model rejects - above all enabling a value option at a scope while its value input is empty, a state with no persistable spelling - leaves the
+// configured options untouched, so no re-projection walks the rows and the browser's own toggle would outlive the model's answer. Restoring the row through
+// applyRowState, from the unchanged projection, undoes the gesture through the same single writer; reference equality on configuredOptions is the store's
+// documented no-op signal, so the restore also covers any future gesture that resolves to nothing.
+const handleChange = ({ event, store }) => {
+
+  const target = event.target;
+  const isValueCommit = target.matches("input[type='text']");
+
+  if(!isValueCommit && !target.matches("input[type='checkbox']")) {
 
     return;
   }
 
-  // Run the pure transition to compute the action to dispatch. The DOM is not updated here: dispatching drives the reactive re-projection, which re-derives this row
-  // (and any others the mutation affects) through applyRowState against the post-dispatch projection. One DOM-writing path - the same one construction uses - rather
-  // than an imperative apply here plus a re-derive on update that could drift apart.
+  const state = store.state;
+  const context = rowContext({ state, target });
+
+  if(!context) {
+
+    return;
+  }
+
+  const { entry, row } = context;
   const inputValue = row.querySelector("input[type='text']");
   const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
-  const { action } = triStateTransition({
+  const transitionArgs = {
 
     catalog: state.catalog,
-    checkbox: target,
     configIndex,
     controllerId: selectedControllerId(state),
     deviceId: selectedDeviceId(state),
     entry,
     inputValue
-  });
+  };
+  const { action } = isValueCommit ? valueCommitTransition(transitionArgs) : triStateTransition({ ...transitionArgs, checkbox: target });
 
-  store.dispatch(action);
+  if(action) {
+
+    store.dispatch(action);
+  }
+
+  if(store.state.configuredOptions === state.configuredOptions) {
+
+    applyRowState({ entry, row, scopeKind: state.scope.kind });
+
+    // A rejected checkbox gesture wanted a value it does not have - hand focus to the value input as the affordance for what comes next. A rejected input commit
+    // gets no focus theft: the user just moved on, and pulling them back would fight the blur that committed it.
+    if(!isValueCommit) {
+
+      inputValue?.focus();
+    }
+  }
 };
 

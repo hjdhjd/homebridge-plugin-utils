@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { isValueOption, optionExists } from "../featureOptions.js";
+import { hasValueContent, isValueOption, optionExists } from "../featureOptions.js";
 import { createElement } from "./utils.mjs";
 
 /**
@@ -21,6 +21,8 @@ import { createElement } from "./utils.mjs";
  *   - {@link triStateTransition} - the click-time state machine. Given the current DOM state of a checkbox plus the projection entry and configuration, computes only
  *     the action to dispatch. The resulting DOM state is not returned: the dispatch updates the store, and the view re-derives the row through {@link applyRowState}
  *     against the post-dispatch projection. Pure - takes data, returns data.
+ *   - {@link valueCommitTransition} - the input-side counterpart for value-centric rows. Given the committed text plus the projection entry and configuration,
+ *     computes the action to dispatch, or none when the commit has nothing to say. Same discipline: pure, no DOM writes, the view dispatches and re-derives.
  *
  * The functions take projection entries (the view-relative records built by {@link projection}), the current view's scope kind, and any view-context identifiers
  * they need (controllerId, deviceId). They do not read from a store, do not subscribe to events, do not call selectors. The view layer assembles the inputs and
@@ -124,9 +126,11 @@ export const optionRow = ({ deviceId, entry, scopeKind }) => {
  *     otherwise the checkbox reflects the resolved enabled state directly.
  *   - **Label color** - the "where did this value come from / has it been modified" cue. Re-applying it here on every projection change is what makes a toggle that
  *     modifies (or reverts) an option re-color its label in place, rather than freezing the color at construction time.
- *   - **Value-input state** (value-centric options only) - readOnly / disabled track the inherit + enabled axes. The value text is re-derived from the projection
- *     EXCEPT while the user is actively editing it: uncommitted text exists only while the input holds focus (the `change` event commits on blur / Enter), so guarding
- *     on `document.activeElement` is exactly the condition under which a re-derive would clobber an in-progress edit.
+ *   - **Value-input state** (value-centric options only) - readOnly / disabled track the inherit + dependency axes. The input stays live on any row the user may
+ *     configure at this scope, whatever its current enabled state, because typing a value IS the gesture that enables a value option here: a scoped value entry
+ *     always carries a value, so the input is the primary affordance and the checkbox follows it. The value text is re-derived from the projection EXCEPT while
+ *     the user is actively editing it: uncommitted text exists only while the input holds focus (the `change` event commits on blur / Enter), so guarding on
+ *     `document.activeElement` is exactly the condition under which a re-derive would clobber an in-progress edit.
  *
  * @param {Object} args
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for this option.
@@ -162,7 +166,9 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
 
   if(input) {
 
-    const locked = inheriting || !entry.enabled;
+    // Locked only while the row borrows from a higher scope or its parent group is disabled. An unset or explicitly disabled row keeps a live input, because
+    // committing a value there is the gesture that enables the option at this scope.
+    const locked = inheriting || entry.requiresParentBadge;
 
     input.readOnly = locked;
     input.disabled = locked;
@@ -238,6 +244,48 @@ export const triStateTransition = ({ catalog, checkbox, configIndex, controllerI
 
   // Transition 3: just transitioned to checked. Explicit enable at this scope.
   return { action: writeAction({ deviceId, enabled: true, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
+};
+
+/**
+ * The value-input commit state machine, the input-side counterpart of {@link triStateTransition} for value-centric rows. Given the committed input plus the
+ * projection entry, configuration index, and view context, compute the action to dispatch - `null` when the commit has nothing to say.
+ *
+ * A commit carrying content (per hasValueContent, the same predicate the entry writer applies) sets the value at this scope, whatever the row's current state -
+ * typing a value is the gesture that enables a value option here, so it works from unset and explicitly disabled rows alike. The {@link writeAction} write rule
+ * still decides between an explicit entry and a clear that reaches the same resolution.
+ *
+ * A commit without content unsets a row that is explicitly enabled at this scope: the engine reduces a scoped valueless enable to clearing the scope, and
+ * composes the bare no-value enable at the global scope. On any other row - unset, or explicitly disabled - there is no value to remove and an enable-shaped
+ * dispatch would disturb state the gesture never addressed, so the commit yields no action and the caller restores the row from the projection instead.
+ *
+ * The function neither mutates nor returns DOM state, mirroring {@link triStateTransition}: the caller dispatches the action (when there is one) and the
+ * reactive re-projection drives the row's DOM through {@link applyRowState}.
+ *
+ * @param {Object} args
+ * @param {import("./state.mjs").Catalog} args.catalog - The catalog index (for the upstream probe).
+ * @param {import("../featureOptions.js").ConfigIndex} args.configIndex - The current config lookup index.
+ * @param {string | null} args.controllerId - The current controller serial, or null when no controller is in context.
+ * @param {string | null} args.deviceId - The current view's device serial, or null for global view.
+ * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for the option.
+ * @param {HTMLInputElement} args.inputValue - The value-input element carrying the committed text.
+ * @returns {{ action: Object | null }} The action to dispatch, or null when the commit has nothing to write.
+ */
+export const valueCommitTransition = ({ catalog, configIndex, controllerId, deviceId, entry, inputValue }) => {
+
+  const { expandedName, option } = entry;
+
+  // A row is explicitly enabled at this scope when its own entry - not an inherited one - resolves it enabled: an entry exists at exactly this scope and the
+  // resolved state is enabled, which a local disable would have overruled.
+  const locallyEnabled = entry.enabled && optionExists({ configIndex, id: deviceId ?? undefined, option: expandedName });
+
+  if(!hasValueContent(inputValue.value) && !locallyEnabled) {
+
+    return { action: null };
+  }
+
+  const upstream = hasUpstreamOption({ catalog, configIndex, controllerId, deviceId, expandedName });
+
+  return { action: writeAction({ deviceId, enabled: true, expandedName, inputValue, option, upstream, valueCentric: true }) };
 };
 
 // Map a view scope kind to the suffix label rendered on category headers. Switch on the tag; every scope kind maps to its own label.

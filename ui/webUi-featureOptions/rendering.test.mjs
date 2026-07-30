@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { applyRowState, categoryShell, optionRow, triStateTransition } from "./rendering.mjs";
+import { applyRowState, categoryShell, optionRow, triStateTransition, valueCommitTransition } from "./rendering.mjs";
 import { buildCatalogIndex, buildConfigIndex } from "../featureOptions.js";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
@@ -264,7 +264,7 @@ describe("optionRow - value input initialization", () => {
     assert.equal(valueInput?.getAttribute("aria-disabled"), null, "an editable input carries no aria-disabled");
   });
 
-  test("falls back to the catalog default value when no entry is configured", () => {
+  test("falls back to the catalog default value when no entry is configured, and stays editable", () => {
 
     using _dom = createTestDom();
 
@@ -274,8 +274,8 @@ describe("optionRow - value input initialization", () => {
     const valueInput = row.querySelector("input[type='text']");
 
     assert.equal(valueInput?.value, "50", "catalog default");
-    assert.equal(valueInput?.disabled, true, "disabled when not enabled");
-    assert.equal(valueInput?.getAttribute("aria-disabled"), "true", "a disabled input signals aria-disabled to assistive tech");
+    assert.equal(valueInput?.disabled, false, "an unset row keeps a live input - committing a value is the gesture that enables a value option at this scope");
+    assert.equal(valueInput?.getAttribute("aria-disabled"), null, "an editable input carries no aria-disabled");
   });
 
   test("is disabled when inheriting from a higher scope", () => {
@@ -482,6 +482,109 @@ describe("triStateTransition - was unchecked, just checked", () => {
     const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue: null });
 
     assert.equal(result.action.type, "option:cleared", "back to default with no upstream - clearOption keeps the array minimal");
+  });
+});
+
+describe("valueCommitTransition - the input-side gesture", () => {
+
+  // A committed text input, built the same way the tri-state tests build their checkbox stubs.
+  const textInput = (value) => {
+
+    const input = document.createElement("input");
+
+    input.type = "text";
+    input.value = value;
+
+    return input;
+  };
+
+  test("a commit carrying content sets the value at this scope, from an unset row", () => {
+
+    using _dom = createTestDom();
+
+    // No prior entries and no checkbox interaction: committing a value is itself the enabling gesture for a value option.
+    const state = loadedState();
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("60") });
+
+    assert.equal(result.action.type, "option:set");
+    assert.equal(result.action.args.enabled, true);
+    assert.equal(result.action.args.value, "60");
+  });
+
+  test("a commit carrying content sets the value from an explicitly disabled row", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({ configuredOptions: ["Disable.Audio.Volume"] });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("60") });
+
+    assert.equal(result.action.type, "option:set", "typing a value overrides the explicit disable at the same scope");
+    assert.equal(result.action.args.enabled, true);
+    assert.equal(result.action.args.value, "60");
+  });
+
+  test("a commit without content unsets a row explicitly enabled at this scope", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({ configuredOptions: ["Enable.Audio.Volume=75"] });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
+
+    // The write rule still runs: enabled-true with no value on a default-off option deviates on the boolean axis, so a set is dispatched, and the engine composes
+    // the bare global enable from it.
+    assert.equal(result.action.type, "option:set");
+    assert.equal(result.action.args.enabled, true);
+    assert.equal(result.action.args.value, undefined);
+  });
+
+  test("a commit without content on an unset row yields no action", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState();
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("   ") });
+
+    assert.equal(result.action, null, "nothing to say and nothing to remove - the caller restores the row instead of dispatching");
+  });
+
+  test("a commit without content on an explicitly disabled row yields no action", () => {
+
+    using _dom = createTestDom();
+
+    // The guard that keeps the gesture honest: an enable-shaped dispatch here would drop the user's explicit disable, state the emptied input never addressed.
+    const state = loadedState({ configuredOptions: ["Disable.Audio.Volume"] });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
+
+    assert.equal(result.action, null, "the explicit disable survives an empty commit untouched");
+  });
+
+  test("an all-delimiter commit reads as no content", () => {
+
+    using _dom = createTestDom();
+
+    // The content predicate is shared with the entry writer, so a value the engine would refuse to persist never dispatches in the first place.
+    const state = loadedState();
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput(" == ") });
+
+    assert.equal(result.action, null);
   });
 });
 

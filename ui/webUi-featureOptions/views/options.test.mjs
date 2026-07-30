@@ -147,7 +147,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     assert.deepEqual(store.state.configuredOptions, ["Disable.Motion.Detect"]);
   });
 
-  test("text-input change re-fires as a checkbox change", () => {
+  test("a value commit on an enabled row replaces the value", () => {
 
     using _dom = createTestDom();
 
@@ -159,7 +159,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
     const checkbox = audio.querySelector("#Audio\\.Volume");
 
-    // Check first so the input becomes editable.
+    // Enable first - the input pre-fills with the catalog default, so the tick writes that value.
     checkbox.click();
 
     const input = audio.querySelector("input[type='text']");
@@ -167,8 +167,54 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     input.value = "75";
     input.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // The change handler re-dispatches as a checkbox change. The state should now reflect a re-set with the new value.
-    assert.equal(store.state.configuredOptions.some((entry) => entry.includes("75")), true);
+    // The value-commit transition dispatches a set that replaces the prior entry rather than accumulating beside it.
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Audio.Volume=75"]);
+  });
+
+  test("a value commit on an unset row enables the option with that value", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const input = audio.querySelector("input[type='text']");
+
+    // No checkbox interaction first: the input is live on an unset row, and committing a value is itself the enabling gesture.
+    input.value = "75";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Audio.Volume=75"]);
+
+    const checkbox = audio.querySelector("#Audio\\.Volume");
+
+    assert.equal(checkbox.checked, true, "the checkbox follows the committed value through the re-projection");
+  });
+
+  test("ticking a value option at a device scope with an empty input is rejected and restores the row", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const checkbox = audio.querySelector("#Audio\\.Volume");
+    const input = audio.querySelector("input[type='text']");
+
+    // Empty the pre-filled input so the tick has no value to write. A scoped enable without value content has no persistable spelling, so the model rejects the
+    // gesture: nothing dispatches, the row restores from the unchanged projection, and focus lands on the input the gesture still needs.
+    input.value = "";
+    checkbox.click();
+
+    assert.deepEqual(store.state.configuredOptions, [], "nothing persists for an enable with nothing to say");
+    assert.equal(checkbox.checked, false, "the browser's toggle is undone through the shared row writer");
+    assert.equal(document.activeElement, input, "focus moves to the value input as the affordance for what comes next");
   });
 });
 

@@ -143,6 +143,49 @@ describe("webUiFeatureOptions.constructor", () => {
   });
 });
 
+describe("webUiFeatureOptions.editedConfig", () => {
+
+  test("a session held whose store has not loaded its model reports the session's SAVED options, not the store's placeholder", async () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    // A config carrying real saved options plus a controllers hook that rejects: show() creates the store and then bails into the connection-error view without ever
+    // dispatching model:loaded. That is the entire pre-load phase in one construction - a session is held, a store exists, and it holds nothing but placeholder state.
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig({ options: [ "Enable.Audio.Volume.50", "Disable.Motion.Detect" ] }),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => Promise.reject(new Error("the controller hook blew up")),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    const edited = orchestrator.editedConfig;
+
+    // The saved options are what the persisted config holds while there are no edits to overlay. An empty array here would tell a consumer - ratgdo's warm recompute
+    // resolving encryption keys, for one - that a configured plugin is unconfigured, which is why the fixture's options are non-empty and the content is asserted.
+    assert.deepEqual(edited[0].options, [ "Enable.Audio.Volume.50", "Disable.Motion.Detect" ],
+      "an unloaded store must not shadow the session's saved options");
+    assert.equal(edited[0].platform, "TestPlugin", "the rest of the primary entry is the session's own platform entry");
+
+    orchestrator.cleanup();
+  });
+});
+
 describe("webUiFeatureOptions.show - global options render", () => {
 
   test("show() sets up the page, reads the config, and renders every category's options at global scope", async () => {

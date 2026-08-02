@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { configIndex, projection, selectedController, selectedControllerId, selectedDevice, selectedDeviceId } from "./selectors.mjs";
+import { configIndex, modelLoaded, projection, selectedController, selectedControllerId, selectedDevice, selectedDeviceId } from "./selectors.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
@@ -54,6 +54,45 @@ const loadedState = ({ configuredOptions = [], controllers = [], devices = [], m
 
   return reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 };
+
+describe("modelLoaded", () => {
+
+  test("reads false on a fresh state and true once model:loaded has installed a catalog", () => {
+
+    assert.equal(modelLoaded(initialState()), false, "a store that has not loaded its model reads false");
+    assert.equal(modelLoaded(loadedState()), true, "model:loaded is the transition that flips it");
+  });
+
+  test("stays false when a connection error lands before the model - the status moved, the model never arrived", () => {
+
+    const failed = reducer(initialState(), {
+
+      guidance: "Check the Settings tab to verify the controller details are correct.",
+      headline: "Unable to retrieve the controller list.",
+      message: "the controller hook blew up",
+      type: "connection:error"
+    });
+
+    assert.equal(failed.status.kind, "connection-error", "pre-condition: the status has left loading");
+    assert.equal(modelLoaded(failed), false, "status is the page-state pointer, not the load signal - a pre-load failure is still an unloaded store");
+  });
+
+  test("reads true for a loaded catalog with no content at all - identity is the signal, not what the catalog contains", () => {
+
+    // A plugin that declares no categories and no options loads a catalog that is structurally identical to the placeholder yet is a different object. Anything
+    // reading content rather than identity would call this store unloaded, which is exactly wrong: its model arrived, and it is empty.
+    const emptyContentCatalog = {
+
+      ...buildCatalogIndex([], {}),
+
+      validators: { isController: () => false, validOption: () => true, validOptionCategory: () => true }
+    };
+
+    const state = reducer(initialState(), { catalog: emptyContentCatalog, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+    assert.equal(modelLoaded(state), true, "an options-less plugin is a legitimately loaded model");
+  });
+});
 
 describe("scope-extraction helpers", () => {
 

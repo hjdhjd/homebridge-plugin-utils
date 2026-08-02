@@ -6,6 +6,7 @@
 
 import { delay } from "../utils.mjs";
 import { effect } from "../store.mjs";
+import { modelLoaded } from "../selectors.mjs";
 
 /**
  * Debounce window for coalescing rapid mutations before writing to disk. 300ms sits below the instant-feel ceiling - a single click feels immediate from the user's
@@ -75,6 +76,15 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
     while((pending || flushing) && !signal.aborted) {
 
       pending = false;
+
+      // A store that has never loaded its model holds only placeholder state, so a write from it would replace the user's saved options with a placeholder-derived
+      // array. The drain refuses instead. Both start-sites - the subscription callback below and flush() - funnel through this loop, so the single refusal covers
+      // the write path whole. Its placement after the `pending` reset keeps the flag discipline honest: the dirty flag is consumed before the refusal and `flushing`
+      // is cleared by the drain's finally, so this path leaves no flag set behind it.
+      if(!modelLoaded(store.state)) {
+
+        return;
+      }
 
       // The debounce is the burst-coalescing wait, but on the flush path (navigating away) we skip it: the edit must reach disk before teardown, so we go straight to
       // the snapshot. In the normal path we restart the debounce on the latest mutation as before.

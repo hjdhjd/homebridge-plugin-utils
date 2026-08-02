@@ -101,6 +101,17 @@ describe("reducer - model:loaded", () => {
     assert.throws(() => reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-onlyy", type: "model:loaded" }),
       /unknown mode/, "an illegal mode literal throws");
   });
+
+  test("throws when the dispatch carries no catalog, naming the missing piece", () => {
+
+    // Catalog identity is what tells a loaded store from a fresh one, so a dispatch that installed a missing catalog would corrupt that signal while the page
+    // rendered as ready. A dispatch-site bug leaves the field absent or leaves it null, and each has to reach the same loud failure.
+    for(const catalog of [ undefined, null ]) {
+
+      assert.throws(() => reducer(initialState(), { catalog, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" }),
+        /carried no catalog/, "a model:loaded without a catalog throws and names the problem");
+    }
+  });
 });
 
 describe("reducer - controllers:loaded", () => {

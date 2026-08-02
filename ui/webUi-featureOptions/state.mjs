@@ -149,7 +149,11 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
 // works against it without null guards; selectors that iterate categories or options produce empty results, which matches the "nothing to render yet" semantics.
 // validOption and validOptionCategory default to permissive (return true) so any speculative iteration during loading does not accidentally hide a category
 // or option; isController defaults to false since it plays no role in visibility.
-const EMPTY_CATALOG = {
+//
+// Identity matters here as much as content: every store is born holding this exact object and {@link model:loaded} is the one transition that replaces it, so a
+// reference comparison against it answers "has this store loaded its model." The export exists for the `modelLoaded` selector in selectors.mjs, which asks that
+// question on behalf of the whole page; nothing else should reach for the placeholder itself.
+export const EMPTY_CATALOG = {
 
   ...buildCatalogIndex([], {}),
 
@@ -312,6 +316,13 @@ export const reducer = (state, action) => {
       if(![ "controller-based", "device-only", "global-only" ].includes(action.mode)) {
 
         throw new Error("FeatureOptionsState.reducer: model:loaded carried an unknown mode \"" + action.mode + "\".");
+      }
+
+      // Validate the catalog the same way, and for the same reason. Catalog identity is what tells a loaded store from a fresh one - see EMPTY_CATALOG above - so a
+      // dispatch that installed a missing catalog would leave that signal, and everything resting on it, silently wrong while the page looked ready.
+      if(!action.catalog || (typeof action.catalog !== "object")) {
+
+        throw new Error("FeatureOptionsState.reducer: model:loaded carried no catalog.");
       }
 
       // First load: catalog, configuredOptions, mode, controllers populated. The persistence anchor seeds from the just-loaded options (pre-mutation the loaded array

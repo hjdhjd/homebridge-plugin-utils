@@ -5,6 +5,7 @@
 "use strict";
 
 import { buildConfigIndex, expandOption, isDependencyMet, isValueOption, resolveScope } from "../featureOptions.js";
+import { EMPTY_CATALOG } from "./state.mjs";
 import { memoize } from "./store.mjs";
 
 /**
@@ -24,6 +25,22 @@ import { memoize } from "./store.mjs";
  *
  * @module
  */
+
+/**
+ * Report whether the store has loaded its model. Pure helper - one-line identity read, not memoized.
+ *
+ * The catalog leaves {@link EMPTY_CATALOG} in exactly one transition, `model:loaded`, so catalog identity answers the question for the store's whole life. Status
+ * cannot answer it from either end: its `connection-error` variant occurs on both sides of a load, and a bail that resolves the page without dispatching anything
+ * leaves it at `loading` for good. Consumers that need the page state - a loading placeholder, an error card - read `status`; consumers that need to know whether
+ * the model's data has arrived read this.
+ *
+ * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
+ * @returns {boolean} True once a model:loaded has installed a real catalog, false for the entire phase before it.
+ */
+export const modelLoaded = (state) => {
+
+  return state.catalog !== EMPTY_CATALOG;
+};
 
 /**
  * Extract the controller serial from the scope tag, or null when no controller is in context. Pure helper - one-line tag read, not memoized.

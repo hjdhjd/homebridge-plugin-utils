@@ -31,19 +31,24 @@ const PLATFORM = { name: "MyPlugin Platform", platform: "MyPlugin" };
 // Helper: build a store seeded with the canonical "ready" state and register the persist effect against a config session backed by a fake host. The fake host's
 // `updatePluginConfig` records every payload and lets each test choose to resolve immediately, defer, or reject; its `getPluginConfig` seeds the session with the
 // canonical platform entry, so the session's commit rebuilds the same `[{ ...PLATFORM, options }]` payload from the options delta the persist effect hands it. Tests
-// get an inspection surface for both the dispatched store events and the host calls. Async because opening the session reads the host config once.
-const setup = async ({ behavior = "resolve", configuredOptions = [] } = {}) => {
+// get an inspection surface for both the dispatched store events and the host calls. Async because opening the session reads the host config once. `loaded: false`
+// withholds the model:loaded dispatch, leaving the store in the placeholder state a page holds when its model never arrives - the input the model-load boundary
+// tests need, and the only thing that option changes about the rig.
+const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = true } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
 
-  store.dispatch({
+  if(loaded) {
 
-    catalog: CATALOG,
-    configuredOptions,
-    controllers: [],
-    mode: "device-only",
-    type: "model:loaded"
-  });
+    store.dispatch({
+
+      catalog: CATALOG,
+      configuredOptions,
+      controllers: [],
+      mode: "device-only",
+      type: "model:loaded"
+    });
+  }
 
   const updates = [];
   const events = [];
@@ -453,5 +458,44 @@ describe("registerPersistEffect - flush (navigate-away drain)", () => {
     await flush();
 
     assert.equal(updates.length, 1, "flush() after abort must not re-commit an already-persisted, now-clean edit");
+  });
+});
+
+describe("registerPersistEffect - model-load boundary", () => {
+
+  // The write path's floor: a store whose model never loaded holds placeholder state, and the options it would write describe nothing the user configured. These
+  // pin the refusal at the drain - the one point both start-sites pass through - across the page states an unloaded store can be sitting in when a write is asked for.
+
+  test("a store that never loaded its model writes nothing, even with a mutation dispatched and flushed", async () => {
+
+    const { flush, store, updates } = await setup({ loaded: false });
+
+    // A mutation against the placeholder state forks configuredOptions off the anchor's shared empty array, so the effect sees a dirty store and starts the drain.
+    // What that drain would commit is the placeholder's own emptiness, landing on disk as an erasure of whatever the user had saved.
+    store.dispatch({ type: "options:reset" });
+
+    await flush();
+
+    assert.equal(updates.length, 0, "an unloaded store must not reach the host");
+  });
+
+  test("the refusal holds once the status has left loading - a connection error before the model does not license a write", async () => {
+
+    const { flush, store, updates } = await setup({ loaded: false });
+
+    store.dispatch({
+
+      guidance: "Check the Settings tab to verify the controller details are correct.",
+      headline: "Unable to retrieve the controller list.",
+      message: "the controller hook blew up",
+      type: "connection:error"
+    });
+
+    store.dispatch({ type: "options:reset" });
+
+    await flush();
+
+    assert.equal(store.state.status.kind, "connection-error", "pre-condition: the status has left loading with no model ever having arrived");
+    assert.equal(updates.length, 0, "the refusal keys on the model, not on the status");
   });
 });

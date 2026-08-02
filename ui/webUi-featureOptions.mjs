@@ -9,6 +9,7 @@ import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { delay, errorMessage, toastError } from "./webUi-featureOptions/utils.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
+import { modelLoaded } from "./webUi-featureOptions/selectors.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
 import { mountHeaderView } from "./webUi-featureOptions/views/header.mjs";
@@ -322,6 +323,10 @@ export class webUiFeatureOptions {
    * config" - the persisted config is owned by the session; this view overlays the in-flight `configuredOptions` for any consumer that wants to see config-as-edited.
    * Returns an empty array before show() has supplied the session. Built fresh on each read - external consumers should not rely on reference equality across calls.
    *
+   * The primary entry's options track the lifecycle. While a session is held whose store has not loaded its model - the whole span between show()'s session
+   * assignment and its `model:loaded` dispatch, every bail that resolves the page short of that dispatch included - they are the session's saved options: there are
+   * no edits to overlay yet, and the saved set is what the persisted config holds. Once the model is loaded they are the store's live `configuredOptions`.
+   *
    * Preserved as a getter (not a public field) so the implementation is free to change without breaking callers; the observable shape is what plugins might consume.
    *
    * @returns {readonly Object[]} The edited plugin-config array.
@@ -333,9 +338,10 @@ export class webUiFeatureOptions {
       return [];
     }
 
-    // Before the store boots (or after a re-show that has not yet dispatched model:loaded) there are no live edits, so the buffer is just the persisted config with
-    // the primary entry's own saved options. Once the store is live, the in-flight configuredOptions override them.
-    const options = this.#store ? this.#store.state.configuredOptions : (this.#session.platform.options ?? []);
+    // The store's options are the overlay only once it has loaded its model. Ahead of that it carries the placeholder state, whose empty options array describes
+    // nothing the user configured and would misreport a configured plugin as an unconfigured one; the session's own saved options are what the config actually
+    // holds through that whole phase, and they are also what the pre-store read returns, so one expression serves both.
+    const options = (this.#store && modelLoaded(this.#store.state)) ? this.#store.state.configuredOptions : (this.#session.platform.options ?? []);
 
     return [ { ...this.#session.platform, options }, ...this.#session.entries.slice(1) ];
   }

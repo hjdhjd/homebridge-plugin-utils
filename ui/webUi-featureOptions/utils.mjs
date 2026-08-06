@@ -180,6 +180,33 @@ export function setCategoryExpanded(details, expanded) {
 }
 
 /**
+ * Swap one Bootstrap button class for another on a menu button, tolerating a button the page does not carry.
+ *
+ * The menu uses the Bootstrap (Material Design for Bootstrap) `btn-primary` / `btn-elegant` pair to encode active versus inactive tabs. Every menu paint in the
+ * webUI routes through here - the orchestrator's tab-switch handlers and the feature-options view's own menu-state pass alike - so what the class pair means lives
+ * in one place while the exact swap each tab needs stays at its call site.
+ *
+ * A plugin's markup declares which menu surfaces it offers, so a swap aimed at a button the markup omits is a deliberate no-op rather than a failure: a plugin whose
+ * configuration is expressed entirely in feature options carries no schema-form button, and a paint that would have styled it finds nothing to style.
+ *
+ * @param {string} id          - The element ID of the menu button to update.
+ * @param {string} removeClass - The class to remove.
+ * @param {string} addClass    - The class to add.
+ */
+export function swapMenuClasses(id, removeClass, addClass) {
+
+  const element = document.getElementById(id);
+
+  if(!element) {
+
+    return;
+  }
+
+  element.classList.remove(removeClass);
+  element.classList.add(addClass);
+}
+
+/**
  * Show a transient toast below the status bar (success styling by default; pass a variant for other alert types).
  *
  * The toast auto-dismisses after 3 seconds with a fade-out transition. Uses Bootstrap's alert component for consistent styling.

@@ -6,12 +6,13 @@
 
 import { BOOT_AWAIT_DEADLINE_SECONDS, webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 import { DeadlineExpiredError, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
+import { swapMenuClasses, toastError } from "./webUi-featureOptions/utils.mjs";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
-import { toastError } from "./webUi-featureOptions/utils.mjs";
 
 // The copy a launch that timed out surfaces. The session open is the page's first bridge call, before any store, view, or retry affordance exists, so the toast is the
-// only surface available - which is why it names the recovery the menu still offers rather than leaving the user staring at an empty page.
-const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the plugin configuration could not be read. Select Feature Options to try again.";
+// only surface available - and the recovery it names has to hold for every plugin whatever menu its markup carries, which reopening the panel does: opening the panel
+// is what runs the launch.
+const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the plugin configuration could not be read. Reopen the settings panel to try again.";
 
 /**
  * @typedef {Object} FirstRunContext
@@ -49,6 +50,10 @@ const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the pl
  * Owns the page-level menu state, the first-run flow, and the {@link webUiFeatureOptions} instance that renders the feature options page. The orchestrator is the
  * single entry point Homebridge invokes to render the configuration UI; everything else - feature option discovery, theming, sidebar navigation, search - lives in
  * the composed {@link webUiFeatureOptions} instance and its sub-components.
+ *
+ * The menu surfaces it drives are whichever ones the plugin's markup carries: `menuHome` enters the support view, `menuFeatureOptions` the feature-options view, and
+ * `menuSettings` the host's schema form. Each is bound and painted when the page carries it and skipped when it does not, so a plugin declares its menu by markup
+ * alone. Painting is shared rather than owned - the feature-options view paints its own active state through the same class-swap helper whenever it shows.
  */
 export class webUi {
 
@@ -382,9 +387,9 @@ export class webUi {
       await this.featureOptions.hide();
     } finally {
 
-      this.#toggleClasses("menuHome", "btn-elegant", "btn-primary");
-      this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
-      this.#toggleClasses("menuSettings", "btn-primary", "btn-elegant");
+      swapMenuClasses("menuHome", "btn-elegant", "btn-primary");
+      swapMenuClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
+      swapMenuClasses("menuSettings", "btn-primary", "btn-elegant");
 
       document.getElementById("pageSupport").style.display = "none";
       document.getElementById("pageFeatureOptions").style.display = "none";
@@ -417,9 +422,9 @@ export class webUi {
       await this.featureOptions.hide();
     } finally {
 
-      this.#toggleClasses("menuHome", "btn-primary", "btn-elegant");
-      this.#toggleClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
-      this.#toggleClasses("menuSettings", "btn-elegant", "btn-primary");
+      swapMenuClasses("menuHome", "btn-primary", "btn-elegant");
+      swapMenuClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
+      swapMenuClasses("menuSettings", "btn-elegant", "btn-primary");
 
       document.getElementById("pageSupport").style.display = "block";
       document.getElementById("pageFeatureOptions").style.display = "none";
@@ -475,9 +480,13 @@ export class webUi {
   /**
    * Bind the top-level menu click listeners exactly once for the webUI's lifetime.
    *
-   * The three menu buttons are page chrome that persists across every show() cycle, so their listeners belong to the whole page rather than to any one show()'s
-   * teardown. A one-shot guard keeps a repeated #launchWebUI from stacking a second handler on each button, which would fire every tab switch twice. Each arrow reads
-   * the current this.#session through its #show* method, so a single persistent listener always acts on the latest session even after a re-launch replaces it.
+   * The menu buttons are page chrome that persists across every show() cycle, so their listeners belong to the whole page rather than to any one show()'s teardown.
+   * A one-shot guard keeps a repeated #launchWebUI from stacking a second handler on each button, which would fire every tab switch twice. Each arrow reads the
+   * current this.#session through its #show* method, so a single persistent listener always acts on the latest session even after a re-launch replaces it.
+   *
+   * Which buttons exist is the plugin's declaration rather than this framework's: the markup carries whatever menu surfaces the plugin offers, and every one the page
+   * carries is bound here. A button the markup omits offers no entry to its view, which is the whole of what its absence means, so each bind steps over an id the
+   * page does not carry rather than treating it as a broken page.
    *
    * The epoch signal is what bounds them. The buttons themselves outlive any single module copy - they are elements of the reused frame, not of the copy that bound
    * them - so a copy that is superseded and whose handlers stayed attached would answer every click alongside the successor's, running each tab switch twice against
@@ -503,9 +512,9 @@ export class webUi {
 
     const signal = this.#epochSignal;
 
-    document.getElementById("menuHome").addEventListener("click", () => this.#showSupport(), { signal });
-    document.getElementById("menuFeatureOptions").addEventListener("click", () => this.#showFeatureOptions(), { signal });
-    document.getElementById("menuSettings").addEventListener("click", () => this.#showSettings(), { signal });
+    document.getElementById("menuHome")?.addEventListener("click", () => this.#showSupport(), { signal });
+    document.getElementById("menuFeatureOptions")?.addEventListener("click", () => this.#showFeatureOptions(), { signal });
+    document.getElementById("menuSettings")?.addEventListener("click", () => this.#showSettings(), { signal });
   }
 
   /**
@@ -524,24 +533,5 @@ export class webUi {
   async #processHandler(handler, context) {
 
     return Boolean((typeof handler === "function") ? await handler(context) : handler);
-  }
-
-  /**
-   * Swap one Bootstrap button class for another on a DOM element.
-   *
-   * The menu uses the Bootstrap (Material Design for Bootstrap) `btn-primary` / `btn-elegant` pair to encode active vs inactive tabs. Tab-switch handlers call this
-   * helper once per menu button, so the exact class swap each tab needs lives at the call site rather than embedded in this helper.
-   *
-   * @param {string} id          - The element ID to update.
-   * @param {string} removeClass - The class to remove.
-   * @param {string} addClass    - The class to add.
-   * @private
-   */
-  #toggleClasses(id, removeClass, addClass) {
-
-    const element = document.getElementById(id);
-
-    element.classList.remove(removeClass);
-    element.classList.add(addClass);
   }
 }

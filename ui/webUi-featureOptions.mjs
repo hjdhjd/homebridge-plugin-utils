@@ -7,7 +7,7 @@
 import { DeadlineExpiredError, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
-import { delay, errorMessage, toastError } from "./webUi-featureOptions/utils.mjs";
+import { delay, errorMessage, swapMenuClasses, toastError } from "./webUi-featureOptions/utils.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
 import { modelLoaded } from "./webUi-featureOptions/selectors.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
@@ -1077,15 +1077,7 @@ const updateMenuState = () => {
 
   for(const { id, primary } of menuStates) {
 
-    const element = document.getElementById(id);
-
-    if(!element) {
-
-      continue;
-    }
-
-    element.classList.remove(primary ? "btn-elegant" : "btn-primary");
-    element.classList.add(primary ? "btn-primary" : "btn-elegant");
+    swapMenuClasses(id, primary ? "btn-elegant" : "btn-primary", primary ? "btn-primary" : "btn-elegant");
   }
 };
 

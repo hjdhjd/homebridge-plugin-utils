@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ui/webUi.test.mjs: Unit tests for the webUi orchestrator - constructor wiring, show() lifecycle, the two routing branches (feature-options vs first-run), the
- * first-run click flow, menu listeners, the #processHandler function-vs-truthy normalization, and the #toggleClasses Bootstrap class swap. The orchestrator's
+ * first-run click flow, menu listeners over whichever buttons the page carries, and the #processHandler function-vs-truthy normalization. The orchestrator's
  * inner webUiFeatureOptions instance is constructed against the real implementation so the constructor's DOM-binding contract is exercised end-to-end, but the
  * inner instance's `show()` and `hide()` methods are stubbed per-test so the orchestrator's call ordering is verified without re-exercising the entire feature-
  * options rendering pipeline (which has its own dedicated suite in `webUi-featureOptions.test.mjs`).
@@ -475,6 +475,70 @@ describe("webUi.show - menu wiring", () => {
     assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("btn-primary"), true, "inactive feature-options tab must carry btn-primary");
     assert.equal(harness.skeleton.menuSettings.classList.contains("btn-primary"), true, "inactive settings tab must carry btn-primary");
   });
+
+  test("a page whose markup omits a menu button launches, switches its remaining views, and paints around the gap", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false }
+    });
+
+    /* The menu shape a fully-consolidated plugin ships: the schema-form button is simply not in the markup. Removing the ELEMENT (rather than the handle's key)
+     * after the skeleton is built and before show() runs is what puts the launch in front of it, since the binds happen inside the launch rather than in the
+     * constructor.
+     *
+     * The first two assertions are the ones that tell a page that tolerates the gap from a page that merely survives it. An unconditional bind throws on the absent
+     * button BEFORE the launch routes to the initial view, and show()'s catch turns that throw into a toast rather than a rethrow - so a launch that leaves the
+     * feature-options view unshown and an error toast behind is the failure this pins, and clicking afterwards would not reveal it (the menu-button handler re-runs
+     * the launch on its own when no session was established).
+     */
+    harness.skeleton.menuSettings.remove();
+
+    await harness.ui.show();
+
+    assert.deepEqual(harness.featureOptionsCalls, ["show"], "the launch must route to the feature-options view even though a menu button is absent");
+    assert.deepEqual(harness.fake.observed.toasts, [], "a launch against a page missing a menu button must surface no failure toast");
+
+    harness.skeleton.menuHome.click();
+    await flushPending();
+
+    // The buttons the markup does carry still switch views, and the class swap each switch performs steps over the absent button instead of dereferencing it.
+    assert.equal(harness.skeleton.pageSupport.style.display, "block", "the support view must still open from the button the markup carries");
+    assert.equal(harness.skeleton.menuHome.classList.contains("btn-elegant"), true, "the active home tab must still be painted");
+
+    harness.skeleton.menuFeatureOptions.click();
+    await flushPending();
+
+    assert.deepEqual(harness.featureOptionsCalls, [ "show", "hide", "show" ], "the feature-options button must still re-enter its view");
+  });
+});
+
+describe("webUi.show - the feature-options view paints the menu whenever it shows", () => {
+
+  test("a real feature-options show() leaves its own tab active and the sibling tabs inactive", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false },
+      requestResponses: new Map([[ "/getOptions", {
+
+        categories: [{ description: "Motion Options", name: "Motion" }],
+        options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+      } ]]),
+      unstubbed: true
+    });
+
+    // The real pipeline, not the stub: the menu paint belongs to the feature-options view rather than to the orchestrator's tab-switch handlers, so it is only
+    // observable when that view actually shows. Active = elegant is the project's local convention, the inverse of vanilla Bootstrap's, which is why the inactive
+    // halves are pinned alongside the active one.
+    await harness.ui.show();
+
+    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("btn-elegant"), true, "the feature-options tab is the active one while its view shows");
+    assert.equal(harness.skeleton.menuHome.classList.contains("btn-primary"), true, "the home tab is inactive while the feature-options view shows");
+    assert.equal(harness.skeleton.menuSettings.classList.contains("btn-primary"), true, "the settings tab is inactive while the feature-options view shows");
+  });
 });
 
 describe("webUi.show - menu listener idempotence across repeated launches", () => {
@@ -908,7 +972,7 @@ describe("webUi - the launch-time session open is deadline-bounded", () => {
 
     assert.deepEqual(harness.fake.observed.toasts.at(-1), {
 
-      message: "The Homebridge server did not respond, so the plugin configuration could not be read. Select Feature Options to try again.",
+      message: "The Homebridge server did not respond, so the plugin configuration could not be read. Reopen the settings panel to try again.",
       title: "Error",
       variant: "error"
     }, "the launch expiry toasts copy that names the recovery rather than the raw deadline message");

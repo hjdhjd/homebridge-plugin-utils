@@ -8,11 +8,13 @@
  * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
  */
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
-import { MqttClient, logGetterPublishOutcome, routeMqttBrokerError } from "./mqttClient.ts";
+import { MqttClient, logGetterPublishOutcome, mqttFeatureOptions, routeMqttBrokerError } from "./mqttClient.ts";
 import { awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { capturingLog, silentLog } from "./testing.helpers.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing.helpers.ts";
+import type { FeatureOptionEntry } from "./featureOptions.ts";
+import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
@@ -1255,5 +1257,133 @@ describe("MqttClient - connect / close edge flag", () => {
 
     assert.ok(fullMessage.includes("REDACTED"), "the password segment of the broker URL must be redacted in the log output");
     assert.ok(!fullMessage.includes("secretpass"), "the raw password must never appear in any log line");
+  });
+});
+
+describe("mqttFeatureOptions - canonical MQTT feature-option group", () => {
+
+  test("declares the MQTT category and exactly two entries carrying the catalog's pinned literals", () => {
+
+    const { category, options } = mqttFeatureOptions({ defaultTopic: "homebridge" });
+
+    assert.deepEqual(category, { description: "MQTT", name: "Mqtt" });
+    assert.equal(options.length, 2, "the group declares exactly two entries");
+
+    const [ url, topic ] = options;
+
+    assert.ok(url, "the group must declare a Url entry");
+    assert.ok(topic, "the group must declare a Topic entry");
+
+    // The descriptions are owner-visible catalog surface and the defaults are the design: Url disabled so an unconfigured broker resolves to null, Topic enabled so
+    // an unconfigured topic resolves to the registered default. A swapped description or a flipped default fails here.
+    assert.equal(url.default, false);
+    assert.equal(url.defaultValue, "");
+    assert.equal(url.description, "URL of the MQTT broker to connect to (e.g. mqtt://1.2.3.4).");
+    assert.equal(url.inputSize, 30);
+    assert.equal(url.name, "Url");
+
+    assert.equal(topic.default, true);
+    assert.equal(topic.defaultValue, "homebridge");
+    assert.equal(topic.description, "Topic prefix for published and subscribed MQTT messages.");
+    assert.equal(topic.inputSize, 20);
+    assert.equal(topic.name, "Topic");
+  });
+
+  test("threads the caller's default topic and scope declaration onto both entries", () => {
+
+    const first = mqttFeatureOptions({ defaultTopic: "hydrawise" });
+    const second = mqttFeatureOptions({ defaultTopic: "ratgdo" });
+    const scoped = mqttFeatureOptions({ defaultTopic: "protect", scopes: ["controller"] });
+
+    const [ firstUrl, firstTopic ] = first.options;
+    const [ secondUrl, secondTopic ] = second.options;
+    const [ scopedUrl, scopedTopic ] = scoped.options;
+
+    assert.ok(firstUrl);
+    assert.ok(firstTopic);
+    assert.ok(secondUrl);
+    assert.ok(secondTopic);
+    assert.ok(scopedUrl);
+    assert.ok(scopedTopic);
+
+    // Two calls with different topics register different defaults - a topic hardcoded in the factory would make these identical - and the topic lands on the Topic
+    // entry alone rather than bleeding into the broker URL's own empty default.
+    assert.equal(firstTopic.defaultValue, "hydrawise");
+    assert.equal(secondTopic.defaultValue, "ratgdo");
+    assert.equal(secondUrl.defaultValue, "");
+
+    // The scope declaration lands on every entry, asserted entry by entry rather than swept: a factory threading it to only one of the two would still satisfy a
+    // some-style check across the array.
+    assert.deepEqual(scopedUrl.scopes, ["controller"]);
+    assert.deepEqual(scopedTopic.scopes, ["controller"]);
+    assert.deepEqual(firstUrl.scopes, ["global"]);
+    assert.deepEqual(firstTopic.scopes, ["global"]);
+  });
+
+  test("allocates a fresh object graph per call and never embeds the caller's scopes array", () => {
+
+    const callerScopes: NonNullable<FeatureOptionEntry["scopes"]> = ["controller"];
+
+    const a = mqttFeatureOptions({ defaultTopic: "alpha", scopes: callerScopes });
+    const b = mqttFeatureOptions({ defaultTopic: "beta", scopes: callerScopes });
+
+    const [ aUrl, aTopic ] = a.options;
+    const [ bUrl, bTopic ] = b.options;
+
+    assert.ok(aUrl);
+    assert.ok(aTopic);
+    assert.ok(bUrl);
+    assert.ok(bTopic);
+
+    // Distinctness at every level between two calls. The scopes tuple is readonly-typed, so a mutation probe on it would not compile; reference inequality is both
+    // the compiling form and the stronger statement, since it rules out sharing rather than sampling one consequence of it.
+    assert.notStrictEqual(a.category, b.category);
+    assert.notStrictEqual(a.options, b.options);
+    assert.notStrictEqual(aUrl, bUrl);
+    assert.notStrictEqual(aTopic, bTopic);
+    assert.notStrictEqual(aUrl.scopes, bUrl.scopes);
+    assert.notStrictEqual(aTopic.scopes, bTopic.scopes);
+
+    // Within a single call the two entries hold their own tuples, and neither is the array the caller passed in - so a caller that later mutates its own array
+    // cannot reach into a catalog it has already handed over.
+    assert.notStrictEqual(aUrl.scopes, aTopic.scopes);
+    assert.notStrictEqual(aUrl.scopes, callerScopes);
+    assert.notStrictEqual(aTopic.scopes, callerScopes);
+
+    // The default-scopes path allocates per call as well, rather than handing every caller one shared module-level tuple.
+    const c = mqttFeatureOptions({ defaultTopic: "gamma" });
+    const d = mqttFeatureOptions({ defaultTopic: "delta" });
+
+    const [ cUrl, cTopic ] = c.options;
+    const [ dUrl, dTopic ] = d.options;
+
+    assert.ok(cUrl);
+    assert.ok(cTopic);
+    assert.ok(dUrl);
+    assert.ok(dTopic);
+
+    assert.notStrictEqual(cUrl.scopes, cTopic.scopes);
+    assert.notStrictEqual(cUrl.scopes, dUrl.scopes);
+    assert.notStrictEqual(cTopic.scopes, dTopic.scopes);
+
+    // Mutation smoke on the mutable string fields. A category or entry hoisted to module scope - the category is the tempting one, since it depends on no
+    // configuration - would let one call's edit surface in another call's catalog.
+    a.category.description = "mutated";
+    aUrl.description = "mutated";
+
+    assert.equal(b.category.description, "MQTT");
+    assert.equal(bUrl.description, "URL of the MQTT broker to connect to (e.g. mqtt://1.2.3.4).");
+  });
+
+  test("an unconfigured catalog surfaces the registered topic and reports no broker URL", () => {
+
+    const { category, options } = mqttFeatureOptions({ defaultTopic: "hydrawise" });
+    const featureOptions = new FeatureOptions([category], { [category.name]: options });
+
+    // Topic defaults enabled, so with nothing configured anywhere `value()` falls through to the default registered by the catalog - the single-source-of-truth
+    // point of the group, and the reason a consuming plugin carries no topic fallback of its own. Url defaults disabled, so the same unconfigured state resolves to
+    // null, which is the unambiguous "MQTT is off" answer. Flipping either default reds exactly one of these two assertions.
+    assert.equal(featureOptions.value("Mqtt.Topic"), "hydrawise");
+    assert.equal(featureOptions.value("Mqtt.Url"), null);
   });
 });

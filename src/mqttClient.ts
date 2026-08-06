@@ -20,6 +20,7 @@
  *
  * @module
  */
+import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
 import type { HomebridgePluginLogging } from "./util.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
@@ -76,6 +77,76 @@ export type MqttGetHandler = () => string;
  * @category Utilities
  */
 export type MqttSetHandler = (value: string, rawValue: string, signal: AbortSignal) => Promise<void> | void;
+
+/**
+ * Configuration accepted by {@link mqttFeatureOptions}. Carries the two facts that vary per plugin: the topic prefix the plugin publishes under by default, and the
+ * scope levels the entries are configurable at.
+ *
+ * @property defaultTopic - The topic prefix used when the user has not configured one. Registered as the `Mqtt.Topic` entry's declared default value, so an
+ *                          unconfigured topic resolves to it through `FeatureOptions.value()` and the plugin needs no fallback of its own.
+ * @property scopes       - Optional. The levels both entries may be configured at, named in the {@link FeatureOptionEntry.scopes} vocabulary. Defaults to
+ *                          `["global"]`, which suits a plugin that talks to a single account or device; a plugin whose controllers each carry their own broker
+ *                          passes `["controller"]`.
+ *
+ * @category Feature Options
+ */
+export interface MqttFeatureOptionsConfig {
+
+  defaultTopic: string;
+  scopes?: NonNullable<FeatureOptionEntry["scopes"]>;
+}
+
+/**
+ * Build the canonical MQTT feature-option group - a category and its two entries - for a plugin to compose into its own feature-option catalog. The library that
+ * ships the MQTT mechanism ships its configuration surface alongside it, so every plugin exposing an MQTT broker offers the same two options under the same names,
+ * with the same descriptions, resolved by the same engine.
+ *
+ * The two entries carry deliberately opposite defaults, because `FeatureOptions.value()` answers differently for each. `Mqtt.Url` defaults to disabled, so an
+ * unconfigured broker resolves to `null` - an unambiguous "MQTT is off" a consumer can branch on without inspecting the string. `Mqtt.Topic` defaults to enabled, so
+ * an unconfigured topic resolves to the `defaultTopic` registered here rather than to `null`, which is what lets the plugin's canonical topic live in the catalog
+ * alone.
+ *
+ * @param config - The per-plugin facts the group needs. See {@link MqttFeatureOptionsConfig}.
+ *
+ * @returns A category entry and the two option entries belonging to it. Every object is freshly allocated per call, so composing plugins never share catalog state.
+ *
+ * @example
+ *
+ * ```ts
+ * import { mqttFeatureOptions } from "homebridge-plugin-utils";
+ *
+ * const mqtt = mqttFeatureOptions({ defaultTopic: "hydrawise" });
+ *
+ * export const featureOptionCategories = [ { description: "Device", name: "Device" }, mqtt.category ];
+ *
+ * export const featureOptions: Record<string, FeatureOptionEntry[]> = {
+ *
+ *   Device: [ { default: true, description: "Make this device available in HomeKit.", name: "" } ],
+ *   [mqtt.category.name]: mqtt.options
+ * };
+ * ```
+ *
+ * @category Feature Options
+ */
+export function mqttFeatureOptions({ defaultTopic, scopes = ["global"] }: MqttFeatureOptionsConfig): { category: FeatureCategoryEntry; options: FeatureOptionEntry[] } {
+
+  /* Everything below is allocated on this call - the category, the options array, each entry, and each entry's scope tuple - and the caller's `scopes` array is
+   * copied rather than embedded. A composing plugin owns its catalog outright: neither a second plugin composing the group nor the caller mutating the array it
+   * passed in can reach into a catalog already handed out. Hoisting any piece to module scope would share it silently, and the category is the tempting one to
+   * hoist precisely because it depends on no configuration at all.
+   */
+  return {
+
+    category: { description: "MQTT", name: "Mqtt" },
+    options: [
+
+      { default: false, defaultValue: "", description: "URL of the MQTT broker to connect to (e.g. mqtt://1.2.3.4).", inputSize: 30, name: "Url",
+        scopes: [...scopes] },
+      { default: true, defaultValue: defaultTopic, description: "Topic prefix for published and subscribed MQTT messages.", inputSize: 20, name: "Topic",
+        scopes: [...scopes] }
+    ]
+  };
+}
 
 /**
  * Static configuration for an {@link MqttClient}. Captures the broker connection parameters and the topic-prefix convention the client applies to every topic it

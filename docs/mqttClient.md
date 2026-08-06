@@ -16,9 +16,10 @@ Non-abort transient disconnects continue to trigger MQTT.js's own auto-reconnect
 further notice." Calling `abort()` (or letting a parent signal fire) ends the connection permanently via `mqtt.end(true)`, rejects any pending publishes with the
 signal's reason, clears all subscription state, and makes every subsequent call a no-op.
 
-Construction fails loudly on invalid broker URLs: the constructor throws with the underlying mqtt.js error attached as `cause`, so a misconfigured plugin cannot
-silently sit in a zombie state where every call either pretends to succeed or throws an unrelated abort error. Callers who want graceful degradation wrap the
-`new MqttClient(...)` call in their own try/catch.
+The module offers two construction postures. Direct construction fails loudly on an invalid broker URL: the constructor throws with the underlying mqtt.js error
+attached as `cause`, so a misconfigured plugin cannot silently sit in a zombie state where every call either pretends to succeed or throws an unrelated abort
+error. [createMqttClient](#createmqttclient) is the graceful path, answering `null` for an unconfigured broker and for a construction failure alike, so a mistyped MQTT entry
+degrades to "MQTT is off" instead of blocking plugin load.
 
 ## Utilities
 
@@ -373,6 +374,28 @@ isolation against synthetic outcomes - the same architectural pattern [routeMqtt
 
 ***
 
+### MqttClientConfigCandidate
+
+```ts
+type MqttClientConfigCandidate = Omit<MqttConfig, "brokerUrl" | "topicPrefix"> & {
+  brokerUrl?: Nullable<string>;
+  topicPrefix?: Nullable<string>;
+};
+```
+
+The configuration [createMqttClient](#createmqttclient) accepts: an [MqttConfig](#mqttconfig) whose broker URL and topic prefix may be absent or `null`, exactly as the feature-option
+engine reports them. `FeatureOptions.value()` answers `null` for an option that is unconfigured or explicitly disabled, so a caller hands both resolved values
+straight through and narrows nothing at the call site.
+
+#### Type Declaration
+
+| Name | Type |
+| ------ | ------ |
+| `brokerUrl?` | [`Nullable`](util.md#nullable)\<`string`\> |
+| `topicPrefix?` | [`Nullable`](util.md#nullable)\<`string`\> |
+
+***
+
 ### MqttGetHandler
 
 ```ts
@@ -454,6 +477,53 @@ Receives three arguments:
 
 ***
 
+### createMqttClient()
+
+```ts
+function createMqttClient(config, init?): Nullable<MqttClient>;
+```
+
+Construct an [MqttClient](#mqttclient) when the configuration supports one, and answer `null` when it does not. This is the graceful counterpart to direct construction:
+where `new MqttClient(...)` throws on an unusable broker URL, this degrades, because a mistyped MQTT entry must never keep a plugin from loading.
+
+`null` is the entire construction-failure vocabulary, and it covers two situations the caller does not have to tell apart:
+
+- **MQTT is off.** The broker URL or the topic prefix is absent, `null`, or empty - the ordinary state of a plugin whose user never configured MQTT, or who
+  switched it back off. Nothing is logged, because a feature being off is not an event.
+- **Construction failed.** The broker URL is present but unusable. The failure is logged once at error level, with the broker URL excised from the inspected
+  error chain through [redactKnownBrokerUrl](#redactknownbrokerurl), since that chain embeds the configured URL verbatim.
+
+The guard covers construction and nothing beyond it. Signal semantics stay the caller's, identical to direct construction: a pre-aborted `init.signal` yields a
+constructed client that has already ended, not a `null`.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `config` | [`MqttClientConfigCandidate`](#mqttclientconfigcandidate) | Broker / topic configuration, both resolved option values passed through as-is. See [MqttClientConfigCandidate](#mqttclientconfigcandidate). |
+| `init?` | [`MqttClientInit`](#mqttclientinit) | Optional init options, forwarded to the constructor unchanged. See [MqttClientInit](#mqttclientinit). |
+
+#### Returns
+
+[`Nullable`](util.md#nullable)\<[`MqttClient`](#mqttclient)\>
+
+A live [MqttClient](#mqttclient), or `null` when MQTT is unconfigured or construction failed. Never throws.
+
+#### Example
+
+```ts
+import { createMqttClient } from "homebridge-plugin-utils";
+
+const mqtt = createMqttClient({
+
+  brokerUrl: featureOptions.value("Mqtt.Url"),
+  log,
+  topicPrefix: featureOptions.value("Mqtt.Topic")
+}, { signal: platform.signal });
+```
+
+***
+
 ### logGetterPublishOutcome()
 
 ```ts
@@ -479,6 +549,66 @@ require contrived socket-level setup that is not worth the test-architecture com
 #### Returns
 
 `void`
+
+***
+
+### redactBrokerUrl()
+
+```ts
+function redactBrokerUrl(brokerUrl): string;
+```
+
+Redact the credentials out of a broker URL so it is safe to put in a log line. The platform's own `URL` parser is the single source of URL-grammar truth here:
+what counts as a password is whatever the parser says it is, rather than whatever a hand-authored expression can be talked into matching.
+
+Three outcomes, in the order the function decides them:
+
+- A URL that parses and carries a password comes back with the password replaced by `REDACTED`. Re-serializing through `href` canonicalizes the WHATWG-special
+  schemes - `ws` and `wss` drop a default port, gain a trailing slash on an empty path, and lowercase their host - so the log shows the canonical redacted form
+  for those two schemes. The mqtt-family schemes are non-special and round-trip byte for byte.
+- A URL that parses and carries no password comes back verbatim, never re-serialized at all. This is the common case, and it pays for nothing beyond the parse.
+- A string the parser rejects comes back as a fixed placeholder. Unparseable means unclassifiable...a string we cannot take apart is one whose credential we
+  cannot locate, and a placeholder cannot leak what it does not carry.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `brokerUrl` | `string` | The broker URL as configured. |
+
+#### Returns
+
+`string`
+
+The URL with any password excised, the input verbatim when there is no password to excise, or a placeholder when the input does not parse.
+
+***
+
+### redactKnownBrokerUrl()
+
+```ts
+function redactKnownBrokerUrl(text, brokerUrl): string;
+```
+
+Excise every occurrence of a known broker URL from arbitrary text, replacing each with that URL's redacted form. An inspected error chain embeds the configured
+URL verbatim, so excising the exact string we already hold is complete for that leak - there is nothing to discover in the text, only something to remove from it.
+
+Split-and-join rather than a string-valued `replaceAll`, because JavaScript interprets `$`-sequences inside a string replacement: a URL whose username contains
+`$&` would make the replacement re-inject the original credentialed URL, the precise opposite of the intent. Splitting on the literal and joining with the
+redacted form gives the substring no interpretation at all, and it covers however many occurrences appear.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `text` | `string` | The text to scrub, typically an inspected error chain. |
+| `brokerUrl` | `string` | The broker URL to excise. Its redacted form is what replaces each occurrence. |
+
+#### Returns
+
+`string`
+
+The text with every occurrence of `brokerUrl` replaced by its redacted form. Text that never mentions the URL comes back unchanged.
 
 ***
 
@@ -517,3 +647,75 @@ The routing paths mirror the transport-error categories HBPU distinguishes:
 [`MqttBrokerErrorResult`](#mqttbrokererrorresult)
 
 A [MqttBrokerErrorResult](#mqttbrokererrorresult) indicating whether the wiring layer should end the transport.
+
+## Feature Options
+
+### MqttFeatureOptionsConfig
+
+Configuration accepted by [mqttFeatureOptions](#mqttfeatureoptions). Carries the two facts that vary per plugin: the topic prefix the plugin publishes under by default, and the
+scope levels the entries are configurable at.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="defaulttopic"></a> `defaultTopic` | `string` | The topic prefix used when the user has not configured one. Registered as the `Mqtt.Topic` entry's declared default value, so an unconfigured topic resolves to it through `FeatureOptions.value()` and the plugin needs no fallback of its own. |
+| <a id="scopes"></a> `scopes?` | readonly \[[`FeatureOptionScope`](featureOptions.md#featureoptionscope), [`FeatureOptionScope`](featureOptions.md#featureoptionscope)\] | Optional. The levels both entries may be configured at, named in the [FeatureOptionEntry.scopes](featureOptions.md#scopes-1) vocabulary. Defaults to `["global"]`, which suits a plugin that talks to a single account or device; a plugin whose controllers each carry their own broker passes `["controller"]`. |
+
+***
+
+### mqttFeatureOptions()
+
+```ts
+function mqttFeatureOptions(config): {
+  category: FeatureCategoryEntry;
+  options: FeatureOptionEntry<unknown>[];
+};
+```
+
+Build the canonical MQTT feature-option group - a category and its two entries - for a plugin to compose into its own feature-option catalog. The library that
+ships the MQTT mechanism ships its configuration surface alongside it, so every plugin exposing an MQTT broker offers the same two options under the same names,
+with the same descriptions, resolved by the same engine.
+
+The two entries carry deliberately opposite defaults, because `FeatureOptions.value()` answers differently for each. `Mqtt.Url` defaults to disabled, so an
+unconfigured broker resolves to `null` - an unambiguous "MQTT is off" a consumer can branch on without inspecting the string. `Mqtt.Topic` defaults to enabled, so
+an unconfigured topic resolves to the `defaultTopic` registered here rather than to `null`, which is what lets the plugin's canonical topic live in the catalog
+alone.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `config` | [`MqttFeatureOptionsConfig`](#mqttfeatureoptionsconfig) | The per-plugin facts the group needs. See [MqttFeatureOptionsConfig](#mqttfeatureoptionsconfig). |
+
+#### Returns
+
+```ts
+{
+  category: FeatureCategoryEntry;
+  options: FeatureOptionEntry<unknown>[];
+}
+```
+
+A category entry and the two option entries belonging to it. Every object is freshly allocated per call, so composing plugins never share catalog state.
+
+| Name | Type |
+| ------ | ------ |
+| `category` | [`FeatureCategoryEntry`](featureOptions.md#featurecategoryentry) |
+| `options` | [`FeatureOptionEntry`](featureOptions.md#featureoptionentry)\<`unknown`\>[] |
+
+#### Example
+
+```ts
+import { mqttFeatureOptions } from "homebridge-plugin-utils";
+
+const mqtt = mqttFeatureOptions({ defaultTopic: "hydrawise" });
+
+export const featureOptionCategories = [ { description: "Device", name: "Device" }, mqtt.category ];
+
+export const featureOptions: Record<string, FeatureOptionEntry[]> = {
+
+  Device: [ { default: true, description: "Make this device available in HomeKit.", name: "" } ],
+  [mqtt.category.name]: mqtt.options
+};
+```

@@ -14,15 +14,16 @@
  * further notice." Calling `abort()` (or letting a parent signal fire) ends the connection permanently via `mqtt.end(true)`, rejects any pending publishes with the
  * signal's reason, clears all subscription state, and makes every subsequent call a no-op.
  *
- * Construction fails loudly on invalid broker URLs: the constructor throws with the underlying mqtt.js error attached as `cause`, so a misconfigured plugin cannot
- * silently sit in a zombie state where every call either pretends to succeed or throws an unrelated abort error. Callers who want graceful degradation wrap the
- * `new MqttClient(...)` call in their own try/catch.
+ * The module offers two construction postures. Direct construction fails loudly on an invalid broker URL: the constructor throws with the underlying mqtt.js error
+ * attached as `cause`, so a misconfigured plugin cannot silently sit in a zombie state where every call either pretends to succeed or throws an unrelated abort
+ * error. {@link createMqttClient} is the graceful path, answering `null` for an unconfigured broker and for a construction failure alike, so a mistyped MQTT entry
+ * degrades to "MQTT is off" instead of blocking plugin load.
  *
  * @module
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
-import type { HomebridgePluginLogging } from "./util.ts";
+import type { HomebridgePluginLogging, Nullable } from "./util.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
 import util from "node:util";
@@ -283,6 +284,67 @@ export function logGetterPublishOutcome(log: HomebridgePluginLogging, type: stri
   }
 
   log.error("MQTT: failed to publish %s status: %s.", type, formatErrorMessage(outcome.error));
+}
+
+/**
+ * Redact the credentials out of a broker URL so it is safe to put in a log line. The platform's own `URL` parser is the single source of URL-grammar truth here:
+ * what counts as a password is whatever the parser says it is, rather than whatever a hand-authored expression can be talked into matching.
+ *
+ * Three outcomes, in the order the function decides them:
+ *
+ * - A URL that parses and carries a password comes back with the password replaced by `REDACTED`. Re-serializing through `href` canonicalizes the WHATWG-special
+ *   schemes - `ws` and `wss` drop a default port, gain a trailing slash on an empty path, and lowercase their host - so the log shows the canonical redacted form
+ *   for those two schemes. The mqtt-family schemes are non-special and round-trip byte for byte.
+ * - A URL that parses and carries no password comes back verbatim, never re-serialized at all. This is the common case, and it pays for nothing beyond the parse.
+ * - A string the parser rejects comes back as a fixed placeholder. Unparseable means unclassifiable...a string we cannot take apart is one whose credential we
+ *   cannot locate, and a placeholder cannot leak what it does not carry.
+ *
+ * @param brokerUrl - The broker URL as configured.
+ *
+ * @returns The URL with any password excised, the input verbatim when there is no password to excise, or a placeholder when the input does not parse.
+ *
+ * @category Utilities
+ */
+export function redactBrokerUrl(brokerUrl: string): string {
+
+  let url: URL;
+
+  try {
+
+    url = new URL(brokerUrl);
+  } catch {
+
+    return "<broker URL redacted>";
+  }
+
+  if(!url.password.length) {
+
+    return brokerUrl;
+  }
+
+  url.password = "REDACTED";
+
+  return url.href;
+}
+
+/**
+ * Excise every occurrence of a known broker URL from arbitrary text, replacing each with that URL's redacted form. An inspected error chain embeds the configured
+ * URL verbatim, so excising the exact string we already hold is complete for that leak - there is nothing to discover in the text, only something to remove from it.
+ *
+ * Split-and-join rather than a string-valued `replaceAll`, because JavaScript interprets `$`-sequences inside a string replacement: a URL whose username contains
+ * `$&` would make the replacement re-inject the original credentialed URL, the precise opposite of the intent. Splitting on the literal and joining with the
+ * redacted form gives the substring no interpretation at all, and it covers however many occurrences appear.
+ *
+ * @param text      - The text to scrub, typically an inspected error chain.
+ * @param brokerUrl - The broker URL to excise. Its redacted form is what replaces each occurrence.
+ *
+ * @returns The text with every occurrence of `brokerUrl` replaced by its redacted form. Text that never mentions the URL comes back unchanged.
+ *
+ * @category Utilities
+ */
+export function redactKnownBrokerUrl(text: string, brokerUrl: string): string {
+
+  return text.split(brokerUrl).join(redactBrokerUrl(brokerUrl));
 }
 
 /**
@@ -657,9 +719,9 @@ export class MqttClient implements AsyncDisposable {
 
       this.#isConnected = true;
 
-      // The replace strips the password from the broker URL's `user:password@host` userinfo before logging, so credentials never reach the log stream. The capture
-      // groups preserve the scheme-plus-username prefix and the `@host` suffix while swapping only the password segment for REDACTED.
-      this.#log.info("MQTT Broker: Connected to %s (topic: %s).", this.#brokerUrl.replace(/^(.*:\/\/.*:)(.*)(@.*)$/, "$1REDACTED$3"), this.#topicPrefix);
+      // Every surface in this module that prints the broker URL routes through the shared redactor, so a configured credential never reaches the log stream. Keeping
+      // that rule in one exported function - rather than at each call site - is what lets the connected log and the construction-failure log stay in agreement.
+      this.#log.info("MQTT Broker: Connected to %s (topic: %s).", redactBrokerUrl(this.#brokerUrl), this.#topicPrefix);
     });
 
     client.on("close", () => {
@@ -766,5 +828,71 @@ export class MqttClient implements AsyncDisposable {
 
     this.#subscriptions.clear();
     this.#mqtt.end(true);
+  }
+}
+
+/**
+ * The configuration {@link createMqttClient} accepts: an {@link MqttConfig} whose broker URL and topic prefix may be absent or `null`, exactly as the feature-option
+ * engine reports them. `FeatureOptions.value()` answers `null` for an option that is unconfigured or explicitly disabled, so a caller hands both resolved values
+ * straight through and narrows nothing at the call site.
+ *
+ * @category Utilities
+ */
+export type MqttClientConfigCandidate = Omit<MqttConfig, "brokerUrl" | "topicPrefix"> & { brokerUrl?: Nullable<string>; topicPrefix?: Nullable<string> };
+
+/**
+ * Construct an {@link MqttClient} when the configuration supports one, and answer `null` when it does not. This is the graceful counterpart to direct construction:
+ * where `new MqttClient(...)` throws on an unusable broker URL, this degrades, because a mistyped MQTT entry must never keep a plugin from loading.
+ *
+ * `null` is the entire construction-failure vocabulary, and it covers two situations the caller does not have to tell apart:
+ *
+ * - **MQTT is off.** The broker URL or the topic prefix is absent, `null`, or empty - the ordinary state of a plugin whose user never configured MQTT, or who
+ *   switched it back off. Nothing is logged, because a feature being off is not an event.
+ * - **Construction failed.** The broker URL is present but unusable. The failure is logged once at error level, with the broker URL excised from the inspected
+ *   error chain through {@link redactKnownBrokerUrl}, since that chain embeds the configured URL verbatim.
+ *
+ * The guard covers construction and nothing beyond it. Signal semantics stay the caller's, identical to direct construction: a pre-aborted `init.signal` yields a
+ * constructed client that has already ended, not a `null`.
+ *
+ * @param config - Broker / topic configuration, both resolved option values passed through as-is. See {@link MqttClientConfigCandidate}.
+ * @param init   - Optional init options, forwarded to the constructor unchanged. See {@link MqttClientInit}.
+ *
+ * @returns A live {@link MqttClient}, or `null` when MQTT is unconfigured or construction failed. Never throws.
+ *
+ * @example
+ *
+ * ```ts
+ * import { createMqttClient } from "homebridge-plugin-utils";
+ *
+ * const mqtt = createMqttClient({
+ *
+ *   brokerUrl: featureOptions.value("Mqtt.Url"),
+ *   log,
+ *   topicPrefix: featureOptions.value("Mqtt.Topic")
+ * }, { signal: platform.signal });
+ * ```
+ *
+ * @category Utilities
+ */
+export function createMqttClient(config: MqttClientConfigCandidate, init?: MqttClientInit): Nullable<MqttClient> {
+
+  const { brokerUrl, topicPrefix } = config;
+
+  // Answer null silently: an unconfigured broker or a disabled topic is the normal MQTT-off state rather than something to report. The check also narrows both
+  // locals to `string`, which is what lets the construction below assemble an `MqttConfig` from explicit fields without a cast anywhere.
+  if(!brokerUrl?.length || !topicPrefix?.length) {
+
+    return null;
+  }
+
+  try {
+
+    return new MqttClient({ brokerUrl, log: config.log, reconnectInterval: config.reconnectInterval, topicPrefix }, init);
+  } catch(error) {
+
+    // The inspected chain embeds the configured broker URL verbatim, so we excise the URL we are holding rather than trusting anything about the chain's shape.
+    config.log.error("Unable to initialize MQTT client: %s.", redactKnownBrokerUrl(util.inspect(error, { depth: null }), brokerUrl));
+
+    return null;
   }
 }

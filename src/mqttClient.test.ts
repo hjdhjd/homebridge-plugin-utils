@@ -8,7 +8,7 @@
  * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
  */
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
-import { MqttClient, logGetterPublishOutcome, mqttFeatureOptions, routeMqttBrokerError } from "./mqttClient.ts";
+import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
 import { awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { capturingLog, silentLog } from "./testing.helpers.ts";
 import { describe, test } from "node:test";
@@ -1237,8 +1237,9 @@ describe("MqttClient - connect / close edge flag", () => {
 
   test("connect logs the redacted broker URL (password-safe for status pages)", async () => {
 
-    // Regex in the connect handler replaces `scheme://user:password@host` with `scheme://user:REDACTED@host` so a connected broker's URL never leaks credentials into
-    // log output. This is an operational-safety guarantee; aedes accepts arbitrary credentials by default, so the real broker honors the URL as-is.
+    // The connect handler routes the broker URL through `redactBrokerUrl`, which renders `scheme://user:password@host` as `scheme://user:REDACTED@host` so a
+    // connected broker's URL never leaks credentials into log output. This is an operational-safety guarantee; aedes accepts arbitrary credentials by default, so
+    // the real broker honors the URL as-is.
     await using broker = await startTestBroker();
     const credentialedUrl = broker.url.replace("mqtt://", "mqtt://user:secretpass@");
     const log = capturingLog();
@@ -1385,5 +1386,151 @@ describe("mqttFeatureOptions - canonical MQTT feature-option group", () => {
     // null, which is the unambiguous "MQTT is off" answer. Flipping either default reds exactly one of these two assertions.
     assert.equal(featureOptions.value("Mqtt.Topic"), "hydrawise");
     assert.equal(featureOptions.value("Mqtt.Url"), null);
+  });
+});
+
+// The redaction contract, one row per URL shape, each pinned to the exact string the platform's URL parser produces. The list covers the shapes that defeated
+// authored credential patterns during design - a password containing "@", an empty username, a colon inside the password, a bracketed IPv6 host, a username
+// carrying the "$&" sequence a string-valued replacement would interpret - plus the two schemes WHATWG treats as special, whose canonical re-serialization elides a
+// default port, lowercases the host, and adds a trailing slash.
+const REDACTION_FIXTURES: readonly { expected: string; input: string }[] = [
+
+  { expected: "mqtt://user:REDACTED@host:1883", input: "mqtt://user:pass@host:1883" },
+  { expected: "mqtts://user:REDACTED@host:8883", input: "mqtts://user:pass@host:8883" },
+  { expected: "mqtt://host", input: "mqtt://host" },
+  { expected: "mqtt://user:REDACTED@host", input: "mqtt://user:P@ssw0rd@host" },
+  { expected: "mqtt://:REDACTED@host", input: "mqtt://:pass@host" },
+  { expected: "mqtt://user:@host", input: "mqtt://user:@host" },
+  { expected: "mqtt://user:REDACTED@host", input: "mqtt://user:pa:ss@host" },
+  { expected: "mqtt://user:REDACTED@[::1]:1883", input: "mqtt://user:pass@[::1]:1883" },
+  { expected: "ws://user:REDACTED@broker.example.com/", input: "ws://user:pass@broker.example.com:80" },
+  { expected: "wss://user:REDACTED@host.example.com/", input: "wss://user:pass@Host.Example.com" },
+  { expected: "mqtt://us$&er:REDACTED@host", input: "mqtt://us$&er:pass@host" },
+  { expected: "<broker URL redacted>", input: "not-a-valid-url" }
+];
+
+describe("redactBrokerUrl / redactKnownBrokerUrl - credential excision", () => {
+
+  test("every broker URL shape redacts to its pinned form", () => {
+
+    for(const fixture of REDACTION_FIXTURES) {
+
+      assert.equal(redactBrokerUrl(fixture.input), fixture.expected, fixture.input);
+    }
+  });
+
+  test("no password fragment survives, whatever shape the password takes", () => {
+
+    // The parser takes the LAST "@" as the userinfo boundary, so "P@ssw0rd" is the password in full rather than a password of "P" with a stray tail, and a colon
+    // inside the password is password text rather than the start of a new field. Both shapes leave nothing behind.
+    assert.ok(!redactBrokerUrl("mqtt://user:P@ssw0rd@host").includes("ssw0rd"));
+    assert.ok(redactBrokerUrl("mqtt://user:P@ssw0rd@host").includes("REDACTED"));
+    assert.ok(!redactBrokerUrl("mqtt://:pass@host").includes("pass"));
+    assert.ok(redactBrokerUrl("mqtt://:pass@host").includes("REDACTED"));
+    assert.ok(!redactBrokerUrl("mqtt://user:pa:ss@host").includes("pa:"));
+    assert.ok(redactBrokerUrl("mqtt://user:pa:ss@host").includes("REDACTED"));
+  });
+
+  test("a known URL is excised from surrounding text wherever it appears", () => {
+
+    const brokerUrl = "mqtt://user:pass@host:1883";
+    const text = "first " + brokerUrl + "\nsecond " + brokerUrl + "\ndone";
+
+    // Every occurrence goes, not just the first - an error chain is free to quote the URL more than once.
+    assert.equal(redactKnownBrokerUrl(text, brokerUrl), "first mqtt://user:REDACTED@host:1883\nsecond mqtt://user:REDACTED@host:1883\ndone");
+    assert.equal(redactKnownBrokerUrl("nothing to see here", brokerUrl), "nothing to see here");
+  });
+
+  test("a URL carrying a $-sequence is excised rather than re-injected", () => {
+
+    // A string-valued replaceAll would interpret the "$&" in the replacement and paste the original credentialed URL back into the text. Splitting on the literal
+    // and joining with the redacted form gives the substring no interpretation at all, so the credential actually leaves.
+    const brokerUrl = "mqtt://us$&er:pass@host";
+    const text = "connecting to " + brokerUrl + " now";
+
+    assert.equal(redactKnownBrokerUrl(text, brokerUrl), "connecting to mqtt://us$&er:REDACTED@host now");
+    assert.ok(!redactKnownBrokerUrl(text, brokerUrl).includes("pass@"));
+  });
+});
+
+describe("createMqttClient - guarded construction", () => {
+
+  test("an absent broker URL or topic prefix returns null and logs nothing", () => {
+
+    // MQTT being unconfigured, or its topic explicitly disabled, is the ordinary off state rather than an event...a helper that logged here would put a line in
+    // every log stream belonging to a user who simply does not use MQTT.
+    for(const brokerUrl of [ undefined, null, "" ]) {
+
+      const log = capturingLog();
+
+      assert.equal(createMqttClient({ brokerUrl, log, topicPrefix: "test" }), null, "broker URL: " + String(brokerUrl));
+      assert.equal(log.entries.length, 0, "an unconfigured broker must not log");
+    }
+
+    for(const topicPrefix of [ undefined, null, "" ]) {
+
+      const log = capturingLog();
+
+      assert.equal(createMqttClient({ brokerUrl: UNREACHABLE_BROKER, log, topicPrefix }), null, "topic prefix: " + String(topicPrefix));
+      assert.equal(log.entries.length, 0, "a disabled topic must not log");
+    }
+  });
+
+  test("an unusable broker URL returns null and logs exactly one error", () => {
+
+    const log = capturingLog();
+
+    // Prove the throw here rather than assuming it. Were this literal ever to stop throwing, the helper assertion below would pass for the wrong reason - a
+    // well-formed-but-unreachable URL constructs happily and would return a client, not null.
+    assert.throws(() => new MqttClient({ brokerUrl: "not-a-valid-url", log: silentLog(), topicPrefix: "test" }));
+
+    assert.equal(createMqttClient({ brokerUrl: "not-a-valid-url", log, topicPrefix: "test" }), null);
+    assert.equal(log.entries.length, 1, "a construction failure logs once");
+
+    const [entry] = log.entries;
+
+    assert.ok(entry);
+    assert.equal(entry.level, "error", "a construction failure is an error, not a warning");
+  });
+
+  test("a credentialed broker URL that throws logs the cause without the credential", () => {
+
+    // This exact input is what gives the pin its teeth: it throws synchronously AND mqtt.js quotes the configured URL verbatim in the error chain, so the redaction
+    // path is genuinely exercised. A plain invalid URL throws without ever naming the URL, and a well-formed credentialed URL does not throw at all.
+    const brokerUrl = "mqtt://user:secret123@:::bad::port";
+    const log = capturingLog();
+
+    assert.throws(() => new MqttClient({ brokerUrl, log: silentLog(), topicPrefix: "test" }));
+
+    assert.equal(createMqttClient({ brokerUrl, log, topicPrefix: "test" }), null);
+    assert.equal(log.entries.length, 1);
+
+    const rendered = firstRendered(log);
+
+    assert.ok(rendered.includes("ERR_INVALID_ARG_VALUE"), "the underlying cause must survive into the log line");
+    assert.ok(!rendered.includes("secret123"), "the configured credential must never reach the log stream");
+    assert.ok(rendered.includes("<broker URL redacted>"), "an unparseable URL is replaced by the placeholder");
+  });
+
+  test("a usable configuration returns a live client and forwards init to the constructor", async () => {
+
+    await using broker = await startTestBroker();
+
+    const controller = new AbortController();
+    const log = capturingLog();
+    const client = createMqttClient({ brokerUrl: broker.url, log, reconnectInterval: 0, topicPrefix: "test" }, { signal: controller.signal });
+
+    assert.ok(client, "a usable configuration must produce a client, never null");
+    assert.ok(client instanceof MqttClient);
+
+    await awaitConnect(broker);
+
+    assert.equal(client.aborted, false);
+
+    // Aborting the signal we handed the helper ends the client, which can only happen if `init` reached the constructor - a helper that dropped it would leave the
+    // client live here.
+    controller.abort();
+
+    assert.equal(client.aborted, true);
   });
 });

@@ -33,6 +33,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
+ *   - `option:armed` - a value option's row is awaiting its first value: the checkbox gesture opened the input, and nothing persists until a value commits. At
+ *     most one row is armed at a time, and any mutation, navigation, or reload disarms it.
+ *   - `option:disarmed` - the armed row stood down without committing a value (the input emptied out, or the user unchecked the row).
  *   - `options:reset` - every configured option dropped (reset to defaults).
  *   - `model:reverted` - configuredOptions restored to the at-show() snapshot.
  *   - `filter:changed` - search query and/or filter mode updated.
@@ -118,6 +121,10 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * state that could drift from this.
  *
  * @typedef {Object} FeatureOptionsState
+ * @property {string | null} armedOption - The expanded name of the value option whose row is armed - checked with a live input, awaiting the first value that
+ *   will actually enable it - or null when no row is. A scoped value entry always carries a value, so the checked-but-empty state has no persistable spelling;
+ *   arming is how the checkbox-first gesture works anyway: the row LOOKS enabled and takes typing, while the configuration remains untouched until a value
+ *   commits. Transient by construction - any configuration mutation, scope change, or model reload clears it.
  * @property {Catalog} catalog - Plugin-provided immutable configuration: catalog index + validators.
  * @property {readonly string[]} configuredOptions - The canonical user-state array. Mutations replace it via the pure transforms from featureOptions.ts.
  * @property {readonly Controller[]} controllers - Controllers list (empty in device-only mode or before resolution).
@@ -276,6 +283,7 @@ export const initialState = () => {
 
   return {
 
+    armedOption: null,
     catalog: EMPTY_CATALOG,
     configuredOptions: empty,
     controllers: [],
@@ -331,6 +339,7 @@ export const reducer = (state, action) => {
       return {
 
         ...state,
+        armedOption: null,
         catalog: action.catalog,
         configuredOptions: action.configuredOptions,
         controllers: action.controllers,
@@ -408,8 +417,8 @@ export const reducer = (state, action) => {
       }
 
       // Replace the selection pointer wholesale. The DU is atomic - controllerId, deviceId, and kind all move together so subscribers never observe a partial
-      // selection state.
-      return { ...state, scope: action.scope };
+      // selection state. An armed row belongs to the view that armed it, so the selection moving disarms it.
+      return { ...state, armedOption: null, scope: action.scope };
     }
 
     case "option:set": {
@@ -417,10 +426,12 @@ export const reducer = (state, action) => {
       // Compute the new configuredOptions via the pure transform. The transform returns a fresh array whenever it writes or drops an entry, so reference equality
       // on configuredOptions detects the change; a scoped enable of a value option without value content reduces to a clear and can return the input reference
       // unchanged, which subscribers reading reference equality see as a no-op. The catalog reference is unchanged either way, so selectors that depend only on
-      // the catalog continue to hit their caches.
+      // the catalog continue to hit their caches. Any configuration mutation disarms an armed row: the armed row's own commit is this very action, and a mutation
+      // elsewhere means the user moved on.
       return {
 
         ...state,
+        armedOption: null,
         configuredOptions: applySetOption({ args: action.args, catalog: state.catalog, configuredOptions: state.configuredOptions })
       };
     }
@@ -428,26 +439,41 @@ export const reducer = (state, action) => {
     case "option:cleared": {
 
       // The pure transform returns the input reference unchanged when nothing matched, so the reducer's `...state, configuredOptions: ...` spread also yields a
-      // state value whose configuredOptions reference equals the prior one. Subscribers reading reference equality see a no-op and skip recomputation.
+      // state value whose configuredOptions reference equals the prior one. Subscribers reading reference equality see a no-op and skip recomputation. The
+      // armed-row clear follows the same mutation-disarms rule option:set applies.
       return {
 
         ...state,
+        armedOption: null,
         configuredOptions: applyClearOption({ args: action.args, catalog: state.catalog, configuredOptions: state.configuredOptions })
       };
+    }
+
+    case "option:armed": {
+
+      // A value option's checkbox gesture opened its input without a value to persist: the row renders enabled and takes typing, while the configuration stays
+      // untouched until a value commits. One row at most is armed, so arming a second row implicitly stands the first down.
+      return { ...state, armedOption: action.option };
+    }
+
+    case "option:disarmed": {
+
+      // The armed row stood down without a value committing - the input emptied out, or the user unchecked the row. Idempotent when nothing is armed.
+      return { ...state, armedOption: null };
     }
 
     case "options:reset": {
 
       // Wipe every configured option. Fresh empty array so reference equality reflects the change. The initial snapshot and the anchor are untouched - revert
-      // and persist failure still have their respective rollback targets.
-      return { ...state, configuredOptions: [] };
+      // and persist failure still have their respective rollback targets. The reset is a configuration mutation, so it disarms like any other.
+      return { ...state, armedOption: null, configuredOptions: [] };
     }
 
     case "model:reverted": {
 
       // Restore configuredOptions to the at-show() snapshot. The snapshot reference is reused as-is - subsequent option:set / option:cleared mutations will fork
-      // it via the pure transforms, so the snapshot stays stable for the next revert.
-      return { ...state, configuredOptions: state.initialOptions };
+      // it via the pure transforms, so the snapshot stays stable for the next revert. The revert is a configuration mutation, so it disarms like any other.
+      return { ...state, armedOption: null, configuredOptions: state.initialOptions };
     }
 
     case "filter:changed": {
@@ -482,8 +508,8 @@ export const reducer = (state, action) => {
     case "persist:failed": {
 
       // Final-attempt failure with no superseding mutation. Roll configuredOptions back to the last-known disk state so memory matches disk, and transition status
-      // to persist-error so subscribers (status bar / toast emitter) can surface the failure.
-      return { ...state, configuredOptions: state.persistedAnchor, status: { error: action.error, kind: "persist-error" } };
+      // to persist-error so subscribers (status bar / toast emitter) can surface the failure. The rollback is a configuration mutation, so it disarms too.
+      return { ...state, armedOption: null, configuredOptions: state.persistedAnchor, status: { error: action.error, kind: "persist-error" } };
     }
 
     case "connection:error": {

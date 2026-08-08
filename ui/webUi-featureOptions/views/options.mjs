@@ -6,9 +6,9 @@
 
 import { applyCategoryStates, captureCategoryStates } from "../utils.mjs";
 import { applyRowState, categoryShell, optionRow, triStateTransition, valueCommitTransition } from "../rendering.mjs";
+import { buildConfigIndex, hasValueContent } from "../../featureOptions.js";
 import { projection, scopeCacheKey, selectedControllerId, selectedDeviceId } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
-import { buildConfigIndex } from "../../featureOptions.js";
 import { effect } from "../store.mjs";
 
 /**
@@ -239,6 +239,12 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
   // re-fires as a checkbox change so the same path handles both.
   configTable.addEventListener("change", (event) => handleChange({ event, store }), { signal });
 
+  // Stand an armed row down when focus leaves it without a value. The armed state exists to take the first value, so focus departing the row with the input
+  // still empty is the abandonment gesture, and the row snaps back to unchecked-and-locked through the same writer every state change uses. Focus moving WITHIN
+  // the row - onto its own checkbox above all, whose click gesture must adjudicate the uncheck itself - is deliberately not an abandonment; nor is a
+  // commit-carrying blur, whose change event has already disarmed through the store by the time focusout fires (change precedes blur in the event order).
+  configTable.addEventListener("focusout", (event) => handleFocusOut({ event, store }), { signal });
+
   // Coalesce post-toggle work into a single microtask. Multiple synchronous toggles (bulk expand-all, saved-state restore) all settle to one persistence write.
   function schedulePostToggleSync() {
 
@@ -411,7 +417,7 @@ const ensureRowsRendered = ({ details, state }) => {
 
   for(const entry of categoryProjection.entries) {
 
-    fragment.appendChild(optionRow({ deviceId, entry, scopeKind }));
+    fragment.appendChild(optionRow({ armed: state.armedOption === entry.expandedName, deviceId, entry, scopeKind }));
   }
 
   rowsContainer.appendChild(fragment);
@@ -459,7 +465,7 @@ const applyProjectionToDom = ({ configTable, state }) => {
 
       if(row) {
 
-        applyRowState({ entry, row, scopeKind });
+        applyRowState({ armed: state.armedOption === entry.expandedName, entry, row, scopeKind });
       }
     }
   }
@@ -494,10 +500,9 @@ const rowContext = ({ state, target }) => {
 // machine computes the action, the dispatch drives the reactive re-projection, and applyRowState re-derives the affected rows - one DOM-writing path, the same
 // one construction uses, rather than an imperative apply here plus a re-derive on update that could drift apart.
 //
-// A gesture the model rejects - above all enabling a value option at a scope while its value input is empty, a state with no persistable spelling - leaves the
-// configured options untouched, so no re-projection walks the rows and the browser's own toggle would outlive the model's answer. Restoring the row through
-// applyRowState, from the unchanged projection, undoes the gesture through the same single writer; reference equality on configuredOptions is the store's
-// documented no-op signal, so the restore also covers any future gesture that resolves to nothing.
+// A gesture that leaves the configured options untouched - an arm or disarm, whose action moves only the store's armedOption, or a gesture that resolves to
+// nothing at all - triggers no re-projection walk, so the affected row is re-derived here through the same single writer, against the post-dispatch armed state.
+// Reference equality on configuredOptions is the store's documented no-op signal, so this one restore covers every such gesture.
 const handleChange = ({ event, store }) => {
 
   const target = event.target;
@@ -528,7 +533,8 @@ const handleChange = ({ event, store }) => {
     entry,
     inputValue
   };
-  const { action } = isValueCommit ? valueCommitTransition(transitionArgs) : triStateTransition({ ...transitionArgs, checkbox: target });
+  const { action } = isValueCommit ? valueCommitTransition(transitionArgs) :
+    triStateTransition({ ...transitionArgs, armed: state.armedOption === entry.expandedName, checkbox: target });
 
   if(action) {
 
@@ -537,14 +543,59 @@ const handleChange = ({ event, store }) => {
 
   if(store.state.configuredOptions === state.configuredOptions) {
 
-    applyRowState({ entry, row, scopeKind: state.scope.kind });
+    const armed = store.state.armedOption === entry.expandedName;
 
-    // A rejected checkbox gesture wanted a value it does not have - hand focus to the value input as the affordance for what comes next. A rejected input commit
-    // gets no focus theft: the user just moved on, and pulling them back would fight the blur that committed it.
-    if(!isValueCommit) {
+    applyRowState({ armed, entry, row, scopeKind: state.scope.kind });
+
+    // An arming gesture opened the input for the value that will actually enable the option - hand it focus as the affordance for what comes next. Every other
+    // no-op keeps focus where it is: a rejected input commit means the user just moved on, and a disarm leaves a locked input nothing should focus.
+    if(!isValueCommit && armed) {
 
       inputValue?.focus();
     }
   }
+};
+
+// Handle a focusout event on the config table: the armed-row abandonment path. An armed row exists to take its first value, so focus leaving the row while the
+// input is still empty stands it down. The event fires for two different departures: focus moving on within the page, and the WINDOW itself losing focus to a
+// tab flip, an app switch, or a click on the host's chrome. Only the in-page move is an abandonment, and the document's focus state at dispatch time is what
+// tells the two apart...a focusout arriving while the document still holds focus is a move within the page, while one arriving after that focus is gone belongs
+// to the departing window, so an armed row survives that trip and is still armed when the user returns. Two in-page departures are deliberately NOT
+// abandonments either: focus settling elsewhere within the same row (the checkbox's own click gesture adjudicates the uncheck itself), and a commit-carrying
+// blur (its change event already committed and disarmed through the store before focusout fired).
+const handleFocusOut = ({ event, store }) => {
+
+  const state = store.state;
+  const target = event.target;
+
+  if((state.armedOption === null) || !target.matches?.("input[type='text']")) {
+
+    return;
+  }
+
+  const context = rowContext({ state, target });
+
+  if(!context || (context.entry.expandedName !== state.armedOption)) {
+
+    return;
+  }
+
+  if(event.relatedTarget && context.row.contains(event.relatedTarget)) {
+
+    return;
+  }
+
+  if(!document.hasFocus()) {
+
+    return;
+  }
+
+  if(hasValueContent(target.value)) {
+
+    return;
+  }
+
+  store.dispatch({ type: "option:disarmed" });
+  applyRowState({ entry: context.entry, row: context.row, scopeKind: state.scope.kind });
 };
 

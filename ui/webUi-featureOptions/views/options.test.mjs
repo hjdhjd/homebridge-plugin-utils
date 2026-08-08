@@ -194,7 +194,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     assert.equal(checkbox.checked, true, "the checkbox follows the committed value through the re-projection");
   });
 
-  test("ticking a value option at a device scope with an empty input is rejected and restores the row", () => {
+  test("ticking a value option at a device scope with an empty input arms the row: checked, live input, focused, nothing persisted", () => {
 
     using _dom = createTestDom();
 
@@ -207,14 +207,123 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     const checkbox = audio.querySelector("#Audio\\.Volume");
     const input = audio.querySelector("input[type='text']");
 
-    // Empty the pre-filled input so the tick has no value to write. A scoped enable without value content has no persistable spelling, so the model rejects the
-    // gesture: nothing dispatches, the row restores from the unchanged projection, and focus lands on the input the gesture still needs.
+    // Empty the pre-filled input so the tick has no value to write. A scoped enable without value content has no persistable spelling, so the gesture arms the
+    // row instead: it reads checked with a live, focused input, while the configuration stays untouched until a value commits.
     input.value = "";
     checkbox.click();
 
     assert.deepEqual(store.state.configuredOptions, [], "nothing persists for an enable with nothing to say");
-    assert.equal(checkbox.checked, false, "the browser's toggle is undone through the shared row writer");
+    assert.equal(store.state.armedOption, "Audio.Volume", "the row is armed in the store");
+    assert.equal(checkbox.checked, true, "an armed row reads checked");
+    assert.equal(input.disabled, false, "an armed row's input is live");
     assert.equal(document.activeElement, input, "focus moves to the value input as the affordance for what comes next");
+  });
+
+  test("committing a value on an armed row enables the option and disarms it", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const checkbox = audio.querySelector("#Audio\\.Volume");
+    const input = audio.querySelector("input[type='text']");
+
+    input.value = "";
+    checkbox.click();
+
+    // The arming gesture's whole purpose: the first committed value writes the scoped entry and the armed state stands down, leaving a genuinely enabled row.
+    input.value = "75";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Audio.Volume.dev-a=75"], "the committed value persists as the scoped entry");
+    assert.equal(store.state.armedOption, null, "the commit disarms the row");
+    assert.equal(checkbox.checked, true, "the row is now genuinely enabled");
+    assert.equal(input.disabled, false, "an enabled row's input stays live");
+  });
+
+  test("unchecking an armed row stands it down and relocks the input, writing nothing", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const checkbox = audio.querySelector("#Audio\\.Volume");
+    const input = audio.querySelector("input[type='text']");
+
+    input.value = "";
+    checkbox.click();
+    checkbox.click();
+
+    assert.deepEqual(store.state.configuredOptions, [], "no write in either direction - nothing was ever persisted");
+    assert.equal(store.state.armedOption, null, "the row stood down");
+    assert.equal(checkbox.checked, false, "the row reads unchecked again");
+    assert.equal(input.disabled, true, "the input relocks");
+  });
+
+  test("focus leaving an armed row with an empty input abandons the arming", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const checkbox = audio.querySelector("#Audio\\.Volume");
+    const input = audio.querySelector("input[type='text']");
+
+    input.value = "";
+    checkbox.click();
+
+    // Focus departs the row for somewhere else entirely - the abandonment gesture. A plain Event carries no relatedTarget, exactly the shape a departure to a
+    // non-focusable target delivers, so the row stands down.
+    input.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, null, "the abandonment disarms the row");
+    assert.equal(checkbox.checked, false, "the row reads unchecked again");
+    assert.equal(input.disabled, true, "the input relocks");
+    assert.deepEqual(store.state.configuredOptions, [], "nothing was ever persisted");
+  });
+
+  test("a window-focus departure leaves an armed row armed and its input live", (t) => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const checkbox = audio.querySelector("#Audio\\.Volume");
+    const input = audio.querySelector("input.fo-option-value");
+
+    input.value = "";
+    checkbox.click();
+
+    assert.equal(store.state.armedOption, "Audio.Volume", "precondition: the row is armed and awaiting its first value");
+
+    // A tab flip fires the same relatedTarget-less focusout an in-page departure to a non-focusable target does, and the only thing separating them is that the
+    // document reads unfocused at dispatch time. Stubbing that read is how the flip is expressed here, since the test DOM carries no window-focus state of its
+    // own...its hasFocus answers from the active element, which is the armed input.
+    t.mock.method(document, "hasFocus", () => false);
+
+    input.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, "Audio.Volume", "the arming survives the departure and is still there when the user returns");
+    assert.equal(checkbox.checked, true, "the row still reads checked");
+    assert.equal(input.disabled, false, "its field is still live for the value that will enable the option");
+    assert.equal(input.value, "", "and nothing was typed into it");
+    assert.deepEqual(store.state.configuredOptions, [], "nothing was persisted either way");
   });
 });
 

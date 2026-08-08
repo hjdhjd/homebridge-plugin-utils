@@ -264,7 +264,7 @@ describe("optionRow - value input initialization", () => {
     assert.equal(valueInput?.getAttribute("aria-disabled"), null, "an editable input carries no aria-disabled");
   });
 
-  test("falls back to the catalog default value when no entry is configured, and stays editable", () => {
+  test("falls back to the catalog default value when no entry is configured, and locks until the option is enabled", () => {
 
     using _dom = createTestDom();
 
@@ -274,8 +274,27 @@ describe("optionRow - value input initialization", () => {
     const valueInput = row.querySelector("input[type='text']");
 
     assert.equal(valueInput?.value, "50", "catalog default");
-    assert.equal(valueInput?.disabled, false, "an unset row keeps a live input - committing a value is the gesture that enables a value option at this scope");
-    assert.equal(valueInput?.getAttribute("aria-disabled"), null, "an editable input carries no aria-disabled");
+    assert.equal(valueInput?.disabled, true, "a disabled or unset row locks its input - the checkbox is the affordance that enables or arms it");
+    assert.equal(valueInput?.getAttribute("aria-disabled"), "true", "a locked input signals aria-disabled to assistive tech");
+  });
+
+  test("renders checked with a live input while armed, though nothing is configured", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({
+
+      devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }],
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" }
+    });
+    const entry = findEntry(state, "Audio", "Volume");
+    const row = optionRow({ armed: true, deviceId: "dev-a", entry, scopeKind: "device" });
+    const checkbox = row.querySelector("input[type='checkbox']");
+    const valueInput = row.querySelector("input[type='text']");
+
+    assert.equal(checkbox?.checked, true, "an armed row reads checked - the arming gesture's own affordance");
+    assert.equal(valueInput?.disabled, false, "an armed row's input is live, awaiting the first value that will actually enable the option");
+    assert.equal(valueInput?.getAttribute("aria-disabled"), null, "an armed input carries no aria-disabled");
   });
 
   test("is disabled when inheriting from a higher scope", () => {
@@ -482,6 +501,89 @@ describe("triStateTransition - was unchecked, just checked", () => {
     const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue: null });
 
     assert.equal(result.action.type, "option:cleared", "back to default with no upstream - clearOption keeps the array minimal");
+  });
+});
+
+describe("triStateTransition - the armed-row transitions", () => {
+
+  // The scoped-view fixture every arming scenario works from: a device view over the value-centric Audio.Volume with nothing configured.
+  const scopedFixture = () => {
+
+    const state = loadedState({
+
+      devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }],
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" }
+    });
+
+    return { catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), entry: findEntry(state, "Audio", "Volume") };
+  };
+
+  test("checking a scoped value row with an empty input arms it rather than writing", () => {
+
+    using _dom = createTestDom();
+
+    const { catalog, configIndex, entry } = scopedFixture();
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+
+    const inputValue = document.createElement("input");
+
+    inputValue.type = "text";
+    inputValue.value = "";
+
+    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue });
+
+    // A scoped value entry always carries a value, so there is nothing to persist yet - the row arms, unlocking the input for the value that will.
+    assert.equal(result.action.type, "option:armed", "a scoped empty enable arms instead of writing");
+    assert.equal(result.action.option, entry.expandedName, "the arm names the row it opened");
+  });
+
+  test("unchecking an armed row stands it down without writing", () => {
+
+    using _dom = createTestDom();
+
+    const { catalog, configIndex, entry } = scopedFixture();
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = false;
+
+    const inputValue = document.createElement("input");
+
+    inputValue.type = "text";
+    inputValue.value = "";
+
+    const result = triStateTransition({ armed: true, catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue });
+
+    // Nothing was ever persisted while armed, so a write-shaped action would disable or clear state the arming gesture never touched.
+    assert.equal(result.action.type, "option:disarmed", "an armed row unchecks into a disarm, never a disable");
+  });
+
+  test("checking a GLOBAL value row with an empty input still writes the bare enable", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState();
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+
+    const inputValue = document.createElement("input");
+
+    inputValue.type = "text";
+    inputValue.value = "";
+
+    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue });
+
+    // A bare valueless enable is a legal global entry, so the global view never arms - the write persists and the enabled row's input unlocks normally.
+    assert.equal(result.action.type, "option:set", "the global view writes the bare enable rather than arming");
+    assert.equal(result.action.args.enabled, true, "the bare enable is an enable");
   });
 });
 

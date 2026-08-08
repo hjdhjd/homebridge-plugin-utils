@@ -81,12 +81,13 @@ export const categoryShell = ({ category, scopeKind }) => {
  * re-derived row identical.
  *
  * @param {Object} args
+ * @param {boolean} [args.armed=false] - Whether this row is the store's armed value row (checked with a live input, awaiting its first value).
  * @param {string | null} args.deviceId - The currently-selected device's serial, or null for the global view.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for this option.
  * @param {"controller" | "device" | "global"} args.scopeKind - The current view's scope kind.
  * @returns {HTMLDivElement} The constructed row element.
  */
-export const optionRow = ({ deviceId, entry, scopeKind }) => {
+export const optionRow = ({ armed = false, deviceId, entry, scopeKind }) => {
 
   const { expandedName, isGrouped, option } = entry;
   const valueCentric = option.defaultValue !== undefined;
@@ -108,7 +109,7 @@ export const optionRow = ({ deviceId, entry, scopeKind }) => {
 
   // The structure is in place; apply every state-dependent attribute from the projection entry. This is the same writer the view's per-mutation walk uses, so a
   // freshly-materialized row arrives correct from its first render without a separate "set the initial state here" path that could drift from the update path.
-  applyRowState({ entry, row, scopeKind });
+  applyRowState({ armed, entry, row, scopeKind });
 
   return row;
 };
@@ -126,18 +127,20 @@ export const optionRow = ({ deviceId, entry, scopeKind }) => {
  *     otherwise the checkbox reflects the resolved enabled state directly.
  *   - **Label color** - the "where did this value come from / has it been modified" cue. Re-applying it here on every projection change is what makes a toggle that
  *     modifies (or reverts) an option re-color its label in place, rather than freezing the color at construction time.
- *   - **Value-input state** (value-centric options only) - readOnly / disabled track the inherit + dependency axes. The input stays live on any row the user may
- *     configure at this scope, whatever its current enabled state, because typing a value IS the gesture that enables a value option here: a scoped value entry
- *     always carries a value, so the input is the primary affordance and the checkbox follows it. The value text is re-derived from the projection EXCEPT while
- *     the user is actively editing it: uncommitted text exists only while the input holds focus (the `change` event commits on blur / Enter), so guarding on
+ *   - **Value-input state** (value-centric options only) - the input is live exactly while the option can take a value at this scope: the row is enabled, or it is
+ *     ARMED (the checkbox gesture opened the input and the first committed value is what will actually enable it - a scoped value entry always carries a value, so
+ *     the checked-but-empty state persists nothing and lives only in the store's armedOption). Every other row locks its input, so a disabled or unset option can
+ *     never take typing, and inheriting or parent-disabled rows lock regardless. The value text is re-derived from the projection EXCEPT while the user is
+ *     actively editing it: uncommitted text exists only while the input holds focus (the `change` event commits on blur / Enter), so guarding on
  *     `document.activeElement` is exactly the condition under which a re-derive would clobber an in-progress edit.
  *
  * @param {Object} args
+ * @param {boolean} [args.armed=false] - Whether this row is the store's armed value row. An armed row renders checked with a live input while persisting nothing.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for this option.
  * @param {HTMLDivElement} args.row - The option row element to update in place.
  * @param {"controller" | "device" | "global"} args.scopeKind - The current view's scope kind.
  */
-export const applyRowState = ({ entry, row, scopeKind }) => {
+export const applyRowState = ({ armed = false, entry, row, scopeKind }) => {
 
   const inheriting = isInheritingView(scopeKind, entry.scope);
 
@@ -148,8 +151,9 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
 
   if(checkbox) {
 
-    // The inherit axis (indeterminate + readOnly) and the dependency-badge axis (disabled) are independent; a row can be both inheriting and parent-disabled.
-    checkbox.checked = entry.enabled;
+    // The inherit axis (indeterminate + readOnly) and the dependency-badge axis (disabled) are independent; a row can be both inheriting and parent-disabled. An
+    // armed row reads checked even though nothing is persisted yet - the checked state is the arming gesture's own affordance.
+    checkbox.checked = entry.enabled || armed;
     checkbox.indeterminate = inheriting;
     checkbox.readOnly = inheriting;
     checkbox.disabled = entry.requiresParentBadge;
@@ -166,9 +170,9 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
 
   if(input) {
 
-    // Locked only while the row borrows from a higher scope or its parent group is disabled. An unset or explicitly disabled row keeps a live input, because
-    // committing a value there is the gesture that enables the option at this scope.
-    const locked = inheriting || entry.requiresParentBadge;
+    // The input is live exactly while the option can take a value at this scope: enabled, or armed and awaiting its first value. A disabled or unset row locks
+    // its input - the checkbox is the affordance that arms it - and inheriting or parent-disabled rows lock regardless.
+    const locked = inheriting || entry.requiresParentBadge || (!entry.enabled && !armed);
 
     input.readOnly = locked;
     input.disabled = locked;
@@ -181,10 +185,12 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
       input.removeAttribute("aria-disabled");
     }
 
-    // Never overwrite the value the user is currently editing. Outside an active edit the projection's resolved value is authoritative.
+    // Never overwrite the value the user is currently editing. Outside an active edit the projection's resolved value is authoritative - except on an armed row,
+    // which presents an EMPTY field: arming asks the user for the option's first value, and the default display belongs to rows describing what resolution
+    // already yields, not to a prompt awaiting entry. The empty field is also what lets the abandonment path read "still no value" honestly.
     if(document.activeElement !== input) {
 
-      input.value = entry.value ?? defaultDisplay(entry.option);
+      input.value = armed ? "" : (entry.value ?? defaultDisplay(entry.option));
     }
   }
 };
@@ -193,13 +199,17 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
  * The tri-state click-time state machine. Given the current DOM state of a clicked checkbox (post-browser-toggle) plus the projection entry, configuration index, and
  * view context, compute the action to dispatch.
  *
- * Three transitions, distinguished by the checkbox's pre-call state:
+ * The transitions, distinguished by the checkbox's pre-call state and the row's armed state:
  *
+ *   - **armed, just unchecked** -> the user stood the armed row down before committing a value. Action: disarm - nothing was ever persisted, so there is nothing
+ *     to clear or disable, and a write-shaped action would disturb state the arming gesture never touched.
  *   - **readOnly (was indeterminate)** -> the user clicked through to an explicit state at this scope. Action: set explicitly, or clear when the write rule says the
  *     entry-less resolution already matches the user's intent.
  *   - **just unchecked (was checked)** -> if an upstream entry exists, clear so resolution falls back to inheritance (the row returns to indeterminate); otherwise the
  *     explicit disable stays, recorded or normalized to a clear per the write rule.
- *   - **just checked (was unchecked)** -> set explicitly (or clear when the post-state matches default with no upstream).
+ *   - **just checked (was unchecked)** -> set explicitly (or clear when the post-state matches default with no upstream). A value-centric row whose input carries no
+ *     content ARMS instead: a scoped value entry always carries a value, so there is nothing to persist yet, and arming is what unlocks the input for the value
+ *     that will.
  *
  * Write rule (parallels {@link FeatureOptions} semantics): a clearOption is correct when the resulting resolution equals the user's intent at this scope - that is,
  * when the catalog default matches AND no upstream entry exists. In that case the entry-less lookup naturally produces the right value. A setOption is needed when
@@ -210,6 +220,7 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
  * transition intends, so there is no second DOM-writing path to keep in sync.
  *
  * @param {Object} args
+ * @param {boolean} [args.armed=false] - Whether this row is the store's armed value row at gesture time.
  * @param {import("./state.mjs").Catalog} args.catalog - The catalog index (for value-centric detection and upstream lookup).
  * @param {HTMLInputElement} args.checkbox - The clicked checkbox, with its post-browser-toggle state.
  * @param {import("../featureOptions.js").ConfigIndex} args.configIndex - The current config lookup index.
@@ -219,10 +230,17 @@ export const applyRowState = ({ entry, row, scopeKind }) => {
  * @param {HTMLInputElement | null} args.inputValue - The value-input element, when the option is value-centric; null otherwise.
  * @returns {{ action: Object }} The action to dispatch.
  */
-export const triStateTransition = ({ catalog, checkbox, configIndex, controllerId, deviceId, entry, inputValue }) => {
+export const triStateTransition = ({ armed = false, catalog, checkbox, configIndex, controllerId, deviceId, entry, inputValue }) => {
 
   const { expandedName, option } = entry;
   const upstream = hasUpstreamOption({ catalog, configIndex, controllerId, deviceId, expandedName });
+
+  // Transition 0: an armed row just unchecked. Nothing was ever persisted, so the row simply stands down - a write-shaped action here would disable or clear
+  // state the arming gesture never touched.
+  if(armed && !checkbox.checked) {
+
+    return { action: { type: "option:disarmed" } };
+  }
 
   // Transition 1: was indeterminate (readOnly). The user clicked through to an explicit state at this scope.
   if(checkbox.readOnly) {
@@ -242,7 +260,15 @@ export const triStateTransition = ({ catalog, checkbox, configIndex, controllerI
     return { action: writeAction({ deviceId, enabled: false, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
   }
 
-  // Transition 3: just transitioned to checked. Explicit enable at this scope.
+  // Transition 3: just transitioned to checked. A SCOPED value-centric row with no value content arms rather than writes - a scoped value entry always carries a
+  // value, so there is nothing to persist until one is typed, and arming is what unlocks the input to take it. The global view is deliberately outside this arm:
+  // a bare valueless enable is a legal global entry, so the write below persists it and the enabled row's input unlocks through the ordinary lock rule.
+  if((deviceId !== null) && isValueOption(catalog, expandedName) && !hasValueContent(inputValue?.value ?? "")) {
+
+    return { action: { option: expandedName, type: "option:armed" } };
+  }
+
+  // Explicit enable at this scope.
   return { action: writeAction({ deviceId, enabled: true, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
 };
 

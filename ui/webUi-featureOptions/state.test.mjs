@@ -431,6 +431,41 @@ describe("reducer - option:set", () => {
   });
 });
 
+describe("reducer - option:armed / option:disarmed", () => {
+
+  const loaded = () => reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+  test("arming records the row and disarming clears it, with configuredOptions untouched by both", () => {
+
+    const base = loaded();
+    const armed = reducer(base, { option: "Audio.Volume", type: "option:armed" });
+
+    assert.equal(armed.armedOption, "Audio.Volume", "the armed row is recorded");
+    assert.equal(armed.configuredOptions, base.configuredOptions, "arming persists nothing - the reference is untouched");
+
+    const disarmed = reducer(armed, { type: "option:disarmed" });
+
+    assert.equal(disarmed.armedOption, null, "disarming stands the row down");
+    assert.equal(disarmed.configuredOptions, base.configuredOptions, "disarming persists nothing either");
+  });
+
+  test("every configuration mutation and navigation disarms an armed row", () => {
+
+    const armed = reducer(loaded(), { option: "Audio.Volume", type: "option:armed" });
+
+    // The whole invalidation surface: a commit anywhere, a clear, a reset, a revert, a rollback, a selection move, and a reload each stand the armed row down.
+    assert.equal(reducer(armed, { args: { enabled: true, option: "Motion.Detect" }, type: "option:set" }).armedOption, null, "a commit disarms");
+    assert.equal(reducer(armed, { args: { option: "Motion.Detect" }, type: "option:cleared" }).armedOption, null, "a clear disarms");
+    assert.equal(reducer(armed, { type: "options:reset" }).armedOption, null, "a reset disarms");
+    assert.equal(reducer(armed, { type: "model:reverted" }).armedOption, null, "a revert disarms");
+    assert.equal(reducer(armed, { error: new Error("boom"), type: "persist:failed" }).armedOption, null, "a persist rollback disarms");
+    assert.equal(reducer(armed, { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" }).armedOption, null,
+      "a selection move disarms");
+    assert.equal(reducer(armed, { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" }).armedOption, null,
+      "a model reload disarms");
+  });
+});
+
 describe("reducer - option:cleared", () => {
 
   test("removes matching entries and produces a fresh array reference", () => {

@@ -107,6 +107,12 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   debounce; a consumer that needs coalescing applies its own.
  * @property {Object} [sidebar] - Sidebar configuration options.
  * @property {string} [sidebar.controllerLabel="Controllers"] - Label for the controllers section.
+ * @property {Function} [sidebar.deviceContent] - Synchronous hook supplying a device link's rendered content: `(device) => Node | string | null`. Invoked once per
+ *   device per sidebar build with the same device object the plugin's own `getDevices` produced, so any field that hook attached is available here. A returned Node
+ *   or string renders as the link's content in place of the device name; null or undefined falls through to the default name rendering, so a plugin may adorn some
+ *   devices and leave the rest alone. The framework keeps the link element itself - its identity attributes, classes, click handling, and highlight - so the
+ *   content must be presentational: interactive elements inside it would fight the link's own delegated click. Controller links are outside this hook's reach; they
+ *   render their names plainly.
  * @property {string} [sidebar.deviceLabel="Devices"] - Label for the devices section.
  * @property {Object} [statusPanel] - Live device-status panel for the device-stats region. Mutually exclusive with {@link FeatureOptionsConfig.infoPanel} (both own
  *   that region, so supplying both throws a TypeError at construction). The plugin supplies a server-side status adapter that speaks the `webui-status` protocol plus
@@ -300,6 +306,7 @@ export class webUiFeatureOptions {
       labelControllers: sidebar.controllerLabel ?? "Controllers",
       labelDevices: sidebar.deviceLabel ?? "Devices",
       onOptionsEdited,
+      renderDeviceContent: sidebar.deviceContent,
       statusPanel,
       validators: {
 
@@ -1057,6 +1064,7 @@ export class webUiFeatureOptions {
       mountNavView({
 
         deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS,
+        deviceContent: this.#config.renderDeviceContent,
         getDevices: (controller) => this.#devicesFor(controller),
         labelControllers: this.#config.labelControllers,
         labelDevices: this.#config.labelDevices,

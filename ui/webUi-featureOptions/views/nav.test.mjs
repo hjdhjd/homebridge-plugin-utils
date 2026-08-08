@@ -32,7 +32,7 @@ const DEVICES = [
 
 // The deadline the view applies to a click's device fetch. The orchestrator owns the value in production; the suite supplies its own so a hang test can name a bound it
 // can advance a mock clock past without the other tests waiting on a production-sized one.
-const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, devices = [], getDevices, mode = "controller-based" } = {}) => {
+const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], getDevices, mode = "controller-based" } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const rootControllers = document.createElement("div");
@@ -52,6 +52,7 @@ const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, devices = [], 
   mountNavView({
 
     deadlineSeconds,
+    deviceContent,
     getDevices,
     labelControllers: "Controllers",
     labelDevices: "Devices",
@@ -113,6 +114,36 @@ describe("mountNavView - devices container", () => {
     assert.equal(links.length, 2);
     assert.equal(links[0].getAttribute("data-device-serial"), "dev-a");
     assert.equal(links[1].getAttribute("data-device-serial"), "dev-b");
+  });
+
+  test("renders a device link's content through the deviceContent hook, falling through to the name on null", () => {
+
+    using _dom = createTestDom();
+
+    // The hook adorns one device and declines the other, which is the contract's whole shape in one build: a returned node replaces the name as the link's
+    // content, a null return leaves the default name rendering, and the link element itself - identity attributes and navigation - is untouched either way.
+    const deviceContent = (device) => {
+
+      if(device.serialNumber !== "dev-a") {
+
+        return null;
+      }
+
+      const content = document.createElement("span");
+
+      content.className = "adorned";
+      content.textContent = "custom " + device.name;
+
+      return content;
+    };
+
+    const { rootDevices } = setup({ deviceContent, devices: DEVICES });
+    const links = [...rootDevices.querySelectorAll(".nav-link[data-navigation]")];
+
+    assert.equal(links[0].querySelector(".adorned")?.textContent, "custom Device A", "the hook's node renders as the link's content");
+    assert.equal(links[0].getAttribute("data-device-serial"), "dev-a", "the framework still owns the link's identity attributes");
+    assert.equal(links[1].querySelector(".adorned"), null, "a declined device carries no adornment");
+    assert.equal(links[1].textContent, "Device B", "a null return falls through to the default name rendering");
   });
 
   test("renders the device-label header when at least one device is ungrouped", () => {

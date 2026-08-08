@@ -39,6 +39,8 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  *
  * @param {Object} args
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.
+ * @param {((device: import("../../webUi-featureOptions.mjs").Device) => Node | string | null) | undefined} args.deviceContent - Plugin-provided hook composing a
+ *        device link's rendered content in place of its name; a null or undefined return falls through to the name. Applies to device links only.
  * @param {((controller: import("../state.mjs").Controller | null) =>
  *           Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>) | undefined} args.getDevices
  *        - Plugin-provided fetcher resolving a controller's DeviceListResult. Called on controller-link click.
@@ -49,7 +51,7 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountNavView = ({ deadlineSeconds, getDevices, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
+export const mountNavView = ({ deadlineSeconds, deviceContent, getDevices, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
 
   // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - a controllers-only refresh hook not currently dispatched.
   effect({
@@ -81,7 +83,7 @@ export const mountNavView = ({ deadlineSeconds, getDevices, labelControllers, la
         return;
       }
 
-      buildDevicesList({ catalog: store.state.catalog, deviceLabel: labelDevices, devices: store.state.devices, root: rootDevices });
+      buildDevicesList({ catalog: store.state.catalog, deviceContent, deviceLabel: labelDevices, devices: store.state.devices, root: rootDevices });
       applyDevicesHighlight(rootDevices, store.state.scope);
     },
     signal,
@@ -184,7 +186,7 @@ const buildControllersList = ({ controllerLabel, mode, root, state }) => {
 // Because the device-label header renders only when there is at least one ungrouped device (the appendSection rule), a fully-grouped device set - every device
 // carrying a sidebarGroup - shows its group headers alone, with no orphan top-level device header. Controllers are excluded from group derivation (their link lives in
 // the controllers container above); the reserved "hidden" group excludes devices from the sidebar entirely.
-const buildDevicesList = ({ catalog, deviceLabel, devices, root }) => {
+const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, root }) => {
 
   root.textContent = "";
 
@@ -194,7 +196,11 @@ const buildDevicesList = ({ catalog, deviceLabel, devices, root }) => {
   }
 
   const isController = catalog.validators.isController;
-  const renderDevice = (device) => navLink({ label: device.name ?? "Unknown", navigation: "device", serial: device.serialNumber });
+
+  // A device link's content is the plugin's to compose when it supplied the deviceContent hook - a returned Node or string replaces the name, and a null or
+  // undefined return falls through to the name so a plugin may adorn some devices and leave the rest alone. The link element itself stays the framework's: its
+  // identity attributes, click delegation, and highlighting are what make every row navigate the same way whatever its content looks like.
+  const renderDevice = (device) => navLink({ label: deviceContent?.(device) ?? device.name ?? "Unknown", navigation: "device", serial: device.serialNumber });
 
   // Ungrouped devices, headed by the device label. appendSection suppresses the header when there are no ungrouped devices.
   appendSection({ items: devices.filter((device) => !device.sidebarGroup), label: deviceLabel, render: renderDevice, root });

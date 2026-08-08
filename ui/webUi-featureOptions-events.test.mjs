@@ -500,3 +500,62 @@ describe("webUiFeatureOptions event delegation - text input change re-dispatches
       "a text-input change must propagate to updatePluginConfig via the checkbox re-dispatch pipeline");
   });
 });
+
+describe("webUiFeatureOptions event delegation - window blur commits and flushes pending edits", () => {
+
+  test("a focused value input with an uncommitted value persists when focus leaves the page, with no change event ever fired", async () => {
+
+    using harness = await makeStartedOrchestrator({
+
+      config: [{ name: "TestPlugin", options: ["Enable.Network.Mtu=1500"], platform: "TestPlugin" }],
+      features: {
+
+        categories: [{ description: "Network Options", name: "Network" }],
+        options: { Network: [{ default: false, defaultValue: "1500", description: "MTU.", name: "Mtu" }] }
+      }
+    });
+
+    clickCategoryHeader(harness.skeleton.configTable.querySelector("details[data-category='Network']"));
+
+    const valueInput = harness.skeleton.configTable.querySelector("[id='row-Network.Mtu']").querySelector("input[type='text']");
+
+    assert.ok(valueInput, "the value input must exist for a value-centric option");
+
+    /* The host-save gesture in miniature: the user types into the input and then clicks a control in the PARENT document, so the input never fires `change` -
+     * moving focus to the parent does not reliably blur the iframe's own active element - and the only signal this window receives is its own `blur`. The wait
+     * afterwards is deliberately shorter than the persist debounce, because the flush half of the handler must skip that window: an edit that only lands after
+     * the debounce would lose the race with the host's save.
+     */
+    valueInput.focus();
+    valueInput.value = "9000";
+    window.dispatchEvent(new Event("blur"));
+
+    await delay(100);
+
+    const staged = harness.fake.observed.updatedConfigs.at(-1);
+
+    assert.ok(staged, "the blur must have driven a persist without any change event");
+    assert.ok(staged[0].options.includes("Enable.Network.Mtu=9000"), "the staged config must carry the value the input held when focus left the page");
+  });
+
+  test("an already-committed edit still inside the persist debounce is written the moment focus leaves the page", async () => {
+
+    using harness = await makeStartedOrchestrator();
+
+    clickCategoryHeader(harness.skeleton.configTable.querySelector("details[data-category='Audio']"));
+
+    const checkbox = harness.skeleton.configTable.querySelector("[id='row-Audio.Capture']").querySelector("input[type='checkbox']");
+
+    // Toggle the option - the edit commits into the store and enters the persist debounce - then pull focus from the page before that window can expire. The
+    // sub-debounce wait pins that the flush wrote immediately rather than the debounce having elapsed on its own.
+    checkbox.click();
+    window.dispatchEvent(new Event("blur"));
+
+    await delay(100);
+
+    const staged = harness.fake.observed.updatedConfigs.at(-1);
+
+    assert.ok(staged, "the blur must have flushed the debounced edit");
+    assert.ok(staged[0].options.includes("Enable.Audio.Capture"), "the staged config must carry the toggled option ahead of the debounce window");
+  });
+});

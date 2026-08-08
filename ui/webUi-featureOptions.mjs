@@ -491,6 +491,30 @@ export class webUiFeatureOptions {
       }
     }, { signal });
 
+    /* Commit-and-flush when keyboard focus leaves the page. The page lives in the host's custom-UI iframe, and every host-side control - the Save button above all,
+     * but Close and the restart affordance too - sits in the parent document, so acting on any of them begins by moving focus out of this window. Two edits are in
+     * flight at exactly that moment and neither would otherwise reach the host in time: a text input still holding focus has never fired `change`, because moving
+     * focus to the parent document does not reliably blur the iframe's own active element, and an already-committed edit inside the persist debounce window has not
+     * been written. Either one makes the host's Save write a config that silently omits the user's last edit.
+     *
+     * The window `blur` event is the signal this window receives for that boundary, and it fires on the focus shift - ahead of the click that completes on the
+     * parent's button - so both halves land before the host acts: the focused value input is committed through the same change delegation every commit routes
+     * through, and the persist drain is then driven immediately, skipping its debounce. Element-level blurs never reach this listener (they do not bubble to the
+     * window), so it fires only when focus genuinely leaves the page; a blur with nothing pending costs one no-op flush. The commit targets only a value input
+     * inside the options table - the search field stages nothing and is deliberately outside this rule.
+     */
+    window.addEventListener("blur", () => {
+
+      const active = document.activeElement;
+
+      if(active?.matches?.("input[type='text']") && active.closest("#configTable")) {
+
+        active.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+
+      void this.#flushPersist?.();
+    }, { signal });
+
     // Wait for controllers (if configured), bounded so a plugin hook riding a dead bridge cannot strand the page. Empty result in controller-based mode means "no
     // controllers configured" - we show the helper text and bail.
     let controllers;

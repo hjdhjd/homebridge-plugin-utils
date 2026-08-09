@@ -163,6 +163,82 @@ describe("TimerRegistry", () => {
     assert.equal(fired, 0, "a disposed registry must fire nothing that was pending");
   });
 
+  test("clearAll() drains every pending timer so none of them fire", () => {
+
+    let fired = 0;
+    const registry = new TimerRegistry();
+
+    registry.setTimeout("one-shot", (): void => { fired++; }, 30);
+    registry.setInterval("interval", (): void => { fired++; }, 30);
+    registry.schedule((): void => { fired++; }, 30);
+
+    registry.clearAll();
+
+    mock.timers.tick(1000);
+
+    assert.equal(fired, 0, "a drained registry must fire nothing that was pending");
+    assert.equal(registry.has("one-shot"), false, "the drained keyed one-shot must be gone");
+    assert.equal(registry.has("interval"), false, "the drained keyed interval must be gone");
+  });
+
+  test("clearAll() leaves the registry armed, so a registration after it fires - even under the key the drain just removed", () => {
+
+    let drained = 0;
+    let rearmed = 0;
+    const registry = new TimerRegistry();
+
+    registry.setTimeout("k", (): void => { drained++; }, 30);
+
+    registry.clearAll();
+
+    // This is what separates the drain from disposal: the registry stays open, so re-arming the very key the drain removed takes and fires on its own schedule.
+    registry.setTimeout("k", (): void => { rearmed++; }, 30);
+    registry.schedule((): void => { rearmed++; }, 30);
+
+    assert.equal(registry.has("k"), true, "the re-armed key must be armed after the drain");
+
+    mock.timers.tick(30);
+
+    assert.equal(drained, 0, "the drained timer must never fire");
+    assert.equal(rearmed, 2, "both registrations made after the drain must fire");
+  });
+
+  test("clearAll() on a disposed registry neither throws nor revives it", () => {
+
+    let fired = 0;
+    const registry = new TimerRegistry();
+
+    registry.dispose();
+
+    // Draining is meaningful whatever the registry's lifetime state, and it is not a route back from disposal.
+    registry.clearAll();
+
+    registry.setTimeout("k", (): void => { fired++; }, 30);
+
+    mock.timers.tick(1000);
+
+    assert.equal(fired, 0, "a drain must not revive a disposed registry");
+    assert.equal(registry.has("k"), false, "a registration after disposal stays inert whether or not a drain intervened");
+  });
+
+  test("dispose() after clearAll() still retires the registry", () => {
+
+    let fired = 0;
+    const registry = new TimerRegistry();
+
+    registry.setTimeout("k", (): void => { fired++; }, 30);
+
+    registry.clearAll();
+    registry.dispose();
+
+    registry.setTimeout("after", (): void => { fired++; }, 30);
+
+    mock.timers.tick(1000);
+
+    assert.equal(fired, 0, "nothing must fire once a drained registry has also been disposed");
+    assert.equal(registry.has("after"), false, "a registration after disposal must not arm");
+  });
+
   test("an aborting lifetime signal drains armed timers and makes later registrations inert", () => {
 
     const controller = new AbortController();

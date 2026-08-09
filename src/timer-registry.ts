@@ -43,6 +43,8 @@ export interface TimerRegistryOptions {
  *   - `schedule(callback, delay)` arms an anonymous one-shot: tracked for disposal, self-removing on fire, never replacing anything, so concurrent anonymous timers
  *     coexist.
  *   - `clear(key)` cancels and removes a keyed timer; `has(key)` reports whether one is currently armed.
+ *   - `clearAll()` drains every pending timer, keyed and anonymous alike, and leaves the registry armed: the shape for an owner whose pending work must all cancel on a
+ *     state change while the re-arms that follow still need to take.
  *   - `dispose()` (and `[Symbol.dispose]`) drains every pending timer and retires the registry: subsequent registrations are no-ops. An `options.signal` binds the same
  *     drain to the owner's lifetime, so the owner never has to unwire the registry by hand at teardown.
  *
@@ -206,17 +208,12 @@ export class TimerRegistry implements Disposable {
   }
 
   /**
-   * Clear every pending timer, keyed and anonymous, and retire the registry: after disposal every registration method is a no-op, so a timer can never arm against a
-   * torn-down owner. Disposal is a no-op on repeat.
+   * Cancel and remove every pending timer, keyed and anonymous alike, while leaving the registry armed for later registrations. This is the drain without the
+   * retirement: reach for it when an owner's pending work must all cancel on a state change but the owner itself lives on, so the re-arms that follow the change still
+   * need to take. Safe to call in any state and a no-op on repeat - draining empty containers does nothing, and a call on an already-disposed registry neither throws
+   * nor revives it.
    */
-  public dispose(): void {
-
-    if(this.#disposed) {
-
-      return;
-    }
-
-    this.#disposed = true;
+  public clearAll(): void {
 
     for(const handle of this.#keyed.values()) {
 
@@ -231,6 +228,23 @@ export class TimerRegistry implements Disposable {
     }
 
     this.#anonymous.clear();
+  }
+
+  /**
+   * Clear every pending timer, keyed and anonymous, and retire the registry: after disposal every registration method is a no-op, so a timer can never arm against a
+   * torn-down owner. Disposal is a no-op on repeat.
+   */
+  public dispose(): void {
+
+    if(this.#disposed) {
+
+      return;
+    }
+
+    this.#disposed = true;
+
+    // The drain is the same act {@link clearAll} performs; retirement is the flag above, so the two lifetimes share one drain implementation.
+    this.clearAll();
 
     // Detach the abort listener so a long-lived composed signal retains no handler for a registry that has already been disposed.
     this.#abortRegistration?.[Symbol.dispose]();

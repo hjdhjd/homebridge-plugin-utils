@@ -280,9 +280,12 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
  * typing a value is the gesture that enables a value option here, so it works from unset and explicitly disabled rows alike. The {@link writeAction} write rule
  * still decides between an explicit entry and a clear that reaches the same resolution.
  *
- * A commit without content unsets a row that is explicitly enabled at this scope: the engine reduces a scoped valueless enable to clearing the scope, and
- * composes the bare no-value enable at the global scope. On any other row - unset, or explicitly disabled - there is no value to remove and an enable-shaped
- * dispatch would disturb state the gesture never addressed, so the commit yields no action and the caller restores the row from the projection instead.
+ * A commit without content clears the entry of a row that is explicitly enabled at this scope, and resolution falls back to whatever the hierarchy answers -
+ * an upstream entry where one exists, the catalog default otherwise. Clearing rather than composing a valueless enable is what makes emptying a pre-filled
+ * field restore the default: a bare enable carries no value at all, so on a default-on value option it would override the declared default with nothing and
+ * the user who cleared the field to get the default back would silently lose it. On any other row - unset, or explicitly disabled - there is no value to
+ * remove and an enable-shaped dispatch would disturb state the gesture never addressed, so the commit yields no action and the caller restores the row from
+ * the projection instead.
  *
  * The function neither mutates nor returns DOM state, mirroring {@link triStateTransition}: the caller dispatches the action (when there is one) and the
  * reactive re-projection drives the row's DOM through {@link applyRowState}.
@@ -303,10 +306,18 @@ export const valueCommitTransition = ({ catalog, configIndex, controllerId, devi
   // A row is explicitly enabled at this scope when its own entry - not an inherited one - resolves it enabled: an entry exists at exactly this scope and the
   // resolved state is enabled, which a local disable would have overruled.
   const locallyEnabled = entry.enabled && optionExists({ configIndex, id: deviceId ?? undefined, option: expandedName });
+  const emptyCommit = !hasValueContent(inputValue.value);
 
-  if(!hasValueContent(inputValue.value) && !locallyEnabled) {
+  if(emptyCommit && !locallyEnabled) {
 
     return { action: null };
+  }
+
+  // Emptying the field on a row enabled here drops its entry outright, handing resolution back to the hierarchy. The alternative - composing an enable with no
+  // value behind it - would answer the option with nothing at all, which is the opposite of what clearing a pre-filled field asks for.
+  if(emptyCommit) {
+
+    return { action: { args: { id: deviceId ?? undefined, option: expandedName }, type: "option:cleared" } };
   }
 
   const upstream = hasUpstreamOption({ catalog, configIndex, controllerId, deviceId, expandedName });

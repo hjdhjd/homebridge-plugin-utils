@@ -12,9 +12,9 @@ import assert from "node:assert/strict";
 import { createTestDom } from "../ui.helpers.mjs";
 import { projection } from "./selectors.mjs";
 
-// Catalog fixture: covers the row archetypes (boolean, grouped boolean, and value-centric options with and without an explicit inputSize) plus a controller-detectable
-// device fixture for upstream tests. inputSize feeds only the field width, not the layout, so both value options exercise the same stacked structure regardless of
-// whether inputSize is declared.
+// Catalog fixture: covers the row archetypes (boolean, grouped boolean, value-centric options with and without an explicit inputSize, and a default-on value-centric
+// option whose declared default is what an emptied field has to fall back to) plus a controller-detectable device fixture for upstream tests. inputSize feeds only
+// the field width, not the layout, so every value option exercises the same stacked structure regardless of whether inputSize is declared.
 const CATEGORIES = [
 
   { description: "Motion Options", name: "Motion" },
@@ -26,7 +26,8 @@ const OPTIONS = {
   Audio: [
 
     { default: false, defaultValue: 50, description: "Audio volume level.", inputSize: 3, name: "Volume" },
-    { default: false, defaultValue: 80, description: "Bandwidth ceiling.", name: "Bandwidth" }
+    { default: false, defaultValue: 80, description: "Bandwidth ceiling.", name: "Bandwidth" },
+    { default: true, defaultValue: "stereo", description: "Default audio channel layout.", name: "Layout" }
   ],
 
   Motion: [
@@ -641,11 +642,59 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const entry = findEntry(state, "Audio", "Volume");
     const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
 
-    // The write rule still runs: enabled-true with no value on a default-off option deviates on the boolean axis, so a set is dispatched, and the engine composes
-    // the bare global enable from it.
-    assert.equal(result.action.type, "option:set");
-    assert.equal(result.action.args.enabled, true);
-    assert.equal(result.action.args.value, undefined);
+    // Emptying the field drops the entry instead of writing an enable with nothing behind it, so resolution falls back to the hierarchy - here to the catalog
+    // default, which leaves this default-off option unset.
+    assert.equal(result.action.type, "option:cleared");
+    assert.equal(result.action.args.option, "Audio.Volume");
+    assert.equal(result.action.args.id, undefined);
+  });
+
+  test("emptying a default-on value option's field clears the entry and hands resolution back to the catalog default", () => {
+
+    using _dom = createTestDom();
+
+    // The case the clear exists for. Audio.Layout is default-on with a declared default value, so an enable carrying no value would answer the option with
+    // nothing at all, and the user who emptied a pre-filled field to get the default back would lose the value entirely.
+    const state = loadedState({ configuredOptions: ["Enable.Audio.Layout=mono"] });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Layout");
+
+    assert.equal(entry.value, "mono", "the row starts out showing its explicit value");
+
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
+
+    assert.equal(result.action.type, "option:cleared");
+    assert.equal(result.action.args.option, "Audio.Layout");
+    assert.equal(result.action.args.id, undefined);
+
+    // Resolution after the clear, driven through the same reducer the view dispatches into: no entry survives at any scope, so the catalog's own default answers.
+    const cleared = reducer(state, result.action);
+    const resolved = findEntry(cleared, "Audio", "Layout");
+
+    assert.deepEqual(cleared.configuredOptions, [], "the explicit entry is gone");
+    assert.equal(resolved.scope, "none", "resolution found no entry at any scope");
+    assert.equal(resolved.enabled, true, "the option resolves enabled by its catalog default");
+    assert.equal(resolved.value, "stereo", "the declared default value is what the row shows once the entry is gone");
+  });
+
+  test("a commit without content on a device-view row with a local value clears at that scope", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({
+
+      configuredOptions: ["Enable.Audio.Volume.dev-a=75"],
+      devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }],
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" }
+    });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue: textInput("") });
+
+    assert.equal(result.action.type, "option:cleared");
+    assert.equal(result.action.args.id, "dev-a", "the clear addresses the device scope the gesture was made at");
   });
 
   test("a commit without content on an unset row yields no action", () => {
@@ -673,6 +722,30 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
 
     assert.equal(result.action, null, "the explicit disable survives an empty commit untouched");
+  });
+
+  test("a commit without content on a row enabled only by inheritance yields no action", () => {
+
+    using _dom = createTestDom();
+
+    // The other polarity of the same guard: the row reads enabled, but the entry answering it lives upstream. A clear here would reach past the scope the user
+    // is editing and take the global entry with it.
+    const state = loadedState({
+
+      configuredOptions: ["Enable.Audio.Volume=75"],
+      devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }],
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" }
+    });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+
+    assert.equal(entry.enabled, true, "the row reads enabled");
+    assert.equal(entry.scope, "global", "but the entry answering it is upstream, not local");
+
+    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue: textInput("") });
+
+    assert.equal(result.action, null, "the upstream entry survives a gesture made at a lower scope");
   });
 
   test("an all-delimiter commit reads as no content", () => {

@@ -655,10 +655,13 @@ export class FfmpegOptions {
         case "macOS.Apple":
         case "macOS.Intel":
 
-          // FFmpeg 8.x on macOS requires explicit upload when moving from software decoding to VideoToolbox encoding.
+          // FFmpeg 8.x on macOS requires explicit upload when moving from software decoding to VideoToolbox encoding. We convert to nv12 before uploading so the
+          // VideoToolbox frames context carries nv12 as its underlying pixel format rather than inheriting the software decoder's yuv420p. hwdownload can only emit
+          // the frames context's own format, so without the pin, a chain that later bridges back to the CPU for caller-supplied filters (hwdownload, format=nv12)
+          // cannot start. nv12 is VideoToolbox's native layout, so the upload itself costs no extra conversion.
           if(this.#codecSupport.ffmpegAtLeast(8)) {
 
-            filters.push("hwupload");
+            filters.push("format=nv12", "hwupload");
           }
 
           break;

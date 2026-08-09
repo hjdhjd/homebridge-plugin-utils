@@ -990,8 +990,11 @@ describe("FfmpegOptions - hardware transfer filter matrix (upload paths)", () =>
 
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
     const chain = filterChain(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false }));
+    const pinIdx = chain.indexOf("format=nv12");
+    const uploadIdx = chain.indexOf("hwupload");
 
-    assert.ok(chain.includes("hwupload"), "macOS 8.x hardware-transcode-from-software-decode must splice in hwupload - got " + chain);
+    assert.ok(uploadIdx >= 0, "macOS 8.x hardware-transcode-from-software-decode must splice in hwupload - got " + chain);
+    assert.ok((pinIdx >= 0) && (pinIdx < uploadIdx), "the nv12 pin must precede hwupload so the frames context carries nv12 - got " + chain);
   });
 
   test("macOS pre-8.x emits no upload filter for software-decode + hardware-transcode", () => {
@@ -1372,7 +1375,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "hwupload, scale_vt=-2:min(ih\\, 1080)",
+      "-filter:v", "format=nv12, hwupload, scale_vt=-2:min(ih\\, 1080)",
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1441,7 +1444,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "hwupload, scale_vt=-2:min(ih\\, 1080)",
+      "-filter:v", "format=nv12, hwupload, scale_vt=-2:min(ih\\, 1080)",
       "-b:v", "3000k",
       "-g:v", "60",
       "-bufsize", "6000k",
@@ -1732,8 +1735,9 @@ describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)",
 
   test("both transfer directions compose around the scaler on a SW-decode + HW-transcode macOS 8.x chain", () => {
 
-    // Software decode paired with hardware transcode: the chain uploads (hwupload) into the GPU scaler, scale_vt runs GPU-resident, then the caller's CPU-side filters
-    // pull the frames back down (hwdownload, format=nv12) before running. Both transfer directions compose correctly around the scaler in one chain.
+    // Software decode paired with hardware transcode: the chain uploads (format=nv12, hwupload) into the GPU scaler, scale_vt runs GPU-resident, then the caller's
+    // CPU-side filters pull the frames back down (hwdownload, format=nv12) before running. Both transfer directions compose correctly around the scaler in one chain,
+    // and the nv12 pin on the upload side is what lets the download side name nv12 as its output format.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
 
     assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS }), [
@@ -1747,7 +1751,7 @@ describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)",
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "hwupload, " + scaleVtChain + ", hwdownload, format=nv12" + callerTail,
+      "-filter:v", "format=nv12, hwupload, " + scaleVtChain + ", hwdownload, format=nv12" + callerTail,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",

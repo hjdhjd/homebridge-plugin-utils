@@ -302,6 +302,18 @@ const buildThemeCss = () => [
   ".fo-option-row:hover { background-color: var(--fo-row-hover-bg); }",
   ".fo-option-row.fo-hidden { display: none !important; }",
 
+  // While the table is busy - a controller's device list in flight - every row's inputs are disabled, and the rows dim to say so. The dim comes from
+  // `--fo-opacity-disabled`, the shared not-actionable value the locked secret toggle already wears, and the default cursor keeps a row that answers nothing from
+  // presenting itself as one that does. The category headers stay undimmed and live: expanding one during the window is how its rows materialize, and they
+  // materialize inert.
+  ".fo-options-busy .fo-option-row { cursor: default; opacity: var(--fo-opacity-disabled); }",
+
+  // The option's text wears the `cursor-pointer` utility, and that rule matches the label element itself while the row rule above matches only its ancestor...so the
+  // row rule alone leaves a pointer hovering over the text of a row that answers nothing. Reaching the label through its row and the busy marker outranks the utility
+  // on specificity and carries the default cursor across the whole row. The dim belongs to the row alone: the label already inherits it, and a second opacity here
+  // would compound the two.
+  ".fo-options-busy .fo-option-row .fo-option-label { cursor: default; }",
+
   // The checkbox top-aligns with the row; this nudge re-centers it on the label's first line (half the line's leading), so a single-line row keeps the control optically
   // centered on its text while a multi-line or stacked row aligns the control to the first line.
   ".fo-option-checkbox { margin-top: calc((1lh - 1em) / 2); }",

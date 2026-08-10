@@ -24,9 +24,11 @@ import { effect } from "../store.mjs";
  *      materialized row's full state (tri-state, value-input, label color, visibility, dependency badge) in place through the shared `applyRowState` writer. No DOM
  *      rebuild - just attribute and class swaps on existing rows, run through the same writer construction uses so the two paths cannot diverge.
  *   5. **Visibility updates** on `filter:changed`: the same projection walk re-derives each row, which includes its visibility and the "requires parent" badge.
- *   6. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), text-input changes (value-commit
+ *   6. **Busy rendering** while a controller's device list is in flight: the table goes inert - every input disabled, the rows dimmed through a marker class - so
+ *      no gesture can land a write at the wrong scope during the window. Derived at every row-state application; see {@link applyBusyState}.
+ *   7. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), text-input changes (value-commit
  *      transition + action dispatch). A gesture the model rejects restores the row through the shared applyRowState writer instead of dispatching.
- *   7. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
+ *   8. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
  *
  * The per-device DOM cache lets navigating from device A to device B and back return to A's previously-rendered DOM without re-running the projection or
  * rebuilding the category shells. The cache map's lifetime is the view's lifetime; aborting the signal releases it.
@@ -201,6 +203,27 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
     store
   });
 
+  // Re-evaluate the busy state when a device fetch is recorded. The scope-render effect above cannot answer this on its own: a sidebar click dispatches its
+  // optimistic scope:changed BEFORE the devices:requested that records the fetch, and dispatch is fully synchronous, so on a revisit to a controller whose list is
+  // already on screen the render pass sees that list still naming this controller with no fetch outstanding and reads the table as settled. The fetch record is
+  // what makes that window observable. One table-wide application is the whole response - no projection walk, no DOM round-trip, which is why this is its own
+  // effect rather than another event on the scope-render's list.
+  effect({
+
+    events: ["devices:requested"],
+    fn: () => {
+
+      if(store.state.status.kind === "loading") {
+
+        return;
+      }
+
+      applyBusyState({ configTable, state: store.state });
+    },
+    signal,
+    store
+  });
+
   // Category-disclosure toggle (capture-phase because `toggle` does not bubble). Materializes rows lazily on first expand; coalesces post-toggle persistence
   // into a microtask so bulk toggles (expand-all / collapse-all) produce one localStorage write.
   let pendingPostToggleSync = null;
@@ -217,6 +240,10 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
     if(details.open) {
 
       ensureRowsRendered({ details, state: store.state });
+
+      // Rows born from an expand never pass through the projection walk at birth, so the freshly materialized subtree takes the busy state here. It is derived
+      // again rather than read off the table's marker class, so one derivation answers every application.
+      applyBusyState({ configTable, root: details, state: store.state });
     }
 
     schedulePostToggleSync();
@@ -480,6 +507,60 @@ const applyProjectionToDom = ({ configTable, state }) => {
         applyRowState({ armed: state.armedOption === entry.expandedName, entry, row, scopeKind });
       }
     }
+  }
+
+  // Re-apply the busy state last. The walk above re-derived every materialized row from the projection alone, which knows nothing about a device fetch, so an open
+  // window would otherwise hand every row it touched its interactivity back - typing in the search box mid-fetch is the concrete case. Every re-derivation effect
+  // funnels through here, so this one application keeps all of them correct without any of them knowing the busy state exists.
+  applyBusyState({ configTable, state });
+};
+
+// Whether the option table must render inert: the scope names a controller whose settled device list is not what the table is showing. Two facts the store
+// already carries answer that together - the loaded list belongs to a different controller, which is a first visit, or a fetch naming this controller is still
+// outstanding, which is a revisit, where the sidebar click refetches while the list already on screen still names the same controller. Every other scope kind
+// reads false: a global or device scope keys its writes from the selection itself and has no in-flight window to protect.
+const isTableBusy = (state) => {
+
+  if(state.scope.kind !== "controller") {
+
+    return false;
+  }
+
+  const controllerId = state.scope.controllerId;
+
+  return (state.devicesControllerId !== controllerId) || (state.devicesRequest?.controllerId === controllerId);
+};
+
+/* Apply the table's busy state over a subtree, deriving it fresh from the store on every call.
+ *
+ * An option row keys its write off the selected device, and a controller scope has none...so a gesture taken while that controller's device list is still in
+ * flight would record the user's choice at global scope while the sidebar reads as the controller. Rendering the table inert for the window is what puts that
+ * write out of reach, and the marker class carries the dim that tells the user why nothing answers.
+ *
+ * Only the disabling half is written here. Handing a row its interactivity back belongs to {@link applyRowState}, whose derivation from the projection already
+ * answers which controls a settled row locks - an inheriting row's field, a parent-disabled checkbox - so an unconditional re-enable here would unlock exactly
+ * the rows that rule keeps shut. Deriving at every application rather than recording busy-ness on the nodes is also what keeps the DOM cache honest: a view
+ * detached mid-window comes back inert while the window is still open and comes back live once it has closed, with nothing stale baked into the cached nodes.
+ *
+ * The two gesture handlers need no busy awareness of their own. A disabled input originates neither a change nor a focusout, and the one event that can still
+ * arrive - the focusout a browser fires when focus sits on an input at the instant it is disabled - carries no write with it: the same gesture's scope:changed
+ * pass nulls armedOption in the reducer before any subscriber re-derives a row, so {@link handleFocusOut} finds no armed row and returns on its first guard. No
+ * resulting write is possible, which is a stronger claim than no event firing and the one this rests on.
+ */
+const applyBusyState = ({ configTable, root = configTable, state }) => {
+
+  const busy = isTableBusy(state);
+
+  configTable.classList.toggle("fo-options-busy", busy);
+
+  if(!busy) {
+
+    return;
+  }
+
+  for(const input of root.querySelectorAll("input")) {
+
+    input.disabled = true;
   }
 };
 

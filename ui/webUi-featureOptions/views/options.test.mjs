@@ -572,6 +572,245 @@ describe("mountOptionsView - per-device cache", () => {
   });
 });
 
+describe("mountOptionsView - in-flight device fetch", () => {
+
+  const CONTROLLER_A = "ctrl-a";
+  const DEVICE_A = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
+
+  // Move the store into the window a sidebar controller click opens: the scope already names the controller, its device list has not arrived, and every write the
+  // table could take would key from a selected device the controller scope does not have. The dispatch order mirrors the nav view's exactly - the optimistic scope
+  // first, the fetch record second - because that order is what makes the window observable at all.
+  const openWindow = ({ configuredOptions } = {}) => {
+
+    const harness = setup({ configuredOptions });
+
+    harness.store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+    harness.store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
+
+    return harness;
+  };
+
+  // Expand a category and hand back its element. Categories render collapsed, so this is how a row comes to exist at all on a first visit to a view.
+  const expandCategory = (configTable, name) => {
+
+    const details = configTable.querySelector("details[data-category='" + name + "']");
+
+    details.open = true;
+    details.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    return details;
+  };
+
+  // Whether every input in the table is disabled - the table-wide reading of "no gesture can land here."
+  const allInputsDisabled = (configTable) => [...configTable.querySelectorAll("input")].every((input) => input.disabled);
+
+  test("a first visit to a controller renders the table inert while its device list is in flight", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+    const motion = expandCategory(configTable, "Motion");
+    const inputs = [...configTable.querySelectorAll("input")];
+    const configuredBefore = store.state.configuredOptions;
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "the table carries the busy marker");
+    assert.notEqual(inputs.length, 0, "precondition: the expand materialized rows to assert over");
+    assert.equal(inputs.every((input) => input.disabled), true, "every input in the table is disabled");
+
+    // The gesture the whole thing exists for. A toggle here keys its write from the selected device, and a controller scope has none, so the entry would land at
+    // global scope while the sidebar reads as the controller. A disabled checkbox never reaches the change handler at all.
+    motion.querySelector("#Motion\\.Detect").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "the same array reference - no write was dispatched");
+  });
+
+  test("a category expanded during the window materializes its rows inert", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+
+    expandCategory(configTable, "Motion");
+
+    // Audio expands strictly after the window is established, so its rows are born inside it. Rows born from an expand never pass through the projection walk at
+    // birth, which is why the materialization path applies the busy state itself.
+    const audio = expandCategory(configTable, "Audio");
+    const audioInputs = [...audio.querySelectorAll("input")];
+    const configuredBefore = store.state.configuredOptions;
+
+    assert.notEqual(audioInputs.length, 0, "precondition: Audio materialized its rows");
+    assert.equal(audioInputs.every((input) => input.disabled), true, "the freshly materialized rows arrive disabled");
+
+    audio.querySelector("#Audio\\.Volume").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "and a click on one writes nothing");
+  });
+
+  test("revisiting a loaded controller is inert again while the refetch is in flight, and lifts when it lands", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    // Settle controller A's list, then sit in its view: the loaded list names this controller and no fetch is outstanding, so the table is live.
+    store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
+    store.dispatch({ controllerId: CONTROLLER_A, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+
+    expandCategory(configTable, "Motion");
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "precondition: a settled controller view is live");
+
+    // Leave and come back, which is what a sidebar click does. The optimistic scope lands first and finds the loaded list still naming this controller, so the
+    // scope alone says nothing is wrong - only the fetch record that follows can tell the view that what it is showing is about to be replaced.
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "the optimistic scope alone does not open the window");
+
+    store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
+
+    const configuredBefore = store.state.configuredOptions;
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "the fetch record is what opens the revisit window");
+    assert.equal(allInputsDisabled(configTable), true, "every restored row is inert");
+
+    configTable.querySelector("details[data-category='Motion'] #Motion\\.Detect").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "no write lands in the revisit window");
+
+    store.dispatch({ controllerId: CONTROLLER_A, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "the fresh list lifts the window");
+    assert.equal(configTable.querySelector("details[data-category='Motion'] #Motion\\.Detect").disabled, false, "and the rows take gestures again");
+  });
+
+  test("a re-derivation during the window leaves every row inert", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+    const motion = expandCategory(configTable, "Motion");
+    const configuredBefore = store.state.configuredOptions;
+
+    // Typing in the search box re-derives every materialized row from the projection, which knows nothing about a device fetch. This is the gesture that would
+    // otherwise hand the window's rows back their interactivity without the user touching a single one of them.
+    store.dispatch({ query: "motion", type: "filter:changed" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "the marker survives the walk");
+    assert.equal(allInputsDisabled(configTable), true, "every re-derived row is still disabled");
+
+    motion.querySelector("#Motion\\.Detect").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "and still no write is possible");
+  });
+
+  test("a focusout arriving from the disabling instant is absorbed with no dispatch at all", (t) => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+    const audio = expandCategory(configTable, "Audio");
+    const input = audio.querySelector("input.fo-option-value");
+
+    assert.equal(input.disabled, true, "precondition: the field is inert");
+
+    // A browser fires focusout from an input that held focus at the instant it was disabled. The test DOM's disabled setter is a plain attribute toggle and models
+    // no such fixup, so the event is synthesized here. Nothing follows from it: the scope:changed that opened this window nulled the armed row in the reducer
+    // before any subscriber re-derived anything, so the abandonment path finds no armed row and returns on its first guard. This row is what keeps a future
+    // reordering of those guards from quietly reopening the path.
+    const stateBefore = store.state;
+    const dispatch = t.mock.method(store, "dispatch");
+
+    input.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+    assert.equal(dispatch.mock.callCount(), 0, "the handler dispatched nothing");
+    assert.equal(store.state, stateBefore, "and the state is the same object it was");
+  });
+
+  test("the device list landing lifts the window on the same dispatch", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+    const motion = expandCategory(configTable, "Motion");
+
+    assert.equal(motion.querySelector("#Motion\\.Detect").disabled, true, "precondition: the window is open");
+
+    store.dispatch({ controllerId: CONTROLLER_A, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    const detect = configTable.querySelector("details[data-category='Motion'] #Motion\\.Detect");
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "the marker is gone");
+    assert.equal(detect.disabled, false, "the row takes gestures again");
+
+    detect.click();
+
+    // A settled controller view carries no device in its scope, so its entry keys to global. That is the view's own semantic and no concern of this row, which
+    // asserts only that the table takes a gesture at all once the fetch has been answered.
+    assert.deepEqual(store.state.configuredOptions, ["Disable.Motion.Detect"], "the toggle writes once the list has landed");
+  });
+
+  test("a controller that answers with no devices lifts the window too", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+
+    expandCategory(configTable, "Motion");
+    store.dispatch({ controllerId: CONTROLLER_A, devices: [], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    // An answered fetch settles the view whatever it carried: the list on screen belongs to this controller and nothing is outstanding, which is the whole of what
+    // the window was waiting on.
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "an empty list is still an answer");
+    assert.equal(configTable.querySelector("#Motion\\.Detect").disabled, false, "the rows take gestures again");
+  });
+
+  test("a view detached mid-window comes back inert while its fetch is still outstanding", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+
+    expandCategory(configTable, "Motion");
+
+    // Away and back with the fetch still in flight. The restored DOM is re-derived from the projection on arrival, which on its own would hand every row back its
+    // interactivity...the busy state is derived again at that same moment, so it does not.
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "the global view is never busy - its writes key from the selection itself");
+
+    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "the restored view is busy again");
+    assert.equal(allInputsDisabled(configTable), true, "every restored row is inert");
+  });
+
+  test("a view that was busy comes back live once its fetch has landed", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = openWindow();
+
+    expandCategory(configTable, "Motion");
+    store.dispatch({ controllerId: CONTROLLER_A, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    // The same round-trip against a view that has settled. Nothing about the window was recorded on the cached nodes, so what comes back is whatever the
+    // projection says it should be.
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+
+    const detect = configTable.querySelector("details[data-category='Motion'] #Motion\\.Detect");
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "no stale busy state survives in the cache");
+    assert.equal(detect.disabled, false, "the restored rows are live");
+
+    detect.click();
+
+    assert.deepEqual(store.state.configuredOptions, ["Disable.Motion.Detect"], "and they write");
+  });
+});
+
 describe("mountOptionsView - legacy category-state key migration", () => {
 
   // The pre-reactive-store architecture wrote category-state entries under context keys of shape `"Global Options"` (for the global view) or the bare device serial

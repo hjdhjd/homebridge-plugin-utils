@@ -145,6 +145,31 @@ describe("buildThemeCss - layout rules", () => {
     assert.match(text, /#sidebar\s*\{[^}]*max-width:\s*var\(--fo-sidebar-width\)/, "max-width reads the token");
     assert.doesNotMatch(text, /#sidebar\s*\{[^}]*200px/, "no literal width survives in the rule");
   });
+
+  test("the busy-table rule dims its rows through the shared disabled token and drops the pointer", async () => {
+
+    using _dom = createTestDom();
+
+    // The busy table's rows are disabled at the element level; this rule is what says so on screen. It reads the same not-actionable token the locked secret
+    // toggle wears, so the two dimmed states cannot drift apart, and a literal here would be exactly that drift.
+    const text = await themeCss();
+
+    assert.match(text, /\.fo-options-busy \.fo-option-row\s*\{[^}]*cursor:\s*default/, "a busy row drops the pointer");
+    assert.match(text, /\.fo-options-busy \.fo-option-row\s*\{[^}]*opacity:\s*var\(--fo-opacity-disabled\)/, "the dim reads the shared token");
+    assert.doesNotMatch(text, /\.fo-options-busy \.fo-option-row\s*\{[^}]*opacity:\s*[0-9.]/, "no literal opacity survives in the rule");
+  });
+
+  test("the busy-table treatment drops the pointer on the option label without dimming it a second time", async () => {
+
+    using _dom = createTestDom();
+
+    // The label carries the cursor-pointer utility, so the row-level cursor cannot reach it and the label needs a rule of its own. The dim must stay off that rule:
+    // the label already inherits the row's opacity, and a second declaration would stack one dim on top of another.
+    const text = await themeCss();
+
+    assert.match(text, /\.fo-options-busy \.fo-option-row \.fo-option-label\s*\{[^}]*cursor:\s*default/, "a busy row's label drops the pointer");
+    assert.doesNotMatch(text, /\.fo-options-busy \.fo-option-row \.fo-option-label\s*\{[^}]*opacity/, "the label rule declares no opacity of its own");
+  });
 });
 
 describe("buildThemeCss - status panel variant rules", () => {

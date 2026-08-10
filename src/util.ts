@@ -298,6 +298,76 @@ export function markHandled<T>(promise: Promise<T>): Promise<T> {
 }
 
 /**
+ * Compare two arrays entry by entry, deciding equality of each pair through a caller-supplied comparator.
+ *
+ * The use case this exists for is persist-on-change: a plugin holds the last state it wrote, computes the current state, and wants to write only when something
+ * actually differs. The entries are usually small records - a device summary, a channel row - whose equality is a matter of the two or three fields that matter to
+ * the caller rather than a deep structural comparison, and the comparator is where that judgement lives.
+ *
+ * Arrays of different lengths are unequal without any comparison. Otherwise the walk is index-wise and short-circuits at the first unequal pair, so the cost is the
+ * length of the common prefix rather than the whole array.
+ *
+ * Undefined slots are settled before the comparator is consulted, which is what keeps a sparse or short-read array from slipping past a comparator that reads
+ * fields off its arguments: a pair with exactly one undefined side is unequal, a pair with both sides undefined is equal, and the comparator runs only when both
+ * sides are present. A comparator therefore never has to defend against an undefined argument.
+ *
+ * Node-side by scope, and deliberately so. It has no runtime dependencies of its own, but util.ts is where the library's Node-side helpers live and every filed
+ * consumer of this one is Node-side; the browser-safe surface is formatters.ts, which is the SSOT for formatting alone, by name and by scope. Should a browser-side
+ * consumer ever appear, relocating this is a deliberate, versioned act rather than something to pre-empt here.
+ *
+ * @typeParam T - The entry type.
+ *
+ * @param a    - The first array.
+ * @param b    - The second array.
+ * @param same - Equality predicate for one pair of entries, invoked only when both entries are present.
+ *
+ * @returns True when the arrays are the same length and every pair is equal, false otherwise.
+ *
+ * @example
+ *
+ * ```ts
+ * // Write only when the device list actually changed.
+ * if(!sameEntries(this.persisted, devices, (x, y) => (x.id === y.id) && (x.name === y.name))) {
+ *
+ *   await this.persist(devices);
+ * }
+ * ```
+ *
+ * @category Utilities
+ */
+export function sameEntries<T>(a: readonly T[], b: readonly T[], same: (x: T, y: T) => boolean): boolean {
+
+  if(a.length !== b.length) {
+
+    return false;
+  }
+
+  for(const [ index, entry ] of a.entries()) {
+
+    const other = b[index];
+
+    // One side present and the other not is a difference, whatever the comparator would have said - and asking it here would hand it an undefined argument. Both
+    // sides absent is not a difference, and there is nothing to ask about.
+    if((entry === undefined) || (other === undefined)) {
+
+      if(entry !== other) {
+
+        return false;
+      }
+
+      continue;
+    }
+
+    if(!same(entry, other)) {
+
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * A utility type that recursively makes all properties of an object, including nested objects, optional.
  *
  * This should only be used on JSON objects. If used on classes, class methods will also be marked as optional.

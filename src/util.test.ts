@@ -6,8 +6,8 @@
  * sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds,
-  guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort, sanitizeName,
-  superviseLoop, superviseStream,
+  guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort, sameEntries,
+  sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing.helpers.ts";
@@ -542,6 +542,106 @@ describe("markHandled", () => {
     resolvers.resolve("ok");
 
     assert.equal(await handled, "ok");
+  });
+});
+
+describe("sameEntries", () => {
+
+  // The comparator every test that does not care about delegation uses: entries are records, and equality is whichever fields the caller cares about.
+  interface Row { id: string; name: string }
+
+  const sameRow = (x: Row, y: Row): boolean => (x.id === y.id) && (x.name === y.name);
+
+  test("arrays of equal length whose every pair the comparator accepts are equal", () => {
+
+    const a: Row[] = [ { id: "1", name: "One" }, { id: "2", name: "Two" } ];
+    const b: Row[] = [ { id: "1", name: "One" }, { id: "2", name: "Two" } ];
+
+    assert.equal(sameEntries(a, b, sameRow), true, "distinct objects with equal fields are equal entries");
+  });
+
+  test("a single differing pair makes the arrays unequal", () => {
+
+    const a: Row[] = [ { id: "1", name: "One" }, { id: "2", name: "Two" } ];
+    const b: Row[] = [ { id: "1", name: "One" }, { id: "2", name: "Deux" } ];
+
+    assert.equal(sameEntries(a, b, sameRow), false);
+  });
+
+  test("a length mismatch is unequal without consulting the comparator", () => {
+
+    let invoked = 0;
+    const same = (x: Row, y: Row): boolean => {
+
+      invoked++;
+
+      return sameRow(x, y);
+    };
+
+    assert.equal(sameEntries([{ id: "1", name: "One" }], [ { id: "1", name: "One" }, { id: "2", name: "Two" } ], same), false);
+    assert.equal(invoked, 0, "a length difference settles it before any pair is examined");
+  });
+
+  test("two empty arrays are equal", () => {
+
+    assert.equal(sameEntries<Row>([], [], sameRow), true);
+  });
+
+  test("equality is the comparator's to decide, not the entries' own", () => {
+
+    // The comparator is the whole point of the helper: identical objects can be unequal and differing ones equal, because only the caller knows which fields matter.
+    const a: Row[] = [{ id: "1", name: "One" }];
+    const b: Row[] = [{ id: "1", name: "Uno" }];
+
+    assert.equal(sameEntries(a, b, (x, y) => x.id === y.id), true, "a comparator that reads only the id ignores the name");
+    assert.equal(sameEntries(a, a, () => false), false, "a comparator that refuses everything makes an array unequal to itself");
+  });
+
+  test("the comparator is invoked once per pair and stops at the first difference", () => {
+
+    const seen: string[] = [];
+    const a: Row[] = [ { id: "1", name: "One" }, { id: "2", name: "Two" }, { id: "3", name: "Three" } ];
+    const b: Row[] = [ { id: "1", name: "One" }, { id: "X", name: "Two" }, { id: "3", name: "Three" } ];
+
+    sameEntries(a, b, (x, y) => {
+
+      seen.push(x.id);
+
+      return sameRow(x, y);
+    });
+
+    assert.deepEqual(seen, [ "1", "2" ], "the walk short-circuits at the second pair rather than finishing the array");
+  });
+
+  test("exactly one undefined side is unequal, and the comparator never sees it", () => {
+
+    let invoked = 0;
+    const same = (x: number, y: number): boolean => {
+
+      invoked++;
+
+      return x === y;
+    };
+
+    assert.equal(sameEntries<number | undefined>([ 1, undefined ], [ 1, 2 ], same as (x: number | undefined, y: number | undefined) => boolean), false,
+      "an undefined slot never false-matches a present one");
+    assert.equal(sameEntries<number | undefined>([ 1, undefined, 3 ], [ 1, 2, 3 ], same as (x: number | undefined, y: number | undefined) => boolean), false,
+      "an undefined slot in the middle settles it before the equal tail is reached");
+    assert.equal(invoked, 2, "each call reached the comparator exactly once - for its leading pair, the only one with both sides present");
+  });
+
+  test("both sides undefined is equal without invoking the comparator", () => {
+
+    let invoked = 0;
+    const never = (): boolean => {
+
+      invoked++;
+
+      return false;
+    };
+
+    assert.equal(sameEntries<undefined>([undefined], [undefined], never), true, "two absent entries are not a difference");
+    assert.equal(invoked, 0, "the comparator is not asked about a pair with nothing in it");
   });
 });
 

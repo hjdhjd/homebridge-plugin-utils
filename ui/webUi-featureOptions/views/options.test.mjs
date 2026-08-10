@@ -128,6 +128,88 @@ describe("mountOptionsView - lazy row materialization", () => {
   });
 });
 
+describe("mountOptionsView - open-category row materialization", () => {
+
+  // Leave a category in the state a lost toggle leaves behind: open, holding no rows, with nothing still owing it the event that would ordinarily build them.
+  // Detaching before the open is what makes the construction faithful rather than contrived - a toggle fired on a detached element reaches that element's own
+  // listeners and never the table's delegated one, which is exactly what a render pass does when it detaches a subtree between a programmatic open and the toggle
+  // task the browser has queued behind it. Re-attaching fires nothing of its own, so the category comes back to the table open and empty.
+  const poisonCategory = (configTable, name) => {
+
+    const details = configTable.querySelector("details[data-category='" + name + "']");
+    const nextSibling = details.nextSibling;
+
+    configTable.removeChild(details);
+    details.open = true;
+    configTable.insertBefore(details, nextSibling);
+
+    return details;
+  };
+
+  test("an open category with no rows takes them at the next projection pass, carrying that pass's row state", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup({ configuredOptions: ["Disable.Motion.Detect"] });
+    const motion = poisonCategory(configTable, "Motion");
+
+    assert.equal(motion.open, true, "precondition: the category is open");
+    assert.equal(motion.dataset.rowsRendered, undefined, "precondition: the lost toggle built nothing");
+    assert.equal(motion.querySelector(".fo-category-rows").children.length, 0, "precondition: the category is empty");
+
+    store.dispatch({ mode: "modified", type: "filter:changed" });
+
+    assert.equal(motion.dataset.rowsRendered, "true", "the walk materialized the category it found open");
+    assert.equal(motion.querySelector(".fo-category-rows").children.length, 2, "Motion has Detect + Sensitivity");
+
+    // The rows are not merely built - they leave the pass derived, which the modified filter reads off directly: the option carrying a configured entry shows, and
+    // the one still sitting at its default hides.
+    assert.equal(motion.querySelector("#row-Motion\\.Detect").classList.contains("fo-hidden"), false);
+    assert.equal(motion.querySelector("#row-Motion\\.Sensitivity").classList.contains("fo-hidden"), true);
+  });
+
+  test("a closed category with no rows keeps them unbuilt through every pass that walks the projection", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    store.dispatch({ mode: "modified", type: "filter:changed" });
+    store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+    store.dispatch({ mode: "all", type: "filter:changed" });
+
+    assert.equal(audio.open, false, "precondition: nothing opened the category");
+    assert.equal(audio.dataset.rowsRendered, undefined, "no pass claimed to have built it");
+    assert.equal(audio.querySelector(".fo-category-rows").children.length, 0, "lazy materialization intact - a closed category costs nothing");
+  });
+
+  test("an open category the walk fills during an in-flight fetch arrives inert", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    // The window a sidebar controller click opens, in the order the nav view dispatches it: the optimistic scope first, the fetch record second.
+    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+
+    const motion = poisonCategory(configTable, "Motion");
+    const configuredBefore = store.state.configuredOptions;
+
+    store.dispatch({ mode: "all", type: "filter:changed" });
+
+    const inputs = [...motion.querySelectorAll("input")];
+
+    assert.notEqual(inputs.length, 0, "precondition: the walk materialized the rows");
+    assert.equal(inputs.every((input) => input.disabled), true, "rows the walk builds mid-window take the same pass's busy application");
+
+    motion.querySelector("#Motion\\.Detect").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "the same array reference - a click on a healed row writes nothing");
+  });
+});
+
 describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("clicking a checkbox dispatches the tri-state transition's action", () => {

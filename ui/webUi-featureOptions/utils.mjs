@@ -172,8 +172,12 @@ export function captureCategoryStates(configTable) {
 
 /**
  * Apply a previously-captured `{ [categoryName]: isCollapsed }` map onto the matching category `<details>` elements in the supplied container. Categories absent
- * from the map are left at their current state. Symmetric counterpart to {@link captureCategoryStates}; routes every write through {@link setCategoryExpanded}
- * so each programmatic toggle fires the `toggle` event the orchestrator listens for (which materializes lazy rows on expand and coalesces post-toggle sync).
+ * from the map are left at their current state. Symmetric counterpart to {@link captureCategoryStates}; routes every write through {@link setCategoryExpanded},
+ * which mutates `details.open` and leaves the browser to propagate the disclosure state and to fire `toggle` for whoever observes it - the options view's
+ * user-gesture path, the search view's expand/collapse ratio.
+ *
+ * What a restored-open category has inside it is neither this write's business nor the event's: the options view's projection walk materializes the rows of any
+ * category it finds open, and every render pass ends in that walk...so restoring state here is a state write and nothing more.
  *
  * @param {HTMLElement} configTable - Container holding category `<details>` elements to apply state to.
  * @param {Object<string, boolean>} states - Map of category name to collapsed boolean (the shape returned by captureCategoryStates).

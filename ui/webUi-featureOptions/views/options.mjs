@@ -19,11 +19,14 @@ import { effect } from "../store.mjs";
  *   1. **Initial build** on `model:loaded`: builds the empty config table (no categories yet - those come from the first scope-render).
  *   2. **Scope-aware render** on `scope:changed`: detaches the prior view's DOM into a per-device cache, restores or builds the new view's DOM, applies persisted
  *      category-expansion state from localStorage.
- *   3. **Lazy row materialization** on category-disclosure toggle: builds row elements only when the user expands a category for the first time.
+ *   3. **Lazy row materialization**: builds a category's row elements the first time that category needs them, which is either the user's own disclosure toggle or
+ *      the first projection pass that finds the category open. A category nobody has opened carries no rows at all.
  *   4. **Per-row updates** on `option:set` / `option:cleared` / `options:reset` / `model:reverted` / `persist:failed`: walks the projection and re-derives each
- *      materialized row's full state (tri-state, value-input, label color, visibility, dependency badge) in place through the shared `applyRowState` writer. No DOM
- *      rebuild - just attribute and class swaps on existing rows, run through the same writer construction uses so the two paths cannot diverge.
- *   5. **Visibility updates** on `filter:changed`: the same projection walk re-derives each row, which includes its visibility and the "requires parent" badge.
+ *      row's full state (tri-state, value-input, label color, visibility, dependency badge) in place through the shared `applyRowState` writer - attribute and class
+ *      swaps on rows that already exist, run through the same writer construction uses so the two paths cannot diverge. The walk first builds whatever rows an open
+ *      category is missing, so what it derives is always the whole of what that category should be showing.
+ *   5. **Visibility updates** on `filter:changed`: the same projection walk, doing the same two jobs - materializing what an open category lacks, then re-deriving
+ *      each row, which includes its visibility and the "requires parent" badge.
  *   6. **Busy rendering** while a controller's device list is in flight: the table goes inert - every input disabled, the rows dimmed through a marker class - so
  *      no gesture can land a write at the wrong scope during the window. Derived at every row-state application; see {@link applyBusyState}.
  *   7. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), text-input changes (value-commit
@@ -186,7 +189,8 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
     store
   });
 
-  // Filter updates - cheap visibility refresh, no per-row state change.
+  // Filter updates. A filter change moves no option's value, so what the walk answers here is purely the derived presentation: which rows show, and which wear the
+  // dependency badge.
   effect({
 
     events: ["filter:changed"],
@@ -411,7 +415,8 @@ const restoreLegacyMigrated = ({ categoryState, newKey, scope }) => {
   return legacy;
 };
 
-// Build the empty category shells for every active category in the projection. Rows materialize lazily on first expand via {@link ensureRowsRendered}.
+// Build the empty category shells for every active category in the projection. Rows materialize lazily via {@link ensureRowsRendered}, at whichever comes first of
+// a user's expand and the projection pass that finds the category open.
 const buildCategoryShells = ({ configTable, state }) => {
 
   const p = projection(state);
@@ -426,7 +431,9 @@ const buildCategoryShells = ({ configTable, state }) => {
   configTable.appendChild(fragment);
 };
 
-// Materialize the rows for a single category. Guarded by dataset.rowsRendered - re-opening an already-built category is a no-op for materialization.
+// Materialize the rows for a single category, serving the two occasions a category comes to need them: the user's own expand, where the rows appear while they
+// watch, and the projection walk, which materializes any category it finds open. Guarded by dataset.rowsRendered, so a call for an already-built category does
+// nothing at all.
 const ensureRowsRendered = ({ details, state }) => {
 
   if(details.dataset.rowsRendered === "true") {
@@ -466,9 +473,16 @@ const ensureRowsRendered = ({ details, state }) => {
   // separate post-materialization apply pass is needed, and there is no window where a row exists without its derived state.
 };
 
-// Walk the projection and re-derive every materialized row's state in place. Categories with no materialized rows are skipped (rows materialize lazily on expand, so
-// an unexpanded category has none to update). For each materialized category we set the category-level visibility, then re-derive each row through the shared
-// applyRowState writer - the same writer construction uses - so a mutation re-checks, re-colors, re-values, and re-hides every affected row without a DOM rebuild.
+/* Walk the projection and bring the table's presentation into agreement with the state: every open category holds its rows, and every row holds its derived state.
+ *
+ * The walk sets each category's visibility, then re-derives each of its rows through the shared applyRowState writer - the same writer construction uses - so a
+ * mutation re-checks, re-colors, re-values, and re-hides every affected row without a DOM rebuild.
+ *
+ * Rows materialize lazily, so a category no one has opened holds none and has nothing to re-derive...but an OPEN category holding no rows is the presentation
+ * disagreeing with the state, a category the user is looking into and seeing nothing inside. The walk materializes that category here and then applies its row
+ * state in the same pass, which is what lets the guarantee stand on its own: every render pass ends in this walk, so an open category takes its rows from the very
+ * next pass whatever put it in that state and whether or not the `toggle` event that carries a user's own expand ever reached its listener.
+ */
 const applyProjectionToDom = ({ configTable, state }) => {
 
   const p = projection(state);
@@ -486,9 +500,17 @@ const applyProjectionToDom = ({ configTable, state }) => {
     // Category-level visibility: hide the entire category when the projection has no visible entries.
     details.classList.toggle("fo-hidden", !categoryProjection.hasVisible);
 
+    // A category with no rows yet is a decision rather than an automatic skip. A closed one is the lazy case and stays empty until something opens it; an open one
+    // is materialized right here and falls through to the row-state application below, so it leaves this pass as correct as any category that was already built. A
+    // category the current projection does not carry materializes nothing and keeps its flag unset, so the pass that follows a projection catching up retries it.
     if(details.dataset.rowsRendered !== "true") {
 
-      continue;
+      if(!details.open) {
+
+        continue;
+      }
+
+      ensureRowsRendered({ details, state });
     }
 
     const rowsContainer = details.querySelector(".fo-category-rows");

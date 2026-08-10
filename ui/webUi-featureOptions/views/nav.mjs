@@ -25,8 +25,9 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * Subscribes to:
  *
  *   - `controllers:loaded` - rebuild the controllers container (the facade's `refreshControllers()` refresh path).
- *   - `devices:loaded` - rebuild the devices container.
- *   - `scope:changed` - update active-link highlighting without rebuilding.
+ *   - `devices:loaded` - rebuild the devices container, and repaint both containers' highlighting: this is the transition that records which controller the loaded
+ *     device list belongs to, and the controllers highlight reads that.
+ *   - `scope:changed` - repaint both containers' highlighting without rebuilding.
  *   - `model:loaded` - initial build (controllers + global link + mode-aware structure).
  *
  * The controller-click handler does I/O: it records the fetch at the store (`devices:requested`, which mints the fetch sequence), calls the caller-supplied
@@ -71,8 +72,8 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, getDevices, label
     store
   });
 
-  // Devices container rebuilds on model:loaded (initial structure) and devices:loaded (new controller selected). Active-link highlighting on scope:changed is the
-  // separate effect below.
+  // Devices container rebuilds on model:loaded (initial structure) and devices:loaded (new controller selected), applying the device highlighting for what it just
+  // built. The separate effect below repaints both containers whenever the state the highlights read moves, without rebuilding either.
   effect({
 
     events: [ "devices:loaded", "model:loaded" ],
@@ -90,10 +91,16 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, getDevices, label
     store
   });
 
-  // scope:changed updates highlighting on both containers without rebuilding their content.
+  /* Repaint both containers' highlighting without rebuilding their content, on every transition that moves the state the highlights read. That state is two things:
+   * the selection pointer, which `scope:changed` moves, and the serial of the controller whose device list is loaded, which `devices:loaded` records.
+   *
+   * The controllers highlight reads both, which is why `devices:loaded` belongs here and not only on the devices-build effect above. A device fetch that comes back
+   * empty moves only the second - the selection stays where it was, and the devices container rebuilds to nothing - so without this subscription nothing would
+   * repaint the controller entry that fetch belongs to, and its in-scope outline would never appear.
+   */
   effect({
 
-    events: ["scope:changed"],
+    events: [ "devices:loaded", "scope:changed" ],
     fn: () => {
 
       applyControllersHighlight(rootControllers, store.state.scope, store.state.devicesControllerId);

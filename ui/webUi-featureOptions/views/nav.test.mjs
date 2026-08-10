@@ -100,6 +100,28 @@ describe("mountNavView - controllers container", () => {
 
     assert.equal(globalLink.classList.contains("active"), true);
   });
+
+  test("outlines the controller whose device list loaded, even when that list came back empty", () => {
+
+    /* The in-scope outline marks which controller the loaded device list belongs to, so the user can still tell what the sidebar is showing while the selection sits
+     * on Global. `devices:loaded` is the only transition that records that controller, and a fetch resolving no devices moves nothing else - the selection does not
+     * move and the devices container rebuilds to nothing - so this is the case where the repaint has to come from the highlighting effect's own subscription.
+     */
+    using _dom = createTestDom();
+
+    const { rootControllers, store } = setup();
+
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+    store.dispatch({ controllerId: "ctrl-a", devices: [], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    const entryA = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
+    const entryB = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-b']");
+
+    assert.equal(entryA.classList.contains("context"), true, "the controller the empty device list belongs to carries the outline");
+    assert.equal(entryA.classList.contains("active"), false, "and it is not the active selection - the scope is still Global");
+    assert.equal(entryB.classList.contains("context"), false, "the other controller carries nothing");
+    assert.equal(rootControllers.querySelector(".nav-link[data-navigation='global']").classList.contains("active"), true, "Global stays the active entry");
+  });
 });
 
 describe("mountNavView - devices container", () => {

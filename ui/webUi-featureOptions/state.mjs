@@ -24,7 +24,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * Names use a `domain:event` shape so they group naturally and read as natural language at dispatch sites.
  *
  *   - `model:loaded` - first load: catalog, configuredOptions, controllers, mode are populated; status transitions to ready.
- *   - `controllers:loaded` - controllers-only refresh (reducer + nav subscriber wired) that no code currently dispatches; the retry path re-runs the full `model:loaded`.
+ *   - `controllers:loaded` - a controllers-only refresh, dispatched through the facade's public `refreshControllers()` entry point; the retry path re-runs the full
+ *     `model:loaded`.
  *   - `devices:requested` - a device fetch is beginning: mints the next fetch sequence into state and records it as the pending request, so the outcome that
  *     eventually answers it can be told apart from a superseded one.
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
@@ -352,7 +353,7 @@ export const reducer = (state, action) => {
 
     case "controllers:loaded": {
 
-      // Controllers list refreshed without re-loading the model - a controllers-only refresh hook that no code currently dispatches (nav rebuilds the sidebar on it).
+      // Controllers list refreshed without re-loading the model - the facade's `refreshControllers()` path, which the nav view rebuilds the sidebar on.
       return { ...state, controllers: action.controllers };
     }
 

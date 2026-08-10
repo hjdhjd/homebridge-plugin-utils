@@ -24,7 +24,7 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  *
  * Subscribes to:
  *
- *   - `controllers:loaded` - rebuild the controllers container (a controllers-only refresh hook not currently dispatched).
+ *   - `controllers:loaded` - rebuild the controllers container (the facade's `refreshControllers()` refresh path).
  *   - `devices:loaded` - rebuild the devices container.
  *   - `scope:changed` - update active-link highlighting without rebuilding.
  *   - `model:loaded` - initial build (controllers + global link + mode-aware structure).
@@ -53,7 +53,7 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  */
 export const mountNavView = ({ deadlineSeconds, deviceContent, getDevices, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
 
-  // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - a controllers-only refresh hook not currently dispatched.
+  // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - the facade's controllers-only refresh path.
   effect({
 
     events: [ "controllers:loaded", "model:loaded" ],

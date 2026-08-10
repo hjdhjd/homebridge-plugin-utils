@@ -163,12 +163,13 @@ export class webUi {
    *
    * @example
    *
-   * // A poll that outlives any single panel: armed once for this module copy, and ended only when a newer copy claims the window.
+   * // A poll that outlives any single panel: armed once for this module copy, and ended only when a newer copy claims the window. The teardown is registered before
+   * // the resource it tears down, so a throw between the two statements can never leave an orphaned poll behind the re-entry guard.
    * if(refreshTimer === undefined) {
    *
-   *   refreshTimer = setInterval(() => void refreshPrices(), REFRESH_INTERVAL_MS);
-   *
    *   ui.epochSignal.addEventListener("abort", () => clearInterval(refreshTimer), { once: true });
+   *
+   *   refreshTimer = setInterval(() => void refreshPrices(), REFRESH_INTERVAL_MS);
    * }
    *
    * @returns {AbortSignal}

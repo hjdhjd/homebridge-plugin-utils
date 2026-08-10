@@ -334,6 +334,10 @@ export class webUiFeatureOptions {
    * assignment and its `model:loaded` dispatch, every bail that resolves the page short of that dispatch included - they are the session's saved options: there are
    * no edits to overlay yet, and the saved set is what the persisted config holds. Once the model is loaded they are the store's live `configuredOptions`.
    *
+   * The primary entry is addressed by position - it is the first element of the returned array - and that position is what this getter guarantees. A consumer that
+   * instead locates it by matching the platform tag is reading a key that may not be there: Config UI X's Settings-tab schema form strips keys its schema does not
+   * model out of the in-memory config, the platform tag among them, so a tag match silently finds nothing for any user who visited the Settings tab in this session.
+   *
    * Preserved as a getter (not a public field) so the implementation is free to change without breaking callers; the observable shape is what plugins might consume.
    *
    * @returns {readonly Object[]} The edited plugin-config array.

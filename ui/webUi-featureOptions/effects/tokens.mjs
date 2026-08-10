@@ -67,6 +67,11 @@ const buildTokenCss = () => [
   "  --fo-space-md: 0.75rem;",
   "  --fo-space-lg: 1rem;",
 
+  // Layout. The device sidebar's width, declared here rather than inline in the theme rule so a plugin can widen the sidebar for long device names by overriding
+  // one custom property, the same way it would retint the accent. Pixel-based rather than rem-based on purpose: this is a container the page's own content has to
+  // fit into, and it should not resize with the host's font scale the way the spacing scale deliberately does.
+  "  --fo-sidebar-width: 200px;",
+
   // Border-radius scale.
   "  --fo-radius-sm: 0.375rem;",
   "  --fo-radius-md: 0.5rem;",

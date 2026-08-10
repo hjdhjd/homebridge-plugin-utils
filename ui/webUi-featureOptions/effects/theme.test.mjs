@@ -12,6 +12,19 @@ import { registerThemeEffect } from "./theme.mjs";
 // Build a fake host whose userCurrentLightingMode returns the supplied mode. Tests override per-call.
 const fakeHost = (mode) => ({ userCurrentLightingMode: async () => mode });
 
+// Adopt the theme sheet and return its rules joined as text. The effect adopts synchronously before it awaits the lighting mode, so the sheet is present once this
+// resolves; the probe is skipped with timeoutMs 0.
+const themeCss = async () => {
+
+  const controller = new AbortController();
+
+  await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
+
+  const stylesheet = document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
+
+  return [...stylesheet.cssRules].map((rule) => rule.cssText).join("\n");
+};
+
 describe("registerThemeEffect - synchronous setup", () => {
 
   test("adopts a stylesheet onto document.adoptedStyleSheets", async () => {
@@ -117,20 +130,24 @@ describe("registerThemeEffect - lifecycle", () => {
   });
 });
 
+describe("buildThemeCss - layout rules", () => {
+
+  test("the sidebar takes all three of its widths from the sidebar-width token", async () => {
+
+    using _dom = createTestDom();
+
+    // The token is the single place the sidebar's width is stated, so a plugin widening it overrides one custom property rather than three declarations. All three
+    // properties must reference it: leaving min-width or max-width on a literal would pin the sidebar at 200px no matter what the token says.
+    const text = await themeCss();
+
+    assert.match(text, /#sidebar\s*\{[^}]*[^-]width:\s*var\(--fo-sidebar-width\)/, "width reads the token");
+    assert.match(text, /#sidebar\s*\{[^}]*min-width:\s*var\(--fo-sidebar-width\)/, "min-width reads the token");
+    assert.match(text, /#sidebar\s*\{[^}]*max-width:\s*var\(--fo-sidebar-width\)/, "max-width reads the token");
+    assert.doesNotMatch(text, /#sidebar\s*\{[^}]*200px/, "no literal width survives in the rule");
+  });
+});
+
 describe("buildThemeCss - status panel variant rules", () => {
-
-  // Adopt the theme sheet and return its rules joined as text. The effect adopts synchronously before it awaits the lighting mode, so the sheet is present once this
-  // resolves; the probe is skipped with timeoutMs 0.
-  const themeCss = async () => {
-
-    const controller = new AbortController();
-
-    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
-
-    const stylesheet = document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
-
-    return [...stylesheet.cssRules].map((rule) => rule.cssText).join("\n");
-  };
 
   test("the status-grid variant sets wrap and a row gap", async () => {
 

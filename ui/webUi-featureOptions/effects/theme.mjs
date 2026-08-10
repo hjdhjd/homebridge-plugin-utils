@@ -261,7 +261,7 @@ const buildThemeCss = () => [
   ".feature-main-content { display: flex !important; flex-direction: row !important; width: 100%; }",
 
   // Sidebar. Background matches the main surface rather than an elevated fill; an accent-derived border delineates it, consistent with the other container frames.
-  "#sidebar { display: block; width: 200px; min-width: 200px; max-width: 200px; position: relative; " +
+  "#sidebar { display: block; width: var(--fo-sidebar-width); min-width: var(--fo-sidebar-width); max-width: var(--fo-sidebar-width); position: relative; " +
     "background-color: var(--fo-surface-bg) !important; border: 1px solid var(--fo-border-accent); border-radius: var(--fo-radius-md); }",
   "#sidebar .sidebar-content { padding: 0rem; overflow: unset; }",
   "#controllersContainer { padding: 0; margin-bottom: 0; }",

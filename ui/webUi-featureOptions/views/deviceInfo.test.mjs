@@ -20,6 +20,7 @@ const CATALOG = {
 };
 
 const DEVICE = { firmwareRevision: "1.2.3", manufacturer: "Acme", model: "X100", name: "Device A", serialNumber: "dev-a" };
+const DEVICE_B = { firmwareRevision: "4.5.6", manufacturer: "Acme", model: "X200", name: "Device B", serialNumber: "dev-b" };
 
 describe("defaultInfoPanel", () => {
 
@@ -148,6 +149,48 @@ describe("mountDeviceInfoView", () => {
 
     assert.ok(root.textContent.length > 0, "the view rendered the device stats");
     assert.equal(root.style.display, "none", "the view did not reveal its own region - reveal is the orchestrator's responsibility");
+
+    controller.abort();
+  });
+
+  test("hands every render of one mount the identical signal object while the per-render device tracks the selection", () => {
+
+    using _dom = createTestDom();
+
+    const root = document.createElement("div");
+
+    document.body.appendChild(root);
+
+    const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+    const controller = new AbortController();
+    const captured = [];
+
+    store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [ DEVICE, DEVICE_B ], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    // Capture each invocation's whole options bag rather than a projection of it, so both axes the bag splits are asserted against one record: `device` is per-render
+    // data that moves with the selection, while `signal` is the mount's own identity and is the object a hook keys its once-ness on.
+    mountDeviceInfoView({ infoPanel: (args) => { captured.push(args); }, root, signal: controller.signal, store });
+
+    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
+
+    const serials = captured.map((call) => call.device?.serialNumber ?? null);
+
+    assert.ok(captured.length >= 2, "the hook ran for the mount pass and for each scope change");
+    assert.deepEqual(serials, [ null, "dev-a", "dev-b" ], "the per-render device moved with the selection across renders");
+
+    const [ first, ...rest ] = captured;
+
+    assert.ok(first.signal instanceof AbortSignal, "the mount hands the hook a signal");
+
+    // Reference identity, not equivalence: a render path that minted a fresh signal per render (wrapping it in AbortSignal.any, say) would still deliver a signal
+    // that aborts at the right moment, and would still break every hook that registers once by keying on this object.
+    for(const call of rest) {
+
+      assert.strictEqual(call.signal, first.signal, "every render of one mount receives the identical signal object");
+    }
 
     controller.abort();
   });

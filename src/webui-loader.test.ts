@@ -98,9 +98,10 @@ const panelMarkup = region.slice(0, region.indexOf("<script>"));
 const monitorStart = region.indexOf(MONITOR_OPEN) + MONITOR_OPEN.length;
 const monitorSource = region.slice(monitorStart, region.indexOf("</script>", monitorStart));
 
-// The two methods the monitor freezes onto `window.webUiBoot`. Declared so the tests reach the registered monitor with types rather than `any`.
+// The methods the monitor freezes onto `window.webUiBoot`. Declared so the tests reach the registered monitor with types rather than `any`.
 interface BootMonitor {
 
+  checkStamp(stamp: unknown): boolean;
   fail(stage: string, error: unknown): void;
   ready(): void;
 }
@@ -532,5 +533,152 @@ describe("boot monitor behavior", () => {
     assert.ok(text.includes("Error: <img src=x>"), "the error line carries the raw message");
     assert.match(text, /Browser: \S/, "the browser line carries the user agent");
     assert.equal(details?.querySelector("img"), null, "the untrusted error text is assigned via textContent, never parsed as markup");
+  });
+});
+
+describe("boot monitor - bundle stamp across boots", () => {
+
+  // The stale-stamp state is what a window that outlives a bundle regeneration lands on. A panel re-open runs the loader again in the same window while the FIRST
+  // run's importmap stays in force, so a stamp that no longer matches means every bare specifier this boot imports would resolve into a subdir that is gone.
+
+  test("the first boot pins its stamp and proceeds, showing nothing", (t) => {
+
+    using _dom = createTestDom();
+    const { calls, fake } = spinnerSpyHomebridge();
+
+    using _hb = installHomebridge(fake);
+
+    startMonitor(t);
+
+    assert.equal(bootMonitor().checkStamp("a1b2c3"), true, "a first boot has nothing to disagree with, so it proceeds");
+    assert.equal(displayOf("pageBootError"), "none", "and the panel stays hidden");
+    assert.equal(calls.hideSpinner, 0, "the spinner is left to the app");
+  });
+
+  test("a later boot on the same stamp proceeds: an ordinary re-open with no regeneration between", (t) => {
+
+    using _dom = createTestDom();
+    const { fake } = spinnerSpyHomebridge();
+
+    using _hb = installHomebridge(fake);
+
+    startMonitor(t);
+
+    bootMonitor().checkStamp("a1b2c3");
+    bootMonitor().ready();
+
+    assert.equal(bootMonitor().checkStamp("a1b2c3"), true, "the same bundle is still installed, so the re-open proceeds");
+    assert.equal(displayOf("pageBootError"), "none", "and nothing is shown");
+  });
+
+  test("a later boot on a different stamp is terminal: the needs-reload message names the remedy", (t) => {
+
+    using _dom = createTestDom();
+    const { calls, fake } = spinnerSpyHomebridge();
+
+    using _hb = installHomebridge(fake);
+
+    startMonitor(t);
+
+    bootMonitor().checkStamp("a1b2c3");
+
+    assert.equal(bootMonitor().checkStamp("d4e5f6"), false, "the bundle was replaced underneath the page, so this boot must not proceed");
+    assert.equal(displayOf("pageBootError"), "block", "the panel is revealed");
+    assert.equal(bucketDisplay("reload"), "block", "the reload bucket is the one shown");
+    assert.equal(bucketDisplay("delivery"), "none", "and no other bucket is shown alongside it");
+    assert.equal(calls.hideSpinner, 1, "the spinner is dropped so it cannot mask the panel");
+
+    const message = document.querySelector<HTMLElement>("#bootErrorMessage [data-boot-bucket='reload']");
+
+    assert.match(message?.textContent ?? "", /Reload the page/, "the message names a reload as the remedy");
+  });
+
+  test("the stale-stamp verdict overrides a prior ready(): the boot that settles the window is the one that goes stale", (t) => {
+
+    // The ordering that matters most in the field. The first boot rendered and stood the monitor down, so `settled` is true by the time a later boot finds the
+    // stamp moved. Honoring settled here would suppress the one message the user needs, leaving them on silently stale code.
+    using _dom = createTestDom();
+    const { fake } = spinnerSpyHomebridge();
+
+    using _hb = installHomebridge(fake);
+
+    startMonitor(t);
+
+    bootMonitor().checkStamp("a1b2c3");
+    bootMonitor().ready();
+
+    assert.equal(displayOf("pageBootError"), "none", "precondition: ready() left the panel hidden");
+    assert.equal(bootMonitor().checkStamp("d4e5f6"), false, "the stale verdict stands");
+    assert.equal(displayOf("pageBootError"), "block", "and it reveals the panel over a settled window");
+  });
+
+  test("the details carry both stamps, so a screenshot says which bundle the page is pinned to", (t) => {
+
+    using _dom = createTestDom();
+    const { fake } = spinnerSpyHomebridge();
+
+    using _hb = installHomebridge(fake);
+
+    startMonitor(t);
+
+    bootMonitor().checkStamp("a1b2c3");
+    bootMonitor().checkStamp("d4e5f6");
+
+    const text = document.getElementById("bootErrorDetails")?.textContent ?? "";
+
+    assert.ok(text.includes("Loaded: a1b2c3"), "the pinned stamp is reported");
+    assert.ok(text.includes("Available: d4e5f6"), "alongside the one now on disk");
+  });
+
+  test("the stamp is pinned in the first run's closure, so a re-executed monitor script still compares against it", (t) => {
+
+    // The monitor guards against a second execution in the same window, which is what makes the first run's closure the single home for the pin. A design that kept
+    // the stamp anywhere a re-execution could reset would silently answer true forever.
+    using _dom = createTestDom();
+    const { fake } = spinnerSpyHomebridge();
+
+    using _hb = installHomebridge(fake);
+
+    startMonitor(t);
+
+    bootMonitor().checkStamp("a1b2c3");
+    runInThisContext(monitorSource);
+
+    assert.equal(bootMonitor().checkStamp("d4e5f6"), false, "the re-executed script did not reset the pin");
+  });
+});
+
+describe("renderWebUiBootRegion - stale-stamp wiring (text-level)", () => {
+
+  test("the loader checks the stamp after reading the manifest and before injecting the importmap", () => {
+
+    const checkIndex = region.indexOf("window.webUiBoot.checkStamp(manifest.subdir)");
+    const manifestIndex = region.indexOf("const manifest = await response.json();");
+    const mapIndex = region.indexOf("mapScript.type = \"importmap\";");
+
+    assert.ok(checkIndex >= 0, "the loader hands the monitor the stamp it is about to pin");
+    assert.ok((manifestIndex >= 0) && (manifestIndex < checkIndex), "the check reads the manifest it just fetched");
+    assert.ok(checkIndex < mapIndex, "and it runs before anything is injected, so a stale boot injects nothing");
+  });
+
+  test("a stale verdict skips the entry import entirely rather than half-loading", () => {
+
+    // The import sits inside the checkStamp branch: a stale boot must not reach it, because every bare specifier it carries would resolve into a retired subdir.
+    const checkIndex = region.indexOf("if(window.webUiBoot.checkStamp(manifest.subdir)) {");
+    const importIndex = region.indexOf("await import(\"./ui.mjs\");");
+
+    assert.ok((checkIndex >= 0) && (checkIndex < importIndex), "the entry import is gated behind the stamp check");
+  });
+
+  test("carries the needs-reload message verbatim, naming a reload as the remedy", () => {
+
+    assert.ok(region.includes("The settings interface was updated while this page was open, so this page is pinned to a version that is no longer installed. " +
+      "Reload the page to load the current version."), "the reload-bucket message appears verbatim");
+    assert.match(region, /<p data-boot-bucket="reload"/, "and it is pre-rendered as its own hidden bucket");
+  });
+
+  test("the monitor freezes checkStamp onto the boot surface alongside fail and ready", () => {
+
+    assert.match(region, /window\.webUiBoot = Object\.freeze\(\{ checkStamp, fail, ready \}\);/, "the surface carries all three, frozen");
   });
 });

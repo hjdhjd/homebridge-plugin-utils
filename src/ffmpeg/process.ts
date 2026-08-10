@@ -20,6 +20,9 @@
  * - `ready` promise resolves when FFmpeg produces its first stderr byte (the earliest reliable "we are actually running" signal).
  * - `exited` promise resolves with the child's exit code and signal once it terminates. Rejects with `signal.reason` only when the child never started (e.g., `ENOENT`).
  * - Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG.
+ * - Synchronous teardown classification. The abort that tears the process down runs its listeners inline, so the moment a consumer's listener on `this.signal`
+ *   fires, `hasError` and the teardown reason already hold their final values. Shutdown logic may rely on that ordering: it is a contract of this class, and
+ *   changing it is a breaking change rather than an implementation detail.
  *
  * @module
  */
@@ -396,6 +399,7 @@ export class FfmpegProcess implements AsyncDisposable {
 
   /**
    * `true` when the abort reason was `HbpuAbortError("failed")`. Covers spawn failures and non-zero natural exits. Derived from `this.signal.reason`; no stored flag.
+   * The value is final by the time any listener on `this.signal` runs, so a consumer's abort handler can read it synchronously rather than waiting on `exited`.
    */
   public get hasError(): boolean {
 

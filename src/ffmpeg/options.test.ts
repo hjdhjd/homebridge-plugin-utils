@@ -2120,4 +2120,26 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
 
     assert.equal(result.exitCode, 0, "streamEncoder + crop args must be accepted by FFmpeg; stderr: " + result.stderr);
   });
+
+  test("caller videoFilters over the VideoToolbox path run cleanly (skipped when VideoToolbox is unavailable)", async (t) => {
+
+    if(!realCodecs.hasEncoder("h264", "h264_videotoolbox") || !realCodecs.hasHwAccel("videotoolbox")) {
+
+      t.skip("host does not advertise h264_videotoolbox / videotoolbox");
+
+      return;
+    }
+
+    /* The one chain that carries both transfer directions: the upload pairing puts frames on the GPU for scale_vt, and the caller's CPU-side filters pull them back
+     * down again. The two ends have to agree on the frames context's pixel format, and only a real FFmpeg graph configuration can prove they do - the unit snapshots
+     * pin the argument order but cannot tell a working agreement from a broken one. This chain failed in the field with "[hwdownload] Invalid output format nv12"
+     * because the download names nv12 while the upload had let the frames context inherit the software decoder's yuv420p, so the format conversion has to sit ahead
+     * of the upload for the download to have anything it can emit.
+     */
+    const options = buildOptions({ hardwareDecoding: true, hardwareTranscoding: true });
+    const args = options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS });
+    const result = await runFfmpeg(args);
+
+    assert.equal(result.exitCode, 0, "VideoToolbox + caller videoFilters args must be accepted by FFmpeg; stderr: " + result.stderr);
+  });
 });

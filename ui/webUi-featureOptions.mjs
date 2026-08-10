@@ -394,7 +394,7 @@ export class webUiFeatureOptions {
    *      reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once devices resolve, dispatch devices:loaded
    *      carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure into the
    *      connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error status returns without
-   *      revealing, otherwise it sets the initial scope.
+   *      revealing, otherwise it moves the selection off global when the mode calls for that.
    *  11. Reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
@@ -744,7 +744,8 @@ export class webUiFeatureOptions {
     }
 
     // Set the initial scope. My outcome applied, so the local `devices` is the applied list. Controller-based mode lands on the first controller's controller-as-device
-    // entry (devices[0]). Device-only mode lands on global so the user sees the global options first.
+    // entry (devices[0]). Every other case wants global, which is where the initial state already points, so there is nothing to dispatch: each view renders its
+    // global content off model:loaded and devices:loaded, both of which have landed by now.
     if((initialController !== null) && (devices.length > 0)) {
 
       this.#store.dispatch({
@@ -752,11 +753,6 @@ export class webUiFeatureOptions {
         scope: { controllerId: initialController.serialNumber, deviceId: devices[0].serialNumber, kind: "device" },
         type: "scope:changed"
       });
-    } else {
-
-      // Re-dispatch the global scope to fire the view-options scope-render. The initial state.scope is already global, but views subscribe to scope:changed; without
-      // an explicit dispatch, view-options would not run its render path.
-      this.#store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
     }
 
     // Reveal the full region set the views render into.

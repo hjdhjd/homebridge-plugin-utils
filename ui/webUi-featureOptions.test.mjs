@@ -1000,6 +1000,84 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     orchestrator.cleanup();
   });
 
+  test("a controller whose devices come back empty still carries the in-scope outline through a full show()", async () => {
+
+    // The end-to-end half of the sidebar's in-scope outline: the nav view paints it off devices:loaded, and this pins that a whole boot arrives at the same place
+    // with the selection sitting on global. The boot dispatches no scope change at all in this shape, so nothing downstream of devices:loaded stands in for it.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+      getDevices: async () => ({ devices: [], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const entry = skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']");
+
+    assert.ok(entry, "precondition: the controller rendered");
+    assert.equal(entry.classList.contains("context"), true, "the controller the empty device list belongs to must carry the outline");
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
+      "and the selection must still be Global");
+
+    orchestrator.cleanup();
+  });
+
+  test("device-only mode: a full show() renders every view at global scope off model:loaded and devices:loaded", async () => {
+
+    /* Device-only mode lands on global, which is where the store's initial scope already points, so a boot in this shape dispatches nothing on the scope channel.
+     * Each view therefore has to reach its rendered global content off model:loaded and devices:loaded alone, and the assertions below name that content rather
+     * than settling for an absence of errors - a view that quietly stayed on its loading placeholder would pass the weaker check.
+     */
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: async () => ({ devices: [{ name: "Front Door", serialNumber: "DEV-1" }], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // The options view built its category shells from the projection - the render that has to land with no scope dispatch anywhere in the boot to drive it.
+    const categories = [...skeleton.configTable.querySelectorAll("details[data-category]")].map((entry) => entry.getAttribute("data-category"));
+
+    assert.deepEqual(categories, [ "Motion", "Audio" ], "the config table carries the catalog's categories in order");
+
+    // The nav view built both containers and highlighted global.
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true, "Global Options is the active entry");
+    assert.ok(skeleton.devicesContainer.querySelector("[data-navigation='device'][data-device-serial='DEV-1']"), "the device list rendered its device");
+
+    // The search view built its panel, and the header rendered the precedence chain in its device-only form.
+    assert.ok(skeleton.search.querySelector("#searchInput"), "the search panel rendered its input");
+    assert.match(skeleton.headerInfo.textContent, /Feature options are applied in prioritized order/, "the header rendered the precedence chain");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Controller options/, "and device-only mode omits the controller hop");
+
+    orchestrator.cleanup();
+  });
+
   test("refreshControllers: a hook that reports a connection failure resolves false and leaves the sidebar standing", async () => {
 
     // The divergence from show(): an explicit, plugin-initiated refresh reports its failure to the caller that asked for it rather than replacing a working page

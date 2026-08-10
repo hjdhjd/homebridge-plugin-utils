@@ -8,8 +8,8 @@
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
-import { applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, expandOption, getDefaultValue, hasValueContent, isDependencyMet,
-  isValueOption, normalizeConfiguredOptions, optionExists, resolveScope } from "./featureOptions.ts";
+import { applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, enumerateConfiguredEntries, expandOption, getDefaultValue, hasValueContent,
+  isDependencyMet, isValueOption, normalizeConfiguredOptions, optionExists, resolveScope } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
@@ -1909,5 +1909,150 @@ describe("FeatureOptions - pure functional core", () => {
       assert.equal(isDependencyMet({ catalog, configIndex: enabledParent, option: "Motion.Sensitivity" }), true, "grouped option with enabled parent");
       assert.equal(isDependencyMet({ catalog, configIndex: disabledParent, option: "Motion.Sensitivity" }), false, "grouped option with disabled parent");
     });
+  });
+});
+
+// The enumeration is the supported alternative to a plugin scanning the configured-options array itself, so what it must prove is that it reads the SAME grammar
+// the engine reads. These tests therefore walk the grammar's boundaries rather than its happy path: where the greedy prefix match lands, where the canonical form
+// stops and the legacy form takes over, what case folding does and does not touch, and how much whitespace the delimiter tolerates.
+describe("FeatureOptions - enumerateConfiguredEntries", () => {
+
+  const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+
+  // Fixture objects for the category-plus-entry composition path, written out rather than indexed off CATEGORIES / OPTIONS so the test reads without a non-null
+  // assertion under noUncheckedIndexedAccess.
+  const audioCategory: FeatureCategoryEntry = { description: "Audio Options", name: "Audio" };
+  const volumeOption: FeatureOptionEntry = { default: false, defaultValue: 50, description: "Audio volume level.", name: "Volume" };
+
+  test("yields one record per addressing entry, global and scoped, in the array's own order", () => {
+
+    const configuredOptions = [ "Enable.Motion.Detect", "Enable.Audio.Mute", "Disable.Motion.Detect.ABC123" ];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Motion.Detect" })], [
+
+      { enabled: true, id: "" },
+      { enabled: false, id: "ABC123" }
+    ], "the global entry, then the scoped one, with the unrelated option's entry skipped");
+  });
+
+  test("a boolean option yields no value while a value option yields the value it carries", () => {
+
+    const configuredOptions = [ "Enable.Motion.Detect.dev1", "Enable.Audio.Volume.dev1=75" ];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Motion.Detect" })], [{ enabled: true, id: "dev1" }],
+      "a boolean option's record carries no value property at all");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Audio.Volume" })], [{ enabled: true, id: "dev1", value: "75" }],
+      "a value option's record carries the value beside the scope");
+  });
+
+  test("reads the legacy dotted forms and the delimiter form alike", () => {
+
+    const legacy = [ "Enable.Audio.Volume.50", "Enable.Audio.Volume.Kitchen.60" ];
+    const canonical = [ "Enable.Audio.Volume=50", "Enable.Audio.Volume.Kitchen=60" ];
+    const expected = [ { enabled: true, id: "", value: "50" }, { enabled: true, id: "Kitchen", value: "60" } ];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: legacy, option: "Audio.Volume" })], expected,
+      "the legacy dot grammar reads as a global value and an id-plus-value pair");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: canonical, option: "Audio.Volume" })], expected,
+      "the canonical delimiter form reads identically - one grammar, two spellings");
+  });
+
+  test("matching folds case while the yielded records keep the casing the entry was written in", () => {
+
+    const configuredOptions = ["ENABLE.audio.VOLUME.KiTcHeN=Loud"];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "AuDiO.vOlUmE" })], [{ enabled: true, id: "KiTcHeN", value: "Loud" }],
+      "the option lookup folds case, and the identifier and value come back exactly as the user typed them");
+  });
+
+  test("whitespace around the delimiter is tolerated, exactly as the engine tolerates it", () => {
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Audio.Volume.Kitchen = 50"], option: "Audio.Volume" })],
+      [{ enabled: true, id: "Kitchen", value: "50" }], "a hand-spaced entry reads as the tight form the composer writes");
+  });
+
+  test("an empty payload yields an empty value, distinct from a bare enable that yields none", () => {
+
+    // The canonical / legacy boundary. `Enable.Audio.Volume=` is the shape whose payload carries nothing, which the engine registers as an empty value; a bare
+    // `Enable.Audio.Volume` never reaches the value grammar at all; and a legacy dotted tail is a value like any other. Three spellings, three distinct records.
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Audio.Volume="], option: "Audio.Volume" })],
+      [{ enabled: true, id: "", value: "" }], "an empty payload is a value that happens to be empty");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Audio.Volume"], option: "Audio.Volume" })],
+      [{ enabled: true, id: "" }], "a bare enable carries no value property");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Audio.Volume.50"], option: "Audio.Volume" })],
+      [{ enabled: true, id: "", value: "50" }], "a legacy dotted tail is the value");
+  });
+
+  test("the greedy longest-prefix match decides which option an entry belongs to", () => {
+
+    // Both "Audio" and "Audio.Volume" are value-centric here, so `Enable.Audio.Volume.50` is ambiguous on its face. The engine resolves it to the longer option,
+    // and the enumeration must agree: the entry is Audio.Volume carrying 50, and it says nothing whatsoever about Audio - not even Audio at a scope named
+    // "Volume", which is the reading a naive prefix scan would invent.
+    const nested = buildCatalogIndex([{ description: "Audio", name: "Audio" }], {
+
+      Audio: [
+
+        { default: false, defaultValue: 10, description: "Audio top-level value.", name: "" },
+        { default: false, defaultValue: 50, description: "Audio volume sub-value.", name: "Volume" }
+      ]
+    });
+    const configuredOptions = ["Enable.Audio.Volume.50"];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog: nested, configuredOptions, option: "Audio.Volume" })], [{ enabled: true, id: "", value: "50" }],
+      "the longer option name claims the entry");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog: nested, configuredOptions, option: "Audio" })], [],
+      "the shorter option is not configured by an entry the longer one claimed");
+  });
+
+  test("a catalog option name is never read as a scope of a shorter option", () => {
+
+    // "Motion.Detect" is an option in its own right, so `Enable.Motion.Detect` cannot be the "Motion" option at a scope named "Detect" - and there is no "Motion"
+    // option here at all, which is the ordinary case a plugin hits when its category name is a prefix of its option names.
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Motion.Detect"], option: "Motion" })], [],
+      "the catalog settles the ambiguity that the raw string alone cannot");
+  });
+
+  test("an option nobody configured, an unparseable entry, and an empty option name each yield nothing", () => {
+
+    const configuredOptions = [ "Enable.Motion.Detect", "Toggle.Audio.Volume", "NotAnEntry" ];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Network.Mtu" })], [], "an unconfigured option yields no records");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Audio.Volume" })], [],
+      "an unknown action and a dotless string are not entries the grammar accepts");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "" })], [], "an empty option name addresses nothing");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, category: "", configuredOptions, option: "Volume" })], [],
+      "an empty category composes to an empty option name, which addresses nothing");
+  });
+
+  test("a category composes with an option exactly as expandOption composes them", () => {
+
+    const configuredOptions = ["Enable.Audio.Volume.Kitchen=50"];
+    const expected = [{ enabled: true, id: "Kitchen", value: "50" }];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, category: "Audio", configuredOptions, option: "Volume" })], expected,
+      "category and option as plain strings");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, category: audioCategory, configuredOptions, option: volumeOption })], expected,
+      "category and option as catalog entry objects");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: expandOption(audioCategory, volumeOption) })], expected,
+      "the expanded name on its own, with no category supplied");
+  });
+
+  test("without a category, an option entry is read as the expanded name it is not", () => {
+
+    // The trap on the composition path, worth stating because it fails quietly: omitting the category means whatever `option` carries IS the expanded name, and a
+    // catalog entry's name is the bare option name rather than the expanded one. Supply the category, or expand first.
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Audio.Volume=50"], option: volumeOption })], [],
+      "a bare \"Volume\" addresses nothing - the catalog names this option \"Audio.Volume\"");
+  });
+
+  test("duplicate entries each yield a record - precedence is resolveScope's question, not this one", () => {
+
+    const configuredOptions = [ "Disable.Motion.Detect", "Enable.Motion.Detect" ];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Motion.Detect" })], [
+
+      { enabled: false, id: "" },
+      { enabled: true, id: "" }
+    ], "both entries the user wrote are reported; the first-write-wins rule belongs to the lookup index");
   });
 });

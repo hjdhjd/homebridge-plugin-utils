@@ -11,9 +11,9 @@
  *   - **Pure functional core.** Catalog and config indices ({@link CatalogIndex}, {@link ConfigIndex}) carry every derived view of the catalog and configured options;
  *     pure builders ({@link buildCatalogIndex}, {@link buildConfigIndex}) construct them from raw inputs; pure transforms ({@link applySetOption},
  *     {@link applyClearOption}, {@link normalizeConfiguredOptions}) compute new configured-options arrays without mutation; pure queries ({@link resolveScope},
- *     {@link getDefaultValue}, {@link isValueOption}, {@link hasValueContent}, {@link optionExists}, {@link isDependencyMet}, {@link expandOption}) answer
- *     scope-aware questions over those indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the
- *     discipline (reducer-driven UIs, server-side renderers, time-travel debuggers, future consumers we have not built yet).
+ *     {@link getDefaultValue}, {@link isValueOption}, {@link hasValueContent}, {@link optionExists}, {@link isDependencyMet}, {@link expandOption},
+ *     {@link enumerateConfiguredEntries}) answer scope-aware questions over those indices. This is the single source of truth for option-array semantics, consumed
+ *     wherever immutable state is the discipline (reducer-driven UIs, server-side renderers, time-travel debuggers, future consumers we have not built yet).
  *
  *   - **Imperative class façade.** {@link FeatureOptions} bundles a {@link CatalogIndex}, a configured-options array, and a {@link ConfigIndex} into one object whose
  *     mutating methods (`setOption` / `clearOption` / the setters) delegate to the pure transforms internally. This is the legacy-friendly surface used by every
@@ -228,6 +228,28 @@ export interface ResolvedOptionEntry {
 }
 
 /**
+ * One configured entry's reading of a single feature option: where it sits, what it says, and the value it carries when it carries one. Yielded by
+ * {@link enumerateConfiguredEntries}, one record per entry that addresses the option.
+ *
+ * Distinct from {@link ResolvedOptionEntry}, which answers "what applies here" after walking the hierarchy. This answers "what did the user write", entry by
+ * entry, with no precedence applied and no catalog default substituted.
+ *
+ * @property enabled - True for an `Enable` entry, false for a `Disable` entry.
+ * @property id      - The device or controller identifier the entry addresses, in the casing the entry carried. The empty string for a global entry.
+ * @property value   - The raw value the entry carries, in the casing the entry carried. Absent when the entry carries none - a boolean option, a `Disable`, or a
+ *                     bare enable of a value option. Present and empty for a canonical entry whose payload is empty, which is the same reading the lookup index
+ *                     registers for it.
+ *
+ * @category Feature Options
+ */
+export interface ConfiguredOptionEntry {
+
+  enabled: boolean;
+  id: string;
+  value?: string;
+}
+
+/**
  * Immutable derived index over the catalog inputs ({@link FeatureCategoryEntry}[] + the options map). Every field except `categories` / `options` is derived from
  * those two; the index bundles them with their derivations so a single value carries everything any caller needs to make catalog-level decisions in O(1).
  *
@@ -309,13 +331,16 @@ export interface ClearOptionArgs {
 
 // Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail (always registered on the index). `valueKey` and `value`
 // appear only when the tail decomposes as a known value-centric option plus a value - they tell the index where to also register the extracted value for O(1)
-// lookups, and `canonicalEntry` carries the same decoding re-composed in the canonical form. Shared between buildConfigIndex (writer), entryAddressesScope
-// (reader), and normalizeConfiguredOptions (rewriter) so none of the three can disagree on what any given entry "means" under the storage format.
+// lookups, and `canonicalEntry` carries the same decoding re-composed in the canonical form. `tailOriginal` is that same tail with the casing the entry was
+// written in, which is what lets a reader hand back an identifier as the user typed it: the lookup keys are lowercased slices of this string, so a key's length
+// is an offset into it. Shared between buildConfigIndex (writer), entryAddressesScope (reader), enumerateConfiguredEntries (reader), and
+// normalizeConfiguredOptions (rewriter) so none of them can disagree on what any given entry "means" under the storage format.
 interface ParsedConfigEntry {
 
   canonicalEntry?: string;
   enabled: boolean;
   primaryKey: string;
+  tailOriginal: string;
   value?: string;
   valueKey?: string;
 }
@@ -419,7 +444,7 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
   const enabled = action === "enable";
   const tailOriginal = rawEntry.slice(dotIndex + 1);
   const tail = tailOriginal.toLowerCase();
-  const parsed: ParsedConfigEntry = { enabled, primaryKey: tail };
+  const parsed: ParsedConfigEntry = { enabled, primaryKey: tail, tailOriginal };
 
   // Value extraction is only meaningful for Enable entries - a disabled option carries no value regardless of trailing segments.
   if(!enabled) {
@@ -696,6 +721,117 @@ export function buildConfigIndex(catalog: CatalogIndex, configuredOptions: reado
   }
 
   return lookup;
+}
+
+// Decide whether a lookup key addresses a given option. A key does so when it is the option itself - the global scope - or the option followed by a single
+// dot-free identifier segment, which is the only scoped address the grammar can write. A key that is itself a catalog option name is that option rather than a
+// scope of a shorter one: `Enable.Motion.Detect` is the `Motion.Detect` option, never `Motion` at a scope named "Detect", and the catalog is what settles it.
+function keyAddressesOption({ catalog, key, optionKey }: { catalog: CatalogIndex; key: string; optionKey: string }): boolean {
+
+  if(key === optionKey) {
+
+    return true;
+  }
+
+  if(!key.startsWith(optionKey + ".") || (key in catalog.defaults)) {
+
+    return false;
+  }
+
+  const id = key.slice(optionKey.length + 1);
+
+  return !!id.length && !id.includes(".");
+}
+
+// Recover a scope identifier in the casing the entry carried. The lookup keys are lowercased slices of the same tail, so the matched key's length is where the
+// identifier ends and the option name's length is where it begins. A key equal in length to the option name is the global address, which has no identifier.
+function originalId({ key, optionKey, tailOriginal }: { key: string; optionKey: string; tailOriginal: string }): string {
+
+  return (key.length > optionKey.length) ? tailOriginal.slice(optionKey.length + 1, key.length) : "";
+}
+
+/**
+ * Enumerate every configured entry that addresses one feature option, decoding each through the engine's own grammar. This is the supported way to discover which
+ * scopes a plugin's users have configured an option at, and with what - a plugin that scans the configured-options array itself is re-implementing the storage
+ * format, and the two readings drift the moment the grammar grows.
+ *
+ * Yields one {@link ConfiguredOptionEntry} per addressing entry, in the order the entries appear in the array, and nothing at all for an option nobody configured.
+ * Matching folds case, because the storage format does; the yielded identifiers and values keep the casing the entry was written in, because that is the text the
+ * user typed and a consumer displaying it should show it back unchanged.
+ *
+ * Two things this deliberately does not do, both of which belong to {@link resolveScope}: it applies no precedence - a device entry and a global entry for the
+ * same option are two records here, not one winner - and it substitutes no catalog default, so an option with no entries yields nothing rather than a record
+ * carrying its default. Ask this what the user wrote; ask {@link resolveScope} what applies. Duplicate entries addressing the same scope each yield a record, so
+ * the first-write-wins rule the lookup index applies is visible here as two records rather than resolved away.
+ *
+ * @param args
+ * @param args.catalog           - The catalog index, which defines what counts as a value-centric option and which names are options in their own right.
+ * @param args.category          - Optional. The option's category, composed with `option` exactly as {@link expandOption} composes them. Omit it when `option` is
+ *                                 already the expanded name.
+ * @param args.configuredOptions - The raw configured-options array.
+ * @param args.option            - The feature option to enumerate: an option entry or name to be composed with `category`, or the expanded name on its own.
+ *
+ * @returns A generator over the configured entries addressing the option.
+ *
+ * @example
+ *
+ * ```ts
+ * // Every device that has this option configured, and the value each one carries.
+ * for(const entry of enumerateConfiguredEntries({ catalog, configuredOptions, option: "Audio.Volume" })) {
+ *
+ *   log.info("Volume is configured.", { enabled: entry.enabled, scope: entry.id.length ? entry.id : "global", value: entry.value });
+ * }
+ * ```
+ *
+ * @category Feature Options
+ */
+export function *enumerateConfiguredEntries({ catalog, category, configuredOptions, option }: {
+
+  catalog: CatalogIndex;
+  category?: FeatureCategoryEntry | string;
+  configuredOptions: readonly string[];
+  option: FeatureOptionEntry | string;
+}): Generator<ConfiguredOptionEntry, void, undefined> {
+
+  // An absent category means the caller already holds the expanded name; supplying one composes through the same helper every other call site composes with.
+  const expanded = (category === undefined) ? ((typeof option === "string") ? option : option.name) : expandOption(category, option);
+  const optionKey = expanded.toLowerCase();
+
+  if(!optionKey.length) {
+
+    return;
+  }
+
+  for(const rawEntry of configuredOptions) {
+
+    const parsed = parseEntry(catalog, rawEntry);
+
+    if(!parsed) {
+
+      continue;
+    }
+
+    const { primaryKey, tailOriginal, valueKey } = parsed;
+
+    /* One entry can decode two ways - the raw tail, and for a value-centric Enable the extracted value key - and the value reading is the entry's meaning whenever
+     * it addresses this option. `Enable.Audio.Volume.50` is the Audio.Volume option carrying 50, so that is the record it yields; the lookup index also registers
+     * its raw tail (an enable at a scope named "50"), a second live reading the index keeps because no canonical entry can express both, but it is not what the
+     * entry says about this option.
+     */
+    if((valueKey !== undefined) && keyAddressesOption({ catalog, key: valueKey, optionKey })) {
+
+      yield { enabled: parsed.enabled, id: originalId({ key: valueKey, optionKey, tailOriginal }), value: parsed.value };
+
+      continue;
+    }
+
+    if(!keyAddressesOption({ catalog, key: primaryKey, optionKey })) {
+
+      continue;
+    }
+
+    yield { enabled: parsed.enabled, id: originalId({ key: primaryKey, optionKey, tailOriginal }) };
+  }
 }
 
 /**

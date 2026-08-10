@@ -62,7 +62,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
     // exact precondition for the connection-error path: a controller is configured but the probe reported it unreachable, so the failure travels back on the result.
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [{ name: "Network Hub", serialNumber: "CTRL-001" }],
+      getControllers: () => ({ controllers: [{ name: "Network Hub", serialNumber: "CTRL-001" }], error: "" }),
       getDevices: () => ({ devices: [], error: "Connection refused: 192.0.2.1:1883" })
     });
 
@@ -120,7 +120,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
       const orchestrator = new webUiFeatureOptions({
 
-        getControllers: () => [{ name: "Hub", serialNumber: "CTRL-001" }],
+        getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-001" }], error: "" }),
         getDevices: () => ({ devices: [], error: "down" }),
         ui: { controllerRetryEnableDelayMs: 100 }
       });
@@ -190,7 +190,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
           getControllersCalls++;
 
-          return [{ name: "Hub", serialNumber: "CTRL-1" }];
+          return { controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" };
         },
         getDevices: () => ({ devices: [], error: "transient" }),
         ui: { controllerRetryEnableDelayMs: 100 }
@@ -263,7 +263,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
       const orchestrator = new webUiFeatureOptions({
 
-        getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+        getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
         getDevices: () => devicesResult,
         ui: { controllerRetryEnableDelayMs: 100 }
       });

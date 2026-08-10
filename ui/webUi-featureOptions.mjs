@@ -72,6 +72,18 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  */
 
 /**
+ * The resolved shape of a `getControllers` hook: the single contract every controller fetch crosses. It carries the controller list and the connection outcome
+ * together, on the same reasoning as {@link DeviceListResult} - a failure travels back with the response it belongs to rather than through a separate side-channel -
+ * and it is what lets the page tell "this plugin has no controllers configured" apart from "the controllers could not be reached", two situations whose remedies
+ * have nothing in common.
+ *
+ * @typedef {Object} ControllerListResult
+ * @property {Controller[]} controllers - The plugin's configured controllers; empty when the probe failed or when the plugin legitimately has none configured.
+ * @property {string} error - The user-facing connection-failure message: empty when the fetch succeeded, the failure text when the fetch failed and `controllers`
+ *   is empty.
+ */
+
+/**
  * The resolved shape of a `getDevices` hook: the single contract every device fetch crosses. It carries the device list and the connection outcome together, so a
  * failure travels back with the response it belongs to rather than through a separate side-channel a concurrent probe could rewrite.
  *
@@ -82,7 +94,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 
 /**
  * @typedef {Object} FeatureOptionsConfig
- * @property {Function} [getControllers] - Handler to retrieve available controllers.
+ * @property {(args: { config: Object }) => Promise<ControllerListResult>} [getControllers] - Handler resolving the plugin's {@link ControllerListResult}.
  * @property {(controller: (Controller|null)) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's {@link DeviceListResult}.
  * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is pinned to
  *   global for the page's life (the reducer refuses any other scope in this mode), and the {@link FeatureOptionsConfig.infoPanel} callback always receives an undefined
@@ -147,9 +159,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
  * action without re-entering the whole show() cycle, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
- * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. The device-list
- * contract is rich: a `getDevices` hook resolves a {@link DeviceListResult} carrying both the device array and the connection outcome, and `getHomebridgeDevices`
- * resolves the same shape.
+ * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
+ * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
+ * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape.
  *
  * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle seam that boots and tears them down. The one
  * piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the store.
@@ -159,7 +171,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * // The orchestrator opens the config session and hands it to show(); the plugin hooks receive their config injected (never reaching for it).
  * const session = await PluginConfigSession.open({ host: homebridge, name: "My Plugin" });
  * const featureOptionsUI = new webUiFeatureOptions({
- *   getControllers: ({ config }) => myPlugin.controllersFrom(config),
+ *   getControllers: ({ config }) => ({ controllers: myPlugin.controllersFrom(config), error: "" }),
  *   getDevices: async (controller, { config }) => controller ? { devices: await myPlugin.getDevices(controller, config), error: "" } : { devices: [], error: "" },
  *   ui: {
  *     isController: (device) => device?.type === "controller",
@@ -372,7 +384,9 @@ export class webUiFeatureOptions {
    *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
    *   6. Adopt the design tokens (synchronous), then fire the theme, persist, and keyboard effects. The theme effect's I/O (Bootstrap probe) runs in the background.
-   *   7. Once controllers resolves: if controller-based mode with empty controllers, show the no-controllers message and return.
+   *   7. Once controllers resolves: hold it to the hook contract, then check the error it carries - a wrong-shaped result and a reported connection failure both
+   *      land on the connection-error view and return, so the no-controllers helper text can never stand in for an unreachable controller or a hook that answered
+   *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return.
    *   8. In the device-bearing modes, record and pre-fire the initial controller's devices fetch (a `devices:requested` mints its sequence) so it overlaps with the
    *      feature catalog. Global-only mode skips this step - it fetches no devices.
    *   9. Once the feature catalog resolves: build the catalog and dispatch model:loaded - the mounted views transition off their loading placeholder and render.
@@ -457,7 +471,8 @@ export class webUiFeatureOptions {
     // theme effect's host). The plugin config is not fetched here - the session already holds it - so getControllers receives the injected platform config rather
     // than reaching for it. None depend on each other; firing them concurrently means total wall-clock time is bounded by the slowest.
     const featuresPromise = homebridge.request("/getOptions").then((response) => response ?? []);
-    const controllersPromise = this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) : Promise.resolve(null);
+    const controllersPromise = this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) :
+      Promise.resolve({ controllers: [], error: "" });
 
     // Adopt design tokens. Synchronous; must run before any consumer references `var(--fo-*)`.
     registerTokensEffect({ signal });
@@ -526,13 +541,16 @@ export class webUiFeatureOptions {
       void this.#flushPersist?.();
     }, { signal });
 
-    // Wait for controllers (if configured), bounded so a plugin hook riding a dead bridge cannot strand the page. Empty result in controller-based mode means "no
-    // controllers configured" - we show the helper text and bail.
-    let controllers;
+    // Wait for controllers (if configured), bounded so a plugin hook riding a dead bridge cannot strand the page. The result carries the list and the connection
+    // outcome together, so the two questions are answered in order: did the fetch reach the controllers at all, and only then, did it find any.
+    let controllerResult;
 
     try {
 
-      controllers = await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+      // The contract check rides inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A plugin still on the
+      // bare-array contract is the case this exists for, and the alternative - letting the array fall through - is the silent degradation into "no controllers are
+      // configured" that this whole channel exists to prevent.
+      controllerResult = assertControllerListResult(await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal }));
     } catch(err) {
 
       this.#failConnection({ err, signal, site: "controllers" });
@@ -545,14 +563,28 @@ export class webUiFeatureOptions {
       return;
     }
 
-    if(this.#config.getControllers && (!controllers || (controllers.length === 0))) {
+    // A hook that reports a connection failure lands on the same retry view a hook that throws does. Routing it here, ahead of the empty-list check, is what keeps
+    // the "no controllers are configured" helper text from standing in for "the controllers could not be reached" - two situations whose remedies have nothing in
+    // common, and only one of which the user can act on from this page.
+    if(controllerResult.error) {
+
+      this.#failConnection({ err: controllerResult.error, signal, site: "controllers" });
+
+      return;
+    }
+
+    // An empty list in controller-based mode means the plugin has no controllers configured - the helper text says so and the cycle bails. A device-only page has
+    // no hook and reaches here on the empty stand-in the fetch resolved, which this check passes over.
+    const controllers = controllerResult.controllers;
+
+    if(this.#config.getControllers && (controllers.length === 0)) {
 
       showNoControllersMessage();
 
       return;
     }
 
-    const initialController = controllers?.[0] ?? null;
+    const initialController = controllers[0] ?? null;
 
     // The device machinery is inert in global-only mode: with scope pinned to global there is no controller device to fetch or select, so the pre-fire here and the
     // matching devices await, applied-sequence gate, and scope decision further down all sit on the device-bearing path. The global-only branch after the theme await
@@ -609,7 +641,7 @@ export class webUiFeatureOptions {
 
       catalog,
       configuredOptions: loadedOptions,
-      controllers: controllers ?? [],
+      controllers,
       initialOptions: this.#initialOptions,
       mode: this.#config.globalOnly ? "global-only" : (this.#config.getControllers ? "controller-based" : "device-only"),
       type: "model:loaded"
@@ -747,13 +779,22 @@ export class webUiFeatureOptions {
    *   - A config re-sync failure resolves false and leaves the rendered view exactly as it was. This is a deliberate divergence from show(), which routes a sync
    *     failure into the connection-error view: an explicit refresh must never tear down a working sidebar over a failed config read. A controller hook that fails or
    *     never answers resolves false on the same reasoning - both awaits are bounded, so neither can leave the caller waiting on a dead bridge.
+   *   - A hook that resolves a {@link ControllerListResult} carrying a non-empty error resolves false without dispatching, joining the two failure cases above. Where
+   *     show() routes that same reported failure into the connection-error view, a refresh leaves the current view standing, and the line between the two is who
+   *     asked: a framework-initiated fetch - show()'s boot path, the framework's own navigation fetches - fails to the framework's failure surface, while a
+   *     plugin-initiated call reports to its caller. The caller needs no error relay from the framework because it authored the getControllers hook that produced
+   *     the failure and can capture the error there.
    *   - A null, absent, or empty resolved controller list resolves false and leaves the store untouched - the consumer owns the messaging for the no-controllers
    *     case, exactly as show()-time handles it through a direct message that bypasses the store.
    *   - A non-empty list dispatches controllers:loaded and resolves true once the sidebar has transitioned to the new list.
    *
    * A false return, in every case, means the view was left as it was; the caller relies on that to decide whether to surface its own no-controllers messaging.
    *
+   * The one outcome that is neither true nor false is a hook that answers in the wrong shape: that rejects with a TypeError naming the contract. It is not a
+   * connection failure and must not be reported as one - it is a bug in the caller's own hook, and the caller is the only party that can fix it.
+   *
    * @returns {Promise<boolean>} True when a non-empty controller list was loaded and the sidebar transitioned; false when the refresh left the view unchanged.
+   * @throws {TypeError} When the configured getControllers hook resolves anything other than a {@link ControllerListResult}.
    * @public
    */
   async refreshControllers() {
@@ -788,23 +829,39 @@ export class webUiFeatureOptions {
     }
 
     // Re-invoke the configured getControllers hook with the same injected-config shape show() uses, bounded on the same reasoning as the sync above. A device-only
-    // plugin has no hook and thus no controllers to refresh, so its null result falls through to the no-change return below; a hook that fails or never answers
-    // reports no change too, since leaving the working sidebar alone is the honest outcome either way.
+    // plugin has no hook and thus no controllers to refresh, so its null stand-in falls through to the no-change return below; a hook that fails, never answers, or
+    // reports a connection failure on its result reports no change too, since leaving the working sidebar alone is the honest outcome in every one of those cases.
     let controllers = null;
 
-    try {
+    if(this.#config.getControllers) {
 
-      if(this.#config.getControllers) {
+      let result;
 
-        controllers = await withDeadline({ promise: this.#config.getControllers({ config: this.#session.platform }), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+      try {
+
+        result = await withDeadline({ promise: this.#config.getControllers({ config: this.#session.platform }), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+      } catch {
+
+        return false;
       }
-    } catch {
 
-      return false;
+      /* The contract check sits outside the catch above, and that placement is the whole point: a hook that fails or never answers is a transport problem this
+       * method reports as "no change", while a hook that answers in the wrong shape is a bug in the plugin's own code. Absorbing the second into the first would
+       * hide it behind a silent no-op forever, so it is raised and travels to the caller - which authored the hook and is the only party that can fix it. This is
+       * the deliberate divergence from show(), where the same violation lands on the framework's retry view because no plugin code is on that call stack.
+       */
+      assertControllerListResult(result);
+
+      if(result.error) {
+
+        return false;
+      }
+
+      controllers = result.controllers;
     }
 
-    // A null, absent, or empty list leaves the store untouched: the consumer owns the no-controllers messaging, so a refresh that finds none reports no change rather
-    // than dispatching an empty sidebar or a connection-error frame. Only a non-empty list transitions the view.
+    // A null stand-in or an empty list leaves the store untouched: the consumer owns the no-controllers messaging, so a refresh that finds none reports no change
+    // rather than dispatching an empty sidebar or a connection-error frame. Only a non-empty list transitions the view.
     if(!controllers || (controllers.length === 0)) {
 
       return false;
@@ -851,8 +908,11 @@ export class webUiFeatureOptions {
    * quiet from one that answered with an error - two failures a user responds to differently. The dispatch rides the staleness guard, so a superseded cycle's late
    * failure never lands on the cycle that replaced it.
    *
+   * The failure value is whatever the await produced: a thrown value, or the message a hook reported on its own result. Both go through {@link errorMessage}, which
+   * reads an Error's message and stringifies anything else, so the two arrive at the view as the same kind of thing and neither needs a channel of its own.
+   *
    * @param {Object} args
-   * @param {*} args.err - The thrown value, tested for a deadline expiry and rendered as the failure's message.
+   * @param {*} args.err - The failure value - thrown or reported - tested for a deadline expiry and rendered as the failure's message.
    * @param {AbortSignal} args.signal - The signal of the cycle the failure belongs to.
    * @param {string} args.site - The await that failed, as named in the copy table.
    * @private
@@ -1173,6 +1233,26 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
       return;
     }
   }
+};
+
+/* Enforce the getControllers hook contract at one site, mirroring the guard `#devicesFor` applies to getDevices: a result that is not a `{ controllers, error }`
+ * object raises a TypeError naming the contract, and an accepted one is handed back so a call site can validate and assign in one step.
+ *
+ * The failure this catches is a plugin still on the bare-array shape. Unchecked, its array carries no `error` and no `controllers`, so the page reads it as "this
+ * plugin has no controllers configured" and says so - advice that sends the user to a settings page which is already correct. Naming the contract instead puts the
+ * mistake where it happened rather than three screens later, wearing a message about something else.
+ *
+ * The two callers route the failure differently, and deliberately: show() catches it into the connection-error view, because no plugin code is on its call stack to
+ * receive it, while refreshControllers lets it reach the caller that asked for the refresh and wrote the hook.
+ */
+const assertControllerListResult = (result) => {
+
+  if(!result || !Array.isArray(result.controllers) || (typeof result.error !== "string")) {
+
+    throw new TypeError("getControllers must resolve to { controllers, error }.");
+  }
+
+  return result;
 };
 
 // Set-wise equality on two string arrays. Used to decide whether a re-loaded options array represents a genuine save (different set) or a no-op reorder (same set).

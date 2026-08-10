@@ -353,7 +353,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 
         seenPlatforms.push(config);
 
-        return [{ name: "Hub", serialNumber: "CTRL-1" }];
+        return { controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" };
       }
     });
 
@@ -536,7 +536,7 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
     const deviceB = { firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Device B", serialNumber: "DEV-B" };
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ],
+      getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
       getDevices: async (controller) => {
 
         // CTRL-A is the initial controller: park its fetch on the gate so it is still in flight when the CTRL-B click lands. CTRL-B resolves immediately.
@@ -917,7 +917,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: async () => []
+      getControllers: async () => ({ controllers: [], error: "" })
     });
 
     await orchestrator.show(await openTestSession());
@@ -926,6 +926,197 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     // No config table rows and no sidebar nav links - the error path short-circuited before any rendering.
     assert.equal(skeleton.configTable.querySelectorAll("details[data-category]").length, 0,
       "the no-controllers path must not render any category tables");
+
+    orchestrator.cleanup();
+  });
+
+  test("a getControllers hook that reports a connection failure lands on the connection-error view, never the no-controllers message", async () => {
+
+    // The two outcomes share an empty controller list and #headerInfo, and they are the whole reason the hook carries an error alongside its list: an unreachable
+    // controller told to "configure a controller in the main settings tab" sends the user to a settings page that is already correct. The reported failure must
+    // therefore reach the retry affordance the thrown-hook path already lands on.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const toastsBefore = fake.observed.toasts.length;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [], error: "Connection refused: 192.0.2.1:443" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the reported failure must render the connection-error view's retry affordance");
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, "Connection refused: 192.0.2.1:443",
+      "the message the hook reported must render as the failure detail");
+    assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the controller list\./, "the controllers site's failure headline must render");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Please configure a controller/,
+      "the no-controllers helper text must be unreachable when the hook reported a connection failure");
+    assert.equal(skeleton.configTable.querySelectorAll("details[data-category]").length, 0, "a reported controller failure must not render any category tables");
+    assert.equal(fake.observed.toasts.length, toastsBefore, "the failure surfaces inline in the connection-error view, not as a toast");
+
+    orchestrator.cleanup();
+  });
+
+  test("a getControllers hook that reports no failure still renders its controllers", async () => {
+
+    // The success half of the same contract: an empty error is the ordinary case, and the list travelling beside it reaches the sidebar exactly as before.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+      getDevices: async () => ({ devices: [], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']"),
+      "a successful result must render its controller in the sidebar");
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "a successful result must leave no connection-error view behind");
+
+    orchestrator.cleanup();
+  });
+
+  test("refreshControllers: a hook that reports a connection failure resolves false and leaves the sidebar standing", async () => {
+
+    // The divergence from show(): an explicit, plugin-initiated refresh reports its failure to the caller that asked for it rather than replacing a working page
+    // with the retry frame. The caller authored the hook that produced the failure and can surface it however it likes.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let result = { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => result,
+      getDevices: async () => ({ devices: [], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "precondition: the sidebar carries the controller");
+
+    /* The hook reports a failure AND hands back a list - the partial result a multi-controller plugin produces when it reaches some controllers and not others. The
+     * list is deliberately non-empty and longer than the rendered one, because that is the only shape where the error channel is observable: an error arriving with
+     * an empty list would leave the view standing anyway, through the no-controllers rule that predates this contract. A reported failure is authoritative over
+     * whatever list rode back with it, so nothing here reaches the store.
+     */
+    result = { controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "the controller went away" };
+
+    assert.equal(await orchestrator.refreshControllers(), false, "a refresh whose hook reports a failure must report that it changed nothing");
+    await flush();
+
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the sidebar the refresh could not improve on must stand untouched");
+    assert.equal(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), null,
+      "the list that rode back with the failure must never reach the sidebar");
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "a refresh failure must never raise the connection-error view over a working page");
+
+    orchestrator.cleanup();
+  });
+
+  test("a hook still on the bare-array contract lands show() on the connection-error view, naming the contract", async () => {
+
+    // The case of a plugin still on the bare-array contract. Such an array carries no error and no controllers, so without the guard it would read as "this plugin
+    // has no controllers configured" - the one message this whole channel exists to keep off a failure it does not describe. show() has no plugin code on its call
+    // stack to hand the TypeError to, so it lands where every other boot failure lands.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => [{ name: "Hub A", serialNumber: "CTRL-A" }]
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "a wrong-shaped result must render the connection-error view's retry affordance");
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, "getControllers must resolve to { controllers, error }.",
+      "the failure detail must name the contract the hook broke");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Please configure a controller/,
+      "the no-controllers helper text must be unreachable for a hook that never answered the question");
+
+    orchestrator.cleanup();
+  });
+
+  test("the same bare-array hook rejects out of refreshControllers rather than reporting no change", async () => {
+
+    // The divergence from show(): a refresh is plugin-initiated, so the plugin that wrote the broken hook is on the call stack and gets told. Absorbing this into
+    // the false return every transport failure gets would hide the bug behind a silent no-op for as long as the plugin ships it.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    let result = { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => result,
+      getDevices: async () => ({ devices: [], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "precondition: the sidebar carries the controller");
+
+    // The plugin regresses its hook to the bare-array shape between the render and the refresh.
+    result = [{ name: "Hub A", serialNumber: "CTRL-A" }];
+
+    await assert.rejects(() => orchestrator.refreshControllers(), TypeError, "a wrong-shaped result must reach the caller as a TypeError, not a false return");
+    await flush();
+
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the rejected refresh leaves the rendered sidebar as it was");
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "a plugin-side contract bug must never raise the retry view over a working page");
 
     orchestrator.cleanup();
   });
@@ -1150,7 +1341,7 @@ describe("webUiFeatureOptions - device info panel", () => {
 
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" })
     });
 
@@ -1188,7 +1379,7 @@ describe("webUiFeatureOptions - device info panel", () => {
 
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => ({ devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" })
     });
 
@@ -1244,7 +1435,7 @@ describe("webUiFeatureOptions - device info panel", () => {
 
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       infoPanel
     });
@@ -1698,7 +1889,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
     const controllers = [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ];
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: async () => controllers,
+      getControllers: async () => ({ controllers, error: "" }),
       getDevices: async (controller) => {
 
         if(pauseNextDevicesFetch) {
@@ -1930,7 +2121,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
       // Predicates reference the fixture's own controllerEntry rather than re-stating the serial literal - the controller object is the SSOT for "what is this
       // fixture's controller," so any change to its identity propagates everywhere consistently.
-      getControllers: async () => [controllerEntry],
+      getControllers: async () => ({ controllers: [controllerEntry], error: "" }),
       getDevices: async (controller) => (controller?.serialNumber === controllerEntry.serialNumber) ?
         { devices: [ controllerAsDevice, deviceA, deviceB ], error: "" } :
         { devices: [], error: "" },
@@ -2327,7 +2518,7 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
     const state = { devicesResult: { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub", serialNumber: "CTRL-1" }], error: "" } };
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => state.devicesResult
     });
 
@@ -2415,7 +2606,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
     // and reveal the regions, never the connection-error short-circuit that a non-empty error would trigger.
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => ({ devices: [], error: "" })
     });
 
@@ -2447,7 +2638,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
     // normal empty UI, leaving the optimistic controller scope in place, rather than the connection-error view.
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ],
+      getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
       getDevices: (controller) => (controller?.serialNumber === "CTRL-A") ?
         { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub A", serialNumber: "CTRL-A" }], error: "" } :
         { devices: [], error: "" }
@@ -2653,7 +2844,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
         seenPlatforms.push(config);
 
-        return controllersToReturn;
+        return { controllers: controllersToReturn, error: "" };
       }
     });
 
@@ -2687,7 +2878,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     orchestrator.cleanup();
   });
 
-  test("a null resolved list leaves the sidebar untouched and resolves false", async () => {
+  test("a null controllers field is off-contract and rejects rather than passing as an empty result", async () => {
 
     using _dom = createTestDom();
 
@@ -2703,22 +2894,22 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     seedBootstrapProbeShim();
 
     let controllersToReturn = [{ name: "Hub A", serialNumber: "CTRL-A" }];
-    const orchestrator = new webUiFeatureOptions({ getControllers: () => controllersToReturn });
+    const orchestrator = new webUiFeatureOptions({ getControllers: () => ({ controllers: controllersToReturn, error: "" }) });
 
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // The refresh's hook resolves null - the consumer owns messaging for that case, so refreshControllers must leave the sidebar as it was.
+    // The contract says `controllers` is an array, so null is a wrong-shaped result and not a spelling of "none". The way a hook reports no controllers is an empty
+    // array, which the sibling test below covers; conflating the two would let a hook that failed to build its list read as a plugin with nothing configured.
     controllersToReturn = null;
 
-    const result = await orchestrator.refreshControllers();
+    await assert.rejects(() => orchestrator.refreshControllers(), TypeError, "a null controllers field must reach the caller as a contract violation");
 
     await flush();
 
-    assert.equal(result, false, "a null refreshed list must resolve false");
     assert.equal(skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 1,
       "the store is untouched: the original controller still renders");
-    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the original controller survives a null refresh");
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the rejected refresh leaves the original controller standing");
 
     orchestrator.cleanup();
   });
@@ -2739,7 +2930,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     seedBootstrapProbeShim();
 
     let controllersToReturn = [{ name: "Hub A", serialNumber: "CTRL-A" }];
-    const orchestrator = new webUiFeatureOptions({ getControllers: () => controllersToReturn });
+    const orchestrator = new webUiFeatureOptions({ getControllers: () => ({ controllers: controllersToReturn, error: "" }) });
 
     await orchestrator.show(await openTestSession());
     await flush();
@@ -2780,7 +2971,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
         seenPlatforms.push(config);
 
-        return [{ name: "Hub A", serialNumber: "CTRL-A" }];
+        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
       }
     });
 
@@ -2858,7 +3049,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
         invoked = true;
 
-        return [{ name: "Hub A", serialNumber: "CTRL-A" }];
+        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
       }
     });
 
@@ -2925,7 +3116,7 @@ describe("webUiFeatureOptions - status panel selection", () => {
 
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => [{ name: "Hub", serialNumber: "CTRL-1" }],
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       statusPanel: { placeholderRows: [{ id: "door", label: "Door", sizer: "Stopped (100%)" }] }
     });
@@ -3033,7 +3224,8 @@ describe("webUiFeatureOptions - global-only construction contracts", () => {
     assert.ok(new webUiFeatureOptions({ globalOnly: true }), "globalOnly with no getDevices supplied constructs");
 
     // Each device- or controller-facing hook contradicts globalOnly and throws at construction.
-    assert.throws(() => new webUiFeatureOptions({ getControllers: () => [], globalOnly: true }), TypeError, "globalOnly with getControllers throws");
+    assert.throws(() => new webUiFeatureOptions({ getControllers: () => ({ controllers: [], error: "" }), globalOnly: true }), TypeError,
+      "globalOnly with getControllers throws");
     assert.throws(() => new webUiFeatureOptions({ getDevices: () => ({ devices: [], error: "" }), globalOnly: true }), TypeError,
       "globalOnly with an explicitly supplied getDevices throws");
     assert.throws(() => new webUiFeatureOptions({ globalOnly: true, statusPanel: {} }), TypeError, "globalOnly with statusPanel throws");
@@ -3602,7 +3794,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => new Promise((resolve) => setTimeout(() => resolve([{ name: "Hub", serialNumber: "CTRL-1" }]), 10000))
+      getControllers: () => new Promise((resolve) => setTimeout(() => resolve({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }), 10000))
     });
 
     const showPromise = orchestrator.show(session);
@@ -3741,7 +3933,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     let stall = false;
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => stall ? hangingCall() : [{ name: "Hub A", serialNumber: "CTRL-A" }]
+      getControllers: () => stall ? hangingCall() : { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }
     });
 
     await orchestrator.show(session);
@@ -3782,7 +3974,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
         calls += 1;
 
-        return (calls === 2) ? stale.promise : [{ name: "Hub A", serialNumber: "CTRL-A" }];
+        return (calls === 2) ? stale.promise : { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
       }
     });
 
@@ -3797,7 +3989,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     await orchestrator.show(session);
     await flush();
 
-    stale.resolve([{ name: "Hub STALE", serialNumber: "CTRL-STALE" }]);
+    stale.resolve({ controllers: [{ name: "Hub STALE", serialNumber: "CTRL-STALE" }], error: "" });
 
     assert.equal(await refresh, false, "a superseded refresh reports that it changed nothing");
     await flush();
@@ -3820,7 +4012,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     using _homebridge = homebridgeGuard;
 
     let controllers = [{ name: "Hub A", serialNumber: "CTRL-A" }];
-    const orchestrator = new webUiFeatureOptions({ getControllers: () => controllers });
+    const orchestrator = new webUiFeatureOptions({ getControllers: () => ({ controllers, error: "" }) });
 
     await orchestrator.show(session);
     await flush();
@@ -3908,7 +4100,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
         calls += 1;
 
-        return (calls === 2) ? stale.promise : [{ name: "Hub A", serialNumber: "CTRL-A" }];
+        return (calls === 2) ? stale.promise : { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
       }
     });
 
@@ -3925,7 +4117,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
      * belonging to a cycle that no longer exists, and the staleness guard is the only thing standing between its list and the page the user is now looking at. It is
      * also the one such path with no repaint behind it: a boot failure lands during the next cycle's own boot, which overwrites it, whereas nothing follows a refresh.
      */
-    stale.resolve([{ name: "Hub STALE", serialNumber: "CTRL-STALE" }]);
+    stale.resolve({ controllers: [{ name: "Hub STALE", serialNumber: "CTRL-STALE" }], error: "" });
 
     orchestrator.cleanup();
 

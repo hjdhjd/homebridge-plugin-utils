@@ -12,8 +12,9 @@
  *     and returns a `Disposable` handle whose `Symbol.dispose` restores the previous globals and closes the window. Matches the `using dom = createTestDom()`
  *     idiom from `src/` so UI test bodies read the same way their backend counterparts do.
  *   - {@link createSkeletonFeatureOptionsDom} - seeds the document with the exact element tree the `webUi` / `webUiFeatureOptions` orchestrators look up by id
- *     (`configTable`, `controllersContainer`, `devicesContainer`, `search`, page containers, menu buttons, etc.). A single source of truth so every test that
- *     needs the full skeleton gets the same shape without copy-pasting.
+ *     (`configTable`, `controllersContainer`, `devicesContainer`, `search`, page containers, menu buttons, etc.), laid out the way a real consuming shell lays it
+ *     out. A single source of truth so every test that needs the full skeleton gets the same shape without copy-pasting, global-only reveal tests included - the
+ *     one fixture serves every mode, and its `misnestDeviceStats` option reproduces the misconfigured shell the reveal diagnostic exists for.
  *   - {@link createFakeHomebridge} - an object with every `homebridge.*` method the UI code calls. Default behaviors are quiet no-ops (spinners and save-button
  *     toggles) or minimal stubs (getPluginConfig returns the seeded config). Individual tests override the methods they care about on a per-test basis.
  *
@@ -115,17 +116,28 @@ export function createTestDom() {
  * Seed the current `document` with the skeleton DOM layout the `webUi` and `webUiFeatureOptions` orchestrators expect. Call after `createTestDom` has installed the
  * globals.
  *
- * The skeleton mirrors the Homebridge config-ui template: page containers for the first-run, feature-options, and support views; the menu wrapper with its three
- * tab buttons (menuHome, menuFeatureOptions, and menuSettings, the last of which has no corresponding page container in this skeleton); the feature-options
- * sub-layout (sidebar + main content + search panel + config table + info header + stats grid + status info).
+ * The skeleton mirrors the real consuming shell: page containers for the first-run, feature-options, and support views; the menu wrapper with its three tab buttons
+ * (menuHome, menuFeatureOptions, and menuSettings, the last of which has no corresponding page container in this skeleton); and the feature-options sub-layout, where
+ * `#headerInfo` is a bar above the content row and that row's two children are `#sidebar` (the nav containers) and the content column holding
+ * `#deviceStatsContainer`, `#search`, and `#optionsContainer` wrapping `#configTable`.
+ *
+ * The interior layout is the shell contract itself, not a convenience: the orchestrator reveals `#deviceStatsContainer`, `#optionsContainer`, and `#search` as content
+ * regions while global-only mode leaves `#sidebar` and `#headerInfo` permanently hidden, so a content region nested under either of those subtrees can never become
+ * visible. Placing them as siblings here is what lets one fixture serve every mode. The `#statusInfo` status bar is deliberately absent: the search view builds its own
+ * at mount, and a second element carrying that id would shadow the real one for any lookup by id.
  *
  * Returns the important element references as a record so tests that need to insert additional content (seeded options, category tables, etc.) have a typed grip on
  * the skeleton's mount points.
  *
+ * @param {Object} [options={}] - Fixture options.
+ * @param {boolean} [options.misnestDeviceStats=false] - Place `#deviceStatsContainer` inside `#sidebar` rather than in the content column, reproducing the
+ *        misconfigured consumer shell that drives the reveal path's misnesting diagnostic. Tests that assert on that warning set it; everything else takes the
+ *        default, which is the shape a correct shell has.
  * @returns {Record<string, HTMLElement>} The mounted skeleton's top-level elements, keyed by their id for convenient reference.
  */
-export function createSkeletonFeatureOptionsDom() {
+export function createSkeletonFeatureOptionsDom({ misnestDeviceStats = false } = {}) {
 
+  const deviceStats = "<div id=\"deviceStatsContainer\"></div>";
   const html =
 
     "<div id=\"pageFirstRun\" style=\"display: none\"><button id=\"firstRun\">Start</button></div>" +
@@ -136,16 +148,15 @@ export function createSkeletonFeatureOptionsDom() {
     "</div>" +
     "<div id=\"pageSupport\" style=\"display: none\"></div>" +
     "<div id=\"pageFeatureOptions\" style=\"display: none\">" +
-      "<div id=\"headerInfo\">" +
-        "<div class=\"device-stats-grid\"><div id=\"statusInfo\"></div></div>" +
-      "</div>" +
+      "<div id=\"headerInfo\"></div>" +
       "<div class=\"feature-main-content\">" +
         "<div id=\"sidebar\">" +
           "<div id=\"controllersContainer\"></div>" +
           "<div id=\"devicesContainer\"></div>" +
-          "<div id=\"deviceStatsContainer\"></div>" +
+          (misnestDeviceStats ? deviceStats : "") +
         "</div>" +
         "<div class=\"feature-content\">" +
+          (misnestDeviceStats ? "" : deviceStats) +
           "<div id=\"search\"></div>" +
           "<div id=\"optionsContainer\"><div id=\"configTable\"></div></div>" +
         "</div>" +
@@ -166,12 +177,12 @@ export function createSkeletonFeatureOptionsDom() {
     menuHome: document.getElementById("menuHome"),
     menuSettings: document.getElementById("menuSettings"),
     menuWrapper: document.getElementById("menuWrapper"),
+    optionsContainer: document.getElementById("optionsContainer"),
     pageFeatureOptions: document.getElementById("pageFeatureOptions"),
     pageFirstRun: document.getElementById("pageFirstRun"),
     pageSupport: document.getElementById("pageSupport"),
     search: document.getElementById("search"),
-    sidebar: document.getElementById("sidebar"),
-    statusInfo: document.getElementById("statusInfo")
+    sidebar: document.getElementById("sidebar")
   };
 }
 

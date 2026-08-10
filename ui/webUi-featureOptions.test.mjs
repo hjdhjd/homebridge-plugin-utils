@@ -3133,57 +3133,6 @@ describe("webUiFeatureOptions - status panel selection", () => {
   });
 });
 
-// A purpose-built page skeleton for the global-only boot tests. The shared createSkeletonFeatureOptionsDom nests #deviceStatsContainer inside #sidebar and #statusInfo
-// inside #headerInfo, so a region revealed under a permanently-hidden sidebar stays invisible - unusable for the reveal assertions here. This mirrors the real
-// consuming shell instead: #headerInfo is a sibling bar above the content row, #sidebar (holding the nav containers) and the content column are the row's two children,
-// and the content column holds #deviceStatsContainer, #search, and #optionsContainer wrapping #configTable. The outer page chrome is reproduced verbatim because show()
-// dereferences #pageSupport and #pageFeatureOptions unguarded. When misnestDeviceStats is set, #deviceStatsContainer is placed back inside #sidebar (the shared
-// skeleton's own shape) to drive the misnesting diagnostic.
-function createGlobalOnlyDom({ misnestDeviceStats = false } = {}) {
-
-  const deviceStats = "<div id=\"deviceStatsContainer\"></div>";
-  const html =
-
-    "<div id=\"pageFirstRun\" style=\"display: none\"><button id=\"firstRun\">Start</button></div>" +
-    "<div id=\"menuWrapper\" style=\"display: none\">" +
-      "<button id=\"menuHome\">Home</button>" +
-      "<button id=\"menuFeatureOptions\">Features</button>" +
-      "<button id=\"menuSettings\">Settings</button>" +
-    "</div>" +
-    "<div id=\"pageSupport\" style=\"display: none\"></div>" +
-    "<div id=\"pageFeatureOptions\" style=\"display: none\">" +
-      "<div id=\"headerInfo\"></div>" +
-      "<div class=\"feature-main-content\">" +
-        "<div id=\"sidebar\">" +
-          "<div id=\"controllersContainer\"></div>" +
-          "<div id=\"devicesContainer\"></div>" +
-          (misnestDeviceStats ? deviceStats : "") +
-        "</div>" +
-        "<div class=\"feature-content\">" +
-          (misnestDeviceStats ? "" : deviceStats) +
-          "<div id=\"search\"></div>" +
-          "<div id=\"optionsContainer\"><div id=\"configTable\"></div></div>" +
-        "</div>" +
-      "</div>" +
-    "</div>";
-
-  document.body.innerHTML = html;
-
-  return {
-
-    configTable: document.getElementById("configTable"),
-    controllersContainer: document.getElementById("controllersContainer"),
-    deviceStatsContainer: document.getElementById("deviceStatsContainer"),
-    devicesContainer: document.getElementById("devicesContainer"),
-    headerInfo: document.getElementById("headerInfo"),
-    optionsContainer: document.getElementById("optionsContainer"),
-    pageFeatureOptions: document.getElementById("pageFeatureOptions"),
-    pageSupport: document.getElementById("pageSupport"),
-    search: document.getElementById("search"),
-    sidebar: document.getElementById("sidebar")
-  };
-}
-
 // Ancestor-aware visibility: a region counts as revealed only when its own inline display is cleared to "" AND no ancestor up to the #pageFeatureOptions boundary carries
 // an inline display:none. The reveal mechanism under test toggles inline styles, so walking inline display up the tree is the honest check in this DOM - a region whose
 // own display is cleared is still invisible if the sidebar or header wrapping it stays hidden.
@@ -3241,7 +3190,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
     using _dom = createTestDom();
 
-    const skeleton = createGlobalOnlyDom();
+    const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
     using _homebridge = installHomebridge(fake);
@@ -3334,7 +3283,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
     using _dom = createTestDom();
 
-    const skeleton = createGlobalOnlyDom();
+    const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
     using _homebridge = installHomebridge(fake);
@@ -3386,7 +3335,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
     using _dom = createTestDom();
 
-    createGlobalOnlyDom();
+    createSkeletonFeatureOptionsDom();
 
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
@@ -3431,7 +3380,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
     using _dom = createTestDom();
 
-    const skeleton = createGlobalOnlyDom();
+    const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
     using _homebridge = installHomebridge(fake);
@@ -3480,7 +3429,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
     using _dom = createTestDom();
 
-    createGlobalOnlyDom({ misnestDeviceStats: true });
+    createSkeletonFeatureOptionsDom({ misnestDeviceStats: true });
 
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 

@@ -80,7 +80,7 @@ describe("createSkeletonFeatureOptionsDom", () => {
     const requiredKeys = [
 
       "configTable", "controllersContainer", "deviceStatsContainer", "devicesContainer", "firstRun", "headerInfo", "menuFeatureOptions", "menuHome", "menuSettings",
-      "menuWrapper", "pageFeatureOptions", "pageFirstRun", "pageSupport", "search", "sidebar", "statusInfo"
+      "menuWrapper", "optionsContainer", "pageFeatureOptions", "pageFirstRun", "pageSupport", "search", "sidebar"
     ];
 
     for(const key of requiredKeys) {
@@ -88,6 +88,37 @@ describe("createSkeletonFeatureOptionsDom", () => {
       assert.ok(skeleton[key], "skeleton record must include reference to " + key);
       assert.ok(skeleton[key] === document.getElementById(key), key + " skeleton reference must be the document's element by that id");
     }
+  });
+
+  test("lays the content regions out as the real shell does, so no revealed region sits under a permanently-hidden ancestor", () => {
+
+    using _dom = createTestDom();
+
+    void _dom;
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    // Global-only mode leaves #sidebar and #headerInfo hidden for the page's life, so a content region nested under either can never become visible however its own
+    // display is set. Pinning the sibling relationship here is what lets one fixture serve every mode.
+    assert.equal(skeleton.sidebar.contains(skeleton.deviceStatsContainer), false, "#deviceStatsContainer must sit outside #sidebar");
+    assert.equal(skeleton.headerInfo.contains(skeleton.deviceStatsContainer), false, "#deviceStatsContainer must sit outside #headerInfo");
+    assert.equal(skeleton.deviceStatsContainer.parentElement, skeleton.search.parentElement, "#deviceStatsContainer and #search share the content column");
+    assert.equal(skeleton.sidebar.parentElement, skeleton.deviceStatsContainer.parentElement.parentElement, "#sidebar and the content column are the row's children");
+
+    // The search view builds its own #statusInfo at mount, so the skeleton carries none: a second element with that id would shadow the real one.
+    assert.equal(document.getElementById("statusInfo"), null, "the skeleton must not seed a competing #statusInfo");
+  });
+
+  test("misnestDeviceStats reproduces the misconfigured shell the reveal diagnostic exists for", () => {
+
+    using _dom = createTestDom();
+
+    void _dom;
+
+    const skeleton = createSkeletonFeatureOptionsDom({ misnestDeviceStats: true });
+
+    assert.equal(skeleton.sidebar.contains(skeleton.deviceStatsContainer), true, "the misnested shape puts #deviceStatsContainer under #sidebar");
+    assert.equal(skeleton.search.parentElement.contains(skeleton.deviceStatsContainer), false, "and takes it out of the content column");
   });
 
   test("seeds the document with the orchestrator's expected element tree (queryable by id)", () => {

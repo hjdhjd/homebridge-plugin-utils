@@ -94,7 +94,7 @@ function abortObservingFetch(lines: readonly string[]): AbortObservingFetch {
   let cancelled = false;
   let seen: AbortSignal | undefined;
 
-  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 
     seen = init?.signal ?? undefined;
 

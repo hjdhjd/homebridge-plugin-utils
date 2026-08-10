@@ -1620,7 +1620,7 @@ describe("guardedDispatch", () => {
     const received: (string | undefined)[] = [];
 
     // A richer callback shape carrying a success payload alongside the error slot; the guard must forward the handler's exact answer, not just the error.
-    const callback = (error?: Error, value?: string): void => { received.push(value); };
+    const callback = (_error?: Error, value?: string): void => { received.push(value); };
 
     await assertNoUnhandledRejections(async () => {
 

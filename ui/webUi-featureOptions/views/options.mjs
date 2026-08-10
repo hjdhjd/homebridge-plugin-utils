@@ -5,7 +5,7 @@
 "use strict";
 
 import { applyCategoryStates, captureCategoryStates } from "../utils.mjs";
-import { applyRowState, categoryShell, optionRow, triStateTransition, valueCommitTransition } from "../rendering.mjs";
+import { applyRowState, categoryShell, optionRow, toggleSecretReveal, triStateTransition, valueCommitTransition } from "../rendering.mjs";
 import { buildConfigIndex, hasValueContent } from "../../featureOptions.js";
 import { projection, scopeCacheKey, selectedControllerId, selectedDeviceId } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
@@ -225,6 +225,18 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
   // Click delegation for rows. Forwards to the checkbox so a click in the row's whitespace toggles the option.
   configTable.addEventListener("click", (event) => {
 
+    // A secret option's reveal toggle is answered here and goes no further. It is neither an input nor a label, so the row forward below would otherwise read a
+    // click on it as a click on the row's whitespace and flip the option the user was only trying to read. The lookup starts from the event target rather than the
+    // button because the glyph inside the button is what a pointer actually lands on.
+    const secretToggle = event.target.closest(".fo-secret-toggle");
+
+    if(secretToggle) {
+
+      toggleSecretReveal(secretToggle);
+
+      return;
+    }
+
     const row = event.target.closest(".fo-option-row");
 
     if(!row || event.target.closest("input, label")) {
@@ -235,7 +247,7 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
     row.querySelector("input[type='checkbox']")?.click();
   }, { signal });
 
-  // Change delegation for checkboxes and text inputs. Checkbox change runs the tri-state transition and dispatches the resulting action; text input change
+  // Change delegation for checkboxes and value inputs. Checkbox change runs the tri-state transition and dispatches the resulting action; value input change
   // re-fires as a checkbox change so the same path handles both.
   configTable.addEventListener("change", (event) => handleChange({ event, store }), { signal });
 
@@ -496,9 +508,12 @@ const rowContext = ({ state, target }) => {
   return entry ? { entry, row } : null;
 };
 
-// Handle a change event on the config table. Checkboxes run the tri-state transition; text inputs run the value-commit transition. Either way the pure state
+// Handle a change event on the config table. Checkboxes run the tri-state transition; value inputs run the value-commit transition. Either way the pure state
 // machine computes the action, the dispatch drives the reactive re-projection, and applyRowState re-derives the affected rows - one DOM-writing path, the same
 // one construction uses, rather than an imperative apply here plus a re-derive on update that could drift apart.
+//
+// A value input is recognized by its class rather than by its type attribute. The class is what marks the element as an option's value field; the type is
+// presentation, and a masked field wears "password" there, so a type-keyed match would quietly drop every secret option out of the commit path.
 //
 // A gesture that leaves the configured options untouched - an arm or disarm, whose action moves only the store's armedOption, or a gesture that resolves to
 // nothing at all - triggers no re-projection walk, so the affected row is re-derived here through the same single writer, against the post-dispatch armed state.
@@ -506,7 +521,7 @@ const rowContext = ({ state, target }) => {
 const handleChange = ({ event, store }) => {
 
   const target = event.target;
-  const isValueCommit = target.matches("input[type='text']");
+  const isValueCommit = target.matches("input.fo-option-value");
 
   if(!isValueCommit && !target.matches("input[type='checkbox']")) {
 
@@ -522,7 +537,7 @@ const handleChange = ({ event, store }) => {
   }
 
   const { entry, row } = context;
-  const inputValue = row.querySelector("input[type='text']");
+  const inputValue = row.querySelector("input.fo-option-value");
   const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
   const transitionArgs = {
 
@@ -568,7 +583,7 @@ const handleFocusOut = ({ event, store }) => {
   const state = store.state;
   const target = event.target;
 
-  if((state.armedOption === null) || !target.matches?.("input[type='text']")) {
+  if((state.armedOption === null) || !target.matches?.("input.fo-option-value")) {
 
     return;
   }

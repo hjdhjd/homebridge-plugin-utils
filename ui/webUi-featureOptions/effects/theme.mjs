@@ -310,6 +310,18 @@ const buildThemeCss = () => [
   // rather than stretching, and min-width: 0 lets a long label wrap within the grid track instead of forcing the track wider.
   ".fo-option-content { align-items: flex-start; display: flex; flex-direction: column; gap: var(--fo-space-xs); min-width: 0; }",
 
+  // A secret option's masked field and its reveal toggle share a horizontal wrapper inside the stacking content cell, which is what seats the control beside the
+  // field rather than beneath it. The toggle carries none of the native button chrome and inherits the surrounding text color, so the eye glyph inside it - drawn
+  // in currentColor - takes whatever color the row's text carries in either mode, with no color rule of its own to keep in step.
+  ".fo-secret-field { align-items: center; display: flex; gap: var(--fo-space-xs); max-width: 100%; }",
+  ".fo-secret-toggle { align-items: center; background: none; border: 0; color: inherit; cursor: pointer; display: inline-flex; " +
+    "line-height: 1; padding: 0; }",
+
+  // A locked row's toggle is disabled, and surrendering the native button chrome means surrendering the browser's own disabled rendering with it - so the dim and
+  // the default cursor are what keep a control the row will not answer from presenting itself as one that will. The dim comes from `--fo-opacity-disabled`, the
+  // shared not-actionable value.
+  ".fo-secret-toggle:disabled { cursor: default; opacity: var(--fo-opacity-disabled); }",
+
   // Main options area. Owns its outline with a theme-aware border rather than config-ui-x's box-shadow "border", which exists only in the host's dark theme (so it
   // is absent in light) and bleeds outside the box (so it clips at the flush iframe edge). Every outer container frame shares --fo-border-accent (the probed theme
   // accent, subtled), a step lighter than the full-accent per-category frame nested inside so the two read as one family at different weights; the border sits

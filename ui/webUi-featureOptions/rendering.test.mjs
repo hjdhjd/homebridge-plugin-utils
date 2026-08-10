@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { applyRowState, categoryShell, optionRow, triStateTransition, valueCommitTransition } from "./rendering.mjs";
+import { applyRowState, categoryShell, optionRow, toggleSecretReveal, triStateTransition, valueCommitTransition } from "./rendering.mjs";
 import { buildCatalogIndex, buildConfigIndex } from "../featureOptions.js";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
@@ -12,9 +12,10 @@ import assert from "node:assert/strict";
 import { createTestDom } from "../ui.helpers.mjs";
 import { projection } from "./selectors.mjs";
 
-// Catalog fixture: covers the row archetypes (boolean, grouped boolean, value-centric options with and without an explicit inputSize, and a default-on value-centric
-// option whose declared default is what an emptied field has to fall back to) plus a controller-detectable device fixture for upstream tests. inputSize feeds only
-// the field width, not the layout, so every value option exercises the same stacked structure regardless of whether inputSize is declared.
+// Catalog fixture: covers the row archetypes (boolean, grouped boolean, value-centric options with and without an explicit inputSize, a default-on value-centric
+// option whose declared default is what an emptied field has to fall back to, and a secret value option) plus a controller-detectable device fixture for upstream
+// tests. inputSize feeds only the field width, not the layout, so every value option exercises the same stacked structure regardless of whether inputSize is
+// declared. The secret option ships an empty defaultValue, which is what a credential declares: value-centric, with nothing meaningful to default to.
 const CATEGORIES = [
 
   { description: "Motion Options", name: "Motion" },
@@ -27,7 +28,8 @@ const OPTIONS = {
 
     { default: false, defaultValue: 50, description: "Audio volume level.", inputSize: 3, name: "Volume" },
     { default: false, defaultValue: 80, description: "Bandwidth ceiling.", name: "Bandwidth" },
-    { default: true, defaultValue: "stereo", description: "Default audio channel layout.", name: "Layout" }
+    { default: true, defaultValue: "stereo", description: "Default audio channel layout.", name: "Layout" },
+    { default: false, defaultValue: "", description: "Streaming account password.", inputSize: 20, name: "Password", secret: true }
   ],
 
   Motion: [
@@ -109,7 +111,7 @@ describe("optionRow - basic structure", () => {
 
     const checkbox = row.querySelector("input[type='checkbox']");
     const label = row.querySelector("label");
-    const valueInput = row.querySelector("input[type='text']");
+    const valueInput = row.querySelector("input.fo-option-value");
 
     assert.equal(checkbox?.id, "Motion.Detect");
     assert.equal(label?.getAttribute("for"), "Motion.Detect");
@@ -258,7 +260,7 @@ describe("optionRow - value input initialization", () => {
     const state = loadedState({ configuredOptions: ["Enable.Audio.Volume.75"] });
     const entry = findEntry(state, "Audio", "Volume");
     const row = optionRow({ deviceId: null, entry, scopeKind: "global" });
-    const valueInput = row.querySelector("input[type='text']");
+    const valueInput = row.querySelector("input.fo-option-value");
 
     assert.equal(valueInput?.value, "75");
     assert.equal(valueInput?.disabled, false, "editable when enabled");
@@ -272,7 +274,7 @@ describe("optionRow - value input initialization", () => {
     const state = loadedState();
     const entry = findEntry(state, "Audio", "Volume");
     const row = optionRow({ deviceId: null, entry, scopeKind: "global" });
-    const valueInput = row.querySelector("input[type='text']");
+    const valueInput = row.querySelector("input.fo-option-value");
 
     assert.equal(valueInput?.value, "50", "catalog default");
     assert.equal(valueInput?.disabled, true, "a disabled or unset row locks its input - the checkbox is the affordance that enables or arms it");
@@ -291,7 +293,7 @@ describe("optionRow - value input initialization", () => {
     const entry = findEntry(state, "Audio", "Volume");
     const row = optionRow({ armed: true, deviceId: "dev-a", entry, scopeKind: "device" });
     const checkbox = row.querySelector("input[type='checkbox']");
-    const valueInput = row.querySelector("input[type='text']");
+    const valueInput = row.querySelector("input.fo-option-value");
 
     assert.equal(checkbox?.checked, true, "an armed row reads checked - the arming gesture's own affordance");
     assert.equal(valueInput?.disabled, false, "an armed row's input is live, awaiting the first value that will actually enable the option");
@@ -310,11 +312,184 @@ describe("optionRow - value input initialization", () => {
     });
     const entry = findEntry(state, "Audio", "Volume");
     const row = optionRow({ deviceId: "dev-a", entry, scopeKind: "device" });
-    const valueInput = row.querySelector("input[type='text']");
+    const valueInput = row.querySelector("input.fo-option-value");
 
     assert.equal(valueInput?.disabled, true, "inheriting - input disabled");
     assert.equal(valueInput?.value, "99", "shows the inherited value");
     assert.equal(valueInput?.getAttribute("aria-disabled"), "true", "an inheriting input signals aria-disabled to assistive tech");
+  });
+});
+
+describe("optionRow - secret options", () => {
+
+  test("a secret option renders a masked field with its reveal toggle beside it", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState();
+    const row = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Password"), scopeKind: "global" });
+    const input = row.querySelector("input.fo-option-value");
+    const toggle = row.querySelector(".fo-secret-toggle");
+
+    assert.equal(input?.type, "password", "a secret option's value is masked");
+    assert.equal(input?.getAttribute("autocomplete"), "new-password", "the masked field asks the browser's credential manager to leave it alone");
+    assert.equal(input?.style.width, "20ch", "a secret option declares its width like any other value option");
+    assert.equal(toggle?.tagName, "BUTTON");
+    assert.equal(toggle?.type, "button", "a bare button, so it can never submit anything");
+    assert.equal(toggle?.getAttribute("aria-label"), "Show the value.", "the label names what the next click does");
+    assert.equal(toggle?.getAttribute("aria-pressed"), "false", "the field starts masked");
+    assert.equal(toggle?.querySelector("svg")?.getAttribute("stroke"), "currentColor", "the glyph draws in whatever color surrounds it");
+    assert.equal(toggle?.querySelector("svg")?.getAttribute("aria-hidden"), "true", "the glyph is decorative - the button's own label names the action");
+
+    // The field and its toggle share a wrapper, which is what puts the control beside the field: the content cell stacks its children, so an unwrapped toggle
+    // would land on its own line beneath the field.
+    const wrapper = row.querySelector(".fo-secret-field");
+
+    assert.ok(wrapper?.contains(input), "the masked field lives in the wrapper");
+    assert.ok(wrapper?.contains(toggle), "and so does its toggle");
+    assert.equal(row.querySelector(".fo-option-content").children[1], wrapper, "the wrapper takes the field's place in the content cell");
+  });
+
+  test("an option that declares no secret renders an unmasked field with no toggle and no wrapper", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState();
+    const row = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Volume"), scopeKind: "global" });
+    const input = row.querySelector("input.fo-option-value");
+    const cell = row.querySelector(".fo-option-content");
+
+    assert.equal(input?.type, "text", "an unflagged option's field is a plain text input");
+    assert.equal(input?.getAttribute("autocomplete"), null, "an unflagged field declares no autocomplete at all");
+    assert.equal(input?.hasAttribute("autocomplete"), false, "not even an empty one");
+    assert.equal(row.querySelector(".fo-secret-toggle"), null, "no toggle");
+    assert.equal(row.querySelector(".fo-secret-field"), null, "no wrapper");
+    assert.equal(cell.children.length, 2, "the content cell holds the label and the field, and nothing else");
+    assert.equal(cell.children[1], input, "the field sits directly in the cell");
+  });
+
+  test("the reveal flips the field and the toggle's labelling together, and flips both back", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
+    const row = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Password"), scopeKind: "global" });
+    const input = row.querySelector("input.fo-option-value");
+    const toggle = row.querySelector(".fo-secret-toggle");
+
+    toggleSecretReveal(toggle);
+
+    assert.equal(input.type, "text", "revealed");
+    assert.equal(toggle.getAttribute("aria-pressed"), "true", "the pressed state tracks the reveal");
+    assert.equal(toggle.getAttribute("aria-label"), "Hide the value.", "and the label now names the way back");
+    assert.equal(input.value, "hunter2", "revealing shows the value it already held - it does not rewrite it");
+
+    toggleSecretReveal(toggle);
+
+    assert.equal(input.type, "password", "masked again");
+    assert.equal(toggle.getAttribute("aria-pressed"), "false");
+    assert.equal(toggle.getAttribute("aria-label"), "Show the value.");
+    assert.equal(input.value, "hunter2", "and the value is still there behind the mask");
+  });
+
+  test("a revealed field stays revealed when the row is re-derived", () => {
+
+    using _dom = createTestDom();
+
+    // Whether a secret is on screen right now is a property of how the page is being read, not of the configuration, so an unrelated mutation's re-derivation walk
+    // must not snap the field shut under the user who is reading it.
+    const state = loadedState({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
+    const entry = findEntry(state, "Audio", "Password");
+    const row = optionRow({ deviceId: null, entry, scopeKind: "global" });
+    const input = row.querySelector("input.fo-option-value");
+
+    toggleSecretReveal(row.querySelector(".fo-secret-toggle"));
+    applyRowState({ entry, row, scopeKind: "global" });
+
+    assert.equal(input.type, "text", "the reveal survives the re-derive");
+    assert.equal(input.value, "hunter2", "and the value re-derives from the projection as it always does");
+  });
+
+  test("the reveal toggle locks and unlocks with the field it belongs to", () => {
+
+    using _dom = createTestDom();
+
+    // Unset and disabled: the row locks its field, and a row that cannot be typed into must not be readable either.
+    const state = loadedState();
+    const row = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Password"), scopeKind: "global" });
+
+    assert.equal(row.querySelector("input.fo-option-value").disabled, true, "precondition: an unset row locks its field");
+    assert.equal(row.querySelector(".fo-secret-toggle").disabled, true, "the toggle locks with it");
+
+    // Enabled at this scope: the same writer brings both back to life.
+    const enabledState = loadedState({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
+
+    applyRowState({ entry: findEntry(enabledState, "Audio", "Password"), row, scopeKind: "global" });
+
+    assert.equal(row.querySelector("input.fo-option-value").disabled, false, "an enabled row unlocks its field");
+    assert.equal(row.querySelector(".fo-secret-toggle").disabled, false, "and its toggle with it");
+  });
+
+  test("a revealed row that locks is masked again, with its toggle disabled", () => {
+
+    using _dom = createTestDom();
+
+    // A value revealed while the row was live would otherwise sit on screen in clear text once the row locks, with the only control that could put it back behind
+    // the mask disabled. Locking re-masks so the disabled toggle guards nothing the user can still see.
+    const enabledState = loadedState({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
+    const row = optionRow({ deviceId: null, entry: findEntry(enabledState, "Audio", "Password"), scopeKind: "global" });
+    const input = row.querySelector("input.fo-option-value");
+    const toggle = row.querySelector(".fo-secret-toggle");
+
+    toggleSecretReveal(toggle);
+
+    assert.equal(input.type, "text", "precondition: the value is on screen");
+    assert.equal(toggle.getAttribute("aria-pressed"), "true", "precondition: the toggle says so");
+
+    // The option is cleared elsewhere and the row re-derives against an unset projection, which locks it.
+    applyRowState({ entry: findEntry(loadedState(), "Audio", "Password"), row, scopeKind: "global" });
+
+    assert.equal(input.disabled, true, "the row locked");
+    assert.equal(input.type, "password", "and the value went back behind the mask");
+    assert.equal(toggle.disabled, true, "the toggle is disabled");
+    assert.equal(toggle.getAttribute("aria-pressed"), "false", "its pressed state follows the field");
+    assert.equal(toggle.getAttribute("aria-label"), "Show the value.", "and so does its label");
+  });
+
+  test("a row held back by an unmet dependency dims through the same token the disabled toggle reads", () => {
+
+    using _dom = createTestDom();
+
+    // Motion.Sensitivity is grouped under Motion.Detect. With the parent disabled the child is normally hidden outright; a search that matches it keeps it on
+    // screen instead, which is the case the badge exists for - visible, but not actionable.
+    const state = reducer(loadedState({ configuredOptions: ["Disable.Motion.Detect"] }), { query: "sensitivity", type: "filter:changed" });
+    const entry = findEntry(state, "Motion", "Sensitivity");
+    const row = optionRow({ deviceId: null, entry, scopeKind: "global" });
+
+    assert.equal(entry.requiresParentBadge, true, "precondition: the search keeps a dependency-blocked row visible, so it wears the badge");
+    assert.equal(row.style.opacity, "var(--fo-opacity-disabled)", "the dim reads the shared token rather than carrying a value of its own");
+
+    // With the parent enabled again the row is actionable, and the dim lifts entirely rather than resolving to some other number.
+    const actionable = reducer(loadedState(), { query: "sensitivity", type: "filter:changed" });
+
+    applyRowState({ entry: findEntry(actionable, "Motion", "Sensitivity"), row, scopeKind: "global" });
+
+    assert.equal(row.style.opacity, "", "an actionable row carries no dim at all");
+  });
+
+  test("a toggle whose row carries no value field does nothing at all", () => {
+
+    using _dom = createTestDom();
+
+    // The view reaches the flip by matching a class on whatever was clicked, so the element arriving here comes from markup rather than from a checkable call
+    // site. A toggle standing on its own does nothing, rather than throwing inside a delegated handler.
+    const orphan = document.createElement("button");
+
+    orphan.classList.add("fo-secret-toggle");
+    orphan.setAttribute("aria-pressed", "false");
+
+    assert.doesNotThrow(() => toggleSecretReveal(orphan));
+    assert.equal(orphan.getAttribute("aria-pressed"), "false", "with no field to reveal, the toggle's own state does not move either");
   });
 });
 
@@ -915,7 +1090,7 @@ describe("applyRowState - re-derivation on the update path", () => {
 
     document.body.appendChild(row);
 
-    const input = row.querySelector("input[type='text']");
+    const input = row.querySelector("input.fo-option-value");
 
     assert.equal(input.value, "75", "the input starts at the configured value");
 

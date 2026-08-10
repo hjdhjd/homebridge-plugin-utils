@@ -39,6 +39,7 @@ describe("registerTokensEffect", () => {
     assert.match(text, /--fo-font-monospace:/);
     assert.match(text, /--fo-text-attention:\s*var\(--bs-danger,/);
     assert.match(text, /--fo-sidebar-width:\s*200px/);
+    assert.match(text, /--fo-opacity-disabled:\s*0\.5/);
   });
 
   test("aborting the signal releases the stylesheet from the document", () => {

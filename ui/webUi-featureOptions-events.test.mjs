@@ -483,7 +483,7 @@ describe("webUiFeatureOptions event delegation - text input change re-dispatches
     clickCategoryHeader(harness.skeleton.configTable.querySelector("details[data-category='Network']"));
 
     const row = harness.skeleton.configTable.querySelector("[id='row-Network.Mtu']");
-    const valueInput = row.querySelector("input[type='text']");
+    const valueInput = row.querySelector("input.fo-option-value");
 
     assert.ok(valueInput, "the value input must exist for a value-centric option");
 
@@ -517,7 +517,7 @@ describe("webUiFeatureOptions event delegation - window blur commits and flushes
 
     clickCategoryHeader(harness.skeleton.configTable.querySelector("details[data-category='Network']"));
 
-    const valueInput = harness.skeleton.configTable.querySelector("[id='row-Network.Mtu']").querySelector("input[type='text']");
+    const valueInput = harness.skeleton.configTable.querySelector("[id='row-Network.Mtu']").querySelector("input.fo-option-value");
 
     assert.ok(valueInput, "the value input must exist for a value-centric option");
 
@@ -536,6 +536,38 @@ describe("webUiFeatureOptions event delegation - window blur commits and flushes
 
     assert.ok(staged, "the blur must have driven a persist without any change event");
     assert.ok(staged[0].options.includes("Enable.Network.Mtu=9000"), "the staged config must carry the value the input held when focus left the page");
+  });
+
+  test("a focused masked value input persists on the same signal, since the commit finds it by class rather than by type", async () => {
+
+    using harness = await makeStartedOrchestrator({
+
+      config: [{ name: "TestPlugin", options: ["Enable.Network.Key=opensesame"], platform: "TestPlugin" }],
+      features: {
+
+        categories: [{ description: "Network Options", name: "Network" }],
+        options: { Network: [{ default: false, defaultValue: "", description: "Shared key.", inputSize: 20, name: "Key", secret: true }] }
+      }
+    });
+
+    clickCategoryHeader(harness.skeleton.configTable.querySelector("details[data-category='Network']"));
+
+    const valueInput = harness.skeleton.configTable.querySelector("[id='row-Network.Key']").querySelector("input.fo-option-value");
+
+    assert.equal(valueInput?.type, "password", "precondition: a secret option's field is masked");
+
+    // The same host-save gesture as above, against a masked field. A commit keyed on the type attribute would find nothing here and the user's last edit would
+    // reach the host as the value it had before they typed.
+    valueInput.focus();
+    valueInput.value = "hunter2";
+    window.dispatchEvent(new Event("blur"));
+
+    await delay(100);
+
+    const staged = harness.fake.observed.updatedConfigs.at(-1);
+
+    assert.ok(staged, "the blur must have driven a persist for the masked field too");
+    assert.ok(staged[0].options.includes("Enable.Network.Key=hunter2"), "the staged config must carry what the masked field held when focus left the page");
   });
 
   test("an already-committed edit still inside the persist debounce is written the moment focus leaves the page", async () => {

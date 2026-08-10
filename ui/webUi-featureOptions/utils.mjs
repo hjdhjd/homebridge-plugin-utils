@@ -102,6 +102,34 @@ export function createElement(tag, props = {}, children = []) {
   return element;
 }
 
+// The namespace every SVG element must be created in. `document.createElement("svg")` yields an inert HTML element that happens to share the tag name and renders
+// nothing, so the namespaced constructor is the only way to build a graphic the browser will draw.
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+/**
+ * Create one SVG element with its attributes applied. The counterpart to {@link createElement} for graphics, and separate from it for two reasons the DOM imposes:
+ * SVG elements need the namespaced constructor, and SVG exposes presentation as attributes rather than as the properties `createElement` assigns.
+ *
+ * Shared by every graphic the webUI draws - the sparkline strip's marks and the feature-options reveal glyph alike - so how an SVG element comes into being is
+ * defined once rather than per drawing.
+ *
+ * @param {Object} options - The element to build.
+ * @param {Object<string, string>} [options.attributes={}] - The attributes to apply.
+ * @param {string} options.tag - The SVG tag name.
+ * @returns {SVGElement} The created element.
+ */
+export function createSvgElement({ attributes = {}, tag }) {
+
+  const element = document.createElementNS(SVG_NAMESPACE, tag);
+
+  for(const [ name, value ] of Object.entries(attributes)) {
+
+    element.setAttribute(name, value);
+  }
+
+  return element;
+}
+
 /**
  * Build a recovery button in the webUI's shared family idiom: a small warning-variant Bootstrap button whose label is prefixed with the refresh glyph (U+21BB, the
  * clockwise open circle arrow) and a space. Both the connection-error view's retry action and the status panel's link-lost reload action construct their button here, so

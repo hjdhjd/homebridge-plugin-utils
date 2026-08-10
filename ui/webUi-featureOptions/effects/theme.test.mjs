@@ -183,6 +183,27 @@ describe("buildThemeCss - status panel variant rules", () => {
     assert.match(await themeCss(), /\.fo-phantom\s*\{[^}]*visibility:\s*hidden/);
   });
 
+  test("the secret field seats its toggle beside the input, and the toggle wears no button chrome of its own", async () => {
+
+    using _dom = createTestDom();
+
+    const text = await themeCss();
+
+    // The wrapper is a horizontal flex line inside the stacking content cell, which is what puts the reveal beside the field rather than beneath it.
+    assert.match(text, /\.fo-secret-field\s*\{[^}]*display:\s*flex/);
+    assert.match(text, /\.fo-secret-field\s*\{[^}]*align-items:\s*center/);
+
+    // The toggle surrenders the native button background and border and inherits the row's text color, which is what the currentColor glyph inside it draws in.
+    assert.match(text, /\.fo-secret-toggle\s*\{[^}]*background:\s*none/);
+    assert.match(text, /\.fo-secret-toggle\s*\{[^}]*color:\s*inherit/);
+    assert.match(text, /\.fo-secret-toggle\s*\{[^}]*cursor:\s*pointer/);
+
+    // Surrendering the chrome surrenders the browser's disabled rendering too, so a locked row's toggle dims and drops the pointer rather than inviting a click it
+    // will not answer. The dim reads the shared not-actionable token rather than carrying a value of its own.
+    assert.match(text, /\.fo-secret-toggle:disabled\s*\{[^}]*cursor:\s*default/);
+    assert.match(text, /\.fo-secret-toggle:disabled\s*\{[^}]*opacity:\s*var\(--fo-opacity-disabled\)/);
+  });
+
   test("the row-break rule is a full-width zero-height spacer", async () => {
 
     using _dom = createTestDom();

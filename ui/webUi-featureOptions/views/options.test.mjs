@@ -20,7 +20,11 @@ const CATEGORIES = [
 
 const OPTIONS = {
 
-  Audio: [{ default: false, defaultValue: 50, description: "Audio volume level.", name: "Volume" }],
+  Audio: [
+
+    { default: false, defaultValue: 50, description: "Audio volume level.", name: "Volume" },
+    { default: false, defaultValue: "", description: "Streaming account password.", inputSize: 20, name: "Password", secret: true }
+  ],
 
   Motion: [
 
@@ -162,7 +166,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     // Enable first - the input pre-fills with the catalog default, so the tick writes that value.
     checkbox.click();
 
-    const input = audio.querySelector("input[type='text']");
+    const input = audio.querySelector("input.fo-option-value");
 
     input.value = "75";
     input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -181,7 +185,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     audio.open = true;
     audio.dispatchEvent(new Event("toggle", { bubbles: false }));
 
-    const input = audio.querySelector("input[type='text']");
+    const input = audio.querySelector("input.fo-option-value");
 
     // No checkbox interaction first: the input is live on an unset row, and committing a value is itself the enabling gesture.
     input.value = "75";
@@ -205,7 +209,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     audio.dispatchEvent(new Event("toggle", { bubbles: false }));
 
     const checkbox = audio.querySelector("#Audio\\.Volume");
-    const input = audio.querySelector("input[type='text']");
+    const input = audio.querySelector("input.fo-option-value");
 
     // Empty the pre-filled input so the tick has no value to write. A scoped enable without value content has no persistable spelling, so the gesture arms the
     // row instead: it reads checked with a live, focused input, while the configuration stays untouched until a value commits.
@@ -230,7 +234,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     audio.dispatchEvent(new Event("toggle", { bubbles: false }));
 
     const checkbox = audio.querySelector("#Audio\\.Volume");
-    const input = audio.querySelector("input[type='text']");
+    const input = audio.querySelector("input.fo-option-value");
 
     input.value = "";
     checkbox.click();
@@ -256,7 +260,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     audio.dispatchEvent(new Event("toggle", { bubbles: false }));
 
     const checkbox = audio.querySelector("#Audio\\.Volume");
-    const input = audio.querySelector("input[type='text']");
+    const input = audio.querySelector("input.fo-option-value");
 
     input.value = "";
     checkbox.click();
@@ -279,7 +283,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     audio.dispatchEvent(new Event("toggle", { bubbles: false }));
 
     const checkbox = audio.querySelector("#Audio\\.Volume");
-    const input = audio.querySelector("input[type='text']");
+    const input = audio.querySelector("input.fo-option-value");
 
     input.value = "";
     checkbox.click();
@@ -324,6 +328,126 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     assert.equal(input.disabled, false, "its field is still live for the value that will enable the option");
     assert.equal(input.value, "", "and nothing was typed into it");
     assert.deepEqual(store.state.configuredOptions, [], "nothing was persisted either way");
+  });
+});
+
+describe("mountOptionsView - secret options", () => {
+
+  // Open the Audio category and hand back the secret option's row, the shape every test in this block starts from.
+  const openPasswordRow = (options) => {
+
+    const { configTable, store } = setup(options);
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    return { row: audio.querySelector("[id='row-Audio.Password']"), store };
+  };
+
+  test("clicking the reveal toggle unmasks the field, and clicking it again re-masks it", () => {
+
+    using _dom = createTestDom();
+
+    const { row } = openPasswordRow({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
+    const input = row.querySelector("input.fo-option-value");
+    const toggle = row.querySelector(".fo-secret-toggle");
+
+    toggle.click();
+
+    assert.equal(input.type, "text", "the delegated click reveals the value");
+    assert.equal(toggle.getAttribute("aria-pressed"), "true");
+
+    // A pointer lands on the glyph inside the button rather than on the button itself, so the delegation has to resolve the click back to the toggle.
+    toggle.querySelector("svg").dispatchEvent(new Event("click", { bubbles: true }));
+
+    assert.equal(input.type, "password", "a click on the glyph masks it again");
+    assert.equal(toggle.getAttribute("aria-pressed"), "false");
+  });
+
+  test("a reveal click writes nothing to the configuration and leaves the option itself alone", () => {
+
+    using _dom = createTestDom();
+
+    const { row, store } = openPasswordRow({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
+    const checkbox = row.querySelector("input[type='checkbox']");
+    const configuredBefore = store.state.configuredOptions;
+
+    row.querySelector(".fo-secret-toggle").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "the same array reference - no mutation was dispatched at all");
+    assert.equal(checkbox.checked, true, "the row-forward delegation does not read a toggle click as a click on the row's whitespace");
+    assert.equal(row.querySelector("input.fo-option-value").type, "text", "the click did what it was for");
+  });
+
+  test("a secret option's value commits through exactly the path a plain option's does", () => {
+
+    using _dom = createTestDom();
+
+    const { row, store } = openPasswordRow();
+    const input = row.querySelector("input.fo-option-value");
+
+    // The commit machinery finds this field by its class, so masking it changes nothing about how its value is committed.
+    input.value = "hunter2";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Audio.Password=hunter2"], "the masked value persists like any other value");
+    assert.equal(row.querySelector("input[type='checkbox']").checked, true, "and the checkbox follows the committed value through the re-projection");
+  });
+
+  test("a revealed field's commit persists the same way, and the field stays revealed after it", () => {
+
+    using _dom = createTestDom();
+
+    const { row, store } = openPasswordRow({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
+    const input = row.querySelector("input.fo-option-value");
+
+    row.querySelector(".fo-secret-toggle").click();
+    input.value = "correct horse";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Audio.Password=correct horse"], "editing in the open commits like editing behind the mask");
+    assert.equal(input.type, "text", "the re-derivation the commit triggers leaves the reveal where the user put it");
+  });
+
+  test("moving focus onto the reveal toggle does not stand an armed row down", () => {
+
+    using dom = createTestDom();
+
+    // The toggle is a focusable control sitting inside the row, so a click on it moves focus off the field. The abandonment path has to read that departure as
+    // staying home - the user reaching for the reveal has not walked away from the value they were asked for.
+    const { row, store } = openPasswordRow({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const input = row.querySelector("input.fo-option-value");
+
+    input.value = "";
+    row.querySelector("input[type='checkbox']").click();
+
+    assert.equal(store.state.armedOption, "Audio.Password", "precondition: the row is armed and awaiting its first value");
+
+    input.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true, relatedTarget: row.querySelector(".fo-secret-toggle") }));
+
+    assert.equal(store.state.armedOption, "Audio.Password", "focus landing on the row's own toggle leaves the arming intact");
+    assert.equal(input.disabled, false, "and the field stays live for the value that will enable the option");
+  });
+
+  test("focus leaving an armed secret row with an empty field abandons the arming", () => {
+
+    using _dom = createTestDom();
+
+    // The abandonment path finds the field by its class as well, so a masked row stands down on the same gesture a plain one does.
+    const { row, store } = openPasswordRow({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const input = row.querySelector("input.fo-option-value");
+
+    input.value = "";
+    row.querySelector("input[type='checkbox']").click();
+
+    assert.equal(store.state.armedOption, "Audio.Password", "precondition: the row is armed");
+
+    input.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, null, "the departure disarms the masked row");
+    assert.equal(input.disabled, true, "and its field relocks");
+    assert.deepEqual(store.state.configuredOptions, [], "nothing was ever persisted");
   });
 });
 

@@ -80,6 +80,11 @@ const buildTokenCss = () => [
   "  --fo-transition-fast: 0.15s;",
   "  --fo-transition-base: 0.2s;",
 
+  // The dim every non-actionable control and row wears - a disabled reveal toggle, a row held back by an unmet dependency. One value so that "on screen but not
+  // actionable" reads identically wherever the webUI says it, and one name so a plugin retunes all of it at once. Theme-independent, like the scales above, so
+  // there is no dark-mode redeclaration below.
+  "  --fo-opacity-disabled: 0.5;",
+
   // Accent colors. CSS-standard `AccentColor` / `AccentColorText` keywords as the declared defaults; the theme effect overrides at runtime via setProperty after
   // probing Bootstrap's `.btn-primary`. The derivative tokens (-hover, -subtle) compose via `color-mix()` against whatever value the accent currently holds, so the
   // derivatives stay in lockstep with both the default and the probed override without separate machinery.

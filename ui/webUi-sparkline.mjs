@@ -9,7 +9,8 @@
  * The primitive owns the mechanism and nothing else. It takes a window of numbers, projects it onto a fixed drawing grid, and renders an area, a line, an end dot,
  * and a zero hairline - all in `currentColor`, so the strip wears whatever color the markup around it wears and the two can never disagree. Every policy stays with
  * the consumer: what the numbers mean, where they come from, how often they arrive, what color the surrounding element carries, whether an update slides, and what
- * the accessible label says. The module holds no store, subscribes to nothing, and imports nothing.
+ * the accessible label says. The module holds no store and subscribes to nothing; its one dependency is the webUI's shared SVG element builder, which every
+ * graphic in the tree draws through.
  *
  * A consumer composes it into a panel it owns:
  *
@@ -24,9 +25,7 @@
  */
 "use strict";
 
-// The SVG namespace every mark is created in. The webUI builds DOM through explicit element construction rather than markup strings, and SVG additionally requires
-// the namespaced constructor: `document.createElement("svg")` yields an inert HTML element that happens to share the tag name and renders nothing.
-const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+import { createSvgElement } from "./webUi-featureOptions/utils.mjs";
 
 // The strip's drawing grid. The consumer sizes and positions the element with its own CSS and the viewBox stretches to fill it, so these are aspect-free coordinate
 // units rather than pixels on screen.
@@ -244,27 +243,6 @@ const isOneStepShift = ({ next, previous }) => {
   return true;
 };
 
-/**
- * Create one SVG element with its static attributes applied. Presentation attributes are set as attributes rather than assigned as properties, which is what SVG
- * actually exposes.
- *
- * @param {Object} options - The element to build.
- * @param {Object<string, string>} [options.attributes={}] - The attributes to apply.
- * @param {string} options.tag - The SVG tag name.
- * @returns {SVGElement} The created element.
- */
-const createMark = ({ attributes = {}, tag }) => {
-
-  const element = document.createElementNS(SVG_NAMESPACE, tag);
-
-  for(const [ name, value ] of Object.entries(attributes)) {
-
-    element.setAttribute(name, value);
-  }
-
-  return element;
-};
-
 // Read the host's motion preference. Qualified with `window` and optional-chained so a host that provides no matchMedia reads as no preference and animates,
 // rather than throwing. The read happens at each update rather than once at construction: the preference can change under the user mid-session, and a page-level
 // reduced-motion stylesheet is not the only way a host expresses it - asking the media query directly keeps the strip correct in any host, not just this library's.
@@ -282,12 +260,12 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
  */
 export function createSparkline({ ariaLabel = "", domainAnchor = undefined, points: initialPoints = [] }) {
 
-  const element = createMark({ attributes: { preserveAspectRatio: "none", role: "img", viewBox: VIEW_BOX }, tag: "svg" });
+  const element = createSvgElement({ attributes: { preserveAspectRatio: "none", role: "img", viewBox: VIEW_BOX }, tag: "svg" });
 
   element.style.overflow = "hidden";
 
   // The zero reference, drawn across the full width outside the sliding group so it stays put while the data moves under it.
-  const hairline = createMark({
+  const hairline = createSvgElement({
 
     attributes: {
 
@@ -305,8 +283,8 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
   });
 
   // The data marks and the group that carries them. The group exists so the conveyor slide can translate them all with one transform.
-  const areaPath = createMark({ attributes: { "d": "", "fill": "currentColor", "fill-opacity": String(AREA_FILL_OPACITY), "stroke": "none" }, tag: "path" });
-  const linePath = createMark({
+  const areaPath = createSvgElement({ attributes: { "d": "", "fill": "currentColor", "fill-opacity": String(AREA_FILL_OPACITY), "stroke": "none" }, tag: "path" });
+  const linePath = createSvgElement({
 
     attributes: {
 
@@ -321,7 +299,7 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
     tag: "path"
   });
 
-  const endDot = createMark({
+  const endDot = createSvgElement({
 
     attributes: {
 
@@ -334,7 +312,7 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
     tag: "circle"
   });
 
-  const slideGroup = createMark({ tag: "g" });
+  const slideGroup = createSvgElement({ tag: "g" });
 
   slideGroup.append(areaPath, linePath, endDot);
   element.append(hairline, slideGroup);

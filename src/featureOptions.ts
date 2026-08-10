@@ -154,6 +154,11 @@ export type FeatureOptionScope = "controller" | "device" | "global";
  *                             across a group: a child's dependency check resolves the PARENT's option, so a parent declared narrower than its children ignores parent
  *                             configuration at exactly the levels the children are still editable from. The tuple is non-empty by construction, since an option
  *                             declaring no level at all would render nowhere and resolve nowhere.
+ * @property secret          - Optional. True declares that the option's value is a secret the settings page must not display in clear text by default: the field
+ *                             renders masked, with a reveal the user operates when they want to read or check what they typed. Presentation only - parsing, storage,
+ *                             scope resolution, and the documentation renderer treat a secret option exactly like any other value option, and its value lands in
+ *                             `config.json` as plain text like every other value. What the masking buys is protection from someone reading the settings page over
+ *                             the user's shoulder; it is not secrecy at rest, and a plugin handling real credentials should say so in the option's description.
  *
  * @typeParam TMeta - The concrete type of the opaque {@link FeatureOptionEntry.meta} annotation. Defaults to `unknown`, so a bare `FeatureOptionEntry` (the form every
  *                    existing core consumer uses) resolves to `FeatureOptionEntry<unknown>` and stays assignable to the parameterized form, keeping the core non-generic.
@@ -184,6 +189,7 @@ export interface FeatureOptionEntry<TMeta = unknown> {
   name: string;
   render?: FeatureOptionFormatter | ((value: string) => string);
   scopes?: readonly [FeatureOptionScope, ...FeatureOptionScope[]];
+  secret?: boolean;
 }
 
 /**

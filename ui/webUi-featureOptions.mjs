@@ -519,7 +519,7 @@ export class webUiFeatureOptions {
 
     /* Commit-and-flush when keyboard focus leaves the page. The page lives in the host's custom-UI iframe, and every host-side control - the Save button above all,
      * but Close and the restart affordance too - sits in the parent document, so acting on any of them begins by moving focus out of this window. Two edits are in
-     * flight at exactly that moment and neither would otherwise reach the host in time: a text input still holding focus has never fired `change`, because moving
+     * flight at exactly that moment and neither would otherwise reach the host in time: a value input still holding focus has never fired `change`, because moving
      * focus to the parent document does not reliably blur the iframe's own active element, and an already-committed edit inside the persist debounce window has not
      * been written. Either one makes the host's Save write a config that silently omits the user's last edit.
      *
@@ -533,7 +533,7 @@ export class webUiFeatureOptions {
 
       const active = document.activeElement;
 
-      if(active?.matches?.("input[type='text']") && active.closest("#configTable")) {
+      if(active?.matches?.("input.fo-option-value") && active.closest("#configTable")) {
 
         active.dispatchEvent(new Event("change", { bubbles: true }));
       }

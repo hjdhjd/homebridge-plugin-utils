@@ -10,7 +10,7 @@
  */
 import * as hap from "@homebridge/hap-nodejs";
 import type { Characteristic, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { acquireService, capabilityGate, getServiceName, setServiceName, validService } from "./service.ts";
+import { acquireService, capabilityGate, getServiceName, setAccessoryName, setServiceName, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -28,6 +28,52 @@ type NamedCharacteristicSlot = "ConfiguredName" | "Name";
 function makeAccessory(): PlatformAccessory {
 
   return new hap.Accessory("TestAccessory", hap.uuid.generate("homebridge-plugin-utils.service-test.accessory")) as unknown as PlatformAccessory;
+}
+
+/* Construct a PlatformAccessory-shaped wrapper over a real HAP accessory, wired the way Homebridge's own constructor wires it: `_associatedHAPAccessory` is the HAP
+ * instance, `displayName` is a plain copy of its display name (not a live view of it), and `services` is the HAP accessory's own array by reference. makeAccessory
+ * above is enough for the service-level helpers, but setAccessoryName renames the accessory itself, and only a fixture carrying both display names can tell a
+ * complete rename apart from one that reached the wrapper and stopped there.
+ *
+ * `updateDisplayName` is transcribed from Homebridge's implementation rather than inherited from it, because the `homebridge` package exposes PlatformAccessory as
+ * a type only - its runtime exports are the HAP re-exports - so the class cannot be constructed here. The transcription is the whole of that method: a truthy name
+ * writes both display names, a falsy one writes neither. If Homebridge's version ever diverges, this is where the divergence has to be reflected.
+ */
+function makePlatformAccessory(): { accessory: PlatformAccessory; hapAccessory: hap.Accessory } {
+
+  const hapAccessory = new hap.Accessory("TestAccessory", hap.uuid.generate("homebridge-plugin-utils.service-test.platform-accessory"));
+
+  const accessory = {
+
+    _associatedHAPAccessory: hapAccessory,
+    displayName: hapAccessory.displayName,
+    services: hapAccessory.services,
+
+    updateDisplayName(name: string): void {
+
+      if(name) {
+
+        accessory.displayName = name;
+        hapAccessory.displayName = name;
+      }
+    }
+  } as unknown as PlatformAccessory;
+
+  return { accessory, hapAccessory };
+}
+
+// The AccessoryInformation service every HAP accessory is constructed with. Looked up by the constructor's own static UUID rather than by index, so the helper does
+// not depend on where HAP happens to place it in the services array.
+function informationServiceOf(accessory: PlatformAccessory): Service {
+
+  const service = accessory.services.find((candidate) => candidate.UUID === hap.Service.AccessoryInformation.UUID);
+
+  if(!service) {
+
+    throw new Error("The fixture accessory has no AccessoryInformation service.");
+  }
+
+  return service;
 }
 
 // Single source of truth for HAP's reflection-based characteristic discovery. Every HAP `Service` instance carries a `characteristics` array whose elements share a
@@ -472,5 +518,87 @@ describe("setServiceName", () => {
     assert.equal(service.displayName, "Rocket Lamp");
     assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Rocket Lamp");
     assert.equal(readNamedCharacteristic(service, "Name"), "Rocket Lamp");
+  });
+});
+
+describe("setAccessoryName", () => {
+
+  test("writes the name to both display names and to the information service", () => {
+
+    const { accessory, hapAccessory } = makePlatformAccessory();
+
+    setAccessoryName(accessory, "Front Porch");
+
+    const information = informationServiceOf(accessory);
+
+    assert.equal(accessory.displayName, "Front Porch", "the platform wrapper's display name");
+    assert.equal(hapAccessory.displayName, "Front Porch", "the HAP accessory's display name beneath the wrapper");
+    assert.equal(information.displayName, "Front Porch", "the information service's display name");
+    assert.equal(readNamedCharacteristic(information, "Name"), "Front Porch", "the Name characteristic");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Front Porch",
+      "ConfiguredName too - it is the user-editable name that makes a rename stick in the Home app");
+  });
+
+  test("sanitizes the supplied name once and applies the sanitized form everywhere", () => {
+
+    const { accessory, hapAccessory } = makePlatformAccessory();
+
+    setAccessoryName(accessory, "Rocket \u{1F680} Lamp");
+
+    const information = informationServiceOf(accessory);
+
+    assert.equal(accessory.displayName, "Rocket Lamp");
+    assert.equal(hapAccessory.displayName, "Rocket Lamp");
+    assert.equal(readNamedCharacteristic(information, "Name"), "Rocket Lamp");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Rocket Lamp");
+  });
+
+  test("a repeat call with the same name leaves the same final state", () => {
+
+    const { accessory, hapAccessory } = makePlatformAccessory();
+
+    setAccessoryName(accessory, "Back Gate");
+    setAccessoryName(accessory, "Back Gate");
+
+    const information = informationServiceOf(accessory);
+
+    assert.equal(accessory.displayName, "Back Gate");
+    assert.equal(hapAccessory.displayName, "Back Gate");
+    assert.equal(readNamedCharacteristic(information, "Name"), "Back Gate");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Back Gate");
+    assert.equal(accessory.services.filter((service) => service.UUID === hap.Service.AccessoryInformation.UUID).length, 1,
+      "a rename never adds a second information service");
+  });
+
+  test("an accessory with no services at all renames its display names and stops there", () => {
+
+    // The reflection needs a service instance to reach HAP's static registry through, so an accessory carrying none has no information service to delegate to.
+    // The display-name writes still land: a partial rename is better than a thrown one, and no real PlatformAccessory reaches this state.
+    const { accessory, hapAccessory } = makePlatformAccessory();
+
+    accessory.services.length = 0;
+
+    setAccessoryName(accessory, "Side Yard");
+
+    assert.equal(accessory.displayName, "Side Yard");
+    assert.equal(hapAccessory.displayName, "Side Yard");
+  });
+
+  test("a name with nothing left after sanitizing is not applied anywhere", () => {
+
+    // An accessory has to answer to something. A name that sanitizes away entirely - punctuation or emoji alone - leaves every name it already had in place,
+    // rather than blanking the accessory and its information service.
+    const { accessory, hapAccessory } = makePlatformAccessory();
+
+    setAccessoryName(accessory, "Garden Shed");
+
+    const information = informationServiceOf(accessory);
+
+    setAccessoryName(accessory, "\u{1F680}");
+
+    assert.equal(accessory.displayName, "Garden Shed", "the wrapper keeps the name it had");
+    assert.equal(hapAccessory.displayName, "Garden Shed", "the HAP accessory keeps it too");
+    assert.equal(readNamedCharacteristic(information, "Name"), "Garden Shed", "the information service is not blanked either");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Garden Shed");
   });
 });

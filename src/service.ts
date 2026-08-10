@@ -351,6 +351,66 @@ export function getServiceName(service?: Service): string | undefined {
 }
 
 /**
+ * Updates the display name of an accessory and of its AccessoryInformation service to the specified value.
+ *
+ * @param accessory - The accessory to rename.
+ * @param name      - The new name to apply to the accessory.
+ *
+ * @remarks
+ * An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to two names. This writes all
+ * of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName` owns the accessory display names (the
+ * `PlatformAccessory`'s own and the HAP accessory's beneath it), and {@link setServiceName} owns the AccessoryInformation service's `ConfiguredName` and `Name`
+ * characteristics. `ConfiguredName` is what makes a rename stick in the Home app, since it is the name a user can edit there.
+ *
+ * The name is sanitized through the same HomeKit naming rules {@link acquireService} applies, so a caller may pass a raw device name straight through. A name with
+ * nothing left after sanitizing is not applied anywhere: an accessory has to answer to something, and a blank one is worse than the name it already had.
+ *
+ * @example
+ * ```typescript
+ * // Rename an accessory after the device reports a new name.
+ * setAccessoryName(accessory, device.name);
+ * ```
+ *
+ * @see setServiceName - the per-service equivalent this delegates its characteristic writes to.
+ * @see getServiceName - to retrieve the current name set on a service.
+ * @category Accessory
+ */
+export function setAccessoryName(accessory: PlatformAccessory, name: string): void {
+
+  // Sanitize once. HomeKit's naming rules govern the accessory display names and the information service's name characteristics alike, so one validation pass
+  // feeds every write below and none of them can disagree about what the name is. Nothing surviving the sanitize means there is no name to apply, and a partial
+  // rename that blanked the information service while leaving the display names alone would be worse than doing nothing.
+  const sanitized = sanitizeName(name);
+
+  if(!sanitized.length) {
+
+    return;
+  }
+
+  // Hand the accessory display names to Homebridge's own setter, which writes the platform wrapper's `displayName` and the HAP accessory's together. Going through
+  // the documented API rather than assigning the two fields directly keeps this off Homebridge's internal `_associatedHAPAccessory` handle entirely.
+  accessory.updateDisplayName(sanitized);
+
+  const [first] = accessory.services;
+
+  if(!first) {
+
+    return;
+  }
+
+  // Reach AccessoryInformation through the same constructor reflection the UUID sets use: HAP's static service registry is not reachable from this module, but
+  // every service instance carries a constructor that holds it. Delegating the write to setServiceName rather than setting the characteristics here keeps the
+  // ConfiguredName / Name conditional logic in its single home.
+  const serviceType = first.constructor as unknown as { AccessoryInformation?: { UUID: string } };
+  const informationService = accessory.services.find((service) => service.UUID === serviceType.AccessoryInformation?.UUID);
+
+  if(informationService) {
+
+    setServiceName(informationService, sanitized);
+  }
+}
+
+/**
  * Updates the displayName and applicable name characteristics of a service to the specified value.
  *
  * @param service - The service to update.
@@ -362,6 +422,7 @@ export function getServiceName(service?: Service): string | undefined {
  *
  * @see acquireService - to add or retrieve services.
  * @see getServiceName - to retrieve the current name set on a service.
+ * @see setAccessoryName - the accessory-level equivalent, which delegates its information-service write here.
  * @category Accessory
  */
 export function setServiceName(service: Service, name: string): void {

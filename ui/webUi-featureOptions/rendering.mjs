@@ -620,12 +620,16 @@ const hasUpstreamOption = ({ catalog, configIndex, controllerId, deviceId, expan
 };
 
 // Decide whether the post-transition state warrants writing a new entry, or whether clearing the option falls back to the default. We write when the user's intent
-// differs from the catalog default (boolean axis OR value axis) OR when there is an upstream entry that the local state needs to override. Otherwise clearing the
-// option is equivalent and keeps the configuredOptions array minimal.
+// differs from the catalog default on the boolean axis, when an enabled post-state carries a value differing from the default, or when there is an upstream entry
+// that the local state needs to override. Otherwise clearing is equivalent and keeps the configuredOptions array minimal.
+//
+// The value axis counts only toward an enabled post-state, because a disabled entry never carries a value: the entry writer strips it, so text left sitting in the
+// input has no bearing on what a disable would persist. This rule is a prediction of what the writer will actually store and it has to agree with the writer
+// exactly...treating residual text as a deviation would compose an explicit disable that says nothing the catalog default does not already say.
 const writeAction = ({ deviceId, enabled, expandedName, inputValue, option, upstream, valueCentric }) => {
 
   const inputValueText = inputValue?.value ?? "";
-  const valueDeviates = (inputValue !== null) && (inputValueText !== defaultDisplay(option));
+  const valueDeviates = enabled && (inputValue !== null) && (inputValueText !== defaultDisplay(option));
   const booleanDeviates = enabled !== option.default;
   const writeNeeded = booleanDeviates || valueDeviates || upstream;
   const id = deviceId ?? undefined;

@@ -628,6 +628,96 @@ describe("triStateTransition - was checked, just unchecked", () => {
     assert.equal(result.action.type, "option:cleared");
     assert.equal(result.action.args.id, "dev-a");
   });
+
+  test("a default-off value option with a committed value clears rather than writing a disable", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({ configuredOptions: ["Enable.Audio.Volume.75"] });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = false;
+
+    // The gesture hands over the row's input element as it stands at click time, still showing the committed value: the DOM is re-derived from the projection only
+    // after the dispatch, so the field has not been emptied yet.
+    const inputValue = document.createElement("input");
+
+    inputValue.type = "text";
+    inputValue.value = "75";
+
+    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue });
+
+    // Audio.Volume defaults off, the post-state is off, and nothing upstream needs overriding. A disable would persist no value at all, so the text still in the
+    // field cannot justify one and the entry goes away entirely.
+    assert.equal(result.action.type, "option:cleared");
+    assert.equal(result.action.args.id, undefined);
+  });
+
+  test("a default-off value option with a committed value clears at device scope rather than writing a disable", () => {
+
+    using _dom = createTestDom();
+
+    // The option is configured at one device and nowhere else, so unchecking it there returns the whole hierarchy to the catalog default.
+    const state = loadedState({
+
+      configuredOptions: ["Enable.Audio.Volume.dev-a=75"],
+      devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }],
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" }
+    });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Volume");
+
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = false;
+
+    const inputValue = document.createElement("input");
+
+    inputValue.type = "text";
+    inputValue.value = "75";
+
+    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue });
+
+    // Nothing sits above the device entry, so there is no upstream to override and the post-state matches the default. The clear addresses the device scope the
+    // gesture was made at.
+    assert.equal(result.action.type, "option:cleared");
+    assert.equal(result.action.args.id, "dev-a");
+  });
+
+  test("unchecking a default-on value option writes the explicit disable, which carries no value", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({ configuredOptions: ["Enable.Audio.Layout.mono"] });
+    const catalog = state.catalog;
+    const configIndex = buildConfigIndex(catalog, state.configuredOptions);
+    const entry = findEntry(state, "Audio", "Layout");
+
+    const checkbox = document.createElement("input");
+
+    checkbox.type = "checkbox";
+    checkbox.checked = false;
+
+    const inputValue = document.createElement("input");
+
+    inputValue.type = "text";
+    inputValue.value = "mono";
+
+    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue });
+
+    // Audio.Layout defaults on, so turning it off deviates on the boolean axis and the explicit entry is the only way to record that. The entry addresses the option
+    // and nothing else.
+    assert.equal(result.action.type, "option:set");
+    assert.equal(result.action.args.enabled, false);
+    assert.equal(result.action.args.value, undefined);
+  });
 });
 
 describe("triStateTransition - was unchecked, just checked", () => {

@@ -1429,6 +1429,187 @@ describe("webUi.epochSignal - the page-copy lifetime surface", () => {
   });
 });
 
+describe("webUi.on - the epoch-scoped listener registration surface", () => {
+
+  // Stand up the DOM, the epoch guard, and a webUi instance, since every row below needs the same three. The skeleton is what the composed feature-options
+  // construction reads at its own construction time.
+  const arrange = () => {
+
+    const dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const epoch = installPageEpoch();
+
+    return {
+
+      ui: new webUi({ name: "Plugin" }),
+
+      [Symbol.dispose]() {
+
+        epoch[Symbol.dispose]();
+        dom[Symbol.dispose]();
+      }
+    };
+  };
+
+  test("a registration with no signal of its own lives for the module copy and dies when a successor claims the window", () => {
+
+    using harness = arrange();
+
+    const fires = [];
+    const target = document.createElement("div");
+
+    harness.ui.on(target, "ping", () => fires.push(1));
+
+    // The dispatch that makes the silence below attributable: without proving the listener was attached and delivering, a later quiet reading could just as well
+    // mean the registration never landed at all.
+    target.dispatchEvent(new Event("ping"));
+    assert.equal(fires.length, 1, "precondition: the registration is live and delivering while this copy holds the window");
+
+    const _successor = new webUi({ name: "Successor" });
+
+    target.dispatchEvent(new Event("ping"));
+    assert.equal(fires.length, 1, "the successor's construction removed the listener - the epoch is the registration's whole lifetime here");
+  });
+
+  test("a caller's own signal composes with the epoch rather than replacing it - either abort removes the listener", () => {
+
+    using harness = arrange();
+
+    // The caller's half, with no supersession involved at all.
+    const callerScoped = new AbortController();
+    const callerFires = [];
+    const callerTarget = document.createElement("div");
+
+    harness.ui.on(callerTarget, "ping", () => callerFires.push(1), { signal: callerScoped.signal });
+
+    callerTarget.dispatchEvent(new Event("ping"));
+    assert.equal(callerFires.length, 1, "precondition: a caller-scoped registration delivers");
+
+    callerScoped.abort();
+    callerTarget.dispatchEvent(new Event("ping"));
+    assert.equal(callerFires.length, 1, "the caller's own signal ends its registration");
+
+    // The epoch's half: the same call shape, ended by a successor while the caller's signal is untouched.
+    const stillLive = new AbortController();
+    const epochFires = [];
+    const epochTarget = document.createElement("div");
+
+    harness.ui.on(epochTarget, "ping", () => epochFires.push(1), { signal: stillLive.signal });
+
+    epochTarget.dispatchEvent(new Event("ping"));
+    assert.equal(epochFires.length, 1, "precondition: the second caller-scoped registration delivers");
+
+    const _successor = new webUi({ name: "Successor" });
+
+    epochTarget.dispatchEvent(new Event("ping"));
+    assert.equal(epochFires.length, 1, "a successor ends a registration whose caller signal is still live - the epoch is the other half");
+    assert.equal(stillLive.signal.aborted, false, "and it did so without touching the caller's own signal");
+  });
+
+  test("the capture-boolean call shape reaches the platform with the same meaning it carries on addEventListener", () => {
+
+    using harness = arrange();
+
+    // Capture is what tells the two boolean spellings apart: a capturing ancestor sees the event on the way down, ahead of the target's own listener, while a
+    // non-capturing one sees it on the way back up. Asserting the phase and the ordering together pins both the flag's delivery and its effect.
+    const ancestor = document.createElement("div");
+    const child = document.createElement("button");
+
+    ancestor.appendChild(child);
+    document.body.appendChild(ancestor);
+
+    const capturingOrder = [];
+    const capturingPhases = [];
+
+    harness.ui.on(ancestor, "click", (event) => {
+
+      capturingOrder.push("ancestor");
+      capturingPhases.push(event.eventPhase);
+    }, true);
+
+    child.addEventListener("click", () => capturingOrder.push("child"));
+    child.dispatchEvent(new Event("click", { bubbles: true }));
+
+    assert.deepEqual(capturingPhases, [Event.CAPTURING_PHASE], "the bare `true` reached the platform as a capturing registration");
+    assert.deepEqual(capturingOrder, [ "ancestor", "child" ], "so the ancestor observed the event ahead of the target's own bubble-phase listener");
+
+    const bubblingAncestor = document.createElement("div");
+    const bubblingChild = document.createElement("button");
+
+    bubblingAncestor.appendChild(bubblingChild);
+    document.body.appendChild(bubblingAncestor);
+
+    const bubblingOrder = [];
+    const bubblingPhases = [];
+
+    harness.ui.on(bubblingAncestor, "click", (event) => {
+
+      bubblingOrder.push("ancestor");
+      bubblingPhases.push(event.eventPhase);
+    }, false);
+
+    bubblingChild.addEventListener("click", () => bubblingOrder.push("child"));
+    bubblingChild.dispatchEvent(new Event("click", { bubbles: true }));
+
+    assert.deepEqual(bubblingPhases, [Event.BUBBLING_PHASE], "the bare `false` reached the platform as a non-capturing registration");
+    assert.deepEqual(bubblingOrder, [ "child", "ancestor" ], "so the ancestor observed the event on the way back up, after the target's own listener");
+  });
+
+  test("sibling listener options survive the composition rather than being dropped for the signal", () => {
+
+    using harness = arrange();
+
+    const fires = [];
+    const target = document.createElement("div");
+
+    harness.ui.on(target, "ping", () => fires.push(1), { once: true });
+
+    target.dispatchEvent(new Event("ping"));
+    target.dispatchEvent(new Event("ping"));
+
+    assert.equal(fires.length, 1, "the caller's own `once` still governs - the composition writes the signal key and carries every sibling key through");
+  });
+
+  test("a null target registers nothing and leaves the page working", () => {
+
+    using harness = arrange();
+
+    const fires = [];
+
+    // The shape a page that omits the surface actually produces: getElementById answers null for an id the markup does not carry, and a plugin registering against
+    // that answer says "bind this if the page has it" rather than "the page is broken".
+    assert.doesNotThrow(() => harness.ui.on(document.getElementById("anIdThisPageDoesNotCarry"), "ping", () => fires.push(1)),
+      "a missing element is an absent surface, not a fault");
+
+    // The registration after it is what proves the no-op cost the page nothing: a guard that swallowed too much would leave the helper unusable afterwards.
+    const target = document.createElement("div");
+
+    harness.ui.on(target, "ping", () => fires.push(1));
+    target.dispatchEvent(new Event("ping"));
+
+    assert.equal(fires.length, 1, "the real registration still fires, so the skipped one took nothing with it");
+  });
+
+  test("an undefined target behaves identically", () => {
+
+    using harness = arrange();
+
+    const fires = [];
+
+    // The other nullish spelling, which is what a destructured or optional-chained lookup hands over.
+    assert.doesNotThrow(() => harness.ui.on(undefined, "ping", () => fires.push(1)), "undefined is an absent surface too");
+
+    const target = document.createElement("div");
+
+    harness.ui.on(target, "ping", () => fires.push(1));
+    target.dispatchEvent(new Event("ping"));
+
+    assert.equal(fires.length, 1, "and the page keeps working after it");
+  });
+});
+
 describe("webUi - the resume detector threads end to end", () => {
 
   // The detector's default cadence and gap threshold in milliseconds, mirrored so a test can jump the clock clear past the threshold.

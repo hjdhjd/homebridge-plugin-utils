@@ -180,13 +180,80 @@ export class webUi {
   }
 
   /**
+   * Register an event listener for the life of this module copy.
+   *
+   * A listener bound to a target that outlives a single module copy - the window, the document, the `homebridge` bridge - has to be retired when a successor claims
+   * the window, and composing that lifetime by hand at every registration is where the composition gets forgotten. This method owns it, so a plugin writes the
+   * registration it means and the epoch bound comes with it.
+   *
+   * Which of the page's two lifetimes a resource wants is the question {@link webUi.epochSignal} answers at length, and the answer decides between this method and
+   * the mount signal: this scopes to the module copy, which suits a listener on an object the frame keeps across copies, while a listener serving the panel
+   * currently on screen belongs on the mount signal a render hook receives, registered directly with that signal.
+   *
+   * A caller's own `signal` composes rather than replaces - whichever of the two aborts first removes the listener - so a consumer that already scopes a listener to
+   * some narrower lifetime keeps that scope and gains the epoch bound on top of it. The `capture`-boolean spelling `addEventListener` accepts is normalized into the
+   * options-object form before that composition, so both call shapes reach the platform meaning the same thing.
+   *
+   * Positional parameters are deliberate here, against the house preference for an options object: this wraps `addEventListener`, and mirroring the platform API's
+   * universally-known shape is what makes a registration readable at a glance - a reader who knows `addEventListener` already knows this.
+   *
+   * The helper serves `addEventListener` targets, which is what accepting a `signal` at all means. A resource with no signal support of its own - a
+   * `MutationObserver`, an interval, a subscription to a foreign API - takes the `epochSignal.addEventListener("abort", ...)` teardown idiom that getter documents.
+   *
+   * A nullish target registers nothing. An element the page's markup omits declares that surface absent rather than marking the page broken, which is the stance the
+   * menu bindings take on their own buttons, so a plugin may register straight against `document.getElementById(...)` output without guarding each site. The cost
+   * this accepts is that a mistyped element id reads as an omitted surface and registers in silence, so a listener that never fires is first checked against the id
+   * it was registered on.
+   *
+   * @example
+   *
+   * // A host push this plugin consumes for as long as its copy holds the window, retired the moment a newer copy claims it.
+   * ui.on(homebridge, "my-plugin-push", (event) => renderPush(event.data));
+   *
+   * @param {?EventTarget} target - The target to register on. Nullish registers nothing.
+   * @param {string} event - The event type.
+   * @param {Function} handler - The listener.
+   * @param {(Object|boolean)} [options] - The platform's own listener options, or the `capture` boolean shorthand. A `signal` among them composes with the epoch.
+   * @public
+   */
+  on(target, event, handler, options) {
+
+    // An element the page's markup omits declares that surface absent - the menu binder's own posture - so a nullish target registers nothing rather than treating
+    // the page as broken. The trade this accepts is documented on the method: a mistyped element id also lands here, silently.
+    if(!target) {
+
+      return;
+    }
+
+    const normalized = (typeof options === "boolean") ? { capture: options } : (options ?? {});
+
+    target.addEventListener(event, handler, { ...normalized, signal: this.#epochBounded(normalized.signal) });
+  }
+
+  /**
+   * Bound a caller's lifecycle signal by the page epoch.
+   *
+   * The one home for the composition rule, shared by the listener registrations {@link webUi.on} makes and the subscription option bags `#scopedToEpoch` builds. A
+   * caller with no signal of its own receives the epoch itself rather than a composition over one, which keeps the common case free of an `AbortSignal.any`
+   * allocation; a caller that supplies one receives a signal that aborts on whichever of the two goes first.
+   *
+   * @param {AbortSignal} [signal] - The caller's own lifecycle signal, when it has one.
+   * @returns {AbortSignal} The caller's signal bounded by the epoch, or the epoch itself.
+   * @private
+   */
+  #epochBounded(signal) {
+
+    return signal ? AbortSignal.any([ signal, this.#epochSignal ]) : this.#epochSignal;
+  }
+
+  /**
    * Bound a liveness subscription's options by the page epoch.
    *
-   * The one home for the composition rule, applied at both points this instance hands a subscription out: the public `liveness.onResume` surface and the detector
-   * handle threaded down to the views. The options default keeps the documented single-argument `onResume(callback)` call shape working, and the spread carries
-   * every sibling key through by construction rather than by enumeration, so a key the detector grows later needs no edit here. `AbortSignal.any` means whichever
-   * of the caller's own signal and the epoch aborts first removes the subscription, which is the same demand-driven disarm the detector already implements - the
-   * detector itself stays page-ignorant, since deciding what supersedes a page is this object's job and not the primitive's.
+   * Applied at both points this instance hands a subscription out: the public `liveness.onResume` surface and the detector handle threaded down to the views. The
+   * options default keeps the documented single-argument `onResume(callback)` call shape working, and the spread carries every sibling key through by construction
+   * rather than by enumeration, so a key the detector grows later needs no edit here. The lifetime comes from `#epochBounded`, so whichever of the caller's own
+   * signal and the epoch aborts first removes the subscription - the same demand-driven disarm the detector already implements. The detector itself stays
+   * page-ignorant either way, since deciding what supersedes a page is this object's job and not the primitive's.
    *
    * @param {{ shouldProbe?: () => boolean, signal?: AbortSignal }} [options] - The caller's own subscription options.
    * @returns {{ shouldProbe?: () => boolean, signal: AbortSignal }} The caller's options with the lifecycle signal bounded by the epoch.
@@ -194,7 +261,7 @@ export class webUi {
    */
   #scopedToEpoch(options = {}) {
 
-    return { ...options, signal: options.signal ? AbortSignal.any([ options.signal, this.#epochSignal ]) : this.#epochSignal };
+    return { ...options, signal: this.#epochBounded(options.signal) };
   }
 
   /**

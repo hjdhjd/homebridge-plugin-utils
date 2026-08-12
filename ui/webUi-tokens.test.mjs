@@ -1,13 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webUi-featureOptions/effects/tokens.test.mjs: Unit tests for the design-tokens effect.
+ * ui/webUi-tokens.test.mjs: Unit tests for the design-tokens effect.
  */
 "use strict";
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { createTestDom } from "../../ui.helpers.mjs";
-import { registerTokensEffect } from "./tokens.mjs";
+import { createTestDom } from "./ui.helpers.mjs";
+import { registerTokensEffect } from "./webUi-tokens.mjs";
 
 describe("registerTokensEffect", () => {
 

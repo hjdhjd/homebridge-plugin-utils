@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webUi-featureOptions/effects/tokens.mjs: Design-token stylesheet adoption for the feature options webUI.
+ * ui/webUi-tokens.mjs: Design-token stylesheet adoption for the plugin webUI page.
  */
 "use strict";
 

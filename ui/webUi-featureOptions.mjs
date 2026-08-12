@@ -18,9 +18,10 @@ import { mountOptionsView } from "./webUi-featureOptions/views/options.mjs";
 import { mountSearchView } from "./webUi-featureOptions/views/search.mjs";
 import { mountStatusPanelView } from "./webUi-featureOptions/views/statusPanel.mjs";
 import { registerKeyboardEffect } from "./webUi-featureOptions/effects/keyboard.mjs";
+import { registerOptionsSkinEffect } from "./webUi-featureOptions/effects/optionsSkin.mjs";
 import { registerPersistEffect } from "./webUi-featureOptions/effects/persist.mjs";
-import { registerThemeEffect } from "./webUi-featureOptions/effects/theme.mjs";
-import { registerTokensEffect } from "./webUi-featureOptions/effects/tokens.mjs";
+import { registerThemeEffect } from "./webUi-theming.mjs";
+import { registerTokensEffect } from "./webUi-tokens.mjs";
 
 /**
  * Upper bound on how long hide() will block waiting for the navigate-away flush to complete. This is a teardown safety cap, NOT a perf knob: the normal flush
@@ -153,9 +154,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 /**
  * webUiFeatureOptions - Lifecycle coordinator for the feature options webUI.
  *
- * Boots the reactive state container, registers every effect (persist, theme, tokens, keyboard) and mounts every view (header, device info, nav, search, options,
- * connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal: every effect's
- * subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically.
+ * Boots the reactive state container, registers every effect (persist, theme, tokens, options skin, keyboard) and mounts every view (header, device info, nav,
+ * search, options, connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal:
+ * every effect's subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically.
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
  * action without re-entering the whole show() cycle, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
@@ -383,7 +384,8 @@ export class webUiFeatureOptions {
    *      shows the retry affordance rather than stranding a blank frame; the sync also lands before getControllers and the options read below, so both see fresh config.
    *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
-   *   6. Adopt the design tokens (synchronous), then fire the theme, persist, and keyboard effects. The theme effect's I/O (Bootstrap probe) runs in the background.
+   *   6. Adopt the design tokens (synchronous), then fire the theme, options-skin, persist, and keyboard effects. The theme effect's I/O (Bootstrap probe) runs in
+   *      the background.
    *   7. Once controllers resolves: hold it to the hook contract, then check the error it carries - a wrong-shaped result and a reported connection failure both
    *      land on the connection-error view and return, so the no-controllers helper text can never stand in for an unreachable controller or a hook that answered
    *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return.
@@ -480,6 +482,10 @@ export class webUiFeatureOptions {
     // Theme effect (async background work for Bootstrap probe; sync stylesheet adoption). Held as a promise so we can await it before the matchMedia listener is
     // registered against any user interaction, but the bulk of init's work overlaps the data fetches below.
     const themeInitPromise = registerThemeEffect({ host: homebridge, signal });
+
+    // The options-view skin: the layout, sidebar, category, search, and status-grid rules this view owns. Synchronous, like the tokens above, and adopted after
+    // the page base sheet so the two land in the source order the design language reads in.
+    registerOptionsSkinEffect({ signal });
 
     // Persist + keyboard effects: register early so they catch any dispatch from the moment model:loaded fires. The persist effect's reference-equality dirty
     // check skips the immediate-run pass since configuredOptions and persistedAnchor share the same empty-array reference in the initial state. We capture the

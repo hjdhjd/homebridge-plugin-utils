@@ -3421,20 +3421,13 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
     seedBootstrapProbeShim();
 
-    // Gate the theme init's awaited lighting-mode read so the boot blocks between the model:loaded dispatch and the global-only reveal. The reveal sits after the
-    // existing post-theme signal check, so delivering the abort in this window and then releasing the gate lands it exactly where the check catches it - failing both a
-    // build that placed the reveal above the check and one that hoisted it before the theme await entirely.
-    let releaseLighting;
-    const lightingGate = new Promise((resolve) => { releaseLighting = resolve; });
-
-    fake.userCurrentLightingMode = async () => {
-
-      await lightingGate;
-
-      return "light";
-    };
-
-    const orchestrator = new webUiFeatureOptions({ globalOnly: true });
+    /* Gate the theming registration so the boot blocks between the model:loaded dispatch and the global-only reveal. The reveal sits after the existing post-theme
+     * signal check, so delivering the abort in this window and then releasing the gate lands it exactly where the check catches it - failing both a build that
+     * placed the reveal above the check and one that hoisted it before the theme await entirely. The gate is the wiring's own promise, memo-faithful the way the
+     * page orchestrator holds it: every call hands back the same one.
+     */
+    const lighting = Promise.withResolvers();
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true }, { registerTheming: () => lighting.promise });
     const session = await openTestSession();
     const showPromise = orchestrator.show(session);
 
@@ -3444,7 +3437,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
     // Abort in the pinned window (after model:loaded, before the reveal), then release the theme gate so the post-theme signal check runs and returns.
     orchestrator.cleanup();
-    releaseLighting();
+    lighting.resolve();
 
     await showPromise;
     await flush();
@@ -3686,17 +3679,28 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     orchestrator.cleanup();
   });
 
-  test("a stalled theme read is NOT fatal: the page renders whole on the theme defaults and the failure is warned", async (t) => {
+  test("a stalled theme read is NOT fatal, and a later cycle never re-eats the deadline for it", async (t) => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
     using _dom = createTestDom();
 
-    const { fake, homebridgeGuard, session, skeleton } = await arrange();
+    const { homebridgeGuard, session, skeleton } = await arrange();
 
     using _homebridge = homebridgeGuard;
 
-    fake.userCurrentLightingMode = hangingCall;
+    /* One memoized registration whose lighting-mode read never answers, exactly as the page orchestrator holds it: the same promise on every call. That identity
+     * is what makes the second half of this row mean anything - a fresh promise per cycle would hand each cycle its own fresh chance and prove nothing about the
+     * once-per-instance wait.
+     */
+    const stalledTheming = hangingCall();
+    let registrations = 0;
+    const registerTheming = () => {
+
+      registrations += 1;
+
+      return stalledTheming;
+    };
 
     const warnings = [];
 
@@ -3707,21 +3711,30 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     // eslint-disable-next-line no-console
     console.warn = (...args) => warnings.push(args);
 
-    const orchestrator = new webUiFeatureOptions();
+    const orchestrator = new webUiFeatureOptions({}, { registerTheming });
 
     try {
 
       await expireDeadline(t, orchestrator.show(session));
+
+      assert.ok(isFullyRendered(skeleton), "a cosmetic read that never answered must not cost the page");
+      assert.equal(failureTextIn(skeleton), null, "the theme's failure must not land the user on the retry view");
+      assert.equal(warnings.length, 1, "the theme failure is reported exactly once");
+      assert.match(warnings[0][0], /^The theme could not read the Homebridge lighting mode/, "the warning is a complete sentence naming what happened");
+
+      // The other half. The read is still hung, so a cycle that awaited it again would stall for another full deadline and warn a second time. It does neither:
+      // this instance spent its one bounded wait on the first cycle, and no clock advance is needed for this show() to complete.
+      await orchestrator.show(session);
+      await flush();
+
+      assert.ok(isFullyRendered(skeleton), "the second cycle rendered whole");
+      assert.equal(warnings.length, 1, "and produced no second warning - it never entered the wait at all");
+      assert.equal(registrations, 2, "though it did ask for the registration again, which the memo answers with no new work");
     } finally {
 
       // eslint-disable-next-line no-console
       console.warn = realWarn;
     }
-
-    assert.ok(isFullyRendered(skeleton), "a cosmetic probe that never answered must not cost the page");
-    assert.equal(failureTextIn(skeleton), null, "the theme's failure must not land the user on the retry view");
-    assert.equal(warnings.length, 1, "the theme failure is reported exactly once");
-    assert.match(warnings[0][0], /^The theme could not read the Homebridge lighting mode/, "the warning is a complete sentence naming what happened");
 
     orchestrator.cleanup();
   });
@@ -4060,12 +4073,16 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     using _dom = createTestDom();
 
-    const { fake, homebridgeGuard, session } = await arrange();
+    const { homebridgeGuard, session } = await arrange();
 
     using _homebridge = homebridgeGuard;
 
-    // Cycle one's theme read never answers; every other hook is healthy, so the cycle parks on exactly that await and nowhere else.
-    fake.userCurrentLightingMode = hangingCall;
+    /* One memoized registration whose read never answers, so cycle one parks on exactly that await and nowhere else. The supersession, not an expiry, is what
+     * settles that parked await: cycle two's show() begins by tearing cycle one down, which ABORTS cycle one's page signal, and the bounded await rejects on that
+     * abort. A deadline expiry never aborts the cycle signal, so an expiry-shaped row - or one built on a fresh instance - would never reach the guard at all.
+     */
+    const stalledTheming = hangingCall();
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } }, { registerTheming: () => stalledTheming });
 
     const warnings = [];
 
@@ -4076,7 +4093,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     // eslint-disable-next-line no-console
     console.warn = (...args) => warnings.push(args);
 
-    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+    const themeWarnings = () => warnings.filter(([message]) => (typeof message === "string") && message.startsWith("The theme could not read"));
 
     try {
 
@@ -4084,25 +4101,87 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
       await flush();
 
-      // Heal the read, then re-enter the page. Cycle two's show() tears cycle one down, which aborts its signal - so cycle one's parked theme await settles at once and
-      // its catch runs, still holding the closured signal of a cycle that no longer exists.
-      fake.userCurrentLightingMode = async () => "light";
+      // Re-enter the page on the SAME instance. Cycle one's parked theme await settles the moment cycle two's teardown aborts its signal, and its catch runs still
+      // holding the closured signal of a cycle that no longer exists.
+      const secondCycle = orchestrator.show(session);
 
-      await orchestrator.show(session);
       await flush();
       await stalledCycle;
       await flush();
+
+      /* Read the channel here, before cycle two's own deadline is anywhere near elapsing: the only theme failure that has settled so far is the superseded
+       * cycle's, so a warning at this point could only be that one. The warn rides the staleness guard, so it says nothing - the user is looking at a page that
+       * rendered fine, and a diagnostic about the cycle they already left would describe a failure that no longer has a page.
+       */
+      assert.deepEqual(themeWarnings(), [], "a superseded cycle's theme failure must log nothing");
+
+      // Let the live cycle run out its own wait. Its expiry DOES warn, which is the control that makes the silence above attributable: the channel was open the
+      // whole time, so cycle one's quiet was the guard's doing rather than a spy that never worked.
+      await expireDeadline(t, secondCycle);
+
+      assert.equal(themeWarnings().length, 1, "while the live cycle's own expiry does warn");
     } finally {
 
       // eslint-disable-next-line no-console
       console.warn = realWarn;
     }
 
-    // The warn rides the staleness guard, so a superseded cycle's theme failure says nothing: the user is looking at a page that rendered fine, and a diagnostic about
-    // the cycle they already left would describe a failure that no longer has a page. A warn here is the guard's absence made visible.
-    const themeWarnings = warnings.filter(([message]) => (typeof message === "string") && message.startsWith("The theme could not read"));
+    orchestrator.cleanup();
+  });
 
-    assert.deepEqual(themeWarnings, [], "a superseded cycle's theme failure must log nothing");
+  test("a cycle abandoned mid-wait does not spend the instance's one bounded wait", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, session } = await arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    // The same hung memoized read throughout, so what changes between cycles is only whether the instance has spent its wait.
+    const stalledTheming = hangingCall();
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } }, { registerTheming: () => stalledTheming });
+
+    const warnings = [];
+
+    // eslint-disable-next-line no-console
+    const realWarn = console.warn;
+
+    // eslint-disable-next-line no-console
+    console.warn = (...args) => warnings.push(args);
+
+    const themeWarnings = () => warnings.filter(([message]) => (typeof message === "string") && message.startsWith("The theme could not read"));
+
+    try {
+
+      // Cycle one parks on the wait and is then superseded, so its wait was abandoned rather than experienced - the user navigated away instead of waiting it out.
+      const abandonedCycle = orchestrator.show(session);
+
+      await flush();
+
+      const secondCycle = orchestrator.show(session);
+
+      await flush();
+      await abandonedCycle;
+      await flush();
+
+      // Cycle two runs its own wait to expiry and warns, which is the proof that it entered the wait at all: an abandoned cycle that had spent the instance's one
+      // wait would have left this cycle skipping it in silence.
+      await expireDeadline(t, secondCycle);
+
+      assert.equal(themeWarnings().length, 1, "the cycle after an abandoned wait awaits again, and its expiry says so");
+
+      // And now the wait IS spent, so a third cycle skips it - no clock advance, no second warning.
+      await orchestrator.show(session);
+      await flush();
+
+      assert.equal(themeWarnings().length, 1, "while the cycle after a SETTLED wait skips it entirely");
+    } finally {
+
+      // eslint-disable-next-line no-console
+      console.warn = realWarn;
+    }
 
     orchestrator.cleanup();
   });
@@ -4162,6 +4241,24 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the newer cycle's own sidebar stands untouched");
 
     orchestrator.cleanup();
+  });
+
+  test("the registerTheming wiring cannot be silently parked in the plugin options bag", () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge());
+
+    assert.throws(() => new webUiFeatureOptions({ registerTheming: () => Promise.resolve() }), {
+
+      message: "registerTheming is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
+      name: "TypeError"
+    }, "framework wiring in the plugin bag would be silently ignored, so it is named instead");
+
+    assert.doesNotThrow(() => new webUiFeatureOptions({}, { registerTheming: () => Promise.resolve() }), "the same value in the wiring parameter is accepted");
+    assert.doesNotThrow(() => new webUiFeatureOptions(), "and the wiring stays entirely optional");
   });
 
   test("the resumeDetector wiring cannot be silently parked in the plugin options bag", () => {

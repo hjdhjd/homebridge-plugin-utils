@@ -9,7 +9,7 @@
 "use strict";
 
 import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "./webui-status.js";
-import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installPageEpoch, installWebUiBoot } from "./ui.helpers.mjs";
+import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installPageEpoch, installWebUiBoot, waitFor } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushPending } from "node:timers/promises";
@@ -18,11 +18,11 @@ import { webUi } from "./webUi.mjs";
 // Build a webUi instance against the skeleton DOM with featureOptions.show / featureOptions.hide stubbed to record calls. The harness bundles the two real
 // disposables every test needs (the DOM globals and the homebridge install) alongside two plain data properties (the orchestrator instance and the inner
 // stubs' call records) returned for assertions, all wrapped in a single object that tests bind with `using` so cleanup runs even on failure.
-function makeWebUiHarness({ name = "TestPlatform", config = [], firstRun, requestResponses, featureOptions, accessories = [], unstubbed = false } = {}) {
+function makeWebUiHarness({ name = "TestPlatform", config = [], firstRun, lightingMode, requestResponses, featureOptions, accessories = [], unstubbed = false } = {}) {
 
   const dom = createTestDom();
   const skeleton = createSkeletonFeatureOptionsDom();
-  const fake = createFakeHomebridge({ cachedAccessories: accessories, config, requestResponses });
+  const fake = createFakeHomebridge({ cachedAccessories: accessories, config, lightingMode, requestResponses });
   const homebridgeGuard = installHomebridge(fake);
 
   // Snapshot the page epoch before the construction below installs its own, so the harness leaves the global table as it found it - the same courtesy the DOM
@@ -1607,6 +1607,300 @@ describe("webUi.on - the epoch-scoped listener registration surface", () => {
     target.dispatchEvent(new Event("ping"));
 
     assert.equal(fires.length, 1, "and the page keeps working after it");
+  });
+});
+
+describe("webUi.registerTheming - the page-lifetime theming surface", () => {
+
+  // The probed accent the shim below puts on `.btn-primary`, so a re-probe is observable as this exact value landing back on the token.
+  const PROBED_ACCENT = "rgb(33, 37, 41)";
+
+  // Drain queued async work. A registration is a bridge read plus its continuation, so a handful of macrotask cycles covers it with no wall-clock wait.
+  const flush = async () => {
+
+    for(let i = 0; i < 12; i++) {
+
+      // Sequential awaits are intentional: each cycle must complete before the next is scheduled, since they drain a chained queue rather than parallel work.
+      // eslint-disable-next-line no-await-in-loop
+      await flushPending();
+    }
+  };
+
+  // Stand up the DOM, the fake bridge, the epoch guard, and a webUi instance, plus Bootstrap's readiness shim and a `.btn-primary` the accent probe can read - so a
+  // probe that runs writes an observable value onto `:root`. The bridge is installed before the construction because registerTheming reads the page's global host.
+  const arrange = ({ lightingMode = "light" } = {}) => {
+
+    const dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({ lightingMode });
+    const homebridgeGuard = installHomebridge(fake);
+    const epochGuard = installPageEpoch();
+    const shim = new CSSStyleSheet();
+
+    shim.replaceSync(".d-none { display: none; } .btn-primary { background-color: " + PROBED_ACCENT + "; color: rgb(255, 255, 255); }");
+    document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, shim ];
+
+    return {
+
+      fake,
+      sheetsBefore: document.adoptedStyleSheets.length,
+      ui: new webUi({ name: "Plugin" }),
+
+      [Symbol.dispose]() {
+
+        epochGuard[Symbol.dispose]();
+        homebridgeGuard[Symbol.dispose]();
+        dom[Symbol.dispose]();
+      }
+    };
+  };
+
+  // Dispatch the host's own theme announcement into this window, in the shape Homebridge posts it.
+  const postThemeUpdate = () => window.dispatchEvent(new window.MessageEvent("message", { data: { isDark: true, theme: "dark", type: "theme-update" } }));
+
+  // The adopted sheets this registration added, as text, in adoption order.
+  const registeredSheetText = (harness) => document.adoptedStyleSheets.slice(harness.sheetsBefore).map((sheet) => [...sheet.cssRules].map((r) => r.cssText).join("\n"));
+
+  /* Take ownership of the unhandled-rejection channel for the duration of `body`, handing it back afterwards. The test runner keeps its own listener on that
+   * channel and turns anything it sees into a test failure, so a row that needs to ASSERT on the channel - including one that deliberately raises a positive
+   * control to prove its instrument works - has to hold the channel itself while it looks.
+   */
+  const captureUnhandledRejections = async (body) => {
+
+    const captured = [];
+    const runnerListeners = process.listeners("unhandledRejection");
+    const onUnhandled = (reason) => captured.push(reason);
+
+    process.removeAllListeners("unhandledRejection");
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+
+      return await body(captured);
+    } finally {
+
+      process.off("unhandledRejection", onUnhandled);
+
+      for(const listener of runnerListeners) {
+
+        process.on("unhandledRejection", listener);
+      }
+    }
+  };
+
+  test("registers once for the page: two calls adopt two sheets, tokens before the theme, and hand back one promise", async () => {
+
+    using harness = arrange({ lightingMode: "dark" });
+
+    const first = harness.ui.registerTheming();
+    const second = harness.ui.registerTheming();
+
+    await Promise.all([ first, second ]);
+    await flush();
+
+    const adopted = registeredSheetText(harness);
+
+    assert.equal(adopted.length, 2, "exactly two sheets - the second call registered nothing of its own");
+    assert.equal(first, second, "and both calls handed back the same promise identity");
+
+    // Order is the contract, not an accident: every rule in the theme sheet reads a token the first sheet declares.
+    assert.match(adopted[0], /--fo-surface-bg/, "the token sheet is adopted first");
+    assert.match(adopted[1], /\.fo-card/, "and the page theme after it");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "and the registration applied the host's mode");
+  });
+
+  test("a probe override is honored on the first call and ignored on every later one", async () => {
+
+    using harness = arrange();
+
+    const warnings = [];
+
+    // eslint-disable-next-line no-console
+    const realWarn = console.warn;
+
+    // eslint-disable-next-line no-console
+    console.warn = (...args) => warnings.push(args);
+
+    try {
+
+      /* The Bootstrap wait is where a probe override becomes observable: with no readiness shim on this DOM, a short timeout elapses and the wait says so, naming
+       * the exact millisecond value it was given. The arrange helper's shim is deliberately unused here - it seeds `.btn-primary` for the accent, and the
+       * readiness probe keys on `.d-none`, which this row removes below so the wait actually elapses.
+       */
+      document.adoptedStyleSheets = document.adoptedStyleSheets.slice(0, harness.sheetsBefore - 1);
+
+      const first = harness.ui.registerTheming({ probe: { intervalMs: 1, timeoutMs: 5 } });
+      const second = harness.ui.registerTheming({ probe: { intervalMs: 1, timeoutMs: 9999 } });
+
+      assert.equal(first, second, "the second call returned the same promise rather than registering again");
+
+      await first;
+      await waitFor(() => warnings.length > 0, { message: "the Bootstrap wait never reported its elapse" });
+      await flush();
+
+      const probeWarnings = warnings.filter(([message]) => (typeof message === "string") && message.includes("Bootstrap stylesheet did not load"));
+
+      assert.equal(probeWarnings.length, 1, "the wait elapsed exactly once - the second call started no second probe");
+      assert.match(probeWarnings[0][0], /within 5ms/, "and it ran on the FIRST call's override, not the second's");
+    } finally {
+
+      // eslint-disable-next-line no-console
+      console.warn = realWarn;
+    }
+  });
+
+  test("a rejected first mode read still leaves theming registered, and the host's next message applies the mode", async () => {
+
+    using harness = arrange();
+
+    harness.fake.userCurrentLightingMode = async () => {
+
+      throw new Error("the bridge refused the read");
+    };
+
+    const registration = harness.ui.registerTheming();
+
+    await assert.rejects(registration, /the bridge refused the read/, "a caller that awaits still observes the failure");
+    await flush();
+
+    assert.equal(registeredSheetText(harness).length, 2, "both sheets are live despite the failed read");
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "precondition: no mode was applied, so the heal below is attributable");
+
+    // Heal the bridge. Nothing re-registers - the follow routes went live before the failed read, so the host's own next announcement is what applies the mode.
+    harness.fake.userCurrentLightingMode = async () => "dark";
+    postThemeUpdate();
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the message route applied the mode the failed read never delivered");
+    assert.equal(harness.ui.registerTheming(), registration, "and a later call returns the same settled promise");
+    assert.equal(registeredSheetText(harness).length, 2, "without adopting a single sheet twice");
+  });
+
+  test("a rejected first mode read heals through the body-class route too", async () => {
+
+    using harness = arrange();
+
+    harness.fake.userCurrentLightingMode = async () => {
+
+      throw new Error("the bridge refused the read");
+    };
+
+    await assert.rejects(harness.ui.registerTheming(), /the bridge refused the read/);
+    await flush();
+
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "precondition: no mode was applied");
+
+    harness.fake.userCurrentLightingMode = async () => "dark";
+    document.body.classList.add("dark-mode");
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the host's retint of our own body applied the mode");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and drove the accent probe with it");
+  });
+
+  test("a voided registration whose read rejects raises no unhandled rejection, while an awaited one still observes it", async () => {
+
+    using harness = arrange();
+
+    await captureUnhandledRejections(async (captured) => {
+
+      // The positive control, first: an absence assertion is worth nothing until the instrument is proven able to see the event it will claim is absent.
+      Promise.reject(new Error("the positive control"));
+      await flush();
+
+      assert.equal(captured.length, 1, "precondition: the capture observes a genuinely unhandled rejection");
+
+      harness.fake.userCurrentLightingMode = async () => {
+
+        throw new Error("the bridge refused the read");
+      };
+
+      // The house rule for a promise a caller does not want is to void it, and voiding attaches no rejection handler - so the surface has to own the posture.
+      void harness.ui.registerTheming();
+      await flush();
+
+      assert.equal(captured.length, 1, "voiding the registration raised nothing further");
+
+      // The other half of the posture: the same promise still rejects for a caller that takes its own branch on it.
+      await assert.rejects(harness.ui.registerTheming(), /the bridge refused the read/, "an awaiting caller still observes the failure");
+      await flush();
+
+      assert.equal(captured.length, 1, "and observing it that way raised nothing either");
+    });
+  });
+
+  test("a read that rejects on a later host announcement is absorbed, and the announcement after it still applies the mode", async () => {
+
+    using harness = arrange();
+
+    await captureUnhandledRejections(async (captured) => {
+
+      Promise.reject(new Error("the positive control"));
+      await flush();
+
+      assert.equal(captured.length, 1, "precondition: the capture is live");
+      await harness.ui.registerTheming();
+      await flush();
+
+      // The follow path fires and forgets, so a read that fails there has no caller to reject to - it must be absorbed at the follower rather than escaping.
+      harness.fake.userCurrentLightingMode = async () => {
+
+        throw new Error("the bridge went away mid-session");
+      };
+
+      postThemeUpdate();
+      await flush();
+
+      assert.equal(captured.length, 1, "the failed follow raised no unhandled rejection");
+      assert.equal(document.documentElement.classList.contains("fo-dark"), false, "and changed nothing on the page");
+
+      harness.fake.userCurrentLightingMode = async () => "dark";
+      postThemeUpdate();
+      await flush();
+
+      assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the next announcement applied the mode - the route survived the failed read");
+    });
+  });
+
+  test("theming outlives a feature-options navigate-away, while the options skin dies with the view", async () => {
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+      featureOptions: { globalOnly: true },
+      firstRun: { isRequired: () => false },
+      lightingMode: "dark",
+      requestResponses: new Map([[ "/getOptions", {
+
+        categories: [{ description: "Motion Options", name: "Motion" }],
+        options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+      } ]]),
+      unstubbed: true
+    });
+
+    await harness.ui.show();
+    await flush();
+
+    // The three sheets the page carries while the options view is on screen, told apart by a rule only each one declares.
+    const sheetTexts = () => document.adoptedStyleSheets.map((sheet) => [...sheet.cssRules].map((r) => r.cssText).join("\n"));
+    const carries = (needle) => sheetTexts().some((text) => text.includes(needle));
+
+    assert.ok(carries("--fo-surface-bg"), "precondition: the token sheet is adopted");
+    assert.ok(carries(".fo-card"), "precondition: the page theme is adopted");
+    assert.ok(carries(".nav-link"), "precondition: the options skin is adopted");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: the host's dark mode is applied to :root");
+
+    await harness.ui.featureOptions.hide();
+    await flush();
+
+    // Navigating to Settings or Support tears the view down. Theming is a page concern, so it must survive that - which is the whole point of registering it on
+    // the epoch rather than on the cycle.
+    assert.ok(carries("--fo-surface-bg"), "the token sheet survives the navigate-away");
+    assert.ok(carries(".fo-card"), "so does the page theme, kit classes and all");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "and the themed canvas stays dark rather than reverting under the user");
+    assert.equal(carries(".nav-link"), false, "while the options skin is released with the view whose Bootstrap classes it restyles");
   });
 });
 

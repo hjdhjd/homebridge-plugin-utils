@@ -7,10 +7,57 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDom } from "./ui.helpers.mjs";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { registerThemeEffect } from "./webUi-theming.mjs";
 
 // Build a fake host whose userCurrentLightingMode returns the supplied mode. Tests override per-call.
 const fakeHost = (mode) => ({ userCurrentLightingMode: async () => mode });
+
+// A fake host whose mode a test can flip between reads, which is exactly what a host theme toggle looks like from this page: the announcement arrives on a route,
+// and the mode the bridge reports afterwards is the new one. `reads` counts the bridge calls, so a row can prove a route reached the follower at all.
+const flippableHost = (mode) => {
+
+  const host = {
+
+    mode,
+    reads: 0,
+
+    userCurrentLightingMode() {
+
+      host.reads += 1;
+
+      return Promise.resolve(host.mode);
+    }
+  };
+
+  return host;
+};
+
+// Seed Bootstrap's `.d-none` readiness shim plus a `.btn-primary` the accent probe can read, so a probe that runs writes an observable value onto `:root`.
+const seedBootstrapProbeShim = () => {
+
+  const sheet = new CSSStyleSheet();
+
+  sheet.replaceSync(".d-none { display: none; } .btn-primary { background-color: rgb(33, 37, 41); color: rgb(255, 255, 255); }");
+  document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
+};
+
+// The probed accent the shim above puts on `.btn-primary`, so a re-probe is observable as this exact value landing back on the token.
+const PROBED_ACCENT = "rgb(33, 37, 41)";
+
+// Drain queued async work. The follow path is a bridge read plus its continuation, so a handful of macrotask cycles covers it without waiting on wall-clock time.
+const flush = async () => {
+
+  for(let i = 0; i < 12; i++) {
+
+    // Sequential awaits are intentional: each cycle must complete before the next is scheduled, since they drain a chained queue rather than parallel work.
+    // eslint-disable-next-line no-await-in-loop
+    await flushImmediate();
+  }
+};
+
+// Dispatch the host's own theme announcement into this window, in the shape Homebridge posts it.
+const postThemeUpdate = (data = { isDark: true, theme: "dark", type: "theme-update" }) => window.dispatchEvent(new window.MessageEvent("message", { data }));
 
 // Adopt the base sheet and return its rules joined as text. The effect adopts synchronously before it awaits the lighting mode, so the sheet is present once this
 // resolves; the probe is skipped with timeoutMs 0.
@@ -127,6 +174,309 @@ describe("registerThemeEffect - lifecycle", () => {
 
     assert.equal(document.adoptedStyleSheets.length, before);
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "");
+  });
+});
+
+describe("registerThemeEffect - following the host's theme signals", () => {
+
+  test("the host's theme-update message re-keys the dark class and re-probes the accent", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("light");
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "precondition: the page registered in light mode");
+
+    // Clearing the token is what makes the re-probe observable: the initial registration already probed, so a value still sitting there afterwards would prove
+    // nothing about whether the route ran one.
+    document.documentElement.style.removeProperty("--fo-accent-bg");
+    host.mode = "dark";
+    postThemeUpdate();
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the announcement re-keyed the dark class");
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "dark", "and re-applied the color-scheme");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent off the host's current chrome");
+  });
+
+  test("a mutation of the frame body's theme classes does the same", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("light");
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    document.documentElement.style.removeProperty("--fo-accent-bg");
+    host.mode = "dark";
+
+    // The host retints a plugin frame by swapping theme classes on its body, so this IS the retint rather than an announcement of one.
+    document.body.classList.add("dark-mode");
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the body-class retint re-keyed the dark class");
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "dark", "and re-applied the color-scheme");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent");
+  });
+
+  test("the message route carries the page back out of dark mode as readily as into it", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("dark");
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: the page registered in dark mode");
+
+    // Clearing the token is what makes the re-probe observable: the initial registration already probed, so a value still sitting there afterwards would prove
+    // nothing about whether the route ran one.
+    document.documentElement.style.removeProperty("--fo-accent-bg");
+    host.mode = "light";
+    postThemeUpdate({ isDark: false, theme: "light", type: "theme-update" });
+    await flush();
+
+    // The removal is the half a route that only ever adds would still pass without: a user who switches Homebridge back to light has to get a light page.
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "the announcement took the dark class off :root");
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "light", "and re-applied the color-scheme in this direction too");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent off the host's current chrome");
+  });
+
+  test("the body-class route carries the page back out of dark mode as readily as into it", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("dark");
+    const controller = new AbortController();
+
+    // The page loads into a frame the host has already retinted dark, so the class is on the body before anything is watching it.
+    document.body.classList.add("dark-mode");
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: the page registered in dark mode");
+
+    document.documentElement.style.removeProperty("--fo-accent-bg");
+    host.mode = "light";
+
+    // Dropping the theme class it had added is as much a retint as adding one, so the observer has to answer it the same way.
+    document.body.classList.remove("dark-mode");
+    await flush();
+
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "the body-class retint took the dark class off :root");
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "light", "and re-applied the color-scheme in this direction too");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent");
+  });
+
+  test("both routes re-read the mode through the bridge rather than trusting the announcement", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("light");
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    const afterRegistration = host.reads;
+
+    // A message claiming dark while the bridge still reports light must leave the page in light: the payload is read for its type alone, and the bridge is the one
+    // authority on which mode is current.
+    postThemeUpdate({ isDark: true, theme: "dark", type: "theme-update" });
+    await flush();
+
+    assert.equal(host.reads, afterRegistration + 1, "the route re-read the mode");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "and the bridge's answer decided the outcome, not the message's own claim");
+  });
+
+  test("a message that is not a theme announcement is ignored", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("light");
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    const afterRegistration = host.reads;
+
+    document.documentElement.style.removeProperty("--fo-accent-bg");
+    host.mode = "dark";
+    postThemeUpdate({ payload: "irrelevant", type: "some-other-plugin-message" });
+
+    // A payload-less message too: the optional chain on `data` is what keeps a bare notification from throwing inside the listener.
+    postThemeUpdate(null);
+    await flush();
+
+    assert.equal(host.reads, afterRegistration, "neither foreign message reached the bridge");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "and neither retinted the page");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), "", "and neither drove an accent probe");
+  });
+
+  test("the system color-scheme query is not one of the routes", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    // The query answers before the host has retinted anything, and on an install pinned to one mode it fires when nothing about the page changed - so the effect
+    // must not even ask for it. Spying the constructor rather than the listener is what makes that provable: a query that is never built cannot be subscribed to.
+    const queries = [];
+    const realMatchMedia = window.matchMedia;
+
+    window.matchMedia = (query) => {
+
+      queries.push(query);
+
+      return realMatchMedia.call(window, query);
+    };
+
+    const controller = new AbortController();
+
+    try {
+
+      await registerThemeEffect({ host: flippableHost("dark"), probe: { timeoutMs: 0 }, signal: controller.signal });
+      await flush();
+    } finally {
+
+      window.matchMedia = realMatchMedia;
+    }
+
+    assert.deepEqual(queries, [], "the effect never constructs a media query");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: the effect did run and did theme the page");
+  });
+
+  test("teardown disconnects the class observer, so a later body-class change reaches nothing", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("light");
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    // The control that makes the silence after teardown attributable: without proving the observer delivered first, its later quiet could mean it was never
+    // constructed at all.
+    document.body.classList.add("dark-mode");
+    await flush();
+
+    const whileLive = host.reads;
+
+    assert.ok(whileLive > 0, "precondition: the observer is live and a body-class change reaches the follower");
+
+    controller.abort();
+    document.body.classList.remove("dark-mode");
+    await flush();
+
+    assert.equal(host.reads, whileLive, "a body-class change after teardown reaches nothing");
+  });
+
+  test("an abort during the initial mode read tears down cleanly and leaves no observer behind", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const before = document.adoptedStyleSheets.length;
+    const initialRead = Promise.withResolvers();
+    const host = flippableHost("dark");
+
+    // The first read never answers until this test says so, which is what holds the effect open at its one await. Every later read answers at once, so the routes
+    // below are free to run while the registration is still parked.
+    host.userCurrentLightingMode = () => {
+
+      host.reads += 1;
+
+      return (host.reads === 1) ? initialRead.promise : Promise.resolve(host.mode);
+    };
+
+    const controller = new AbortController();
+    const registration = registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+
+    await flush();
+
+    assert.equal(host.reads, 1, "precondition: the initial read is in flight");
+    assert.equal(document.adoptedStyleSheets.length, before + 1, "precondition: the sheet is adopted before that read settles");
+
+    // The observer-liveness precondition. Without it the disconnect assertion at the end passes identically when the observer was never constructed, which is
+    // exactly the misordering this row exists to catch.
+    document.body.classList.add("dark-mode");
+    await flush();
+
+    assert.equal(host.reads, 2, "precondition: the class observer is already live while the initial read is still parked");
+
+    controller.abort();
+    initialRead.resolve("dark");
+
+    // Awaiting the registration is the no-throw assertion: a teardown that raced the read resuming would surface here.
+    await registration;
+    await flush();
+
+    assert.equal(document.adoptedStyleSheets.length, before, "the sheet is released");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "the dark class is gone");
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "the color-scheme is gone");
+
+    const afterTeardown = host.reads;
+
+    document.body.classList.remove("dark-mode");
+    await flush();
+
+    assert.equal(host.reads, afterTeardown, "and the observer was disconnected - a post-teardown class change reaches nothing");
+  });
+
+  test("a follow already in flight when the teardown lands cannot put the theme back afterwards", async () => {
+
+    using _dom = createTestDom();
+
+    seedBootstrapProbeShim();
+
+    const host = flippableHost("light");
+    const controller = new AbortController();
+
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await flush();
+
+    // Park the follow's own read, then announce a change: the follower is now suspended between reading the mode and writing it.
+    const followRead = Promise.withResolvers();
+
+    host.userCurrentLightingMode = () => followRead.promise;
+    postThemeUpdate();
+    await flush();
+
+    controller.abort();
+    followRead.resolve("dark");
+    await flush();
+
+    // A write that raced the teardown would put the theme back on a document the effect had already promised to leave untouched.
+    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "no color-scheme survived the teardown");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "no dark class survived it");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), "", "no accent background survived it");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-fg"), "", "no accent foreground survived it");
   });
 });
 

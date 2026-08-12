@@ -7,26 +7,34 @@
 import { delay } from "./webUi-featureOptions/utils.mjs";
 
 /**
- * Register the theme effect. Adopts the page base stylesheet, applies color-scheme + dark-mode class from the Homebridge lighting-mode setting, listens for
- * `prefers-color-scheme` changes, and probes Bootstrap's `.btn-primary` to enhance the accent tokens.
+ * Register the page theme effect. Adopts the page base stylesheet, applies the color-scheme and dark-mode class from the Homebridge lighting-mode setting, follows
+ * the host's own announcements of a theme change, and probes Bootstrap's `.btn-primary` to enhance the accent tokens.
  *
- * Cleanup is automatic via the AbortSignal: aborting releases the stylesheet from the document, clears the `color-scheme`, `.fo-dark` class, and accent-token inline
- * overrides the effect wrote on `:root` (so it leaves no trace on a shared document), removes the matchMedia listener (via `{signal}` on addEventListener), and
- * short-circuits the in-progress Bootstrap probe at the next await checkpoint.
+ * The normal entry point is `webUi.registerTheming`, which composes this effect with the design tokens its rules read and holds both for the life of the page. A
+ * direct call is for bespoke composition, where the caller owns the ordering and the lifetime itself.
  *
- * The function returns once the synchronous portion completes (stylesheet adopted, color-scheme applied, matchMedia listener registered). The Bootstrap accent
- * probe runs in the background - the caller's `show()` pipeline is not blocked on probe completion. Until the probe resolves, the tokens' declared `AccentColor` /
- * `AccentColorText` defaults remain in effect, so the user sees a sensible accent immediately rather than waiting up to `probe.timeoutMs` for Bootstrap to load.
+ * Two routes carry a host theme change into this page and the effect follows both: the message Homebridge posts into a plugin frame, and a mutation of that
+ * frame body's own theme classes. Each announces a mode the user picked and a system flip an auto-detecting install inherits alike, because the host resolves
+ * either into the same retint. Both routes re-read the mode through the bridge, so the bridge stays the one authority on which mode is current.
+ *
+ * Cleanup is automatic via the AbortSignal: aborting releases the stylesheet from the document, clears the `color-scheme`, `.fo-dark` class, and accent-token
+ * inline overrides the effect wrote on `:root` (so it leaves no trace on a shared document), removes the message listener (via `{signal}` on addEventListener),
+ * disconnects the class observer, and short-circuits the in-progress Bootstrap probe at the next await checkpoint.
+ *
+ * The function returns once the initial lighting-mode read has been applied. Both follow routes are live before that read is even issued, so a page whose initial
+ * read fails or never answers still follows every later host announcement. The Bootstrap accent probe runs in the background - the caller's pipeline is not blocked
+ * on probe completion. Until the probe resolves, the tokens' declared `AccentColor` / `AccentColorText` defaults remain in effect, so the user sees a sensible
+ * accent immediately rather than waiting up to `probe.timeoutMs` for Bootstrap to load.
  *
  * @param {Object} args
  * @param {{userCurrentLightingMode: () => Promise<string>}} args.host - The Homebridge bridge (or a test stub matching that surface). The lighting mode is normally
  *        "light" or "dark"; any unrecognized value is tolerated and treated as a no-op (no color scheme is applied).
- * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down every listener and the background probe.
+ * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down the listener, the class observer, and the background probe.
  * @param {Object} [args.probe] - Optional probe overrides.
  * @param {number} [args.probe.timeoutMs=2000] - Maximum time, in milliseconds, to poll for Bootstrap's stylesheet. Override to `0` in tests to skip the probe.
  * @param {number} [args.probe.intervalMs=20] - Poll interval, in milliseconds.
- * @returns {Promise<void>} Resolves when the synchronous setup is complete (after color-scheme is applied and the matchMedia listener is registered). Does NOT wait
- *                          for the Bootstrap probe to complete.
+ * @returns {Promise<void>} Resolves once the initial mode read has been applied, and rejects when that read rejects - the sheet and both follow routes are live
+ *                          either way. Does NOT wait for the Bootstrap probe to complete.
  */
 export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, timeoutMs = 2000 } = {}, signal }) => {
 
@@ -43,6 +51,60 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
   stylesheet.replaceSync(buildBaseCss());
   document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, stylesheet ];
 
+  /* The one follower both host routes share. The mode is captured before the abort check so a teardown that lands while the read is in flight can never be
+   * overwritten afterwards: a write that raced the teardown would put `color-scheme` and the dark class back on `:root` after the effect promised to leave no
+   * trace on it.
+   */
+  const followHostTheme = async () => {
+
+    /* The follow is opportunistic by contract: a read that fails says nothing the initial registration's own diagnostic has not already said, the next host
+     * announcement retries by construction, and both routes below fire this and forget it - so the failure is absorbed here rather than left to surface as an
+     * unhandled rejection on every later toggle against an unreachable host.
+     */
+    let mode;
+
+    try {
+
+      mode = await host.userCurrentLightingMode();
+    } catch {
+
+      return;
+    }
+
+    if(signal.aborted) {
+
+      return;
+    }
+
+    applyColorScheme(mode);
+    probeAndApplyAccent();
+  };
+
+  /* Follow the host's announcement of a theme change. Homebridge retints a plugin frame by swapping theme classes on its body and posting a message into it, and
+   * both routes run on a mode the user picked and on a system flip an auto-detecting install inherits, because the host resolves either into the same retint.
+   * Watching our own body settles the ordering - a class change IS the retint, and mutation records deliver after it lands - while the message reaches frames the
+   * host cannot reach into directly. The system color-scheme query is deliberately not a route: it answers before the host has retinted anything, and on an
+   * install pinned to one mode it fires when nothing about the page changed.
+   *
+   * A toggle that fires both routes costs two cheap bridge reads and two accent probes. That is the accepted price of covering both announcements with no dedup
+   * state that could go stale, and the payload is read for nothing but its type, so traffic from anywhere else costs one string comparison.
+   */
+  window.addEventListener("message", (event) => {
+
+    if(event.data?.type === "theme-update") {
+
+      void followHostTheme();
+    }
+  }, { signal });
+
+  /* The observer watches `document.body`'s class while applyColorScheme writes on `documentElement`, so the effect's own writes can never feed back into it, and a
+   * host retint landing mid-registration is followed rather than missed. Constructed through `window` so a headless harness that installs its own globals supplies
+   * this one too.
+   */
+  const themeClassObserver = new window.MutationObserver(() => void followHostTheme());
+
+  themeClassObserver.observe(document.body, { attributeFilter: ["class"], attributes: true });
+
   signal.addEventListener("abort", () => {
 
     // Restore the document to its pre-effect state, symmetric with every mutation the effect made to it: drop the adopted stylesheet, then the `color-scheme` and
@@ -50,36 +112,27 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
     // one that matters - it is a native property, so a leftover `dark` value would tint default form-control and scrollbar rendering on whatever content occupies the
     // document after teardown (in a multi-page host, a sibling tab). The class and token overrides are inert once the stylesheet that reads them is gone, but are
     // cleared too so the effect leaves no trace on `:root`.
+    //
+    // The observer takes no signal of its own, so its disconnect is spelled out here; the message listener needs no line because the native `{ signal }` option
+    // detaches it. This block registers after every resource it restores exists, so there is no window in which it could fire against a half-built effect.
     document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== stylesheet);
     document.documentElement.classList.remove("fo-dark");
     document.documentElement.style.removeProperty("color-scheme");
     document.documentElement.style.removeProperty("--fo-accent-bg");
     document.documentElement.style.removeProperty("--fo-accent-fg");
+    themeClassObserver.disconnect();
   }, { once: true });
 
   // Apply the color-scheme from the current Homebridge setting. The lightweight portion of "apply theme" - no Bootstrap probe required; just sets the color-scheme
-  // property on :root and toggles the fo-dark class.
-  applyColorScheme(await host.userCurrentLightingMode());
+  // property on :root and toggles the fo-dark class. Captured before the abort check for the same reason the follower captures its own read.
+  const mode = await host.userCurrentLightingMode();
 
   if(signal.aborted) {
 
     return;
   }
 
-  // Listen for system / browser changes to the current dark-mode setting. Re-applying the color-scheme is cheap (no probe); the accent is then re-probed directly
-  // and immediately below - not through the deferred wait-for-Bootstrap path used at initial registration - since Bootstrap is assumed to already be loaded by
-  // the time a preference change can fire.
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", async () => {
-
-    applyColorScheme(await host.userCurrentLightingMode());
-
-    if(signal.aborted) {
-
-      return;
-    }
-
-    probeAndApplyAccent();
-  }, { signal });
+  applyColorScheme(mode);
 
   // Fire the Bootstrap probe in the background. Its job is to replace the fallback `AccentColor` keyword with Bootstrap's actual `.btn-primary` background color;
   // until it resolves, the user sees the system accent. Void-discarded because the caller cannot meaningfully wait on it.

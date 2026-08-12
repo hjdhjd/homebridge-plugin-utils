@@ -8,6 +8,8 @@ import { BOOT_AWAIT_DEADLINE_SECONDS, webUiFeatureOptions } from "./webUi-featur
 import { DeadlineExpiredError, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
 import { swapMenuClasses, toastError } from "./webUi-featureOptions/utils.mjs";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
+import { registerThemeEffect } from "./webUi-theming.mjs";
+import { registerTokensEffect } from "./webUi-tokens.mjs";
 
 // The copy a launch that timed out surfaces. The session open is the page's first bridge call, before any store, view, or retry affordance exists, so the toast is the
 // only surface available - and the recovery it names has to hold for every plugin whatever menu its markup carries, which reopening the panel does: opening the panel
@@ -47,9 +49,11 @@ const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the pl
 /**
  * webUi - Top-level plugin webUI orchestrator.
  *
- * Owns the page-level menu state, the first-run flow, and the {@link webUiFeatureOptions} instance that renders the feature options page. The orchestrator is the
- * single entry point Homebridge invokes to render the configuration UI; everything else - feature option discovery, theming, sidebar navigation, search - lives in
- * the composed {@link webUiFeatureOptions} instance and its sub-components.
+ * Owns the page-level menu state, the first-run flow, page theming, and the {@link webUiFeatureOptions} instance that renders the feature options page. The
+ * orchestrator is the single entry point Homebridge invokes to render the configuration UI. Theming is this object's own because its scope is the page - the
+ * design tokens, the themed canvas, and the page-kit classes all land on `:root` and `body` - so it registers through {@link webUi.registerTheming} and lives for
+ * the page; feature-option discovery, the options view and the skin that dresses it, sidebar navigation, and search all live in the composed
+ * {@link webUiFeatureOptions} instance and its sub-components.
  *
  * The menu surfaces it drives are whichever ones the plugin's markup carries: `menuHome` enters the support view, `menuFeatureOptions` the feature-options view, and
  * `menuSettings` the host's schema form. Each is bound and painted when the page carries it and skipped when it does not, so a plugin declares its menu by markup
@@ -87,6 +91,7 @@ export class webUi {
   #name;
   #resumeDetector;
   #session;
+  #themingPromise;
 
   /**
    * Initialize the plugin webUI orchestrator.
@@ -136,7 +141,13 @@ export class webUi {
     /** @type {EpochScopedResumeHandle} */
     const resumeDetector = { subscribe: (callback, options) => this.#resumeDetector.subscribe(callback, this.#scopedToEpoch(options)) };
 
-    this.featureOptions = new webUiFeatureOptions(featureOptions, { epochSignal: this.#epochSignal, resumeDetector });
+    this.featureOptions = new webUiFeatureOptions(featureOptions, {
+
+      epochSignal: this.#epochSignal,
+      registerTheming: (options) => this.registerTheming(options),
+      resumeDetector
+    });
+
     this.liveness = { onResume: (callback, options) => this.#resumeDetector.subscribe(callback, this.#scopedToEpoch(options)) };
     this.#name = name;
   }
@@ -228,6 +239,56 @@ export class webUi {
     const normalized = (typeof options === "boolean") ? { capture: options } : (options ?? {});
 
     target.addEventListener(event, handler, { ...normalized, signal: this.#epochBounded(normalized.signal) });
+  }
+
+  /**
+   * Register the framework's theming for the life of this page.
+   *
+   * One call is the whole contract: it adopts the design-token sheet, then the page theme - the themed canvas, dark-mode handling, the page-kit classes, and the
+   * Bootstrap accent probe - and holds both for as long as this module copy owns the window. Theming is a page concern rather than a view one, since everything it
+   * writes lands on `:root` and `body`, so a plugin's first-run page, support tab, and settings form all keep the theme rather than losing it on every navigation.
+   * The feature-options view routes through this same registration rather than registering theming of its own.
+   *
+   * Safe to call more than once: the first call registers, and every later call returns the same promise without registering anything a second time. A `probe`
+   * override is honored on the FIRST call only - a later call's override is ignored, because the probe it would configure has already run.
+   *
+   * Registration is complete even when the initial lighting-mode read rejects. The sheets are adopted and both host-signal routes are live before that read is
+   * issued, so the next theme change the host announces applies the mode and the page heals itself. The returned promise still rejects, so a caller that awaits it
+   * can say so in its own diagnostic; a caller that voids it per the house rule gets no unhandled-rejection noise, because this method owns that posture itself.
+   *
+   * The PAGE KIT is the class contract a plugin's own markup opts into, and it is in force wherever this registration is:
+   *
+   *   - `.fo-card` - the accent-derived frame every framework container wears, for grouping a plugin's own content into a card.
+   *   - `.fo-monospace` - the monospace stack the framework gives value-bearing inputs, as a per-element opt-in.
+   *   - `.fo-page` - the marker that scopes the dark-mode form-control corrections. Put it on a custom-page container and that container's plain form controls
+   *     become dark-mode-correct: surface, border, text, placeholder, and focus state together. Nothing outside the marked container is touched, and light mode is
+   *     left to Bootstrap, exactly as the framework treats its own fields.
+   *
+   * @example
+   *
+   * // A plugin's own first-run page, themed with one call at page load.
+   * await ui.registerTheming();
+   *
+   * @param {Object} [options] - Registration options.
+   * @param {{ intervalMs?: number, timeoutMs?: number }} [options.probe] - Bootstrap accent-probe overrides, honored on the first call only.
+   * @returns {Promise<void>} The registration's own promise, the same identity on every call.
+   * @public
+   */
+  registerTheming({ probe } = {}) {
+
+    if(!this.#themingPromise) {
+
+      registerTokensEffect({ signal: this.#epochSignal });
+      this.#themingPromise = registerThemeEffect({ host: homebridge, probe, signal: this.#epochSignal });
+
+      // A caller that voids the returned promise attaches no rejection handler, and the void operator does not mark a rejection handled - so this branch owns the
+      // diagnostic posture: it marks a failed initial mode read handled for the page (the failure is survivable by design - the sheets and the followed host
+      // signals are live, and the next host announcement applies the mode), while a caller that awaits still observes the rejection through its own branch of the
+      // same promise.
+      this.#themingPromise.catch(() => {});
+    }
+
+    return this.#themingPromise;
   }
 
   /**

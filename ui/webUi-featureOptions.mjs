@@ -20,8 +20,6 @@ import { mountStatusPanelView } from "./webUi-featureOptions/views/statusPanel.m
 import { registerKeyboardEffect } from "./webUi-featureOptions/effects/keyboard.mjs";
 import { registerOptionsSkinEffect } from "./webUi-featureOptions/effects/optionsSkin.mjs";
 import { registerPersistEffect } from "./webUi-featureOptions/effects/persist.mjs";
-import { registerThemeEffect } from "./webUi-theming.mjs";
-import { registerTokensEffect } from "./webUi-tokens.mjs";
 
 /**
  * Upper bound on how long hide() will block waiting for the navigate-away flush to complete. This is a teardown safety cap, NOT a perf knob: the normal flush
@@ -154,9 +152,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 /**
  * webUiFeatureOptions - Lifecycle coordinator for the feature options webUI.
  *
- * Boots the reactive state container, registers every effect (persist, theme, tokens, options skin, keyboard) and mounts every view (header, device info, nav,
- * search, options, connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal:
- * every effect's subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically.
+ * Boots the reactive state container, registers this view's own effects (persist, options skin, keyboard) and mounts every view (header, device info, nav, search,
+ * options, connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal: every
+ * effect's subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically. Page theming is deliberately not
+ * among them - its scope is `:root` and `body`, so it is registered through the page orchestrator's wiring and outlives every cycle this class tears down.
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
  * action without re-entering the whole show() cycle, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
@@ -212,6 +211,17 @@ export class webUiFeatureOptions {
   // The page-level abort controller. Aborting it tears down every effect and every view in one operation. Recreated on every show(); nulled out on cleanup().
   #pageAbort;
 
+  // The page's theming registration, supplied by the orchestrator that owns the page lifetime. Theming's scope is `:root` and `body`, so its lifetime is the page's
+  // rather than this cycle's, which is why the registration is the orchestrator's to own and this class only asks for it. Memoized on the orchestrator's side, so
+  // calling it on every cycle registers once; a directly-constructed instance holds undefined and the page renders unthemed.
+  #registerTheming;
+
+  // Whether this instance has already spent its one bounded wait on the theming registration. The wait exists so the first paint lands with the mode applied, and
+  // the registration promise is memoized, so awaiting it again on a later cycle would re-serve one hung bridge read as a fresh full-deadline stall on every
+  // navigate-in. Set when the wait SETTLES - success, host rejection, or deadline expiry - and deliberately not when the cycle's own signal aborts mid-wait, since
+  // an abandoned wait was never experienced as a stall and the epoch has not spent it. Never reset: it dies with this instance, whose lifetime is the epoch's.
+  #themeAwaited = false;
+
   // The page's resume detector, supplied by the orchestrator that owns the page lifetime. Threaded to the views that probe on a resume and otherwise untouched; when
   // it is absent - a directly-constructed instance, as every test call site is - no view subscribes and no resume timer ever runs.
   #resumeDetector;
@@ -241,10 +251,13 @@ export class webUiFeatureOptions {
    * @param {Object} [wiring] - Framework wiring supplied by the page orchestrator.
    * @param {AbortSignal} [wiring.epochSignal] - The page epoch, aborted when a newer page copy claims the window. Every show() cycle composes itself into it, so a
    *                                             superseded copy tears down whole. Absent means no cycle is epoch-bounded.
+   * @param {() => Promise<void>} [wiring.registerTheming] - The page's theming registration, memoized by the orchestrator that owns it, so calling it on every
+   *                                                         show() cycle registers once and hands back the same promise afterwards. Absent means the page
+   *                                                         registers no theming.
    * @param {{ subscribe: Function }} [wiring.resumeDetector] - The page's resume detector, threaded to the views that probe on a resume. Absent means no view
    *                                                            subscribes to resumes.
    */
-  constructor(options = {}, { epochSignal = undefined, resumeDetector = undefined } = {}) {
+  constructor(options = {}, { epochSignal = undefined, registerTheming = undefined, resumeDetector = undefined } = {}) {
 
     const {
 
@@ -292,6 +305,11 @@ export class webUiFeatureOptions {
       },
       {
 
+        message: "registerTheming is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
+        violated: "registerTheming" in options
+      },
+      {
+
         message: "resumeDetector is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
         violated: "resumeDetector" in options
       }
@@ -332,6 +350,7 @@ export class webUiFeatureOptions {
     this.#epochSignal = epochSignal;
     this.#flushPersist = null;
     this.#pageAbort = null;
+    this.#registerTheming = registerTheming;
     this.#resumeDetector = resumeDetector;
     this.#session = null;
     this.#store = null;
@@ -384,8 +403,8 @@ export class webUiFeatureOptions {
    *      shows the retry affordance rather than stranding a blank frame; the sync also lands before getControllers and the options read below, so both see fresh config.
    *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
-   *   6. Adopt the design tokens (synchronous), then fire the theme, options-skin, persist, and keyboard effects. The theme effect's I/O (Bootstrap probe) runs in
-   *      the background.
+   *   6. Register the page's theming through the orchestrator's wiring (once for the page, not once per cycle), then fire the options-skin, persist, and keyboard
+   *      effects. The theming registration's I/O - the lighting-mode read and the Bootstrap probe - runs in the background.
    *   7. Once controllers resolves: hold it to the hook contract, then check the error it carries - a wrong-shaped result and a reported connection failure both
    *      land on the connection-error view and return, so the no-controllers helper text can never stand in for an unreachable controller or a hook that answered
    *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return.
@@ -469,22 +488,23 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // Fire every independent I/O in parallel. The independent sources: controllers (optional), the /getOptions catalog, and the Homebridge lighting mode (via the
-    // theme effect's host). The plugin config is not fetched here - the session already holds it - so getControllers receives the injected platform config rather
-    // than reaching for it. None depend on each other; firing them concurrently means total wall-clock time is bounded by the slowest.
+    // Fire every independent I/O in parallel. The independent sources: controllers (optional), the /getOptions catalog, and - on the one cycle that registers it -
+    // the Homebridge lighting mode the theming registration reads. The plugin config is not fetched here - the session already holds it - so getControllers
+    // receives the injected platform config rather than reaching for it. None depend on each other; firing them concurrently means total wall-clock time is
+    // bounded by the slowest.
     const featuresPromise = homebridge.request("/getOptions").then((response) => response ?? []);
     const controllersPromise = this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) :
       Promise.resolve({ controllers: [], error: "" });
 
-    // Adopt design tokens. Synchronous; must run before any consumer references `var(--fo-*)`.
-    registerTokensEffect({ signal });
+    /* Register the page's theming through the orchestrator that owns it: the design tokens and the page theme, adopted in that order and held for the page rather
+     * than for this cycle, so navigating to Settings or Support keeps the themed canvas the user is looking at. The registration is memoized on the orchestrator's
+     * side, so this call registers on the first cycle and hands back the same promise on every later one. The optional chain is the same posture the epoch
+     * composition above takes: a directly-constructed instance carries no wiring and renders unthemed rather than crashing.
+     */
+    const themeInitPromise = this.#registerTheming?.() ?? Promise.resolve();
 
-    // Theme effect (async background work for Bootstrap probe; sync stylesheet adoption). Held as a promise so we can await it before the matchMedia listener is
-    // registered against any user interaction, but the bulk of init's work overlaps the data fetches below.
-    const themeInitPromise = registerThemeEffect({ host: homebridge, signal });
-
-    // The options-view skin: the layout, sidebar, category, search, and status-grid rules this view owns. Synchronous, like the tokens above, and adopted after
-    // the page base sheet so the two land in the source order the design language reads in.
+    // The options-view skin: the layout, sidebar, category, search, and status-grid rules this view owns. Synchronous, and scoped to THIS cycle rather than to the
+    // page - several of its rules restyle Bootstrap classes a custom page may use for something else, so they have to be gone the moment the user navigates away.
     registerOptionsSkinEffect({ signal });
 
     // Persist + keyboard effects: register early so they catch any dispatch from the moment model:loaded fires. The persist effect's reference-equality dirty
@@ -653,23 +673,39 @@ export class webUiFeatureOptions {
       type: "model:loaded"
     });
 
-    // Wait for the theme's matchMedia listener registration before any user interaction can trigger a theme change. By this point, themeInitPromise has almost
-    // always already resolved - it ran in parallel with every other fetch above.
-    //
-    // This await is the one whose failure is NOT fatal. The theme's host read is cosmetic: a page that cannot learn the host's lighting mode renders on the theme's
-    // own defaults and is entirely usable, so a probe that hangs or fails costs a warning and nothing else. Every other await lands the user on the retry view;
-    // making this one do the same would let a cosmetic detail take down a working page.
-    try {
+    /* Wait for the theming registration's initial lighting-mode read, so the first paint lands with the mode already applied rather than showing the default and
+     * correcting under the user's eye. Both of the registration's host-signal routes go live synchronously, ahead of that read, so first-paint correctness is the
+     * whole of what this await buys. By this point the promise has almost always already settled - the read ran in parallel with every fetch above.
+     *
+     * This await is the one whose failure is NOT fatal. The lighting-mode read is cosmetic: a page that cannot learn it renders on the theme's own defaults and is
+     * entirely usable, so a read that hangs or fails costs a warning and nothing else. Every other await lands the user on the retry view; making this one do the
+     * same would let a cosmetic detail take down a working page.
+     *
+     * It is spent once per INSTANCE rather than once per cycle, which the memoized registration is what forces: a bridge read that hangs stays hung for the page's
+     * life, so awaiting the same promise on every navigate-in would re-serve one stall as a fresh full-deadline wait each time. A later cycle skips the wait
+     * entirely - by then the mode is either applied already or the followed host signals are the ones that will apply it.
+     */
+    if(!this.#themeAwaited) {
 
-      await withDeadline({ promise: themeInitPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
-    } catch(err) {
+      try {
 
-      this.#unlessStale({ run: () => {
+        await withDeadline({ promise: themeInitPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
 
-        // console is the browser page's diagnostic transport, and a theme probe that did not answer is exactly a diagnostic - the boot continues on the defaults.
-        // eslint-disable-next-line no-console
-        console.warn("The theme could not read the Homebridge lighting mode, so the page is rendering on its default theme.", err);
-      }, signal });
+        this.#themeAwaited = true;
+      } catch(err) {
+
+        /* The staleness guard's verdict is the flag's too, because they answer the same question: was this cycle still the live one when the wait ended? A cycle
+         * superseded mid-wait was abandoned rather than experienced - the user navigated away instead of waiting - so it neither says anything nor spends this
+         * instance's one bounded wait, and the next cycle awaits again against a read that has usually settled by then. Every other rejection, a host that refused
+         * the read or the deadline elapsing, is a wait the epoch genuinely spent, so it warns and sets the flag together.
+         */
+        this.#themeAwaited = this.#unlessStale({ run: () => {
+
+          // console is the browser page's diagnostic transport, and a theme read that did not answer is exactly a diagnostic - the boot continues on the defaults.
+          // eslint-disable-next-line no-console
+          console.warn("The theme could not read the Homebridge lighting mode, so the page is rendering on its default theme.", err);
+        }, signal });
+      }
     }
 
     if(signal.aborted) {

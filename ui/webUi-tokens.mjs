@@ -18,9 +18,12 @@
  *      at `:root` for the light default, one at `:root.fo-dark` for the dark override. Consumers reference the token by name (`var(--fo-surface-bg)`) and get the
  *      right value automatically. A future third theme (high-contrast, brand variant) joins by adding a third selector block; no consumer rules change.
  *
+ * The normal entry point is `webUi.registerTheming`, which composes this effect with the page theme whose rules read these tokens and holds both for the life of
+ * the page. A direct call is for bespoke composition, where the caller owns the ordering and the lifetime itself.
+ *
  * Adopted synchronously - token declarations are static and have no I/O dependencies, so the stylesheet is ready by the time the call returns. Must run before any
- * consumer (the theme effect or any inline style using `var(--fo-*)`) references a token, which the orchestrator's boot sequence guarantees by registering this
- * effect first.
+ * consumer (the page theme, the options-view skin, or any inline style using `var(--fo-*)`) references a token. `webUi.registerTheming` guarantees that for the
+ * page theme by registering this effect first, and the feature-options boot registers its skin after that same call.
  *
  * @param {Object} args
  * @param {AbortSignal} args.signal - Lifecycle signal. Aborting releases the stylesheet from the document.

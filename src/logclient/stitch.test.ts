@@ -3,7 +3,7 @@
  * logclient/stitch.test.ts: Unit tests for the history-plus-live overlap join.
  */
 import { describe, test } from "node:test";
-import { gapMarker, mergeHistoryThenLive, stitchLive } from "./stitch.ts";
+import { gapMarker, stitchLive } from "./stitch.ts";
 import type { LogRecord } from "./types.ts";
 import assert from "node:assert/strict";
 
@@ -135,25 +135,6 @@ describe("stitchLive", () => {
     const live = [ line("o1"), line("o2"), line("a"), line("b"), line("c"), line("a"), line("b"), line("c"), line("d") ];
 
     assert.deepEqual(raws(stitchLive(history, live)), [ "a", "b", "c", "a", "b", "c", "d" ]);
-  });
-});
-
-describe("mergeHistoryThenLive", () => {
-
-  test("delegates to the same join policy as stitchLive", () => {
-
-    const history = [ line("a"), line("b"), line("c") ];
-    const live = [ line("c"), line("d") ];
-
-    assert.deepEqual(raws(mergeHistoryThenLive(history, live)), raws(stitchLive(history, live)));
-  });
-
-  test("forwards the maxOverlap bound", () => {
-
-    const history = [ line("a"), line("b"), line("c"), line("d") ];
-    const live = [ line("c"), line("d"), line("e") ];
-
-    assert.deepEqual(raws(mergeHistoryThenLive(history, live, { maxOverlap: 1 })), raws(stitchLive(history, live, { maxOverlap: 1 })));
   });
 });
 

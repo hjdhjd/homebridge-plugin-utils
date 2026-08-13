@@ -52,38 +52,6 @@ A fresh gap-marker [LogRecord](types.md#logrecord).
 
 ***
 
-### mergeHistoryThenLive()
-
-```ts
-function mergeHistoryThenLive(
-   history, 
-   live, 
-   options?): LogRecord[];
-```
-
-Thin coordinator that joins an already-collected history tail and live buffer via [stitchLive](#stitchlive).
-
-This is the composition seam the client uses for `follow-history`: it takes the already-materialized history tail and the already-buffered seed-plus-live records and
-defers entirely to [stitchLive](#stitchlive) for the join policy. It exists so callers have one named entry point for "merge history then live" rather than re-deriving the
-call, and so the join policy lives in exactly one place. It performs no I/O of its own - the caller is responsible for having collected both sides (the socket seeds
-into a bounded ring and the REST download streams into records before this is called).
-
-#### Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `history` | readonly [`LogRecord`](types.md#logrecord)[] | The trailing history records, oldest first. |
-| `live` | readonly [`LogRecord`](types.md#logrecord)[] | The seed-plus-live records, oldest first. |
-| `options` | [`StitchOptions`](#stitchoptions) | Optional bounds forwarded to [stitchLive](#stitchlive). |
-
-#### Returns
-
-[`LogRecord`](types.md#logrecord)[]
-
-The joined record list.
-
-***
-
 ### stitchLive()
 
 ```ts

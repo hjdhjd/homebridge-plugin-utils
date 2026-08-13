@@ -198,24 +198,3 @@ export function stitchLive(history: readonly LogRecord[], live: readonly LogReco
   // Neither alignment held - history's tail appears nowhere in live: surface the discontinuity rather than hide it, and keep every live line.
   return [ ...history, gapMarker(), ...live ];
 }
-
-/**
- * Thin coordinator that joins an already-collected history tail and live buffer via {@link stitchLive}.
- *
- * This is the composition seam the client uses for `follow-history`: it takes the already-materialized history tail and the already-buffered seed-plus-live records and
- * defers entirely to {@link stitchLive} for the join policy. It exists so callers have one named entry point for "merge history then live" rather than re-deriving the
- * call, and so the join policy lives in exactly one place. It performs no I/O of its own - the caller is responsible for having collected both sides (the socket seeds
- * into a bounded ring and the REST download streams into records before this is called).
- *
- * @param history - The trailing history records, oldest first.
- * @param live    - The seed-plus-live records, oldest first.
- * @param options - Optional bounds forwarded to {@link stitchLive}.
- *
- * @returns The joined record list.
- *
- * @category Log Client
- */
-export function mergeHistoryThenLive(history: readonly LogRecord[], live: readonly LogRecord[], options: StitchOptions = {}): LogRecord[] {
-
-  return stitchLive(history, live, options);
-}

@@ -7,7 +7,7 @@
 import { applyCategoryStates, captureCategoryStates } from "../utils.mjs";
 import { applyRowState, categoryShell, optionRow, toggleSecretReveal, triStateTransition, valueCommitTransition } from "../rendering.mjs";
 import { buildConfigIndex, hasValueContent } from "../../featureOptions.js";
-import { projection, scopeCacheKey, selectedControllerId, selectedDeviceId } from "../selectors.mjs";
+import { projection, scopeCacheKey, scopingControllerId, selectedDeviceId } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { effect } from "../store.mjs";
 
@@ -421,7 +421,7 @@ const buildCategoryShells = ({ configTable, state }) => {
 
   const p = projection(state);
   const fragment = document.createDocumentFragment();
-  const scopeKind = state.scope.kind;
+  const scopeKind = p.viewScope;
 
   for(const { category } of p.categories) {
 
@@ -459,7 +459,7 @@ const ensureRowsRendered = ({ details, state }) => {
 
   const fragment = document.createDocumentFragment();
   const deviceId = selectedDeviceId(state);
-  const scopeKind = state.scope.kind;
+  const scopeKind = p.viewScope;
 
   for(const entry of categoryProjection.entries) {
 
@@ -486,7 +486,7 @@ const ensureRowsRendered = ({ details, state }) => {
 const applyProjectionToDom = ({ configTable, state }) => {
 
   const p = projection(state);
-  const scopeKind = state.scope.kind;
+  const scopeKind = p.viewScope;
 
   for(const categoryProjection of p.categories) {
 
@@ -594,6 +594,9 @@ const cssEscape = (value) => ((typeof CSS !== "undefined") && CSS.escape) ? CSS.
 // Resolve the row element and its projection entry for any input element inside an option row. Shared by the two gesture handlers in handleChange so the checkbox
 // and the value input work from the same projection state. The checkbox's id carries the option's expanded name for both, since the value input has no identity of
 // its own. Returns null when the element sits outside a materialized row or the projection no longer carries the option.
+//
+// The presented view scope rides back alongside the entry, read off the same projection the entry came from, so a handler re-deriving a single row describes the
+// page at exactly the scope the render pass gave every other row.
 const rowContext = ({ state, target }) => {
 
   const row = target.closest(".fo-option-row");
@@ -605,10 +608,11 @@ const rowContext = ({ state, target }) => {
     return null;
   }
 
-  const categoryProjection = projection(state).categories.find((c) => c.name === categoryName);
+  const p = projection(state);
+  const categoryProjection = p.categories.find((c) => c.name === categoryName);
   const entry = categoryProjection?.entries.find((e) => e.expandedName === expandedName);
 
-  return entry ? { entry, row } : null;
+  return entry ? { entry, row, viewScope: p.viewScope } : null;
 };
 
 // Handle a change event on the config table. Checkboxes run the tri-state transition; value inputs run the value-commit transition. Either way the pure state
@@ -639,14 +643,14 @@ const handleChange = ({ event, store }) => {
     return;
   }
 
-  const { entry, row } = context;
+  const { entry, row, viewScope } = context;
   const inputValue = row.querySelector("input.fo-option-value");
   const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
   const transitionArgs = {
 
     catalog: state.catalog,
     configIndex,
-    controllerId: selectedControllerId(state),
+    controllerId: scopingControllerId(state),
     deviceId: selectedDeviceId(state),
     entry,
     inputValue
@@ -663,7 +667,7 @@ const handleChange = ({ event, store }) => {
 
     const armed = store.state.armedOption === entry.expandedName;
 
-    applyRowState({ armed, entry, row, scopeKind: state.scope.kind });
+    applyRowState({ armed, entry, row, scopeKind: viewScope });
 
     // An arming gesture opened the input for the value that will actually enable the option - hand it focus as the affordance for what comes next. Every other
     // no-op keeps focus where it is: a rejected input commit means the user just moved on, and a disarm leaves a locked input nothing should focus.
@@ -714,6 +718,6 @@ const handleFocusOut = ({ event, store }) => {
   }
 
   store.dispatch({ type: "option:disarmed" });
-  applyRowState({ entry: context.entry, row: context.row, scopeKind: state.scope.kind });
+  applyRowState({ entry: context.entry, row: context.row, scopeKind: context.viewScope });
 };
 

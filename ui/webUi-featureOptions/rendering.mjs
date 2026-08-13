@@ -43,12 +43,14 @@ import { hasValueContent, isValueOption, optionExists } from "../featureOptions.
  * container. The rows container is intentionally empty; the view materializes its option rows lazily on first expand via {@link optionRow}.
  *
  * The category header carries a scope-suffix label - `(Global)` / `(Controller-specific)` / `(Device-specific)` - so the user always knows which scope they are
- * editing at. Each variant maps directly from the view's scope kind; we do not consult validators here because the scope DU already encodes the distinction
- * (controller view vs device view is the scope's kind, not a runtime predicate).
+ * editing at. Each variant maps directly from the view's PRESENTED scope, which {@link projection} derives: the scope tag's own kind for an ordinary view, folded
+ * to "controller" for a page whose selected device is the in-scope controller, where every edit is stored at the controller's serial. Taking the presented scope
+ * rather than the raw tag is what makes the suffix name the scope an edit actually lands at, and it is a question the scope DU cannot answer on its own - the tag
+ * says a device is selected without saying which device that is.
  *
  * @param {Object} args
  * @param {import("../featureOptions.js").FeatureCategoryEntry} args.category - The catalog entry for the category.
- * @param {"controller" | "device" | "global"} args.scopeKind - The current view's scope kind.
+ * @param {"controller" | "device" | "global"} args.scopeKind - The view's presented scope, from the projection's `viewScope`.
  * @returns {HTMLDetailsElement} The category shell, ready for insertion into the config table.
  */
 export const categoryShell = ({ category, scopeKind }) => {
@@ -89,7 +91,7 @@ export const categoryShell = ({ category, scopeKind }) => {
  * @param {boolean} [args.armed=false] - Whether this row is the store's armed value row (checked with a live input, awaiting its first value).
  * @param {string | null} args.deviceId - The currently-selected device's serial, or null for the global view.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for this option.
- * @param {"controller" | "device" | "global"} args.scopeKind - The current view's scope kind.
+ * @param {"controller" | "device" | "global"} args.scopeKind - The view's presented scope, from the projection's `viewScope`.
  * @returns {HTMLDivElement} The constructed row element.
  */
 export const optionRow = ({ armed = false, deviceId, entry, scopeKind }) => {
@@ -145,7 +147,7 @@ export const optionRow = ({ armed = false, deviceId, entry, scopeKind }) => {
  * @param {boolean} [args.armed=false] - Whether this row is the store's armed value row. An armed row renders checked with a live input while persisting nothing.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for this option.
  * @param {HTMLDivElement} args.row - The option row element to update in place.
- * @param {"controller" | "device" | "global"} args.scopeKind - The current view's scope kind.
+ * @param {"controller" | "device" | "global"} args.scopeKind - The view's presented scope, from the projection's `viewScope`.
  */
 export const applyRowState = ({ armed = false, entry, row, scopeKind }) => {
 
@@ -277,7 +279,8 @@ export const toggleSecretReveal = (toggle) => {
  * @param {import("./state.mjs").Catalog} args.catalog - The catalog index (for value-centric detection and upstream lookup).
  * @param {HTMLInputElement} args.checkbox - The clicked checkbox, with its post-browser-toggle state.
  * @param {import("../featureOptions.js").ConfigIndex} args.configIndex - The current config lookup index.
- * @param {string | null} args.controllerId - The current controller serial, or null when no controller is in context.
+ * @param {string | null} args.controllerId - The in-scope controller's scoping identity (the serial its entries are keyed by, from
+ *        {@link scopingControllerId}), or null when no controller is in context.
  * @param {string | null} args.deviceId - The current view's device serial, or null for global view.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for the option.
  * @param {HTMLInputElement | null} args.inputValue - The value-input element, when the option is value-centric; null otherwise.
@@ -346,7 +349,8 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
  * @param {Object} args
  * @param {import("./state.mjs").Catalog} args.catalog - The catalog index (for the upstream probe).
  * @param {import("../featureOptions.js").ConfigIndex} args.configIndex - The current config lookup index.
- * @param {string | null} args.controllerId - The current controller serial, or null when no controller is in context.
+ * @param {string | null} args.controllerId - The in-scope controller's scoping identity (the serial its entries are keyed by, from
+ *        {@link scopingControllerId}), or null when no controller is in context.
  * @param {string | null} args.deviceId - The current view's device serial, or null for global view.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for the option.
  * @param {HTMLInputElement} args.inputValue - The value-input element carrying the committed text.

@@ -566,6 +566,257 @@ describe("mountOptionsView - modified-option highlight", () => {
   });
 });
 
+describe("mountOptionsView - a controller's own options page", () => {
+
+  // The page a controller click lands on for a plugin whose device list leads with the controller-as-device: one serial fills both scope slots, so everything
+  // edited here is stored at the controller's serial and answers for every device beneath it. The catalog pairs an option declared at both levels with one that
+  // declares nothing, which is what puts a set-here row and a genuinely inherited row side by side on the same page.
+  const PAGE_CATEGORIES = [{ description: "Page Options", name: "Page" }];
+
+  const PAGE_OPTIONS = {
+
+    Page: [
+
+      { default: false, description: "Controller-wide zone default.", name: "Zone", scopes: [ "controller", "device" ] },
+      { default: false, description: "Option that declares nothing.", name: "Anywhere" }
+    ]
+  };
+
+  const PAGE_CATALOG = {
+
+    ...buildCatalogIndex(PAGE_CATEGORIES, PAGE_OPTIONS),
+
+    validators: { isController: (device) => device?.serialNumber === "ctrl-a", validOption: () => true, validOptionCategory: () => true }
+  };
+
+  const CONTROLLER = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+
+  // The controller leads its own device list, which is the arrangement that puts a controller-as-device page on screen at all.
+  const DEVICES = [
+
+    { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Controller A", serialNumber: "ctrl-a" },
+    { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }
+  ];
+
+  const CONTROLLER_PAGE = { controllerId: "ctrl-a", deviceId: "ctrl-a", kind: "device" };
+  const DEVICE_PAGE = { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" };
+
+  // Mount the view over the page catalog at the given scope with its one category expanded, so the assertions read a page that holds real rows. Mirrors setup()'s
+  // sequence for a controller-based plugin: the model, the device list through the request/outcome pairing, and the scope all land before the mount.
+  const mountPage = ({ configuredOptions = [], scope }) => {
+
+    const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+    const configTable = document.createElement("div");
+    const controller = new AbortController();
+
+    configTable.id = "configTable";
+    document.body.appendChild(configTable);
+
+    store.dispatch({ catalog: PAGE_CATALOG, configuredOptions, controllers: [CONTROLLER], mode: "controller-based", type: "model:loaded" });
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+    store.dispatch({ controllerId: "ctrl-a", devices: DEVICES, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+    store.dispatch({ scope, type: "scope:changed" });
+
+    mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
+
+    const details = configTable.querySelector("details[data-category='Page']");
+
+    details.open = true;
+    details.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    return { configTable, details, store };
+  };
+
+  test("the category header names the controller scope the page edits at", () => {
+
+    using _dom = createTestDom();
+
+    const { details } = mountPage({ scope: CONTROLLER_PAGE });
+
+    assert.equal(details.querySelector(".fo-category-title").textContent, "Page Options (Controller-specific)");
+  });
+
+  test("a row set on this page reads as set here, while a globally-inherited row keeps the inherit treatment", () => {
+
+    using _dom = createTestDom();
+
+    const { details } = mountPage({ configuredOptions: [ "Enable.Page.Zone.ctrl-a", "Enable.Page.Anywhere" ], scope: CONTROLLER_PAGE });
+    const zone = details.querySelector("[id='row-Page.Zone']");
+    const anywhere = details.querySelector("[id='row-Page.Anywhere']");
+    const zoneCheckbox = zone.querySelector("input[type='checkbox']");
+    const anywhereCheckbox = anywhere.querySelector("input[type='checkbox']");
+
+    // The entry the user wrote right here. It is stored at the controller's serial, so nothing about it is borrowed from above and the row takes gestures.
+    assert.equal(zoneCheckbox.checked, true);
+    assert.equal(zoneCheckbox.indeterminate, false, "an entry set on this page is not inherited");
+    assert.equal(zoneCheckbox.readOnly, false, "and the row is not locked against the user who wrote it");
+    assert.equal(zone.querySelector("label").classList.contains("text-info"), true, "it colors as a modified entry set at this scope");
+
+    // The global entry genuinely is borrowed from above, and a controller page inherits from global exactly as any other page does.
+    assert.equal(anywhereCheckbox.indeterminate, true, "a global entry is still an inherited one here");
+    assert.equal(anywhereCheckbox.readOnly, true);
+    assert.equal(anywhere.querySelector("label").classList.contains("text-warning"), true, "and keeps the global source color");
+  });
+
+  test("a real device page under the same controller is unchanged: device-specific header, controller entries inherited", () => {
+
+    using _dom = createTestDom();
+
+    const { details } = mountPage({ configuredOptions: ["Enable.Page.Zone.ctrl-a"], scope: DEVICE_PAGE });
+    const zoneCheckbox = details.querySelector("[id='row-Page.Zone'] input[type='checkbox']");
+
+    assert.equal(details.querySelector(".fo-category-title").textContent, "Page Options (Device-specific)");
+    assert.equal(zoneCheckbox.indeterminate, true, "the controller's entry is upstream of a real device page");
+    assert.equal(zoneCheckbox.readOnly, true);
+    assert.equal(details.querySelector("[id='row-Page.Zone'] label").classList.contains("text-success"), true, "colored as sourced from the controller");
+  });
+
+  test("a toggle on the controller page still writes at the controller's serial", (t) => {
+
+    using _dom = createTestDom();
+
+    // The presented scope governs how the page reads and nothing about where it writes. The write path targets the selected device, which on this page IS the
+    // controller, so the entry lands at the controller's serial...this row is what keeps the presented scope from ever reaching that decision.
+    const { details, store } = mountPage({ scope: CONTROLLER_PAGE });
+    const dispatch = t.mock.method(store, "dispatch");
+
+    details.querySelector("#Page\\.Zone").click();
+
+    const [action] = dispatch.mock.calls[0].arguments;
+
+    assert.equal(action.type, "option:set");
+    assert.equal(action.args.id, "ctrl-a", "the action keys from the selected device, which is the controller itself");
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Page.Zone.ctrl-a"], "and the entry persists at that serial");
+  });
+});
+
+describe("mountOptionsView - a controller whose scoping identity differs from its sidebar link", () => {
+
+  // The two-identity shape: the sidebar link is named by the configured address, because the list has to render before any connection, while the entries the
+  // connection reveals are keyed by the hardware serial the device list stamps on the controller's own row. Every assertion below is a presentation the framework
+  // can only reach by deriving that second identity from the controller-as-device row.
+  const NVR_ADDRESS = "192.0.2.1";
+  const NVR_MAC = "AABBCCDDEE01";
+  const CAMERA_MAC = "AABBCCDDEE02";
+
+  const IDENTITY_CATEGORIES = [{ description: "Camera Options", name: "Camera" }];
+
+  const IDENTITY_OPTIONS = {
+
+    Camera: [
+
+      { default: false, description: "Enable HKSV recording.", name: "Hksv", scopes: [ "controller", "device" ] }
+    ]
+  };
+
+  const IDENTITY_CATALOG = {
+
+    ...buildCatalogIndex(IDENTITY_CATEGORIES, IDENTITY_OPTIONS),
+
+    validators: { isController: (device) => device?.modelKey === "nvr", validOption: () => true, validOptionCategory: () => true }
+  };
+
+  const CONTROLLERS = [{ address: NVR_ADDRESS, name: "Doorbell NVR", serialNumber: NVR_ADDRESS }];
+
+  const DEVICES = [
+
+    { firmwareRevision: "4.0", manufacturer: "Ubiquiti", model: "NVR", modelKey: "nvr", name: "Doorbell NVR", serialNumber: NVR_MAC },
+    { firmwareRevision: "4.0", manufacturer: "Ubiquiti", model: "G4", modelKey: "camera", name: "Front Door", serialNumber: CAMERA_MAC }
+  ];
+
+  const CONTROLLER_PAGE = { controllerId: NVR_ADDRESS, deviceId: NVR_MAC, kind: "device" };
+  const CHILD_PAGE = { controllerId: NVR_ADDRESS, deviceId: CAMERA_MAC, kind: "device" };
+
+  // Mount the view over the two-identity catalog at the given scope with its category expanded. The device list lands stamped with the navigation identity, which
+  // is what a real fetch carries, so the derivation has to bridge the two serials itself.
+  const mountPage = ({ configuredOptions = [], scope }) => {
+
+    const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+    const configTable = document.createElement("div");
+    const controller = new AbortController();
+
+    configTable.id = "configTable";
+    document.body.appendChild(configTable);
+
+    store.dispatch({ catalog: IDENTITY_CATALOG, configuredOptions, controllers: CONTROLLERS, mode: "controller-based", type: "model:loaded" });
+    store.dispatch({ controllerId: NVR_ADDRESS, type: "devices:requested" });
+    store.dispatch({ controllerId: NVR_ADDRESS, devices: DEVICES, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+    store.dispatch({ scope, type: "scope:changed" });
+
+    mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
+
+    const details = configTable.querySelector("details[data-category='Camera']");
+
+    details.open = true;
+    details.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    return { configTable, details, store };
+  };
+
+  test("the controller's own page names controller scope and reads its entry as set here", () => {
+
+    using _dom = createTestDom();
+
+    const { details } = mountPage({ configuredOptions: ["Enable.Camera.Hksv." + NVR_MAC], scope: CONTROLLER_PAGE });
+    const checkbox = details.querySelector("[id='row-Camera.Hksv'] input[type='checkbox']");
+
+    assert.equal(details.querySelector(".fo-category-title").textContent, "Camera Options (Controller-specific)");
+    assert.equal(checkbox.checked, true);
+    assert.equal(checkbox.indeterminate, false, "the entry was written on this page, so nothing is borrowed from above");
+    assert.equal(checkbox.readOnly, false);
+    assert.equal(details.querySelector("[id='row-Camera.Hksv'] label").classList.contains("text-info"), true, "colored as a modified entry set at this scope");
+  });
+
+  test("a child device's page shows the controller's entry as inherited", () => {
+
+    using _dom = createTestDom();
+
+    const { details } = mountPage({ configuredOptions: ["Enable.Camera.Hksv." + NVR_MAC], scope: CHILD_PAGE });
+    const checkbox = details.querySelector("[id='row-Camera.Hksv'] input[type='checkbox']");
+
+    assert.equal(details.querySelector(".fo-category-title").textContent, "Camera Options (Device-specific)");
+    assert.equal(checkbox.checked, true, "the controller's value reaches the device beneath it");
+    assert.equal(checkbox.indeterminate, true, "and reads as borrowed rather than set here");
+    assert.equal(checkbox.readOnly, true);
+    assert.equal(details.querySelector("[id='row-Camera.Hksv'] label").classList.contains("text-success"), true, "colored as sourced from the controller");
+  });
+
+  test("unchecking an inherited row on a child device writes the explicit device-scope disable", (t) => {
+
+    using _dom = createTestDom();
+
+    // The upstream probe has to find the controller's entry to know that a clear would leave the option enabled by inheritance. Finding it takes the same derived
+    // identity the row's own inherit treatment came from, so this is the gesture that proves the transitions are asking about the right serial.
+    const { details, store } = mountPage({ configuredOptions: ["Enable.Camera.Hksv." + NVR_MAC], scope: CHILD_PAGE });
+    const dispatch = t.mock.method(store, "dispatch");
+
+    details.querySelector("[id='row-Camera.Hksv'] input[type='checkbox']").click();
+
+    const [action] = dispatch.mock.calls[0].arguments;
+
+    assert.equal(action.type, "option:set", "an explicit disable, not a clear that would fall back to the controller's enable");
+    assert.equal(action.args.enabled, false);
+    assert.equal(action.args.id, CAMERA_MAC, "written at the device the page is editing");
+    assert.equal(store.state.configuredOptions.includes("Disable.Camera.Hksv." + CAMERA_MAC), true, "the device-scope disable persists beneath the controller entry");
+    assert.equal(store.state.configuredOptions.includes("Enable.Camera.Hksv." + NVR_MAC), true, "and the controller's own entry is left alone");
+  });
+
+  test("a toggle on the controller's own page writes at the controller's scoping identity", (t) => {
+
+    using _dom = createTestDom();
+
+    const { details, store } = mountPage({ scope: CONTROLLER_PAGE });
+    const dispatch = t.mock.method(store, "dispatch");
+
+    details.querySelector("[id='row-Camera.Hksv'] input[type='checkbox']").click();
+
+    const [action] = dispatch.mock.calls[0].arguments;
+
+    assert.equal(action.args.id, NVR_MAC, "the write keys off the selected device, which on this page carries the controller's own serial");
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Camera.Hksv." + NVR_MAC]);
+  });
+});
+
 describe("mountOptionsView - filter visibility", () => {
 
   test("filter:changed with mode=modified hides unmodified rows", () => {

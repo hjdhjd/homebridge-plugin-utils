@@ -110,11 +110,12 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is pinned to
  *   global for the page's life (the reducer refuses any other scope in this mode), and the {@link FeatureOptionsConfig.infoPanel} callback always receives an undefined
  *   device. Mutually exclusive with `getControllers`, an explicitly supplied `getDevices`, and `statusPanel` - each throws a TypeError at construction. The `sidebar`
- *   labels and `ui.isController` are inert here (isController's only consumer is the nav view's grouping filter, which never mounts), while `ui.validOption` and
- *   `ui.validOptionCategory` stay active and receive an undefined device. This is a UI declaration a plugin adopts only when its runtime evaluates options at global
- *   scope exclusively; any device- or controller-scoped entries already in the config remain there untouched and are not editable through this page. The page markup
- *   must keep the revealed content regions (`deviceStatsContainer`, `optionsContainer`, `search`) OUTSIDE the `#sidebar` and `#headerInfo` subtrees (the standard
- *   template's sibling layout): a region nested under a permanently-hidden ancestor cannot become visible, and the reveal path warns by name when it detects that shape.
+ *   labels and `ui.isController` are inert here (its consumers - the nav view's grouping filter and the projection's scoping-identity derivation - never run in this
+ *   mode: the nav never mounts, and the derivation short-circuits with no controller ever in scope), while `ui.validOption` and `ui.validOptionCategory` stay active
+ *   and receive an undefined device. This is a UI declaration a plugin adopts only when its runtime evaluates options at global scope exclusively; any device- or
+ *   controller-scoped entries already in the config remain there untouched and are not editable through this page. The page markup must keep the revealed content
+ *   regions (`deviceStatsContainer`, `optionsContainer`, `search`) OUTSIDE the `#sidebar` and `#headerInfo` subtrees (the standard template's sibling layout): a
+ *   region nested under a permanently-hidden ancestor cannot become visible, and the reveal path warns by name when it detects that shape.
  * @property {(args: { device: (Device|undefined), panel: HTMLElement, signal: AbortSignal }) => void} [infoPanel] - Renders the device-stats region for the current
  *   selection. It receives ONE options bag: `device` is the selection (undefined at global scope, and always undefined under
  *   {@link FeatureOptionsConfig.globalOnly}), `panel` is the `#deviceStatsContainer` element to render into, and `signal` is the mount's lifecycle signal. A hook
@@ -156,7 +157,8 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   Defaults to `[]`, so an unconfigured skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
  * @property {Object} [ui] - UI validation and display options.
  * @property {number} [ui.controllerRetryEnableDelayMs=5000] - Interval before enabling a retry button when connecting to a controller.
- * @property {Function} [ui.isController] - Validates if a device is a controller.
+ * @property {Function} [ui.isController] - Identifies the controller-as-device row in a device list. The nav view groups the sidebar by it, and the projection
+ *   derives the controller's scoping identity - the serial its controller-scope entries are keyed by - from the row it names.
  * @property {Function} [ui.validOption] - Validates if an option should display for a device.
  * @property {Function} [ui.validOptionCategory] - Validates if a category should display for a device.
  */
@@ -1175,8 +1177,8 @@ export class webUiFeatureOptions {
       mountOptionsView({ configTable, platform: () => this.#session?.platform?.platform, signal, store });
     }
 
-    // The nav view does not mount in global-only mode: with scope pinned to global there is no controller or device list to navigate, and its grouping filter (the sole
-    // consumer of ui.isController) is inert here.
+    // The nav view does not mount in global-only mode: with scope pinned to global there is no controller or device list to navigate, so its grouping filter is inert
+    // here, as is the projection's scoping-identity derivation, which also consults ui.isController and short-circuits with no controller ever in scope.
     if(controllersContainer && devicesContainer && !this.#config.globalOnly) {
 
       mountNavView({

@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { configIndex, modelLoaded, projection, selectedController, selectedControllerId, selectedDevice, selectedDeviceId } from "./selectors.mjs";
+import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId } from "./selectors.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
@@ -511,6 +511,229 @@ describe("projection - the declared-scopes view gate", () => {
     const state = scopedState({ scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" } });
 
     assert.deepEqual(projection(state).categories.map((c) => c.name), ["Scoped"], "Account holds only a global-declared option, so a device view drops the header");
+  });
+});
+
+describe("projection - the presented view scope", () => {
+
+  // A controller's own options page is the shape a plugin whose device list leads with the controller-as-device produces: one serial fills both scope slots, and
+  // every edit made there is stored at that serial. The catalog declares an option at both levels, one at the controller level alone, and one that declares
+  // nothing, so a single page carries an entry resolved at each step the walk can answer at.
+  const PAGE_CATEGORIES = [{ description: "Page Options", name: "Page" }];
+
+  const PAGE_OPTIONS = {
+
+    Page: [
+
+      { default: false, description: "Controller and device option.", name: "Dual", scopes: [ "controller", "device" ] },
+      { default: false, description: "Controller-level option.", name: "ControllerOnly", scopes: ["controller"] },
+      { default: false, description: "Option that declares nothing.", name: "Anywhere" }
+    ]
+  };
+
+  const CONTROLLER = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+
+  // The controller leads its own device list, which is the arrangement that puts a controller-as-device page on screen at all.
+  const DEVICES = [
+
+    { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Controller A", serialNumber: "ctrl-a" },
+    { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }
+  ];
+
+  const CONTROLLER_PAGE = { controllerId: "ctrl-a", deviceId: "ctrl-a", kind: "device" };
+  const DEVICE_PAGE = { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" };
+
+  // Build a ready state over the page catalog at the requested scope. The device list lands through the request/outcome pairing the reducer guards.
+  const pageState = ({ configuredOptions = [], controllers = [CONTROLLER], mode = "controller-based", scope }) => {
+
+    const catalog = {
+
+      ...buildCatalogIndex(PAGE_CATEGORIES, PAGE_OPTIONS),
+
+      validators: { isController: (device) => device?.serialNumber === "ctrl-a", validOption: () => true, validOptionCategory: () => true }
+    };
+
+    const base = reducer(initialState(), { catalog, configuredOptions, controllers, mode, type: "model:loaded" });
+    const requested = reducer(base, { controllerId: "ctrl-a", type: "devices:requested" });
+    const withDevices = reducer(requested, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    return reducer(withDevices, { scope, type: "scope:changed" });
+  };
+
+  const entryScope = (state, optionName) => projection(state).categories[0].entries.find((e) => e.name === optionName).scope;
+
+  test("a page whose selected device is the in-scope controller presents at controller scope", () => {
+
+    assert.equal(projection(pageState({ scope: CONTROLLER_PAGE })).viewScope, "controller");
+  });
+
+  test("entries stored at the controller's own serial report controller scope, whichever step resolution reached them at", () => {
+
+    const state = pageState({
+
+      configuredOptions: [ "Enable.Page.Dual.ctrl-a", "Enable.Page.ControllerOnly.ctrl-a", "Enable.Page.Anywhere" ],
+      scope: CONTROLLER_PAGE
+    });
+
+    // The dual-declared option is the one resolution answers at the device step, because the serial it was asked about is the controller's own. The entry governs
+    // the controller and everything beneath it either way, so the page reports it as what it is.
+    assert.equal(entryScope(state, "Dual"), "controller", "an entry resolved at the device step against the controller's serial is a controller entry");
+    assert.equal(entryScope(state, "ControllerOnly"), "controller", "a controller-declared option already resolves at the controller step and passes through");
+    assert.equal(entryScope(state, "Anywhere"), "global", "a genuinely inherited entry keeps the scope it resolved at");
+  });
+
+  test("a real device page under the same controller is untouched: device scope, and entry scopes as resolution reported them", () => {
+
+    const state = pageState({
+
+      configuredOptions: [ "Enable.Page.Dual.dev-a", "Enable.Page.ControllerOnly.ctrl-a", "Enable.Page.Anywhere" ],
+      scope: DEVICE_PAGE
+    });
+
+    assert.equal(projection(state).viewScope, "device");
+    assert.equal(entryScope(state, "Dual"), "device", "the device's own entry stays a device entry");
+    assert.equal(entryScope(state, "ControllerOnly"), "controller", "the controller's entry is inherited here");
+    assert.equal(entryScope(state, "Anywhere"), "global");
+  });
+
+  test("a device-only-mode page keeps device scope even for a device the plugin calls a controller", () => {
+
+    // With no controller in scope there is no serial to be equal to, so a controller-flagged device's edits are genuine device-scope entries and keep the device
+    // presentation. The validator here calls ctrl-a a controller, which is exactly the flag the predicate deliberately does not read.
+    const state = pageState({
+
+      configuredOptions: ["Enable.Page.Dual.ctrl-a"],
+      controllers: [],
+      mode: "device-only",
+      scope: { controllerId: null, deviceId: "ctrl-a", kind: "device" }
+    });
+
+    assert.equal(projection(state).viewScope, "device");
+    assert.equal(entryScope(state, "Dual"), "device");
+  });
+
+  test("the global view and a controller's transient view pass their own kind through", () => {
+
+    assert.equal(projection(pageState({ scope: { kind: "global" } })).viewScope, "global");
+    assert.equal(projection(pageState({ scope: { controllerId: "ctrl-a", kind: "controller" } })).viewScope, "controller");
+  });
+
+  test("which options the page offers is unchanged - admission still answers to the raw scope tag", () => {
+
+    // The presented scope moves the page's SEMANTICS, never its row set. A controller page admits what a device view admits, because admission is a
+    // declared-scopes question about the storage step that matches...reading the presented scope here would drop every device-only-declared option off the page.
+    const names = (scope) => projection(pageState({ scope })).categories.flatMap((c) => c.entries).map((e) => e.name);
+
+    assert.deepEqual(names(CONTROLLER_PAGE), names(DEVICE_PAGE), "a controller page and a device page offer the same rows");
+  });
+});
+
+describe("the controller's scoping identity", () => {
+
+  // The two-identity shape a plugin produces when its controller list must render before any connection: the sidebar link is named by the configured address,
+  // while the entries the connection reveals are keyed by the hardware serial the device list stamps on the controller's own row. Everything here models that
+  // split, so a derivation that quietly used the link's serial would fail every row below.
+  const NVR_ADDRESS = "192.0.2.1";
+  const NVR_MAC = "AABBCCDDEE01";
+  const CAMERA_MAC = "AABBCCDDEE02";
+
+  const CONTROLLERS = [{ address: NVR_ADDRESS, name: "Doorbell NVR", serialNumber: NVR_ADDRESS }];
+
+  // The controller's own row carries the marker its validator reads, and a serial that is nothing like the link's.
+  const DEVICES = [
+
+    { firmwareRevision: "4.0", manufacturer: "Ubiquiti", model: "NVR", modelKey: "nvr", name: "Doorbell NVR", serialNumber: NVR_MAC },
+    { firmwareRevision: "4.0", manufacturer: "Ubiquiti", model: "G4", modelKey: "camera", name: "Front Door", serialNumber: CAMERA_MAC }
+  ];
+
+  const IDENTITY_CATEGORIES = [{ description: "Camera Options", name: "Camera" }];
+
+  const IDENTITY_OPTIONS = {
+
+    Camera: [
+
+      { default: false, description: "Enable HKSV recording.", name: "Hksv", scopes: [ "controller", "device" ] }
+    ]
+  };
+
+  const CONTROLLER_PAGE = { controllerId: NVR_ADDRESS, deviceId: NVR_MAC, kind: "device" };
+  const CHILD_PAGE = { controllerId: NVR_ADDRESS, deviceId: CAMERA_MAC, kind: "device" };
+
+  // Build a ready state over the two-identity catalog. `listOwner` is the controller the loaded device list belongs to, stamped through the request/outcome
+  // pairing exactly as a fetch does, which is what lets a test model the window where the scope has moved but the new list has not landed.
+  const identityState = ({ configuredOptions = [], devices = DEVICES, isController = (device) => device?.modelKey === "nvr", listOwner = NVR_ADDRESS, scope }) => {
+
+    const catalog = {
+
+      ...buildCatalogIndex(IDENTITY_CATEGORIES, IDENTITY_OPTIONS),
+
+      validators: { isController, validOption: () => true, validOptionCategory: () => true }
+    };
+
+    const base = reducer(initialState(), { catalog, configuredOptions, controllers: CONTROLLERS, mode: "controller-based", type: "model:loaded" });
+    const requested = reducer(base, { controllerId: listOwner, type: "devices:requested" });
+    const withDevices = reducer(requested, { controllerId: listOwner, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    return reducer(withDevices, { scope, type: "scope:changed" });
+  };
+
+  const hksvEntry = (state) => projection(state).categories[0].entries.find((e) => e.name === "Hksv");
+
+  test("comes from the controller-as-device row the plugin's isController names, not from the sidebar link", () => {
+
+    assert.equal(scopingControllerId(identityState({ scope: CONTROLLER_PAGE })), NVR_MAC);
+    assert.equal(scopingControllerId(identityState({ scope: CHILD_PAGE })), NVR_MAC, "a child device's page resolves against the same controller identity");
+  });
+
+  test("is null when no controller is in scope", () => {
+
+    assert.equal(scopingControllerId(identityState({ scope: { kind: "global" } })), null, "the global view has no controller");
+    assert.equal(scopingControllerId(identityState({ scope: { controllerId: null, deviceId: CAMERA_MAC, kind: "device" } })), null, "device-only mode has none either");
+  });
+
+  test("stands in with the navigation identity while the in-scope controller's device list has not landed", () => {
+
+    // The list on hand belongs to a different controller, so it cannot answer for this one. The navigation identity is coarser for the moment and is the only
+    // answer available that is not some other controller's.
+    const state = identityState({ listOwner: "192.0.2.9", scope: CONTROLLER_PAGE });
+
+    assert.equal(scopingControllerId(state), NVR_ADDRESS);
+  });
+
+  test("stands in with the navigation identity when no row answers to isController", () => {
+
+    // A plugin that supplies no validator gets the framework default, which calls nothing a controller...this is the path that keeps such a plugin on exactly the
+    // identity it has always resolved by.
+    assert.equal(scopingControllerId(identityState({ isController: () => false, scope: CONTROLLER_PAGE })), NVR_ADDRESS);
+  });
+
+  test("is the one shared serial for a plugin whose two identities coincide", () => {
+
+    const devices = [
+
+      { firmwareRevision: "1.0", manufacturer: "X", model: "Y", modelKey: "nvr", name: "Controller", serialNumber: NVR_ADDRESS },
+      { firmwareRevision: "1.0", manufacturer: "X", model: "Y", modelKey: "camera", name: "Device", serialNumber: CAMERA_MAC }
+    ];
+
+    assert.equal(scopingControllerId(identityState({ devices, scope: { controllerId: NVR_ADDRESS, deviceId: NVR_ADDRESS, kind: "device" } })), NVR_ADDRESS);
+  });
+
+  test("carries the controller's own page to controller scope even though the link's serial matches nothing", () => {
+
+    const state = identityState({ configuredOptions: ["Enable.Camera.Hksv." + NVR_MAC], scope: CONTROLLER_PAGE });
+
+    assert.equal(projection(state).viewScope, "controller", "the page presents at the scope its edits land at");
+    assert.equal(hksvEntry(state).scope, "controller", "and its own entry reports the scope it governs");
+  });
+
+  test("resolves a child device's inheritance from the controller's entry", () => {
+
+    const state = identityState({ configuredOptions: ["Enable.Camera.Hksv." + NVR_MAC], scope: CHILD_PAGE });
+    const entry = hksvEntry(state);
+
+    assert.equal(projection(state).viewScope, "device", "a child device's page is a device page");
+    assert.equal(entry.scope, "controller", "the controller's entry reaches the device beneath it");
+    assert.equal(entry.enabled, true, "and carries its value there");
   });
 });
 

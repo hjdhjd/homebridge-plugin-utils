@@ -45,6 +45,10 @@ export const modelLoaded = (state) => {
 /**
  * Extract the controller serial from the scope tag, or null when no controller is in context. Pure helper - one-line tag read, not memoized.
  *
+ * This is the controller's NAVIGATION identity: the serial the plugin's `getControllers` hook put on the sidebar link, which is what names, highlights, and
+ * caches the controller as a place in the UI. A consumer that resolves configuration through the scope hierarchy wants {@link scopingControllerId} instead -
+ * the serial controller-scope entries are keyed by, which a plugin may legitimately spell differently.
+ *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {string | null} The controller serial when the scope is controller-based, null otherwise.
  */
@@ -194,6 +198,55 @@ export const selectedController = memoize({
 });
 
 /**
+ * Resolve the serial that the in-scope controller's configuration entries are keyed by, or null when no controller is in scope. Memoized on `(catalog, devices,
+ * devicesControllerId, scope)` - every input the derivation reads.
+ *
+ * A plugin may carry two distinct controller identities, and the framework holds both. The NAVIGATION identity is the serial its `getControllers` hook puts on
+ * the sidebar link, which {@link selectedControllerId} reads off the scope tag; it has to exist before any connection succeeds, since a controller the page
+ * cannot reach still has to appear in the list, so a plugin often names it by something configuration alone supplies, such as the address. The SCOPING identity
+ * is the serial its controller-scope entries are keyed by, which the connection is what reveals - the same serial the plugin stamps on the controller's own row
+ * in the device list.
+ *
+ * The framework recovers the second without asking the plugin for anything it does not already declare. The loaded device list carries the controller-as-device
+ * row, and `ui.isController` is the plugin's own statement of which row that is, so that row's serialNumber IS the scoping identity. Everything that resolves
+ * configuration reads it: the scope walk and the dependency probe in {@link projection}, the controller-page predicate, and the tri-state machine's
+ * upstream-override probe. Everything that names or highlights the controller as a place reads the navigation identity, because those consumers are addressing
+ * the sidebar rather than the configuration.
+ *
+ * The device-list guard is what keeps the derivation honest across a navigation: the list is consulted only while it belongs to the controller currently in
+ * scope, which `devicesControllerId` answers. In the window where a click has moved the scope but the incoming list has not landed, the navigation identity
+ * stands in...a momentarily coarser answer, and never some other controller's.
+ *
+ * The fallbacks are the compatibility contract. No controller in scope - the global view, device-only mode, global-only mode - is null, which is also why a
+ * page with no controller machinery never reaches `isController` at all. No controller-as-device row - a plugin that supplies no validator, or a device list
+ * that carries none - is the navigation identity, which is the serial a single-identity plugin resolves by anyway, so such a plugin cannot observe this
+ * derivation. When more than one row answers to `isController`, the first in list order wins: one controller in scope, one page, one identity.
+ *
+ * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
+ * @returns {string | null} The controller's scoping identity, or null when no controller is in scope.
+ */
+export const scopingControllerId = memoize({
+
+  compute: (state) => {
+
+    const navigationId = selectedControllerId(state);
+
+    if(navigationId === null) {
+
+      return null;
+    }
+
+    if(state.devicesControllerId !== navigationId) {
+
+      return navigationId;
+    }
+
+    return state.devices.find((device) => state.catalog.validators.isController(device))?.serialNumber ?? navigationId;
+  },
+  slices: [ (s) => s.catalog, (s) => s.devices, (s) => s.devicesControllerId, (s) => s.scope ]
+});
+
+/**
  * @typedef {Object} ProjectionEntry
  * @property {string} description - The option's display description.
  * @property {boolean} enabled - The resolved enabled state at the highest-precedence scope where the option was found (or the catalog default at scope "none").
@@ -203,7 +256,9 @@ export const selectedController = memoize({
  * @property {string} name - The option's catalog name (without the category prefix).
  * @property {import("../featureOptions.js").FeatureOptionEntry} option - The raw catalog entry for the option.
  * @property {boolean} requiresParentBadge - The "requires parent" badge applies: option is visible, grouped, and its parent is currently disabled.
- * @property {import("../featureOptions.js").OptionScope} scope - The scope at which the option resolved ("device" / "controller" / "global" / "none").
+ * @property {import("../featureOptions.js").OptionScope} scope - The scope at which the option resolved ("device" / "controller" / "global" / "none"). On a
+ *           controller's own options page - where the selected device IS the in-scope controller - an entry stored at that serial reports "controller" whichever
+ *           step resolution reached it at, because the serial is the controller's and the entry governs every device beneath it.
  * @property {string | undefined} value - The resolved value for value-centric options when enabled; undefined for booleans and disabled options.
  * @property {boolean} visible - The option's row should be displayed under the current search query, filter mode, and dependency state.
  */
@@ -230,6 +285,8 @@ export const selectedController = memoize({
  * @typedef {Object} Projection
  * @property {readonly ProjectionCategory[]} categories - Active categories in catalog order. Categories with zero active options are omitted.
  * @property {ProjectionCounts} counts - Aggregate counts across the active option set.
+ * @property {"controller" | "device" | "global"} viewScope - The scope the page presents at, which is the scope an edit made here lands at. It is the scope tag's
+ *           own kind everywhere except a controller's options page, where the selected device is the in-scope controller and the view presents as "controller".
  */
 
 /**
@@ -252,6 +309,9 @@ export const selectedController = memoize({
  *
  * `requiresParentBadge` collapses the combined predicate `visible && isGrouped && !dependencyMet` into one boolean so rendering code does not have to reconstruct
  * the rule from the raw fields.
+ *
+ * The projection also settles what scope the page presents at ({@link Projection.viewScope}) and reports each entry's scope in those terms, so the header suffix,
+ * the inherit treatment, and the row colors all describe the scope an edit here actually lands at rather than the tag the navigation happened to produce.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {Projection} The computed projection.
@@ -302,11 +362,24 @@ const computeProjection = (state) => {
   const { catalog, filter } = state;
   const idx = configIndex(state);
   const device = selectedDevice(state);
-  const controllerId = selectedControllerId(state) ?? undefined;
+  const controllerId = scopingControllerId(state) ?? undefined;
   const deviceId = selectedDeviceId(state) ?? undefined;
   const query = filter.query.toLowerCase();
   const filterActive = (query.length > 0) || (filter.mode === "modified");
   const viewKind = state.scope.kind;
+
+  // The page is the controller's own options page exactly when the selected device carries the controller's scoping identity, which {@link scopingControllerId}
+  // derives from the controller-as-device row the plugin's isController declares. That equality is the definition of "edits here land at controller scope" rather
+  // than a test for it: a write keys off the selected device's serial, so the edit lands on the very key controller-scope entries use precisely when the two
+  // agree, and resolution answers that key at the controller step for every device beneath it. Every other controller read in this function - the scope walk, the
+  // dependency probe - asks the same resolution question, which is why one identity serves all three.
+  const controllerPage = (deviceId !== undefined) && (deviceId === controllerId);
+
+  // The presented scope and the raw tag answer different questions, so both live on this path. What the page PRESENTS is what the header suffix, the inherit
+  // treatment, and the row colors read, and that is the scope an edit lands at. Which options the page OFFERS stays keyed to the raw tag below, because admission
+  // is a declared-scopes question about the storage step that matches, refined by the plugin's own validator - folding the controller identity into it would add
+  // and remove rows rather than describe the rows already there.
+  const viewScope = controllerPage ? "controller" : viewKind;
 
   const categories = [];
   const counts = { grouped: 0, modified: 0, total: 0, visible: 0 };
@@ -341,6 +414,12 @@ const computeProjection = (state) => {
       const optionIsGrouped = option.group !== undefined;
       const optionIsModified = resolved.scope !== "none";
       const optionDependencyMet = isDependencyMet({ catalog, configIndex: idx, controller: controllerId, device: deviceId, option: expandedName });
+
+      // The entry's scope as this page means it. On a controller's own page an entry the walk answered at the device step is stored at the controller's serial:
+      // "device" is resolution's view-relative answer to being asked about that serial first, while the entry itself governs the controller and everything under
+      // it. The projection is where the page's semantics are assembled, so the row reports the scope its entry actually holds...an entry resolved at the
+      // controller, at global, or nowhere at all already says what it means and passes through.
+      const entryScope = (controllerPage && (resolved.scope === "device")) ? "controller" : resolved.scope;
 
       // Visibility cascade: modified filter, search query, then dependency-hide (only when neither filter nor search is active).
       let visible = true;
@@ -399,7 +478,7 @@ const computeProjection = (state) => {
         name: option.name,
         option,
         requiresParentBadge: visible && optionIsGrouped && !optionDependencyMet,
-        scope: resolved.scope,
+        scope: entryScope,
         value,
         visible
       });
@@ -420,5 +499,5 @@ const computeProjection = (state) => {
     });
   }
 
-  return { categories, counts };
+  return { categories, counts, viewScope };
 };

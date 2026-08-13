@@ -93,6 +93,18 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 
 /**
  * @typedef {Object} FeatureOptionsConfig
+ * @property {(args: { controller: (Controller|null), panel: HTMLElement, signal: AbortSignal }) => void} [connectionErrorPanel] - Renders plugin-owned content in the
+ *   connection-error view, beneath the framework's error copy and retry affordance. This is the surface that reaches a selected-but-unreachable controller: the
+ *   {@link FeatureOptionsConfig.infoPanel} and {@link FeatureOptionsConfig.statusPanel} regions render only after a successful device fetch, which is exactly what a
+ *   controller with wrong credentials or a changed address never completes. The framework's own affordances stay primary - the retry flow remains the framework's,
+ *   and the hook neither replaces nor suppresses it. It receives ONE options bag: `controller` is the selected controller entry, the same object this plugin's
+ *   {@link FeatureOptionsConfig.getControllers} hook produced, or null when no controller is in scope (a config-sync failure, a controller-list failure, or global
+ *   scope); `panel` is a plugin-owned element the framework positions after its own error block and never writes into; and `signal` is the mount's lifecycle signal.
+ *   The same `panel` identity arrives on every render of one mount, so plugin content persists across error re-renders, and `signal` carries the same per-mount
+ *   semantics as `infoPanel` - one identity for the mount's life, aborted on navigate-away or teardown - so a hook that registers listeners keys its once-ness on
+ *   that signal and scopes its registrations to it. The hook is re-invoked on every error render of a mount (a config-sync failure, a controller fetch failure,
+ *   switching controllers while an error is showing), and a retry click reboots the page cycle through `show()`, so a failed retry re-invokes the hook in a fresh
+ *   mount with a fresh panel and a fresh signal.
  * @property {(args: { config: Object }) => Promise<ControllerListResult>} [getControllers] - Handler resolving the plugin's {@link ControllerListResult}.
  * @property {(controller: (Controller|null)) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's {@link DeviceListResult}.
  * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is pinned to
@@ -261,6 +273,7 @@ export class webUiFeatureOptions {
 
     const {
 
+      connectionErrorPanel = undefined,
       getControllers = undefined,
       getDevices = undefined,
       globalOnly = false,
@@ -325,6 +338,7 @@ export class webUiFeatureOptions {
 
     this.#config = {
 
+      connectionErrorPanel,
       controllerRetryEnableDelayMs: ui.controllerRetryEnableDelayMs ?? 5000,
       getControllers,
 
@@ -1109,6 +1123,8 @@ export class webUiFeatureOptions {
       }
 
       mountConnectionErrorView({
+
+        connectionErrorPanel: this.#config.connectionErrorPanel,
 
         // Retry routes through show(), which owns teardown: its internal `await this.hide()` flushes any debounced edit before aborting the page signal, so a retry
         // cannot drop a pending write. We deliberately do not call cleanup() here - cleanup() aborts the signal without flushing, which is exactly the drop we avoid.

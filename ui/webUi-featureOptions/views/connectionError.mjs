@@ -6,6 +6,7 @@
 
 import { buildRecoveryButton, createElement, delay } from "../utils.mjs";
 import { effect } from "../store.mjs";
+import { selectedController } from "../selectors.mjs";
 
 /**
  * Mount the connection-error view.
@@ -26,18 +27,36 @@ import { effect } from "../store.mjs";
  *
  * The retry button's click invokes the caller-supplied `onRetry` callback (typically the orchestrator's cleanup + show() sequence).
  *
+ * An optional `connectionErrorPanel` hook docks plugin-owned content beneath that error block - the surface a plugin uses to offer repair or removal for the very
+ * controller the page cannot reach. The framework's own affordances stay primary: the retry flow is entirely the framework's, and the hook neither replaces nor
+ * suppresses it.
+ *
+ * The hook receives one options bag, minted fresh on each error render. What is per-render and what is per-mount inside that bag differ, on the same reasoning the
+ * device-info view's renderer follows: `controller` is per-render data, since the selection can move between error renders of a single mount, while `panel` and
+ * `signal` are the mount's own identities. The same element arrives on every error render of one mount, so whatever the plugin put inside it survives an error
+ * re-render (the framework rebuilds its own error block each time and re-docks the panel after it, never writing into it), and the same AbortSignal arrives too, so a
+ * hook that must register a listener exactly once despite being re-invoked per render keys that once-ness on the signal and scopes the registration to it. A retry
+ * click reboots the page cycle through `show()`, so a failed retry re-invokes the hook in a fresh mount with a fresh panel and a fresh signal.
+ *
  * @param {Object} args
+ * @param {((args: { controller: (import("../state.mjs").Controller | null), panel: HTMLElement, signal: AbortSignal }) => void) | undefined} args.connectionErrorPanel -
+ *                                                          Optional plugin-provided renderer for the slot beneath the error block. When omitted, no slot is created.
  * @param {() => Promise<void>} args.onRetry - Callback invoked when the retry button is clicked. The orchestrator passes its restart routine.
  * @param {number} [args.retryDelayMs=5000] - Milliseconds before the retry button becomes enabled.
  * @param {HTMLElement} args.root - The `#headerInfo` container.
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountConnectionErrorView = ({ onRetry, retryDelayMs = 5000, root, signal, store }) => {
+export const mountConnectionErrorView = ({ connectionErrorPanel = undefined, onRetry, retryDelayMs = 5000, root, signal, store }) => {
 
   // One active retry-window controller at a time. Aborting the parent signal aborts it; transitioning out of the error state also aborts it so a partially-armed
   // retry button does not linger after the user navigates away.
   let retryAbort = null;
+
+  // The plugin slot, minted on the first error render that has a hook to call and held for the rest of the mount. One element per mount is what lets plugin content
+  // outlive an error re-render: the framework rebuilds its own error block each time, while this element is re-docked with its children intact. Stays null for the
+  // whole mount when no hook is configured, so an unconfigured page builds no slot at all.
+  let pluginPanel = null;
 
   // The last status object this view acted on. The reducer mints a new status object only on a genuine transition, so a `devices:loaded` that did not move the status
   // leaves this reference unchanged and the effect below skips - a dropped or successful device outcome neither tears down an armed retry window nor restarts its
@@ -72,6 +91,18 @@ export const mountConnectionErrorView = ({ onRetry, retryDelayMs = 5000, root, s
 
       retryAbort = new AbortController();
       renderError({ guidance: status.guidance, headline: status.headline, message: status.message, onRetry, retryDelayMs, retrySignal: retryAbort.signal, root });
+
+      if(!connectionErrorPanel) {
+
+        return;
+      }
+
+      // Dock the plugin slot after the framework's error block and hand it over already attached. renderError's replaceChildren has just rebuilt the root, so this
+      // re-appends the same element on every error render rather than creating a new one - the plugin's content rides along on the element and never needs rebuilding.
+      pluginPanel ??= createElement("div");
+
+      root.appendChild(pluginPanel);
+      connectionErrorPanel({ controller: selectedController(store.state), panel: pluginPanel, signal });
     },
     signal,
     store

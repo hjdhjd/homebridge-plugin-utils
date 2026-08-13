@@ -1543,6 +1543,59 @@ describe("webUiFeatureOptions - device info panel", () => {
   });
 });
 
+describe("webUiFeatureOptions - connection-error plugin panel", () => {
+
+  test("a configured connectionErrorPanel receives its slot docked after the error block, carrying the mount's signal", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const bags = [];
+    const connectionErrorPanel = (bag) => {
+
+      bags.push(bag);
+      bag.panel.replaceChildren(document.createElement("form"));
+    };
+
+    // A reported controller-list failure is the page's shortest route to the connection-error view, and it is one of the cases whose bag carries a null controller:
+    // the fetch that would have named one is the fetch that failed.
+    const orchestrator = new webUiFeatureOptions({
+
+      connectionErrorPanel,
+      getControllers: async () => ({ controllers: [], error: "Connection refused: 192.0.2.1:443" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(bags.length, 1, "the error render invoked the plugin's hook");
+
+    const [bag] = bags;
+
+    assert.deepEqual(Object.keys(bag).toSorted(), [ "controller", "panel", "signal" ], "the bag carries exactly controller, panel, and signal");
+    assert.equal(bag.controller, null, "a controller-list failure leaves no controller in scope");
+    assert.ok(bag.panel === skeleton.headerInfo.lastElementChild, "the plugin's slot is docked after the framework's error block");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the framework's own retry affordance renders alongside it, unsuppressed");
+    assert.ok(skeleton.headerInfo.querySelector("form"), "the plugin's own content reached the page");
+    assert.ok(bag.signal instanceof AbortSignal, "the bag carries the mount's lifecycle signal");
+    assert.equal(bag.signal.aborted, false, "which is live while the mount is");
+
+    orchestrator.cleanup();
+
+    assert.equal(bag.signal.aborted, true, "the bag's signal aborts with the mount, so a hook that scoped anything to it is released");
+  });
+});
+
 describe("webUiFeatureOptions - detached-operation error contract", () => {
 
   // Option persistence is fire-and-forget: a checkbox change dispatches an option mutation that the persist effect's coalescing drain writes to disk via

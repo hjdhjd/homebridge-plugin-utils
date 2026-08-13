@@ -1523,7 +1523,7 @@ describe("webUiFeatureOptions - device info panel", () => {
 
     assert.ok(bags.length > 0, "the hook rendered the device view");
     assert.equal(bags.at(-1).device?.serialNumber, "CTRL-1", "the bag's device is the current selection");
-    assert.equal(bags.at(-1).panel, skeleton.deviceStatsContainer, "the bag's panel is the device-stats root");
+    assert.ok(bags.at(-1).panel === skeleton.deviceStatsContainer, "the bag's panel is the device-stats root");
 
     const rendersBefore = bags.length;
 
@@ -1533,7 +1533,7 @@ describe("webUiFeatureOptions - device info panel", () => {
 
     assert.ok(bags.length > rendersBefore, "the scope change drove another render of the same mount");
     assert.equal(bags.at(-1).device, undefined, "the bag's device followed the selection to global scope");
-    assert.equal(bags.at(-1).signal, bags[0].signal, "the signal is one identity for the mount's life, which is what a once-per-mount registration can key on");
+    assert.ok(bags.at(-1).signal === bags[0].signal, "the signal is one identity for the mount's life, which is what a once-per-mount registration can key on");
     assert.equal(abortsSeen.length, 0, "the mount is live, so nothing the hook scoped to that signal has been released yet");
 
     // Navigate away through the real path: hide() drains any pending edit and then tears the cycle down.

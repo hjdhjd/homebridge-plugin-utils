@@ -238,7 +238,7 @@ export class webUi {
 
     const normalized = (typeof options === "boolean") ? { capture: options } : (options ?? {});
 
-    target.addEventListener(event, handler, { ...normalized, signal: this.#epochBounded(normalized.signal) });
+    target.addEventListener(event, handler, { ...normalized, signal: this.epochBounded(normalized.signal) });
   }
 
   /**
@@ -292,17 +292,30 @@ export class webUi {
   }
 
   /**
-   * Bound a caller's lifecycle signal by the page epoch.
+   * Bound a lifecycle signal by this module copy's own lifetime.
    *
-   * The one home for the composition rule, shared by the listener registrations {@link webUi.on} makes and the subscription option bags `#scopedToEpoch` builds. A
-   * caller with no signal of its own receives the epoch itself rather than a composition over one, which keeps the common case free of an `AbortSignal.any`
-   * allocation; a caller that supplies one receives a signal that aborts on whichever of the two goes first.
+   * The one home for the epoch-composition rule, and the surface a plugin reaches for when it holds a lifetime of its own that should also end when a successor
+   * claims the window. The framework's own consumers run through it too - {@link webUi.on} composes every listener registration here, and the liveness
+   * subscriptions compose their option bags here - so a plugin bounding a wiring envelope and the framework bounding a listener are applying one rule rather than
+   * two that could drift apart.
+   *
+   * Called with no signal, it hands back the page epoch itself rather than a composition over one, so the common case allocates no `AbortSignal.any` at all. Called
+   * with a signal, it hands back a composition that ends when either side does - the caller's own lifetime, or a supersession, whichever comes first. An
+   * already-aborted input yields an already-aborted composition, by the platform's own `AbortSignal.any` semantics rather than by anything added here.
+   *
+   * Which of the page's two lifetimes a resource actually wants is the question {@link webUi.epochSignal} answers at length. This method is how that answer gets
+   * applied once it is the epoch's.
+   *
+   * @example
+   *
+   * // A wiring envelope that ends on its own abort or on a supersession, whichever lands first, so every cancellation point downstream reads one signal.
+   * const wiringSignal = ui.epochBounded(wiringController.signal);
    *
    * @param {AbortSignal} [signal] - The caller's own lifecycle signal, when it has one.
    * @returns {AbortSignal} The caller's signal bounded by the epoch, or the epoch itself.
-   * @private
+   * @public
    */
-  #epochBounded(signal) {
+  epochBounded(signal) {
 
     return signal ? AbortSignal.any([ signal, this.#epochSignal ]) : this.#epochSignal;
   }
@@ -312,9 +325,9 @@ export class webUi {
    *
    * Applied at both points this instance hands a subscription out: the public `liveness.onResume` surface and the detector handle threaded down to the views. The
    * options default keeps the documented single-argument `onResume(callback)` call shape working, and the spread carries every sibling key through by construction
-   * rather than by enumeration, so a key the detector grows later needs no edit here. The lifetime comes from `#epochBounded`, so whichever of the caller's own
-   * signal and the epoch aborts first removes the subscription - the same demand-driven disarm the detector already implements. The detector itself stays
-   * page-ignorant either way, since deciding what supersedes a page is this object's job and not the primitive's.
+   * rather than by enumeration, so a key the detector grows later needs no edit here. The lifetime comes from {@link webUi.epochBounded}, so whichever of the
+   * caller's own signal and the epoch aborts first removes the subscription - the same demand-driven disarm the detector already implements. The detector itself
+   * stays page-ignorant either way, since deciding what supersedes a page is this object's job and not the primitive's.
    *
    * @param {{ shouldProbe?: () => boolean, signal?: AbortSignal }} [options] - The caller's own subscription options.
    * @returns {{ shouldProbe?: () => boolean, signal: AbortSignal }} The caller's options with the lifecycle signal bounded by the epoch.
@@ -322,7 +335,7 @@ export class webUi {
    */
   #scopedToEpoch(options = {}) {
 
-    return { ...options, signal: this.#epochBounded(options.signal) };
+    return { ...options, signal: this.epochBounded(options.signal) };
   }
 
   /**

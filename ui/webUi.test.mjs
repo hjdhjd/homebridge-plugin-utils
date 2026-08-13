@@ -1610,6 +1610,81 @@ describe("webUi.on - the epoch-scoped listener registration surface", () => {
   });
 });
 
+describe("webUi.epochBounded - the public epoch-composition surface", () => {
+
+  // The same arrangement the ui.on rows use: the DOM, the epoch guard, and one instance.
+  const arrange = () => {
+
+    const dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const epoch = installPageEpoch();
+
+    return {
+
+      ui: new webUi({ name: "Plugin" }),
+
+      [Symbol.dispose]() {
+
+        epoch[Symbol.dispose]();
+        dom[Symbol.dispose]();
+      }
+    };
+  };
+
+  test("with no signal it hands back the epoch itself rather than a composition over it", () => {
+
+    using harness = arrange();
+
+    // Reference identity, not equivalent behavior: a composition that merely behaves like the epoch would satisfy a behavioral assertion while allocating an
+    // AbortSignal.any the common case has no use for. The contract is that the cheap path is genuinely cheap.
+    assert.equal(harness.ui.epochBounded(), harness.ui.epochSignal, "the no-signal call is the epoch signal, not a copy of it");
+    assert.equal(harness.ui.epochBounded(undefined), harness.ui.epochSignal, "and an explicit undefined takes the same path");
+  });
+
+  test("a composed signal ends on whichever side aborts first, in both orders", () => {
+
+    using harness = arrange();
+
+    // The caller's side first, with no supersession involved at all.
+    const callerScoped = new AbortController();
+    const callerComposed = harness.ui.epochBounded(callerScoped.signal);
+
+    assert.equal(callerComposed.aborted, false, "precondition: the composition is live while both sides are");
+
+    callerScoped.abort();
+
+    assert.equal(callerComposed.aborted, true, "the caller's own abort ends the composition");
+    assert.equal(harness.ui.epochSignal.aborted, false, "and does so without touching the epoch");
+
+    // The epoch's side, on a fresh composition whose caller signal stays live throughout, so the end is attributable to the supersession alone.
+    const stillLive = new AbortController();
+    const epochComposed = harness.ui.epochBounded(stillLive.signal);
+
+    assert.equal(epochComposed.aborted, false, "precondition: the second composition is live");
+
+    const _successor = new webUi({ name: "Successor" });
+
+    assert.equal(epochComposed.aborted, true, "a successor claiming the window ends the composition");
+    assert.equal(stillLive.signal.aborted, false, "and does so without touching the caller's own signal");
+  });
+
+  test("an already-aborted caller signal yields an already-aborted composition", () => {
+
+    using harness = arrange();
+
+    const spent = new AbortController();
+
+    spent.abort();
+
+    // The platform's own AbortSignal.any semantics carry this, so the row pins the behavior a caller can rely on rather than any handling of its own: a resource
+    // registered against the result is retired at once instead of running unbounded.
+    assert.equal(harness.ui.epochBounded(spent.signal).aborted, true, "composing over a spent signal is spent from the start");
+    assert.equal(harness.ui.epochSignal.aborted, false, "and the epoch is untouched by it");
+  });
+});
+
 describe("webUi.registerTheming - the page-lifetime theming surface", () => {
 
   // The probed accent the shim below puts on `.btn-primary`, so a re-probe is observable as this exact value landing back on the token.

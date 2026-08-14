@@ -525,14 +525,24 @@ describe("buildBaseCss - page rules", () => {
      * eye-catching treatment on the tab the user is on, in either mode. Happy-DOM expands a `border` shorthand carrying a `var()` into longhands, so the ghost's
      * border color is read off `border-color` while the active rule's literal-valued shorthand survives intact.
      */
-    assert.match(text, /\.fo-menu\s*\{[^}]*background:\s*transparent/, "the ghost declares no fill of its own");
-    assert.match(text, /\.fo-menu\s*\{[^}]*border-color:\s*var\(--fo-border-subtle\)/, "and takes its hairline from the mode-aware subtle border token");
-    assert.match(text, /\.fo-menu\s*\{[^}]*color:\s*var\(--fo-text-muted\)/, "with the mode-aware muted text token, which is what reads quietly on either canvas");
+    assert.match(text, /\.fo-action,\s*\.fo-menu\s*\{[^}]*background:\s*transparent/, "the ghost declares no fill of its own, for either vocabulary");
+    assert.match(text, /\.fo-action,\s*\.fo-menu\s*\{[^}]*border-color:\s*var\(--fo-border-accent\)/,
+      "and wears the accent frame every visible container on the page already shares");
+    assert.match(text, /\.fo-action,\s*\.fo-menu\s*\{[^}]*color:\s*var\(--fo-text-muted\)/,
+      "with the mode-aware muted text token, which is what reads quietly on either canvas");
     assert.match(text, /\.fo-menu-active[^{]*\{[^}]*background:\s*var\(--fo-accent-bg\)/, "the active tab takes the host-probed accent as its fill");
     assert.match(text, /\.fo-menu-active[^{]*\{[^}]*color:\s*var\(--fo-accent-fg\)/, "with the accent's own foreground, so the pair travels together");
 
-    // The hover tint is scoped away from the active tab, which is what keeps a hover from lifting the accent fill off the tab the user is already on.
-    assert.match(text, /\.fo-menu:not\(\.fo-menu-active\):hover\s*\{[^}]*background:\s*var\(--fo-accent-hover\)/, "hover tints only a tab the user can move to");
+    // The hover tint is scoped away from the active tab, which is what keeps a hover from lifting the accent fill off the tab the user is already on, and
+    // unconditional for an action, which has no active state to protect.
+    assert.match(text, /\.fo-action:hover,\s*\.fo-menu:not\(\.fo-menu-active\):hover\s*\{[^}]*background:\s*var\(--fo-accent-hover\)/,
+      "hover tints an action always and a tab only when the user can move to it");
+
+    // The subtle border token belongs to the nav-header divider, not to the ghost: a control that wore it would sit grey beside a page of accent-framed containers.
+    for(const rule of text.split("\n").filter((line) => line.includes(".fo-menu") || line.includes(".fo-action"))) {
+
+      assert.doesNotMatch(rule, /--fo-border-subtle/, "no ghost rule reaches for the subtle border token");
+    }
   });
 
   test("the menu tabs pin their colors through hover, focus, and press, leaving the focus ring to the host", async () => {
@@ -542,24 +552,24 @@ describe("buildBaseCss - page rules", () => {
     const text = await baseCss();
 
     /* The host carries its own stateful `.btn` rules, and a class-plus-pseudo-class selector outranks a bare class - so a state our rules do not describe is one the
-     * page around us describes instead, and a tab wearing no Bootstrap variant resolves those rules to the canvas showing through. Each state is therefore named
-     * explicitly, and the active selector list keeps its resting selector alongside its state ones so the two cannot drift apart.
+     * page around us describes instead, and a button wearing no Bootstrap variant resolves those rules to the canvas showing through. Each state is therefore named
+     * explicitly for both vocabularies, and the active selector list keeps its resting selector alongside its state ones so the two cannot drift apart.
      */
+    const statePin = /\.fo-action:hover,\s*\.fo-action:focus,\s*\.fo-action:active,\s*\.fo-menu:hover,\s*\.fo-menu:focus,\s*\.fo-menu:active\s*\{/;
+
     assert.match(text, /\.fo-menu-active,\s*\.fo-menu-active:hover,\s*\.fo-menu-active:focus,\s*\.fo-menu-active:active\s*\{/,
       "the accent fill is declared for the resting active tab and for each of its interactive states in one rule");
-    assert.match(text, /\.fo-menu:hover,\s*\.fo-menu:focus,\s*\.fo-menu:active\s*\{[^}]*border-color:\s*var\(--fo-border-subtle\)/,
-      "the ghost holds its hairline through its own states");
-    assert.match(text, /\.fo-menu:hover,\s*\.fo-menu:focus,\s*\.fo-menu:active\s*\{[^}]*color:\s*var\(--fo-text-muted\)/,
-      "and its muted text with it");
+    assert.match(text, statePin, "every state of both vocabularies is named in one pinning rule");
+    assert.match(text, new RegExp(statePin.source + "[^}]*border-color:\\s*var\\(--fo-border-accent\\)"), "the ghost holds its accent hairline through its states");
+    assert.match(text, new RegExp(statePin.source + "[^}]*color:\\s*var\\(--fo-text-muted\\)"), "and its muted text with it");
 
-    // Background is deliberately absent from the ghost's state rule: the tint rule owns the non-active hover fill and the resting ghost is already transparent.
-    assert.doesNotMatch(text, /\.fo-menu:hover,\s*\.fo-menu:focus,\s*\.fo-menu:active\s*\{[^}]*background:/,
-      "the ghost's state rule leaves the background to the tint rule that owns it");
+    // Background is deliberately absent from the ghost's state rule: the tint rule owns the hover fill and the resting ghost is already transparent.
+    assert.doesNotMatch(text, new RegExp(statePin.source + "[^}]*background:"), "the ghost's state rule leaves the background to the tint rule that owns it");
 
-    // Focus indication belongs to the host. Pinning a box-shadow or an outline here would take the focus ring with it, so neither appears in any menu rule.
-    for(const rule of text.split("\n").filter((line) => line.includes(".fo-menu"))) {
+    // Focus indication belongs to the host. Pinning a box-shadow or an outline here would take the focus ring with it, so neither appears in any ghost rule.
+    for(const rule of text.split("\n").filter((line) => line.includes(".fo-menu") || line.includes(".fo-action"))) {
 
-      assert.doesNotMatch(rule, /box-shadow|outline/, "no menu rule touches the properties the host's focus ring is drawn with");
+      assert.doesNotMatch(rule, /box-shadow|outline/, "no ghost rule touches the properties the host's focus ring is drawn with");
     }
   });
 

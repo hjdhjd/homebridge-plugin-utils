@@ -327,28 +327,34 @@ const buildBaseCss = () => [
   ":root.fo-dark .text-body { color: var(--fo-text-muted) !important; }",
   ":root.fo-dark .text-muted { color: var(--fo-text-muted) !important; }",
 
-  /* The menu tabs. The active tab takes the accent fill and the inactive ones a quiet ghost, which puts the eye-catching treatment on the tab the user is actually
-   * on. That reading holds in both modes by construction: a saturated fill against a transparent ghost cannot invert the way two Bootstrap variants can, whichever
-   * canvas they land on. The fill is the host-probed accent, so a host that re-themes carries the tabs with it and no value here needs revisiting.
+  /* The menu tabs and the plugin controls that share their ghost. Two vocabularies, one definition: `.fo-menu` is a tab and `.fo-action` is something a plugin's own
+   * sidebar control offers, and they are grouped rather than duplicated so the quiet treatment cannot drift into two slightly different quiets. What separates them is
+   * only what the accent means - a solid accent fill says "where you are", which is why it stays menu-only, and the ghost says "something you can do".
    *
-   * The ghost's colors are the mode-aware neutrals - muted text and a subtle border - whose dark overrides give the quiet light-on-dark reading a dark canvas wants.
-   * Both states declare the same hairline border so the geometry never shifts as the active tab moves, and the active one declares it transparent so the fill alone
-   * describes the state. Everything else about a tab's size is the `btn` class the markup already carries, which these rules deliberately leave alone.
+   * The active tab takes that fill and everything else takes the ghost, which puts the eye-catching treatment on the tab the user is actually on. That reading holds
+   * in both modes by construction: a saturated fill against a transparent ghost cannot invert the way two Bootstrap variants can, whichever canvas they land on. The
+   * fill is the host-probed accent, so a host that re-themes carries the tabs with it and no value here needs revisiting.
    *
-   * The hover tint is an affordance for a tab the user can move to, so it is scoped away from the active tab: hovering the tab you are already on offers nothing and
-   * must not lift the accent fill off it.
+   * The ghost's text is the mode-aware muted neutral, whose dark override gives the quiet light-on-dark reading a dark canvas wants, and its border is the accent
+   * frame every visible container on the page already wears, so a ghost control reads as part of the page's own chrome rather than as grey furniture beside it.
+   * Both tab states declare the same hairline border so the geometry never shifts as the active tab moves, and the active one declares it transparent so the fill
+   * alone describes the state. Everything else about size is the `btn` class the markup already carries, which these rules deliberately leave alone.
    *
-   * Every state a tab can be in is spelled out here rather than left to whatever the page around us says, because the host stylesheet carries its own stateful `.btn`
-   * rules and a class-plus-pseudo-class selector outranks a bare class. A tab wearing no Bootstrap variant resolves those rules' color variables to nothing, so an
-   * unpinned state shows the canvas through the button. Pinning is limited to background, text, and border color: box-shadow and outline stay the host's, which is
-   * what keeps its focus ring intact.
+   * The hover tint is an affordance for something the user can act on, so it is unconditional for an action and scoped away from the active tab: hovering the tab you
+   * are already on offers nothing and must not lift the accent fill off it.
+   *
+   * Every state either vocabulary can be in is spelled out here rather than left to whatever the page around us says, because the host stylesheet carries its own
+   * stateful `.btn` rules and a class-plus-pseudo-class selector outranks a bare class. A button wearing no Bootstrap variant resolves those rules' color variables to
+   * nothing, so an unpinned state shows the canvas through it. Pinning is limited to background, text, and border color: box-shadow and outline stay the host's, which
+   * is what keeps its focus ring intact.
    *
    * Where our own selectors tie on specificity - the ghost's states against the active tab's - source order decides, so the active rule is written last and the fill
    * holds on the tab the user is on.
    */
-  ".fo-menu { background: transparent; border: 1px solid var(--fo-border-subtle); color: var(--fo-text-muted); }",
-  ".fo-menu:hover, .fo-menu:focus, .fo-menu:active { border-color: var(--fo-border-subtle); color: var(--fo-text-muted); }",
-  ".fo-menu:not(.fo-menu-active):hover { background: var(--fo-accent-hover); }",
+  ".fo-action, .fo-menu { background: transparent; border: 1px solid var(--fo-border-accent); color: var(--fo-text-muted); }",
+  ".fo-action:hover, .fo-action:focus, .fo-action:active, .fo-menu:hover, .fo-menu:focus, .fo-menu:active { " +
+    "border-color: var(--fo-border-accent); color: var(--fo-text-muted); }",
+  ".fo-action:hover, .fo-menu:not(.fo-menu-active):hover { background: var(--fo-accent-hover); }",
   ".fo-menu-active, .fo-menu-active:hover, .fo-menu-active:focus, .fo-menu-active:active { background: var(--fo-accent-bg); " +
     "border: 1px solid transparent; color: var(--fo-accent-fg); }",
 
@@ -362,7 +368,11 @@ const buildBaseCss = () => [
 
   /* The page kit: the classes a plugin puts on its own custom views so they wear the framework's look. `.fo-card` is the accent-derived frame every framework
    * container already wears, `.fo-monospace` is the per-field monospace opt-in, and `.fo-page` is the marker that scopes the dark form-control corrections - a
-   * plugin puts it on a custom-page container and that container's plain form controls become dark-mode-correct, with nothing outside it touched. Those
+   * plugin puts it on a custom-page container and that container's plain form controls become dark-mode-correct, with nothing outside it touched. `.fo-action` is
+   * the fourth, declared above beside the menu rules it shares its definition with: a plugin puts it on its own sidebar controls so they wear the framework's quiet
+   * action treatment. That placement is deliberate, because the ghost is one definition serving both vocabularies and the source-order reasoning that keeps the
+   * active tab's fill intact reads as one piece. The vocabulary rule a consumer needs is the whole of it: the solid accent means "where you are", so it belongs to
+   * the page's own navigation, while the ghost means "something you can do". Those
    * corrections are needed because the host retints a plugin frame's theme classes but never restyles a plain form control, so an unthemed field stays light on a
    * dark page; light mode is deliberately left to Bootstrap, exactly as the framework treats its own fields.
    *

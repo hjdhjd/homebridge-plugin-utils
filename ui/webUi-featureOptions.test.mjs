@@ -1323,8 +1323,8 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
   test("a controller whose devices come back empty still carries the in-scope outline through a full show()", async () => {
 
-    // The end-to-end half of the sidebar's in-scope outline: the nav view paints it off devices:loaded, and this pins that a whole boot arrives at the same place
-    // with the selection sitting on global. The boot dispatches no scope change at all in this shape, so nothing downstream of devices:loaded stands in for it.
+    // The end-to-end half of the sidebar's in-scope outline: the nav view paints it off devices:loaded, and this pins that a whole boot arrives at the same place a
+    // click on that controller does - the outline on the controller whose list came back empty, and the selection resting on that controller rather than on Global.
     using _dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
@@ -1350,8 +1350,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     assert.ok(entry, "precondition: the controller rendered");
     assert.equal(entry.classList.contains("context"), true, "the controller the empty device list belongs to must carry the outline");
-    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
-      "and the selection must still be Global");
+    assert.equal(entry.classList.contains("active"), true, "and it is the resting selection, the same place its own click would leave the page");
 
     orchestrator.cleanup();
   });
@@ -1914,6 +1913,108 @@ describe("webUiFeatureOptions - connection-error plugin panel", () => {
     orchestrator.cleanup();
 
     assert.equal(bag.signal.aborted, true, "the bag's signal aborts with the mount, so a hook that scoped anything to it is released");
+  });
+});
+
+describe("webUiFeatureOptions - the boot selects its initial controller", () => {
+
+  /* The boot takes the sidebar click's choreography: it selects the first controller before fetching that controller's devices. These tests pin what the shared shape
+   * buys - a failed boot keeps the controller, so the plugin's repair surface reaches the user - and what it costs nowhere: device-only mode, which has no controller
+   * to select, still rests on global. Scope itself is private to the store, so each test reads it where the page shows it, through the sidebar highlight the nav view
+   * derives from the scope's kind and controllerId.
+   */
+  test("a boot whose device fetch reports a failure hands the connection-error panel the selected controller", async () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    // The identity the assertion turns on: the hook's own controller entry, which is what a plugin's repair editor needs in order to know which controller to repair.
+    const hubA = { name: "Hub A", serialNumber: "CTRL-A" };
+    const bags = [];
+    const orchestrator = new webUiFeatureOptions({
+
+      connectionErrorPanel: (bag) => bags.push(bag),
+      getControllers: async () => ({ controllers: [hubA], error: "" }),
+      getDevices: async () => ({ devices: [], error: "Controller unreachable." })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(bags.length, 1, "the boot failure rendered the connection-error view and invoked the plugin's hook");
+    assert.ok(bags[0].controller === hubA, "the bag carries the getControllers-produced entry itself, so the plugin can act on the controller that failed");
+
+    orchestrator.cleanup();
+  });
+
+  test("a zero-device boot rests on the controller's own view, where a click on that controller would rest", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+      getDevices: async () => ({ devices: [], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const entry = skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']");
+
+    assert.equal(entry.classList.contains("active"), true, "the controller is the resting selection, which is where its own click leaves the page");
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), false, "so Global is not the selection");
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active"), null, "and no device is selected, since the controller returned none");
+
+    orchestrator.cleanup();
+  });
+
+  test("device-only mode has no controller to select, so the whole cycle rests on global", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using _homebridge = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: async () => ({ devices: [{ name: "Front Door", serialNumber: "DEV-1" }], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
+      "global stays the selection through a device-only boot");
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active"), null, "and the boot selects no device either");
+
+    orchestrator.cleanup();
   });
 });
 
@@ -3054,8 +3155,8 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
 
     seedBootstrapProbeShim();
 
-    // A selected controller that legitimately has no devices resolves an empty-success result (empty error). The orchestrator must fall through to the global scope
-    // and reveal the regions, never the connection-error short-circuit that a non-empty error would trigger.
+    // A selected controller that legitimately has no devices resolves an empty-success result (empty error). The orchestrator must fall through to the reveal, resting
+    // on the controller's own view, never the connection-error short-circuit that a non-empty error would trigger.
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),

@@ -447,14 +447,16 @@ export class webUiFeatureOptions {
    *      land on the connection-error view and return, so the no-controllers helper text can never stand in for an unreachable controller or a hook that answered
    *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return. Both of those surfaces take the frame
    *      from the boot affordance, which clears as they render.
-   *   8. In the device-bearing modes, record and pre-fire the initial controller's devices fetch (a `devices:requested` mints its sequence) so it overlaps with the
-   *      feature catalog. Global-only mode skips this step - it fetches no devices.
+   *   8. In the device-bearing modes, select the initial controller (the same transient controller scope a sidebar click dispatches), then record and pre-fire its
+   *      devices fetch (a `devices:requested` mints its sequence) so it overlaps with the feature catalog. Device-only mode has no controller to select and stays on
+   *      global; global-only mode skips the step entirely - it fetches no devices.
    *   9. Once the feature catalog resolves: build the catalog and dispatch model:loaded - the mounted views transition off their loading placeholder and render.
    *  10. Global-only mode ends here: after the theme settles it clears #headerInfo (the header view that reclaims it in the other modes never mounts), clears the boot
    *      affordance, and reveals the reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once devices resolve,
    *      dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure
    *      into the connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error status clears the
-   *      affordance and returns without revealing, otherwise it moves the selection off global when the mode calls for that.
+   *      affordance and returns without revealing, otherwise it carries the selection on to the controller-as-device entry when the mode and the device list call
+   *      for that.
    *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
@@ -663,9 +665,23 @@ export class webUiFeatureOptions {
     let devicesSeq;
     let devicesPromise;
 
-    // In the device-bearing modes, record this fetch at the store's chokepoint before firing it, then read back the minted sequence - the store's ticket for this
-    // fetch. The sequence, not the controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
+    /* In the device-bearing modes the boot is a click of the first controller, and it takes the click's shape exactly: select the controller, record the fetch at the
+     * store's chokepoint, then fire it. One operation, one choreography. The selection ahead of the fetch is what carries the controller through a failure - the
+     * connection-error view hands its plugin panel the selected controller entry, so a boot that cannot reach the controller offers the same repair surface a click
+     * that cannot reach it offers. Device-only mode has no controller to select and keeps the global scope the initial state already holds.
+     *
+     * The sequence, not the controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
+     *
+     * One null-controller case survives by design: a catalog or bridge failure landing after this selection but before model:loaded populates the controllers list
+     * still hands the panel a null controller, because the selection resolves against a list that has not arrived. That failure belongs to the plugin bridge rather
+     * than to the controller, so offering no controller-repair surface is the honest rendering of it.
+     */
     if(!this.#config.globalOnly) {
+
+      if(initialController !== null) {
+
+        this.#store.dispatch({ scope: { controllerId: initialController.serialNumber, kind: "controller" }, type: "scope:changed" });
+      }
 
       this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, type: "devices:requested" });
       devicesSeq = this.#store.state.devicesRequest.seq;
@@ -843,9 +859,9 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // Set the initial scope. My outcome applied, so the local `devices` is the applied list. Controller-based mode lands on the first controller's controller-as-device
-    // entry (devices[0]). Every other case wants global, which is where the initial state already points, so there is nothing to dispatch: each view renders its
-    // global content off model:loaded and devices:loaded, both of which have landed by now.
+    // Complete the selection the pre-fire began. My outcome applied, so the local `devices` is the applied list, and a controller that returned devices continues to
+    // its controller-as-device entry (devices[0]) exactly as a click on that controller does. Every other case already rests where a click would leave it: device-only
+    // and global-only on global, where the initial state points, and a controller whose list came back empty on the controller's own view.
     if((initialController !== null) && (devices.length > 0)) {
 
       this.#store.dispatch({

@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { createElement, errorMessage } from "../utils.mjs";
+import { createElement, createSvgElement, errorMessage, toastError } from "../utils.mjs";
 import { effect } from "../store.mjs";
 import { withDeadline } from "../../webUi-liveness.mjs";
 
@@ -49,13 +49,18 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  *        - Plugin-provided fetcher resolving a controller's DeviceListResult. Called on controller-link click.
  * @param {string} args.labelControllers - Section header label for the controllers list.
  * @param {string} args.labelDevices - Section header label for the devices list.
+ * @param {(() => Promise<void>) | undefined} args.onReenter - The orchestrator's view re-entry, run after a successful refresh so the sidebar rebuilds against the
+ *        plugin's freshly-invalidated data. Composed alongside `refresh`; the view itself owns no lifecycle.
+ * @param {{ label?: string, onRefresh: Function }} [args.refresh] - The plugin's refresh action, docked on the mode's primary list heading: the controllers heading
+ *        where controllers exist, the top-level devices heading where they do not. Absent renders no action, and so does a mode whose primary heading is itself
+ *        absent - a fully-grouped device list heads its groups only.
  * @param {HTMLElement} args.rootControllers - The `#controllersContainer` element.
  * @param {HTMLElement} args.rootDevices - The `#devicesContainer` element.
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, labelControllers, labelDevices, rootControllers, rootDevices,
-  signal, store }) => {
+export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, labelControllers, labelDevices, onReenter = undefined,
+  refresh = undefined, rootControllers, rootDevices, signal, store }) => {
 
   // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - the facade's controllers-only refresh path.
   effect({
@@ -68,7 +73,7 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
         return;
       }
 
-      buildControllersList({ controllerLabel: labelControllers, mode: store.state.mode, root: rootControllers, state: store.state });
+      buildControllersList({ controllerLabel: labelControllers, mode: store.state.mode, onReenter, refresh, root: rootControllers, signal, state: store.state });
       applyControllersHighlight(rootControllers, store.state.scope, store.state.devicesControllerId);
     },
     signal,
@@ -87,7 +92,18 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
         return;
       }
 
-      buildDevicesList({ catalog: store.state.catalog, deviceContent, deviceLabel: labelDevices, devices: store.state.devices, root: rootDevices });
+      buildDevicesList({
+
+        catalog: store.state.catalog,
+        deviceContent,
+        deviceLabel: labelDevices,
+        devices: store.state.devices,
+        mode: store.state.mode,
+        onReenter,
+        refresh,
+        root: rootDevices,
+        signal
+      });
       applyDevicesHighlight(rootDevices, store.state.scope);
     },
     signal,
@@ -132,18 +148,127 @@ const navLink = ({ label, navigation, serial }) => createElement("a", {
   role: "button"
 }, [label]);
 
-// Build a section header. The controllers section, the ungrouped-device list, and every device group share the same header markup, so one factory is the single
-// source of that shape.
-const sectionHeader = (label) => createElement("h6", {
+// The class set every section heading wears. A heading that docks an action adds the flex classes below to it.
+const HEADER_CLASSES = [ "nav-header", "text-muted", "text-uppercase", "small", "mb-1" ];
 
-  classList: [ "nav-header", "text-muted", "text-uppercase", "small", "mb-1" ]
-}, [label]);
+/* Build a section header. The controllers section, the ungrouped-device list, and every device group share the same header markup, so one factory is the single
+ * source of that shape. A header that docks an action wraps its label in a span so the two sit as siblings on the heading row; a header without one carries its
+ * label as bare text, which is the shape every section that heads nothing but a list keeps.
+ *
+ * The docked form is a flex row, which is what makes the action's placement a property of the layout rather than of how much room the label happens to leave: the
+ * label takes the leading edge, the button is pushed to the trailing edge, and the icon cannot wrap to a line of its own however narrow the sidebar gets. The
+ * trailing edge is also the truer reading of the action - it spans the list the heading labels rather than trailing the label like a suffix.
+ */
+const sectionHeader = ({ action, label }) => createElement("h6", {
+
+  classList: action ? [ ...HEADER_CLASSES, "d-flex", "align-items-center" ] : HEADER_CLASSES
+}, action ? [ createElement("span", {}, [label]), action ] : [label]);
+
+/* The refresh glyph: arrowed arcs closing a circle, stroked in the current text color at text scale. Drawing it rather than reaching for a font glyph is what
+ * keeps it in step with whatever the row around it is doing - `currentColor` follows the heading's muted color, and `1em` follows the type scale - and `aria-hidden`
+ * keeps it out of the accessibility tree, where the button's own label already says what the control does.
+ */
+const refreshGlyph = () => {
+
+  const svg = createSvgElement({ attributes: {
+
+    "aria-hidden": "true",
+    fill: "none",
+    height: "1em",
+    stroke: "currentColor",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "stroke-width": "2",
+    viewBox: "0 0 24 24",
+    width: "1em"
+  }, tag: "svg" });
+
+  for(const points of [ "23 4 23 10 17 10", "1 20 1 14 7 14" ]) {
+
+    svg.appendChild(createSvgElement({ attributes: { points }, tag: "polyline" }));
+  }
+
+  svg.appendChild(createSvgElement({ attributes: { d: "M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" }, tag: "path" }));
+
+  return svg;
+};
+
+/**
+ * Build the heading's refresh action.
+ *
+ * The division is the whole design: the plugin's handler invalidates its own domain - clearing a cache, asking a server to re-read - and the framework re-enters the
+ * view afterwards, so a plugin never reaches for the page's lifecycle to show its own fresh data. That re-entry is the orchestrator's callback, composed where the
+ * connection-error view's retry is composed and running the same re-show.
+ *
+ * Everything else about the control is the framework's too: the glyph, the ghost treatment borrowed from the page kit, the accessible name taken from the plugin's
+ * label, and the in-flight behavior. A click disables the button for both halves, so a slow refresh cannot be asked for twice; a rejected invalidation stops there,
+ * because a page that failed to refresh must not present as refreshed, and it reaches the user through the same toast channel every other detached failure uses.
+ *
+ * @param {Object} args
+ * @param {(() => Promise<void>) | undefined} args.onReenter - The orchestrator's re-entry, run after a successful invalidation. Absent only where the view stands
+ *        alone, which is the one case that has no rebuild coming.
+ * @param {{ label?: string, onRefresh: Function }} args.refresh - The plugin's refresh configuration.
+ * @param {AbortSignal} args.signal - Lifecycle signal; the click registration dies with the mount.
+ * @returns {HTMLButtonElement} The action button.
+ */
+const refreshAction = ({ onReenter, refresh, signal }) => {
+
+  const label = refresh.label ?? "Refresh";
+
+  // The treatment is the page kit's `fo-action` ghost and the geometry is `btn-xs`, so nothing here is bespoke; the one layout utility pushes the button to the
+  // trailing edge of the heading's flex row, which is where an action that spans the whole list belongs.
+  const button = createElement("button", {
+
+    "aria-label": label,
+    classList: [ "fo-action", "btn", "btn-xs", "ms-auto" ],
+    title: label,
+    type: "button"
+  }, [refreshGlyph()]);
+
+  button.addEventListener("click", async () => {
+
+    button.disabled = true;
+
+    try {
+
+      await refresh.onRefresh();
+    } catch(err) {
+
+      // A failed invalidation stops here: re-entering would present the page as refreshed when nothing was. The control comes back so the user can try again.
+      toastError(err);
+      button.disabled = false;
+
+      return;
+    }
+
+    /* The re-entry tears this sidebar down and builds a fresh one, so the button stays disabled through it: the element dies with the rebuild, and the boot
+     * affordance clothes the refetch window in its place. That composition is what makes the whole contract work - the user sees the page reloading rather than a
+     * dead control.
+     *
+     * A view standing alone has no re-entry composed and therefore no rebuild coming, so its control comes back instead of stranding disabled.
+     */
+    if(onReenter) {
+
+      await onReenter();
+
+      return;
+    }
+
+    button.disabled = false;
+  }, { signal });
+
+  return button;
+};
+
+// Which list heading a refresh action docks on. The controllers heading is the mode's primary list where controllers exist, and the top-level devices heading is the
+// primary one where they do not; global-only mounts no navigation at all, so it never asks. One rule in one place, read by both list builders.
+const refreshDock = (mode) => (mode === "controller-based") ? "controllers" : "devices";
 
 // Append a labeled section to a container: an optional header followed by one rendered node per item. The header renders only when the section has at least one item,
 // so a section that heads nothing emits no header. This is the single enforcement point for the "a header labels a non-empty section" rule - it makes an orphan
 // header (a label with no items beneath it) unrepresentable regardless of which list a caller renders, which is what keeps a fully-grouped device set from showing a
 // standalone top-level header that labels nothing.
-const appendSection = ({ items, label, render, root }) => {
+const appendSection = ({ action, items, label, render, root }) => {
 
   if(!items.length) {
 
@@ -152,7 +277,7 @@ const appendSection = ({ items, label, render, root }) => {
 
   if(label) {
 
-    root.appendChild(sectionHeader(label));
+    root.appendChild(sectionHeader({ action, label }));
   }
 
   for(const item of items) {
@@ -163,7 +288,7 @@ const appendSection = ({ items, label, render, root }) => {
 
 // Build the controllers container: the always-present Global Options link, then - in controller-based mode - the controllers section. The Global Options link carries
 // its own header-style class set (bold, uppercase) and is always present, so it is built inline rather than through appendSection.
-const buildControllersList = ({ controllerLabel, mode, root, state }) => {
+const buildControllersList = ({ controllerLabel, mode, onReenter, refresh, root, signal, state }) => {
 
   root.textContent = "";
 
@@ -185,6 +310,7 @@ const buildControllersList = ({ controllerLabel, mode, root, state }) => {
   // section under one rule rather than special-casing this one.
   appendSection({
 
+    action: (refresh && (refreshDock(mode) === "controllers")) ? refreshAction({ onReenter, refresh, signal }) : undefined,
     items: state.controllers,
     label: controllerLabel,
     render: (controller) => navLink({ label: controller.name, navigation: "controller", serial: controller.serialNumber }),
@@ -196,7 +322,7 @@ const buildControllersList = ({ controllerLabel, mode, root, state }) => {
 // Because the device-label header renders only when there is at least one ungrouped device (the appendSection rule), a fully-grouped device set - every device
 // carrying a sidebarGroup - shows its group headers alone, with no orphan top-level device header. Controllers are excluded from group derivation (their link lives in
 // the controllers container above); the reserved "hidden" group excludes devices from the sidebar entirely.
-const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, root }) => {
+const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, mode, onReenter, refresh, root, signal }) => {
 
   root.textContent = "";
 
@@ -212,8 +338,16 @@ const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, root }
   // identity attributes, click delegation, and highlighting are what make every row navigate the same way whatever its content looks like.
   const renderDevice = (device) => navLink({ label: deviceContent?.(device) ?? device.name ?? "Unknown", navigation: "device", serial: device.serialNumber });
 
-  // Ungrouped devices, headed by the device label. appendSection suppresses the header when there are no ungrouped devices.
-  appendSection({ items: devices.filter((device) => !device.sidebarGroup), label: deviceLabel, render: renderDevice, root });
+  // Ungrouped devices, headed by the device label. appendSection suppresses the header when there are no ungrouped devices, which is also what decides the refresh
+  // action's fate in this mode: a fully-grouped list has no top-level heading to dock on, so the action does not render rather than finding another home.
+  appendSection({
+
+    action: (refresh && (refreshDock(mode) === "devices")) ? refreshAction({ onReenter, refresh, signal }) : undefined,
+    items: devices.filter((device) => !device.sidebarGroup),
+    label: deviceLabel,
+    render: renderDevice,
+    root
+  });
 
   // Grouped devices, each group its own section in alphabetical order. Group derivation excludes controllers and the reserved "hidden" group.
   const groups = [...new Set(devices

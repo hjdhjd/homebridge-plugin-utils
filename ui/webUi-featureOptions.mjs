@@ -143,6 +143,17 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   content must be presentational: interactive elements inside it would fight the link's own delegated click. Controller links are outside this hook's reach; they
  *   render their names plainly.
  * @property {string} [sidebar.deviceLabel="Devices"] - Label for the devices section.
+ * @property {Object} [sidebar.refresh] - A refresh action docked inline on the sidebar's primary list heading, rendered as an icon-only button in the framework's
+ *   quiet action treatment. Which heading is primary follows the mode: the controllers heading where the plugin has controllers, the top-level devices heading where
+ *   it does not. Where that heading does not exist, neither does the action - global-only mode mounts no navigation at all, and a device list whose every entry
+ *   carries a `sidebarGroup` heads its groups without a top-level heading to dock on.
+ * @property {string} [sidebar.refresh.label="Refresh"] - The action's accessible name and tooltip. The button shows a glyph rather than this text, so the label is
+ *   what a screen reader announces and what a hover reveals.
+ * @property {Function} [sidebar.refresh.onRefresh] - The plugin's refresh handler, synchronous or async. Its job is invalidation and nothing more: clear a cache, ask
+ *   a server to re-read, mark whatever the plugin knows as stale. **The framework re-enters the view once it settles**, so the page reloads against the fresh data
+ *   without the plugin touching the menu, the orchestrator, or any other part of the page's lifecycle. The rest of the interaction is the framework's too: the button
+ *   disables itself across both halves, so a slow refresh cannot be asked for twice, and a rejection surfaces through the same error toast every other detached
+ *   failure uses. A rejected handler does NOT re-enter - a page that failed to refresh must not present as refreshed.
  * @property {Object} [statusPanel] - Live device-status panel for the device-stats region. Mutually exclusive with {@link FeatureOptionsConfig.infoPanel} (both own
  *   that region, so supplying both throws a TypeError at construction). The plugin supplies a server-side status adapter that speaks the `webui-status` protocol plus
  *   the parts below, and inherits the entire rendered panel.
@@ -381,6 +392,7 @@ export class webUiFeatureOptions {
       labelDevices: sidebar.deviceLabel ?? "Devices",
       onOptionsEdited,
       renderDeviceContent: sidebar.deviceContent,
+      sidebarRefresh: sidebar.refresh,
       statusPanel,
       validators: {
 
@@ -1357,6 +1369,21 @@ export class webUiFeatureOptions {
         getDevices: (controller) => this.#devicesFor(controller),
         labelControllers: this.#config.labelControllers,
         labelDevices: this.#config.labelDevices,
+
+        // The sidebar refresh's re-entry, composed here for the same reason the connection-error view's retry is: re-showing the page is lifecycle work, which the
+        // orchestrator owns and a view never should. show() flushes any pending edit through its own hide() before tearing down, so a refresh cannot drop a write,
+        // and the try/catch surfaces a failed re-show as a toast rather than an unobserved rejection - the plugin's handler has already succeeded by this point.
+        onReenter: async () => {
+
+          try {
+
+            await this.show(this.#session);
+          } catch(err) {
+
+            toastError(err);
+          }
+        },
+        refresh: this.#config.sidebarRefresh,
         rootControllers: controllersContainer,
         rootDevices: devicesContainer,
         signal,

@@ -32,7 +32,8 @@ const DEVICES = [
 
 // The deadline the view applies to a click's device fetch. The orchestrator owns the value in production; the suite supplies its own so a hang test can name a bound it
 // can advance a mock clock past without the other tests waiting on a production-sized one.
-const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], getDevices, mode = "controller-based" } = {}) => {
+const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], getDevices, mode = "controller-based", onReenter,
+  refresh } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const rootControllers = document.createElement("div");
@@ -56,6 +57,8 @@ const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent,
     getDevices,
     labelControllers: "Controllers",
     labelDevices: "Devices",
+    onReenter,
+    refresh,
     rootControllers,
     rootDevices,
     signal: controller.signal,
@@ -490,5 +493,190 @@ describe("mountNavView - click dispatch", () => {
     store.dispatch({ controllerId: "ctrl-a", devices: [], error: "", seq: 1, type: "devices:loaded" });
 
     assert.equal(store.state.devices, beforeDevices, "the outcome drops against a null pending request, leaving the device list untouched");
+  });
+});
+
+describe("mountNavView - the heading refresh action", () => {
+
+  // The action docks on the mode's primary list heading, so each mode's assertions read it off the container that heading belongs to.
+  const actionIn = (root) => root.querySelector("h6.nav-header button.fo-action");
+
+  test("docks on the controllers heading in controller-based mode, carrying the label as its accessible name", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers, rootDevices } = setup({ devices: DEVICES, refresh: { label: "Refresh controllers", onRefresh: () => {} } });
+    const button = actionIn(rootControllers);
+
+    assert.ok(button, "the controllers heading carries the action");
+    assert.equal(button.getAttribute("aria-label"), "Refresh controllers", "the plugin's label is what a screen reader announces");
+    assert.equal(button.getAttribute("title"), "Refresh controllers", "and what a hover reveals");
+    assert.equal(button.type, "button", "the control submits nothing");
+    assert.equal(button.classList.contains("btn-xs"), true, "it takes its geometry from the shared extra-small button class");
+    assert.equal(button.classList.contains("ms-auto"), true, "and pins to the heading's trailing edge, which is what makes wrapping impossible at any width");
+    assert.equal(actionIn(rootDevices), null, "and the devices heading carries none, since it is not the primary list in this mode");
+  });
+
+  test("the glyph is drawn at text scale in the current color and hidden from the accessibility tree", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers } = setup({ refresh: { onRefresh: () => {} } });
+    const svg = actionIn(rootControllers).querySelector("svg");
+
+    assert.ok(svg, "the button carries a drawn glyph rather than a text character");
+    assert.equal(svg.getAttribute("height"), "1em", "sized to the type around it");
+    assert.equal(svg.getAttribute("stroke"), "currentColor", "and stroked in whatever color the heading is wearing");
+    assert.equal(svg.getAttribute("aria-hidden"), "true", "the button's own label speaks for it, so the drawing stays out of the accessibility tree");
+  });
+
+  test("defaults its label when the plugin supplies only a handler", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers } = setup({ refresh: { onRefresh: () => {} } });
+
+    assert.equal(actionIn(rootControllers).getAttribute("aria-label"), "Refresh", "the framework's own word for the action stands in");
+  });
+
+  test("docks on the devices heading in device-only mode", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers, rootDevices } = setup({ devices: DEVICES, mode: "device-only", refresh: { onRefresh: () => {} } });
+
+    assert.ok(actionIn(rootDevices), "the top-level devices heading is the primary list where there are no controllers");
+    assert.equal(actionIn(rootControllers), null, "and the controllers container heads nothing in this mode");
+  });
+
+  test("a fully-grouped device-only list has no heading to dock on, so no action renders", () => {
+
+    using _dom = createTestDom();
+
+    // Every device carries a group, so appendSection suppresses the top-level heading - and the action goes with it rather than finding another home.
+    const grouped = DEVICES.map((device) => ({ ...device, sidebarGroup: "Cameras" }));
+    const { rootDevices } = setup({ devices: grouped, mode: "device-only", refresh: { onRefresh: () => {} } });
+
+    assert.ok(rootDevices.querySelector("h6.nav-header"), "precondition: the group heading rendered");
+    assert.equal(actionIn(rootDevices), null, "but no action docked, because the heading it docks on is the top-level one");
+  });
+
+  test("a docked heading is a flex row, so the action's placement is the layout's business rather than the label's length", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers } = setup({ devices: DEVICES, refresh: { onRefresh: () => {} } });
+    const heading = rootControllers.querySelector("h6.nav-header");
+
+    assert.equal(heading.classList.contains("d-flex"), true, "the docked heading lays its label and action out as a row");
+    assert.equal(heading.classList.contains("align-items-center"), true, "with the two centered against each other");
+    assert.equal(heading.firstElementChild.tagName, "SPAN", "the label leads");
+    assert.equal(heading.lastElementChild, actionIn(rootControllers), "and the action trails it");
+  });
+
+  test("an unconfigured sidebar leaves the heading exactly as it was", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers } = setup({ devices: DEVICES });
+    const heading = rootControllers.querySelector("h6.nav-header");
+
+    assert.equal(heading.querySelector("button"), null, "no action renders");
+    assert.equal(heading.innerHTML, "Controllers", "and the heading carries its label as bare text, with no wrapper introduced for an action that is not there");
+  });
+
+  test("a click invalidates through the plugin, then re-enters through the framework, in that order", async () => {
+
+    using _dom = createTestDom();
+
+    const gate = Promise.withResolvers();
+    const order = [];
+    const { rootControllers } = setup({
+
+      onReenter: (...args) => {
+
+        order.push({ args, step: "reenter" });
+      },
+      refresh: { onRefresh: () => {
+
+        order.push({ step: "refresh" });
+
+        return gate.promise;
+      } }
+    });
+
+    const button = actionIn(rootControllers);
+
+    button.click();
+
+    assert.deepEqual(order.map((entry) => entry.step), ["refresh"], "the click reached the plugin's handler first");
+    assert.equal(button.disabled, true, "and the control refuses a second request while the invalidation is in flight");
+
+    gate.resolve();
+    await gate.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(order.map((entry) => entry.step), [ "refresh", "reenter" ], "the framework's re-entry follows the plugin's invalidation, never precedes it");
+    assert.deepEqual(order[1].args, [], "the re-entry is called with nothing - the view asks for a re-show, it does not describe one");
+    assert.equal(button.disabled, true, "and the control stays disabled into the rebuild that replaces it");
+  });
+
+  test("a view standing alone with no re-entry composed returns its control rather than stranding it disabled", async () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers } = setup({ refresh: { onRefresh: () => {} } });
+    const button = actionIn(rootControllers);
+
+    button.click();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(button.disabled, false, "with no rebuild coming, the button that survives has to be usable");
+  });
+
+  test("a rejected refresh surfaces through the error toast and re-enables the control", async () => {
+
+    using _dom = createTestDom();
+
+    const toasts = [];
+
+    globalThis.homebridge = { toast: { error: (message, title) => toasts.push({ message, title }) } };
+
+    try {
+
+      let reenters = 0;
+      const { rootControllers } = setup({
+
+        onReenter: () => {
+
+          reenters += 1;
+        },
+        refresh: { onRefresh: () => Promise.reject(new Error("the plugin could not reach its API")) }
+      });
+
+      const button = actionIn(rootControllers);
+
+      button.click();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.deepEqual(toasts, [{ message: "the plugin could not reach its API", title: "Error" }], "the failure reaches the user rather than the console alone");
+      assert.equal(reenters, 0, "and the page does not re-enter: a failed invalidation must never present as refreshed");
+      assert.equal(button.disabled, false, "the control comes back so the user can try again");
+    } finally {
+
+      delete globalThis.homebridge;
+    }
+  });
+
+  test("a click on the action moves no scope - it is inert to the navigation delegation", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers, store } = setup({ refresh: { onRefresh: () => {} } });
+    const before = store.state.scope;
+
+    actionIn(rootControllers).click();
+
+    assert.equal(store.state.scope, before, "the button carries no navigation marker, so the delegated handler passes over it");
   });
 });

@@ -143,6 +143,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   content must be presentational: interactive elements inside it would fight the link's own delegated click. Controller links are outside this hook's reach; they
  *   render their names plainly.
  * @property {string} [sidebar.deviceLabel="Devices"] - Label for the devices section.
+ * @property {Function} [sidebar.globalGlyph] - Zero-argument hook supplying the Global Options row's leading kind glyph: `() => Node | string | null`. Invoked once
+ *   per sidebar build, so a plugin returns a fresh node each time rather than handing over one stored node - a node kept in this slot would be adopted into the page
+ *   by the first build and missing from the next. Null or undefined falls through to the framework's own globe. The glyph marks Global Options as a scope rather than
+ *   a device, which is the one categorical difference in the list; a plugin swapping it is changing that mark, not the row's behavior.
  * @property {Object} [sidebar.refresh] - A refresh action docked inline on the sidebar's primary list heading, rendered as an icon-only button in the framework's
  *   quiet action treatment. Which heading is primary follows the mode: the controllers heading where the plugin has controllers, the top-level devices heading where
  *   it does not. Where that heading does not exist, neither does the action - global-only mode mounts no navigation at all, and a device list whose every entry
@@ -392,6 +396,7 @@ export class webUiFeatureOptions {
       labelDevices: sidebar.deviceLabel ?? "Devices",
       onOptionsEdited,
       renderDeviceContent: sidebar.deviceContent,
+      renderGlobalGlyph: sidebar.globalGlyph,
       sidebarRefresh: sidebar.refresh,
       statusPanel,
       validators: {
@@ -1367,6 +1372,7 @@ export class webUiFeatureOptions {
         deviceContent: this.#config.renderDeviceContent,
         failureGuidance: this.#config.controllerFailureGuidance,
         getDevices: (controller) => this.#devicesFor(controller),
+        globalGlyph: this.#config.renderGlobalGlyph,
         labelControllers: this.#config.labelControllers,
         labelDevices: this.#config.labelDevices,
 

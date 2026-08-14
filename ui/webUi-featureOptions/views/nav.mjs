@@ -42,6 +42,8 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.
  * @param {((device: import("../../webUi-featureOptions.mjs").Device) => Node | string | null) | undefined} args.deviceContent - Plugin-provided hook composing a
  *        device link's rendered content in place of its name; a null or undefined return falls through to the name. Applies to device links only.
+ * @param {(() => Node | string | null) | undefined} args.globalGlyph - Plugin-provided hook supplying the Global Options row's leading kind glyph, invoked once per
+ *        sidebar build so each build renders a fresh node. A null or undefined return falls through to the framework's own globe.
  * @param {string} [args.failureGuidance] - The plugin's own guidance for a controller that cannot be reached, carried on this view's outcome dispatches so a click
  *        that fails reads the same way a boot that fails does. Absent leaves the reducer on the framework's shared controller-failure wording.
  * @param {((controller: import("../state.mjs").Controller | null) =>
@@ -59,8 +61,8 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, labelControllers, labelDevices, onReenter = undefined,
-  refresh = undefined, rootControllers, rootDevices, signal, store }) => {
+export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, globalGlyph = undefined, labelControllers, labelDevices,
+  onReenter = undefined, refresh = undefined, rootControllers, rootDevices, signal, store }) => {
 
   // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - the facade's controllers-only refresh path.
   effect({
@@ -73,7 +75,17 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
         return;
       }
 
-      buildControllersList({ controllerLabel: labelControllers, mode: store.state.mode, onReenter, refresh, root: rootControllers, signal, state: store.state });
+      buildControllersList({
+
+        controllerLabel: labelControllers,
+        globalGlyph,
+        mode: store.state.mode,
+        onReenter,
+        refresh,
+        root: rootControllers,
+        signal,
+        state: store.state
+      });
       applyControllersHighlight(rootControllers, store.state.scope, store.state.devicesControllerId);
     },
     signal,
@@ -137,16 +149,21 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
   rootDevices.addEventListener("click", onClick, { signal });
 };
 
-// Build a controller / device navigation link. Both kinds share the same class set and accessibility shape, differing only in their navigation marker and serial, so
-// one factory keeps that shape in a single place. The Global Options link is built inline in buildControllersList because it carries a distinct header-style class set.
-const navLink = ({ label, navigation, serial }) => createElement("a", {
+/* Build a navigation row. Every entry in the sidebar is one of these - Global Options, a controller, a device - so one factory keeps the class set, the identity
+ * attributes, and the accessibility shape in a single place, and the click delegation and both highlight passes find every row through the same selector.
+ *
+ * An entry with no serial emits no `data-device-serial` attribute at all, rather than an empty one: Global Options is a scope rather than a thing with an identity,
+ * and the highlight passes read a missing attribute as null, which is exactly what they compare against for it. The content is a list of nodes or strings, which is
+ * what lets a row carry a leading glyph beside its label.
+ */
+const navLink = ({ content, navigation, serial }) => createElement("a", {
 
   classList: [ "nav-link", "text-decoration-none" ],
-  "data-device-serial": serial,
+  ...((serial === undefined) ? {} : { "data-device-serial": serial }),
   "data-navigation": navigation,
   href: "#",
   role: "button"
-}, [label]);
+}, content);
 
 // The class set every section heading wears. A heading that docks an action adds the flex classes below to it.
 const HEADER_CLASSES = [ "nav-header", "text-muted", "text-uppercase", "small", "mb-1" ];
@@ -286,19 +303,42 @@ const appendSection = ({ action, items, label, render, root }) => {
   }
 };
 
-// Build the controllers container: the always-present Global Options link, then - in controller-based mode - the controllers section. The Global Options link carries
-// its own header-style class set (bold, uppercase) and is always present, so it is built inline rather than through appendSection.
-const buildControllersList = ({ controllerLabel, mode, onReenter, refresh, root, signal, state }) => {
+/* The framework's own mark for the global scope: a stroked globe - outline, equator, one meridian - at text scale in the current color. Drawing it in `currentColor`
+ * is what makes it follow the row it sits in without a rule of its own: it picks up the hover tint and the accent foreground of the selected state the same way the
+ * label beside it does, in either mode. `aria-hidden` keeps it out of the accessibility tree, where the row's own text already names the scope.
+ */
+const globeGlyph = () => {
+
+  const svg = createSvgElement({ attributes: {
+
+    "aria-hidden": "true",
+    fill: "none",
+    height: "1em",
+    stroke: "currentColor",
+    "stroke-width": "2",
+    viewBox: "0 0 24 24",
+    width: "1em"
+  }, tag: "svg" });
+
+  svg.appendChild(createSvgElement({ attributes: { cx: "12", cy: "12", r: "9" }, tag: "circle" }));
+  svg.appendChild(createSvgElement({ attributes: { d: "M3 12h18" }, tag: "path" }));
+  svg.appendChild(createSvgElement({ attributes: { cx: "12", cy: "12", rx: "4.5", ry: "9" }, tag: "ellipse" }));
+
+  return svg;
+};
+
+/* Build the controllers container: the always-present Global Options row, then - in controller-based mode - the controllers section.
+ *
+ * Global Options is the one categorically different entry in the list - a scope among things - and it wears that distinction as a quiet leading glyph rather than as
+ * a different kind of element. Row anatomy says "clickable" and the glyph says "a different kind of thing", two layers doing one job each, which is why the entry is
+ * built through the same factory every other row uses. Its glyph is the plugin's to supply through a hook rather than a stored node, so every rebuild gets a fresh
+ * one: a node held in a config slot would be adopted out of it by the first build and be missing from the second.
+ */
+const buildControllersList = ({ controllerLabel, globalGlyph, mode, onReenter, refresh, root, signal, state }) => {
 
   root.textContent = "";
 
-  root.appendChild(createElement("a", {
-
-    classList: [ "nav-link", "nav-header", "text-decoration-none", "text-uppercase", "fw-bold" ],
-    "data-navigation": "global",
-    href: "#",
-    role: "button"
-  }, ["Global Options"]));
+  root.appendChild(navLink({ content: [ globalGlyph?.() ?? globeGlyph(), createElement("span", {}, ["Global Options"]) ], navigation: "global" }));
 
   if(mode !== "controller-based") {
 
@@ -313,7 +353,7 @@ const buildControllersList = ({ controllerLabel, mode, onReenter, refresh, root,
     action: (refresh && (refreshDock(mode) === "controllers")) ? refreshAction({ onReenter, refresh, signal }) : undefined,
     items: state.controllers,
     label: controllerLabel,
-    render: (controller) => navLink({ label: controller.name, navigation: "controller", serial: controller.serialNumber }),
+    render: (controller) => navLink({ content: [controller.name], navigation: "controller", serial: controller.serialNumber }),
     root
   });
 };
@@ -336,7 +376,7 @@ const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, mode, 
   // A device link's content is the plugin's to compose when it supplied the deviceContent hook - a returned Node or string replaces the name, and a null or
   // undefined return falls through to the name so a plugin may adorn some devices and leave the rest alone. The link element itself stays the framework's: its
   // identity attributes, click delegation, and highlighting are what make every row navigate the same way whatever its content looks like.
-  const renderDevice = (device) => navLink({ label: deviceContent?.(device) ?? device.name ?? "Unknown", navigation: "device", serial: device.serialNumber });
+  const renderDevice = (device) => navLink({ content: [deviceContent?.(device) ?? device.name ?? "Unknown"], navigation: "device", serial: device.serialNumber });
 
   // Ungrouped devices, headed by the device label. appendSection suppresses the header when there are no ungrouped devices, which is also what decides the refresh
   // action's fate in this mode: a fully-grouped list has no top-level heading to dock on, so the action does not render rather than finding another home.

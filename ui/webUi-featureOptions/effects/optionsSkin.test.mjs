@@ -254,3 +254,85 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     assert.ok(valueRules.every((rule) => rule.startsWith(":root.fo-dark ")), "and every one of them is dark-qualified");
   });
 });
+
+describe("buildOptionsSkinCss - the Global Options row", () => {
+
+  // One rule owns the row's whole presentation, so the row is asserted as one thing: the type that keys it with the page's control vocabulary, the flex centering
+  // that seats its glyph, and the spacing that keeps the heading below it labelling only the list beneath.
+  const globalRule = () => skinCss().match(/^.*\[data-navigation="global"\].*$/m)?.[0] ?? "";
+
+  test("wears the heading family's case, scale, and weight, so a control-shaped row reads as one", () => {
+
+    using _dom = createTestDom();
+
+    const rule = globalRule();
+
+    assert.match(rule, /text-transform:\s*uppercase/, "the page's control vocabulary is uppercase, and the row keys with it");
+    assert.match(rule, /font-size:\s*var\(--fo-font-size-xs\)/, "at the heading family's own scale, read from the token the headings resolve to rather than restated");
+    assert.match(rule, /font-weight:\s*600/, "and its weight");
+  });
+
+  test("centers its glyph structurally rather than nudging it off the baseline", () => {
+
+    using _dom = createTestDom();
+
+    const rule = globalRule();
+
+    // An inline SVG sits on the text baseline and hangs below the label's optical middle. Centering is the fix that holds at any type scale; a constant offset
+    // would drift the moment the scale moved, which is why its absence is pinned alongside the centering itself.
+    assert.match(rule, /display:\s*flex/, "the row lays its glyph and label out as a row");
+    assert.match(rule, /align-items:\s*center/, "centered against each other");
+    assert.doesNotMatch(rule, /vertical-align|position:\s*relative|top:/, "with no baseline nudge standing in for the centering");
+  });
+
+  test("owns the space between glyph and label, and the space beneath the row", () => {
+
+    using _dom = createTestDom();
+
+    const rule = globalRule();
+
+    assert.match(rule, /gap:\s*var\(--fo-space-sm\)/, "the gap is the rule's, so the markup carries no spacing class of its own");
+    assert.match(rule, /margin-bottom:\s*var\(--fo-space-sm\)/, "and the margin below keeps the controllers heading labelling the list rather than this row");
+  });
+
+  test("wears the interactive family's outline at rest, which the selected fill then subsumes", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+    const activeRule = text.match(/^.*\[data-navigation="global"\]\.active.*$/m)?.[0] ?? "";
+
+    assert.match(globalRule(), /border-color:\s*var\(--fo-border-accent\)/, "the row is outlined in the token every framed element on the page shares");
+    assert.match(globalRule(), /color:\s*var\(--fo-text-muted\)/, "and rests in the muted text the ghost family rests in, which the headings beside it also resolve to");
+    assert.match(activeRule, /border-color:\s*transparent/, "and the selected state hides that edge so the accent fill alone describes being here");
+    assert.doesNotMatch(activeRule, /border-width|border-style/, "the border stays declared and only its color goes, so the row is the same size in both states");
+  });
+
+  test("declares no background of its own, which is what leaves the shared hover tint and selected fill reachable", () => {
+
+    using _dom = createTestDom();
+
+    /* The row's selector carries an id, so any background it declared would outrank `.nav-link:hover` and `.nav-link.active` - both plain class selectors - and take
+     * the tint and the fill with it. A resting nav row is painted by nothing, so the outline needs no background beside it to read as transparent. This absence is
+     * therefore the mechanism rather than an omission, which is why it is pinned.
+     */
+    assert.doesNotMatch(globalRule(), /background/, "no background declaration sits in the row's own rule");
+    assert.match(skinCss(), /\.nav-link:hover\s*\{[^}]*background-color:\s*var\(--fo-accent-hover\)/, "so the shared hover tint still paints inside the outline");
+    assert.match(skinCss(), /\.nav-link\.active\s*\{[^}]*background-color:\s*var\(--fo-accent-bg\)/, "and the shared accent fill still lands when the row is current");
+  });
+
+  test("paints no state colors of its own - the shared row rules reach it", () => {
+
+    using _dom = createTestDom();
+
+    /* The row's affordances are what separate it from a title, and their colors come from `.nav-link:hover` and `.nav-link.active`. A colored state rule of its own
+     * would be a second definition of the same thing, so its absence is the pin. The one state rule the row does carry hides its own border under the selected fill
+     * and paints nothing, which is why the hover selector is the one this asserts against.
+     */
+    const rule = globalRule();
+
+    assert.doesNotMatch(rule, /:hover/, "the row's own rule declares no hover treatment");
+    assert.match(skinCss(), /\.nav-link:hover\s*\{[^}]*background-color:\s*var\(--fo-accent-hover\)/, "the shared hover tint is what reaches it");
+    assert.match(skinCss(), /\.nav-link\.active\s*\{[^}]*background-color:\s*var\(--fo-accent-bg\)/, "and the shared accent fill when it is the selection");
+  });
+});

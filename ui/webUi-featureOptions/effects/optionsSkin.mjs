@@ -180,9 +180,42 @@ const buildOptionsSkinCss = () => [
   ".nav-header { border-bottom: 1px solid var(--fo-border-subtle); margin-bottom: var(--fo-space-xxs); " +
     "padding: var(--fo-space-xs) var(--fo-space-md) !important; font-size: var(--fo-font-size-xs) !important; line-height: 1.2; }",
   "#devicesContainer .nav-header, #controllersContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: var(--fo-space-sm) !important; }",
-  // The Global Options link shares `.nav-header` for its bold-uppercase look but is a selectable, highlighted pill, not a section separator - so it keeps symmetric
-  // vertical padding rather than inheriting the section-header top spacing above (which otherwise pushes its text below the pill's center).
-  "#controllersContainer .nav-link[data-navigation=\"global\"] { padding-top: var(--fo-space-xs) !important; }",
+  /* Global Options: a row that keys with the page's control vocabulary. Everything control-shaped here reads uppercase - the host's own stylesheet uppercases every
+   * button it renders, and the section headings are uppercase by the rule above - so a row in sentence case is the one thing on the page that looks like neither,
+   * anchored to no section and matching no control. Wearing the heading family's case, scale, and weight settles it into that vocabulary, while what separates it
+   * from an actual heading stays exactly what it was: the row container it is built as, the hover tint, the accent fill when selected, and the kind glyph. The
+   * affordances carry "clickable", never the case.
+   *
+   * The type comes from the heading family and reads its token rather than restating a value: `--fo-font-size-xs` is the size the section headings resolve to, and 600
+   * is their weight, so the row and the headings track one scale and a change to it moves both. The token is what "the heading scale" means here, since a heading
+   * reaches that size through the rule above outranking the `small` class it carries. Flex centering is what seats the glyph against the label: an inline SVG sits on
+   * the text baseline and hangs below the label's optical middle, and
+   * centering is the structural answer to that rather than a nudge constant that would drift with the type. The gap owns the space between them, so the markup
+   * carries no spacing class of its own, and the margin below is what keeps the controllers heading reading as the label of the list beneath it rather than of this
+   * row too.
+   *
+   * The outline is the interactive family's, shared with the page's action controls at rest, and that symmetry is the point: what separates a destination from an
+   * action is not its resting frame but its type, its position, and what happens when you arrive. This row rides the tabs' lifecycle rather than a button's - an
+   * outline while you are elsewhere, a solid accent fill that stays for as long as you are here - because it is a place with a current state, which an action never
+   * has.
+   *
+   * The frame is a border and nothing else. A background declared here would outrank the shared hover and selected rules, whose selectors carry no id, and take the
+   * tint and the fill down with it; the row is transparent at rest already, since nothing paints a resting nav row. The radius is the shared nav token, inherited
+   * rather than restated, so the family reads as one at every corner.
+   *
+   * The resting text is the ghost family's own: the `.fo-action` and `.fo-menu` rest state declares exactly this token, and a row riding that family's grammar
+   * while you are elsewhere rests in the same muted tone rather than in whatever an ordinary nav row inherits. Agreeing with the headings beside it follows from
+   * both reading one token and is a consequence rather than the reason. The tie is semantic and not mechanical: the family's rule and this one reach for the token
+   * independently, so a redesign of what the family's rest looks like carries both without either rule reaching into the other. The color is safe to declare where
+   * a background was not, because the shared hover and selected rules mark their own text `!important` and this plain declaration cannot outrank that.
+   */
+  "#controllersContainer .nav-link[data-navigation=\"global\"] { align-items: center; border: 1px solid var(--fo-border-accent); " +
+    "color: var(--fo-text-muted); display: flex; font-size: var(--fo-font-size-xs); font-weight: 600; gap: var(--fo-space-sm); " +
+    "margin-bottom: var(--fo-space-sm); text-transform: uppercase; }",
+
+  // The selected state subsumes the frame: an accent edge over an accent fill reads as a line through the fill rather than as an outline, so the fill alone
+  // describes being here. The border stays declared and only its color goes, which keeps the row exactly the same size in both states.
+  "#controllersContainer .nav-link[data-navigation=\"global\"].active { border-color: transparent; }",
 
   // Search bar.
   ".search-toolbar { border-radius: var(--fo-radius-md); padding: 0 0 var(--fo-space-sm) 0; }",

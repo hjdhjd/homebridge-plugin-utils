@@ -9,6 +9,7 @@ import { initialState, reducer } from "../state.mjs";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
+import { createElement } from "../utils.mjs";
 import { createTestDom } from "../../ui.helpers.mjs";
 import { mountNavView } from "./nav.mjs";
 
@@ -32,7 +33,7 @@ const DEVICES = [
 
 // The deadline the view applies to a click's device fetch. The orchestrator owns the value in production; the suite supplies its own so a hang test can name a bound it
 // can advance a mock clock past without the other tests waiting on a production-sized one.
-const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], getDevices, mode = "controller-based", onReenter,
+const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], getDevices, globalGlyph, mode = "controller-based", onReenter,
   refresh } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
@@ -55,6 +56,7 @@ const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent,
     deadlineSeconds,
     deviceContent,
     getDevices,
+    globalGlyph,
     labelControllers: "Controllers",
     labelDevices: "Devices",
     onReenter,
@@ -678,5 +680,81 @@ describe("mountNavView - the heading refresh action", () => {
     actionIn(rootControllers).click();
 
     assert.equal(store.state.scope, before, "the button carries no navigation marker, so the delegated handler passes over it");
+  });
+});
+
+describe("mountNavView - the Global Options row", () => {
+
+  const globalIn = (root) => root.querySelector("[data-navigation='global']");
+
+  test("renders as a navigable row rather than a heading, wearing no header costume", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers } = setup();
+    const row = globalIn(rootControllers);
+
+    assert.equal(row.classList.contains("nav-link"), true, "it carries the row anatomy every other entry carries");
+    assert.equal(row.getAttribute("role"), "button", "and the same accessibility shape");
+
+    for(const costume of [ "fw-bold", "nav-header", "text-uppercase" ]) {
+
+      assert.equal(row.classList.contains(costume), false, "a row that reads as a title is the confusion this drops: " + costume);
+    }
+
+    assert.equal(row.hasAttribute("data-device-serial"), false, "a scope has no serial, so the attribute is absent rather than empty");
+  });
+
+  test("carries the framework's globe at text scale, drawn in the row's own color", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers } = setup();
+    const svg = globalIn(rootControllers).querySelector("svg");
+
+    assert.ok(svg, "the row leads with a drawn kind glyph");
+    assert.equal(svg.getAttribute("height"), "1em", "sized to the row's type");
+    assert.equal(svg.getAttribute("stroke"), "currentColor", "and colored by the row, which is what carries it through hover and the selected state");
+    assert.equal(svg.getAttribute("aria-hidden"), "true", "the row's label names the scope, so the glyph stays out of the accessibility tree");
+    assert.match(globalIn(rootControllers).textContent, /Global Options/, "the label reads beside it");
+  });
+
+  test("a configured globalGlyph replaces the globe and is invoked once per sidebar build", () => {
+
+    using _dom = createTestDom();
+
+    let calls = 0;
+    const globalGlyph = () => {
+
+      calls += 1;
+
+      // A fresh node per call is the contract: one stored node would be adopted into the page by the first build and missing from the second.
+      return createElement("i", { classList: ["plugin-glyph"] });
+    };
+
+    const { rootControllers, store } = setup({ globalGlyph });
+
+    assert.equal(calls, 1, "the hook ran for the first build");
+    assert.ok(globalIn(rootControllers).querySelector("i.plugin-glyph"), "and its node is what the row leads with");
+    assert.equal(globalIn(rootControllers).querySelector("svg"), null, "the framework's globe gives way to it entirely");
+
+    // A controllers refresh rebuilds the container, which is the rebuild a stored node would not survive.
+    store.dispatch({ controllers: CONTROLLERS, type: "controllers:loaded" });
+
+    assert.equal(calls, 2, "the hook ran again for the rebuild rather than a node being reused");
+    assert.ok(globalIn(rootControllers).querySelector("i.plugin-glyph"), "and the rebuilt row carries a glyph again");
+  });
+
+  test("the selected state still lands on the row at global scope", () => {
+
+    using _dom = createTestDom();
+
+    const { rootControllers, store } = setup();
+
+    assert.equal(globalIn(rootControllers).classList.contains("active"), true, "global scope activates the row at first render");
+
+    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+
+    assert.equal(globalIn(rootControllers).classList.contains("active"), false, "and moving the scope off global deactivates it");
   });
 });

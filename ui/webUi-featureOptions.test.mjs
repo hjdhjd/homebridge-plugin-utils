@@ -615,6 +615,327 @@ describe("webUiFeatureOptions.show - progressive disclosure (no overlay spinner)
   });
 });
 
+// The boot affordance as the page carries it: the element the orchestrator prepends to #pageFeatureOptions for the length of a load, or null when no boot window is
+// open. Found structurally rather than by an id, because the affordance is markup the orchestrator owns outright - the indeterminate striped bar is what tells it apart
+// from anything else that could sit at the top of the page.
+function bootAffordanceIn() {
+
+  const affordance = document.getElementById("pageFeatureOptions").firstElementChild;
+
+  return affordance?.querySelector(".progress-bar-striped.progress-bar-animated") ? affordance : null;
+}
+
+// Attach a plugin-declared region carrying a control the plugin owns - the shape HBUP's sidebar wrapper takes, and the reason plugin chrome sits outside the managed
+// region ids. Returns both the region and the control so a test can assert the content survived by identity, not just by markup comparison.
+function attachPluginRegion() {
+
+  const region = document.createElement("div");
+  const button = document.createElement("button");
+
+  button.id = "pluginAddController";
+  button.textContent = "Add Controller";
+  region.setAttribute("data-fo-region", "");
+  region.appendChild(button);
+  document.getElementById("pageFeatureOptions").appendChild(region);
+
+  return { button, region };
+}
+
+describe("webUiFeatureOptions - the boot window", () => {
+
+  // Stand up the page skeleton, the fake bridge, and the Bootstrap probe shim: everything a boot needs before show() is called. Kept separate from starting the boot so
+  // a test can put its own markup on the page first, which is exactly what a plugin's chrome is - it is there before the framework ever runs.
+  const arrangePage = () => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    return { fake, homebridgeGuard, skeleton };
+  };
+
+  // Start a boot and park it on its controllers fetch, resolving once the affordance has taken the frame - so every mid-boot assertion is made while show() is genuinely
+  // still waiting on plugin I/O. Releasing the returned gate sends the boot down the success path: one controller carrying one device, which reveals the full page.
+  const startHeldBoot = async ({ ui = {} } = {}) => {
+
+    const gate = Promise.withResolvers();
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => {
+
+        await gate.promise;
+
+        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
+      },
+
+      getDevices: async () => ({ devices: [{ name: "Front Door", serialNumber: "DEV-1" }], error: "" }),
+      ui
+    });
+
+    const showPromise = orchestrator.show(await openTestSession());
+
+    await waitFor(() => bootAffordanceIn(), { message: "the boot affordance to take the frame while the controllers fetch is held" });
+
+    return { gate, orchestrator, showPromise };
+  };
+
+  test("the affordance holds the frame while the boot waits on plugin I/O, and the success reveal takes it back", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    const { gate, orchestrator, showPromise } = await startHeldBoot();
+    const affordance = bootAffordanceIn();
+
+    assert.equal(affordance.textContent, "Loading...", "an unconfigured plugin shows the framework's own neutral copy");
+    assert.ok(affordance.querySelector(".progress.mx-auto"), "the affordance borrows the connection-error view's progress wrapper, centered on the page");
+    assert.ok(affordance.querySelector(".progress-bar-striped.progress-bar-animated"),
+      "in its indeterminate form, because a boot has no known duration to animate toward");
+    assert.equal(skeleton.sidebar.style.display, "none", "precondition: every managed region is hidden for the whole boot window, which is what the affordance covers");
+
+    gate.resolve();
+
+    await showPromise;
+    await flush();
+
+    assert.equal(bootAffordanceIn(), null, "the success reveal takes the frame back from the affordance");
+    assert.equal(skeleton.sidebar.style.display, "", "and the revealed page is what stands in its place");
+
+    orchestrator.cleanup();
+  });
+
+  test("a configured ui.connectingMessage renders verbatim", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    const copy = "Connecting to your controller. A first connection can take up to twenty seconds.";
+    const { gate, orchestrator, showPromise } = await startHeldBoot({ ui: { connectingMessage: copy } });
+
+    assert.equal(bootAffordanceIn().textContent, copy, "the plugin's own copy is what the boot window says, since only the plugin knows what the wait is");
+
+    gate.resolve();
+
+    await showPromise;
+    await flush();
+
+    orchestrator.cleanup();
+  });
+
+  test("a controllers fetch that reports a failure lands on the connection-error view with the affordance gone", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [], error: "Connection refused: 192.0.2.1:443" }),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "precondition: the reported failure rendered the connection-error view");
+    assert.equal(bootAffordanceIn(), null, "the error view owns the frame it took, so no progress treatment keeps running underneath it");
+
+    orchestrator.cleanup();
+  });
+
+  test("an empty controller list lands on the no-controllers helper with the affordance gone", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({ getControllers: async () => ({ controllers: [], error: "" }) });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /Please configure a controller/, "precondition: the empty list rendered the no-controllers helper");
+    assert.equal(bootAffordanceIn(), null, "the helper is a terminal state too - a page that is waiting for nothing must not say it is loading");
+
+    orchestrator.cleanup();
+  });
+
+  test("global-only mode: the affordance holds the frame while the catalog request is held, and the reduced reveal takes it back", async () => {
+
+    using _dom = createTestDom();
+
+    const { fake, homebridgeGuard } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    // Park the catalog request itself. Global-only mode fetches no devices and takes no controllers hook, so the catalog is the one await that can hold its boot open.
+    const catalog = Promise.withResolvers();
+
+    fake.request = (path) => (path === "/getOptions") ? catalog.promise : Promise.resolve(null);
+
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true });
+    const showPromise = orchestrator.show(await openTestSession());
+
+    await waitFor(() => bootAffordanceIn(), { message: "the boot affordance to take the frame while the catalog request is held" });
+
+    catalog.resolve(FEATURES);
+
+    await showPromise;
+    await flush();
+
+    assert.equal(bootAffordanceIn(), null, "the reduced reveal takes the frame back from the affordance");
+    assert.ok(isRegionVisible("optionsContainer"), "and the reduced region set is what stands in its place");
+
+    orchestrator.cleanup();
+  });
+
+  test("teardown mid-boot retires the affordance through the cycle's signal", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    const { gate, orchestrator, showPromise } = await startHeldBoot();
+
+    assert.ok(bootAffordanceIn(), "precondition: the affordance holds the frame while the fetch is held");
+
+    orchestrator.cleanup();
+
+    assert.equal(bootAffordanceIn(), null, "the abort retires the affordance with everything else the cycle owns, with no terminal state ever reached");
+
+    // Release the held fetch so the abandoned boot settles rather than leaving a pending promise behind.
+    gate.resolve();
+
+    await showPromise;
+    await flush();
+
+    assert.equal(bootAffordanceIn(), null, "and the settled boot puts nothing back on the page it no longer owns");
+  });
+
+  test("a plugin-declared region hides for the boot window, returns with the page, and is never cleared", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    // Attached before show(), the way a plugin's own chrome is: markup the framework never built and must never destroy.
+    const { button, region } = attachPluginRegion();
+    const content = region.innerHTML;
+    const { gate, orchestrator, showPromise } = await startHeldBoot();
+
+    assert.equal(region.style.display, "none",
+      "the plugin region leaves the frame with the managed regions rather than floating alone over an emptied page");
+    assert.equal(region.innerHTML, content, "and being hidden costs it nothing of its content");
+
+    gate.resolve();
+
+    await showPromise;
+    await flush();
+
+    assert.equal(region.style.display, "", "the reveal restores the plugin region alongside the framework's own");
+    assert.equal(region.innerHTML, content, "with its content identical across the whole cycle - the clear cycle never reaches a plugin region");
+    assert.ok(region.querySelector("#pluginAddController") === button, "and the plugin's own element survives by identity, so its listeners survive with it");
+
+    orchestrator.cleanup();
+  });
+
+  test("global-only mode reveals a plugin-declared region with its reduced region set", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    const { region } = attachPluginRegion();
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.sidebar.style.display, "none", "precondition: the reduced set left the sidebar and header hidden");
+    assert.equal(region.style.display, "", "a reduced reveal is still a page reveal, so the plugin's chrome returns with it in this mode too");
+
+    orchestrator.cleanup();
+  });
+
+  test("a re-entry mid-boot leaves the successor's own affordance standing", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard } = arrangePage();
+
+    using _homebridge = homebridgeGuard;
+
+    /* One instance, two overlapping cycles, which is what a menu re-entry during a slow boot produces. The gate the hook reads is swapped between them so each cycle
+     * parks on a gate of its own, while both share the instance's affordance field - the shape that puts a dead cycle's late failure in reach of the live cycle's state.
+     * The superseded cycle's await rejects with the abort reason and lands in the failure path, which owns nothing on this page any more.
+     */
+    let gate = Promise.withResolvers();
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => {
+
+        await gate.promise;
+
+        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
+      },
+
+      getDevices: async () => ({ devices: [{ name: "Front Door", serialNumber: "DEV-1" }], error: "" })
+    });
+
+    const session = await openTestSession();
+    const superseded = orchestrator.show(session);
+    const firstAffordance = await waitFor(() => bootAffordanceIn(), { message: "the first cycle's affordance to take the frame" });
+    const supersededGate = gate;
+
+    gate = Promise.withResolvers();
+
+    const live = orchestrator.show(session);
+
+    // The identity comparison is what makes this a wait for the SUCCESSOR's affordance rather than
+    // one satisfied by the element still on screen from the cycle it replaced.
+    await waitFor(() => {
+
+      const affordance = bootAffordanceIn();
+
+      return affordance && (affordance !== firstAffordance);
+    }, { message: "the re-entry's own affordance to take the frame" });
+
+    supersededGate.resolve();
+
+    await superseded;
+    await flush();
+
+    assert.ok(bootAffordanceIn(), "a dead cycle's late failure must not clear the live cycle's affordance");
+
+    gate.resolve();
+
+    await live;
+    await flush();
+
+    assert.equal(bootAffordanceIn(), null, "and the live cycle's own reveal is what finally takes the frame");
+
+    orchestrator.cleanup();
+  });
+});
+
 describe("webUiFeatureOptions.hide", () => {
 
   test("hide() removes the feature-options page from view without destroying the orchestrator state", async () => {

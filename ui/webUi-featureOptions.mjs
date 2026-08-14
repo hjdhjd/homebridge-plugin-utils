@@ -7,7 +7,7 @@
 import { DeadlineExpiredError, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
-import { delay, errorMessage, swapMenuClasses, toastError } from "./webUi-featureOptions/utils.mjs";
+import { createElement, delay, errorMessage, swapMenuClasses, toastError } from "./webUi-featureOptions/utils.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
 import { modelLoaded } from "./webUi-featureOptions/selectors.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
@@ -43,6 +43,11 @@ export const BOOT_AWAIT_DEADLINE_SECONDS = 30;
 
 // The page's content regions, in alphabetical id order. hide() sets each to display:none during teardown so the user never sees a half-built page; the coordinated
 // end-of-load reveal restores them together. Both the teardown-hide loop and the reveal read this single list so the two can never drift.
+//
+// A plugin joins its own page chrome to the same visibility rhythm by putting `data-fo-region` on the element: the teardown-hide loop and every reveal sweep that
+// attribute alongside these ids, so plugin chrome hides and returns with the page in every mode. What the attribute does not join is the clear cycle - clearContainers
+// reaches only the containers it names and never a plugin region - and that guarantee is the whole reason the attribute is markup rather than another managed id: a
+// plugin's control keeps its content, its listeners, and its state across an entire show(), which is what put plugin chrome outside this list to begin with.
 const REGION_IDS = [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ];
 
 // The two regions global-only mode never reveals: the device sidebar and the precedence header bar. The reduced global-only reveal set is derived by filtering these
@@ -156,6 +161,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {Object[]} [statusPanel.placeholderRows] - Row templates (id / label / sizer / optional latch, no value) the skeleton renders before the first snapshot.
  *   Defaults to `[]`, so an unconfigured skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
  * @property {Object} [ui] - UI validation and display options.
+ * @property {string} [ui.connectingMessage="Loading..."] - The copy the boot affordance shows while the page loads. It holds the frame from the moment teardown empties
+ *   the page until a terminal state takes it - the revealed page, the connection-error view, or the no-controllers helper - so it is the only thing on screen for a boot
+ *   whose device fetch is slow. The framework default says nothing about what is being waited on, because only the plugin knows: a plugin whose boot is dominated by a
+ *   controller login supplies copy that names it.
  * @property {number} [ui.controllerRetryEnableDelayMs=5000] - Interval before enabling a retry button when connecting to a controller.
  * @property {Function} [ui.isController] - Identifies the controller-as-device row in a device list. The nav view groups the sidebar by it, and the projection
  *   derives the controller's scoping identity - the serial its controller-scope entries are keyed by - from the row it names.
@@ -176,6 +185,11 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
  * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
  * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape.
+ *
+ * The page contract is markup the consumer supplies. The framework's own content regions are addressed by id - `deviceStatsContainer`, `headerInfo`,
+ * `optionsContainer`, `search`, and `sidebar` - and are hidden at teardown and revealed together at the end of a load. A plugin's own chrome joins that rhythm by
+ * carrying the `data-fo-region` attribute: such an element hides and reveals with the page in every mode and is never cleared, so a control the plugin builds and owns
+ * survives a whole cycle intact while still following the page's visibility.
  *
  * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle seam that boots and tears them down. The one
  * piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the store.
@@ -209,6 +223,10 @@ export class webUiFeatureOptions {
    * @type {{ resetStaleGuards: () => void, watchRequest: (request: (Promise<unknown> | unknown)) => void } | null}
    */
   statusPanel = null;
+
+  // The boot affordance this show() cycle installed: the centered message and indeterminate progress treatment that occupies the emptied page for the length of the
+  // load. Null whenever no boot window is open - before the first show(), and from the moment a terminal state takes the frame back.
+  #bootAffordance;
 
   // Plugin-provided configuration captured at construction. Threaded through to effects and views at mount time via closures; never mutated after the constructor
   // returns.
@@ -340,6 +358,7 @@ export class webUiFeatureOptions {
 
     this.#config = {
 
+      connectingMessage: ui.connectingMessage ?? "Loading...",
       connectionErrorPanel,
       controllerRetryEnableDelayMs: ui.controllerRetryEnableDelayMs ?? 5000,
       getControllers,
@@ -363,6 +382,7 @@ export class webUiFeatureOptions {
       }
     };
 
+    this.#bootAffordance = null;
     this.#epochSignal = epochSignal;
     this.#flushPersist = null;
     this.#pageAbort = null;
@@ -414,7 +434,9 @@ export class webUiFeatureOptions {
    *      below populates each region against the visible shell.
    *   2. Tear down any prior show() cycle via hide() (it flushes any pending edit before tearing down).
    *   3. Create the page abort controller, clear stale containers, create the store, and mount every view. The views mount here - before any data loads, against the
-   *      loading placeholder - so the connection-error view already exists to render a config-sync failure into the visible shell.
+   *      loading placeholder - so the connection-error view already exists to render a config-sync failure into the visible shell. The boot affordance is installed
+   *      once they are mounted: a centered message and an indeterminate progress bar occupying the emptied page for the length of the load, cleared by whichever
+   *      terminal below takes the frame from it and by this cycle's own signal when the page is torn down or superseded before one does.
    *   4. Re-sync the session against the host config. A read failure routes into the connection-error view (with the config-read copy) and bails, so a failed sync
    *      shows the retry affordance rather than stranding a blank frame; the sync also lands before getControllers and the options read below, so both see fresh config.
    *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
@@ -423,16 +445,17 @@ export class webUiFeatureOptions {
    *      effects. The theming registration's I/O - the lighting-mode read and the Bootstrap probe - runs in the background.
    *   7. Once controllers resolves: hold it to the hook contract, then check the error it carries - a wrong-shaped result and a reported connection failure both
    *      land on the connection-error view and return, so the no-controllers helper text can never stand in for an unreachable controller or a hook that answered
-   *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return.
+   *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return. Both of those surfaces take the frame
+   *      from the boot affordance, which clears as they render.
    *   8. In the device-bearing modes, record and pre-fire the initial controller's devices fetch (a `devices:requested` mints its sequence) so it overlaps with the
    *      feature catalog. Global-only mode skips this step - it fetches no devices.
    *   9. Once the feature catalog resolves: build the catalog and dispatch model:loaded - the mounted views transition off their loading placeholder and render.
-   *  10. Global-only mode ends here: after the theme settles it clears #headerInfo (the header view that reclaims it in the other modes never mounts) and reveals the
-   *      reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once devices resolve, dispatch devices:loaded
-   *      carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure into the
-   *      connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error status returns without
-   *      revealing, otherwise it moves the selection off global when the mode calls for that.
-   *  11. Reveal the full region set the views render into.
+   *  10. Global-only mode ends here: after the theme settles it clears #headerInfo (the header view that reclaims it in the other modes never mounts), clears the boot
+   *      affordance, and reveals the reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once devices resolve,
+   *      dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure
+   *      into the connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error status clears the
+   *      affordance and returns without revealing, otherwise it moves the selection off global when the mode calls for that.
+   *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
    *        persisted config and the seam through which option edits are persisted.
@@ -488,6 +511,11 @@ export class webUiFeatureOptions {
     // here renders nothing yet - but the connection-error view exists from this point on, so a config-sync failure below renders its retry affordance instead of
     // stranding a blank frame. Each mount is a no-op if its required page element is missing, so the orchestrator does not need to validate the page skeleton up front.
     this.#mountViews(signal);
+
+    // Take the emptied frame with the connecting affordance before the first await. Everything above this line is synchronous, and everything below it is a bounded
+    // wait on someone else's I/O - so this is the exact moment the page would otherwise sit blank, for as long as the slowest of them takes. Installing it after the
+    // views mount means every failure from here on has both the error view to render into and an affordance to hand the frame over to.
+    this.#installBootAffordance(signal);
 
     // Re-read the host config into the session before the page renders against it. show() is the single entry chokepoint (launch, first-run, the menu, and the
     // connection-error retry), so re-syncing here makes "every show is fresh" an unconditional guarantee: an edit made in the Settings tab while this page was hidden
@@ -621,6 +649,7 @@ export class webUiFeatureOptions {
 
     if(this.#config.getControllers && (controllers.length === 0)) {
 
+      this.#removeBootAffordance();
       showNoControllersMessage();
 
       return;
@@ -743,6 +772,7 @@ export class webUiFeatureOptions {
         headerInfo.textContent = "";
       }
 
+      this.#removeBootAffordance();
       revealRegions(GLOBAL_ONLY_REGION_IDS, { warnOnNesting: true });
 
       return;
@@ -760,16 +790,24 @@ export class webUiFeatureOptions {
 
       const { guidance, headline } = connectionFailureCopy({ expired: err instanceof DeadlineExpiredError, site: "devices" });
 
-      this.#unlessStale({ run: () => this.#store.dispatch({
+      // Clearing the affordance and rendering the failure are one terminal action, so they ride the staleness guard together. A cycle superseded while parked on this
+      // await reaches this catch after the cycle that replaced it has installed an affordance of its own, and its own was retired by its abort listener the moment it
+      // was superseded - so a dead cycle has nothing of its own left to clear here, and clearing unguarded would take the live page's frame away on its behalf.
+      this.#unlessStale({ run: () => {
 
-        controllerId: initialController?.serialNumber ?? null,
-        devices: [],
-        error: errorMessage(err),
-        guidance,
-        headline,
-        seq: devicesSeq,
-        type: "devices:loaded"
-      }), signal });
+        this.#removeBootAffordance();
+
+        this.#store.dispatch({
+
+          controllerId: initialController?.serialNumber ?? null,
+          devices: [],
+          error: errorMessage(err),
+          guidance,
+          headline,
+          seq: devicesSeq,
+          type: "devices:loaded"
+        });
+      }, signal });
 
       return;
     }
@@ -788,6 +826,8 @@ export class webUiFeatureOptions {
     // its scope.
     if(this.#store.state.devicesAppliedSeq !== devicesSeq) {
 
+      this.#removeBootAffordance();
+
       return;
     }
 
@@ -797,6 +837,8 @@ export class webUiFeatureOptions {
     // here. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and the success-path revealRegions() never runs on this
     // branch - because the user has no devices to navigate to.
     if(this.#store.state.status.kind === "connection-error") {
+
+      this.#removeBootAffordance();
 
       return;
     }
@@ -813,7 +855,8 @@ export class webUiFeatureOptions {
       });
     }
 
-    // Reveal the full region set the views render into.
+    // Hand the frame from the boot affordance to the page itself, then reveal the full region set the views render into.
+    this.#removeBootAffordance();
     revealRegions(REGION_IDS);
   }
 
@@ -965,6 +1008,11 @@ export class webUiFeatureOptions {
    * The failure value is whatever the await produced: a thrown value, or the message a hook reported on its own result. Both go through {@link errorMessage}, which
    * reads an Error's message and stringifies anything else, so the two arrive at the view as the same kind of thing and neither needs a channel of its own.
    *
+   * This is also the single place the boot affordance yields the frame on a failed boot: every failing await routes here, so clearing it once covers the config sync,
+   * the controller fetch, and the feature catalog alike. The clear rides the staleness guard beside the dispatch, as one terminal action rather than two, because a
+   * superseded cycle reaches this catch after the cycle that replaced it has installed an affordance of its own. Its own was retired by its abort listener at the moment
+   * it was superseded, so a dead cycle has nothing of its own left to clear here and an unguarded clear would only take the live page's frame away on its behalf.
+   *
    * @param {Object} args
    * @param {*} args.err - The failure value - thrown or reported - tested for a deadline expiry and rendered as the failure's message.
    * @param {AbortSignal} args.signal - The signal of the cycle the failure belongs to.
@@ -975,7 +1023,74 @@ export class webUiFeatureOptions {
 
     const { guidance, headline } = connectionFailureCopy({ expired: err instanceof DeadlineExpiredError, site });
 
-    this.#unlessStale({ run: () => this.#store.dispatch({ guidance, headline, message: errorMessage(err), type: "connection:error" }), signal });
+    this.#unlessStale({ run: () => {
+
+      this.#removeBootAffordance();
+
+      this.#store.dispatch({ guidance, headline, message: errorMessage(err), type: "connection:error" });
+    }, signal });
+  }
+
+  /**
+   * Install the boot affordance: the centered message and indeterminate progress treatment that occupies the page for the length of a load.
+   *
+   * It lives in `#pageFeatureOptions` itself rather than in any content region, and that placement is what makes it survive the window it exists for. Every region in
+   * {@link REGION_IDS} is display:none from teardown until the reveal, so an affordance inside one would never be seen; `#headerInfo` in particular is repainted by the
+   * header view at model:loaded, which lands early - the catalog is a fast local request - while a controller login is still grinding, so an affordance there would
+   * vanish long before the wait ended. The page container is the one element that is visible for the whole window.
+   *
+   * Everything it renders is Bootstrap vocabulary, borrowed from the connection-error view's progress block in its indeterminate form: that bar animates toward a known
+   * deadline, while a boot has no duration to animate toward, so this one is striped and animated at full width. It leans on no page skin, because the options skin
+   * registers after the config sync and this has to look right before that.
+   *
+   * A missing page container is a no-op, matching the posture every view mount takes toward the page skeleton. Removal is registered on the cycle's own signal, so
+   * teardown, supersession, and navigate-away all retire it through the machinery every other per-cycle resource already rides.
+   *
+   * @param {AbortSignal} signal - The signal of the cycle the affordance belongs to.
+   * @private
+   */
+  #installBootAffordance(signal) {
+
+    const page = document.getElementById("pageFeatureOptions");
+
+    if(!page) {
+
+      return;
+    }
+
+    this.#bootAffordance = createElement("div", { classList: [ "text-center", "my-4" ] }, [
+
+      createElement("div", { classList: "mb-2" }, [this.#config.connectingMessage]),
+      createElement("div", {
+
+        classList: [ "progress", "mx-auto" ],
+        style: { height: "4px", maxWidth: "20rem" }
+      }, [
+
+        createElement("div", {
+
+          classList: [ "progress-bar", "progress-bar-striped", "progress-bar-animated" ],
+          role: "progressbar",
+          style: { width: "100%" }
+        })
+      ])
+    ]);
+
+    page.prepend(this.#bootAffordance);
+
+    signal.addEventListener("abort", () => this.#removeBootAffordance(), { once: true });
+  }
+
+  /**
+   * Retire the boot affordance, handing the frame to whatever takes it next. Safe to call when none is installed - every terminal in `show()` calls it as it renders,
+   * and the cycle's signal calls it again on teardown, so the second caller must find nothing to do rather than fail.
+   *
+   * @private
+   */
+  #removeBootAffordance() {
+
+    this.#bootAffordance?.remove();
+    this.#bootAffordance = null;
   }
 
   /**
@@ -997,6 +1112,9 @@ export class webUiFeatureOptions {
    * Hide the feature options webUI - the navigate-away chokepoint. Flushes any pending edit to disk (see `#flushPending`), then visually hides the regions, then tears
    * down. The flush precedes the teardown so a debounced-but-unwritten edit reaches the host before the page signal aborts.
    *
+   * Hiding covers the framework's own regions and every plugin-declared `data-fo-region` element together, so a plugin's chrome leaves the frame with the page rather
+   * than floating alone over an emptied one. The plugin's markup is only hidden here, never emptied - the clear cycle stays off it entirely.
+   *
    * @returns {Promise<void>}
    * @public
    */
@@ -1012,6 +1130,11 @@ export class webUiFeatureOptions {
 
         element.style.display = "none";
       }
+    }
+
+    for(const region of document.querySelectorAll("[data-fo-region]")) {
+
+      region.style.display = "none";
     }
 
     this.cleanup();
@@ -1251,6 +1374,10 @@ const clearContainers = () => {
 // The success path passes REGION_IDS in the device-bearing modes and the reduced GLOBAL_ONLY_REGION_IDS in global-only mode. When warnOnNesting is set (global-only),
 // each revealed region is checked for a hidden ancestor: a content region nested under the permanently-hidden sidebar or header cannot become visible however its own
 // display is set, so the misnesting is surfaced as a named console warning rather than a silently-invisible panel.
+//
+// Every plugin-declared `data-fo-region` element is then revealed too, whichever id set the caller passed: which framework regions a mode shows is the framework's own
+// decision, while a plugin declares only chrome that belongs to this page, so its markup returns in every mode. The nesting diagnostic stays with the framework's ids -
+// where a plugin puts its own chrome is the plugin's business.
 const revealRegions = (ids, { warnOnNesting = false } = {}) => {
 
   for(const id of ids) {
@@ -1268,6 +1395,11 @@ const revealRegions = (ids, { warnOnNesting = false } = {}) => {
 
       warnIfRegionNestedUnderHidden(id, element);
     }
+  }
+
+  for(const region of document.querySelectorAll("[data-fo-region]")) {
+
+    region.style.display = "";
   }
 };
 

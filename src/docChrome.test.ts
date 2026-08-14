@@ -85,15 +85,19 @@ const DOC_FOOTER_OUTPUT = [
 const WEBUI_NAV_OUTPUT = [
 
   "<h5>Getting Started</h5>",
+  "<div class=\"px-4\">",
   "<ul dir=\"auto\">",
   "  <li><a target=\"_blank\" href=\"https://github.com/acme/example-plugin/blob/main/README.md#installation\">Installation</a>: installing this plugin.</li>",
   "  <li><a target=\"_blank\" href=\"https://github.com/acme/example-plugin/blob/main/docs/BestPractices.md\">Best Practices</a>: best practices.</li>",
   "</ul>",
+  "</div>",
   "",
   "<h5>Additional Topics</h5>",
+  "<div class=\"px-4\">",
   "<ul dir=\"auto\">",
   "  <li><a target=\"_blank\" href=\"https://github.com/acme/example-plugin/blob/main/docs/AudioOptions.md\">Audio Options</a>: audio &amp; &lt;video&gt; options.</li>",
-  "</ul>"
+  "</ul>",
+  "</div>"
 ].join("\n");
 
 describe("renderMasthead", () => {
@@ -139,6 +143,24 @@ describe("renderDocIndex", () => {
   test("the webUI surface ignores currentFile and never omits a self-link", () => {
 
     assert.equal(renderDocIndex({ currentFile: "docs/AudioOptions.md", manifest: MANIFEST, surface: "webui" }), WEBUI_NAV_OUTPUT);
+  });
+
+  test("the webUI surface indents its section bodies and leaves the headings flush, while the markdown surfaces carry no presentation at all", () => {
+
+    const webui = renderDocIndex({ manifest: MANIFEST, surface: "webui" });
+
+    /* Heading flush, body indented is the rhythm the hand-authored sections of a support tab establish, so the generated region has to match it or the tab breaks
+     * exactly where the hand-authored copy ends. The indent is presentation for that one surface: a markdown bullet list has nowhere to put a class and no reason
+     * to, so the two markdown surfaces are asserted free of it rather than left unstated.
+     */
+    assert.match(webui, /<div class="px-4">\n<ul dir="auto">/, "each webUI section list sits inside the padded wrapper that carries the indent");
+    assert.doesNotMatch(webui, /<ul[^>]*class=/, "the list itself carries no class: a padding utility on it would replace its own indentation rather than add to it");
+    assert.doesNotMatch(webui, /<h5 [^>]*class=/, "while the headings stay flush outside the wrapper, carrying no class of their own");
+
+    for(const surface of [ "doc-footer", "readme" ] as const) {
+
+      assert.doesNotMatch(renderDocIndex({ manifest: MANIFEST, surface }), /px-4/, surface + " renders document structure, so no presentation class reaches it");
+    }
   });
 });
 

@@ -281,9 +281,11 @@ export function renderDevBadges(manifest: DocChromeManifest): string {
 
 /**
  * Render the documentation index for a surface. On the markdown surfaces (`"readme"`, `"doc-footer"`) the output is one bullet per section with a nested bullet per
- * entry; on `"webui"` it is one `<h5>` heading and `<ul>` per section. Href derivation follows the surface: in-README anchors on `"readme"`, absolute blob URLs
- * elsewhere. A `"doc-footer"` render omits the current document (via `currentFile`) and drops any section left empty by that omission, so a doc's own footer never links
- * back to itself.
+ * entry; on `"webui"` it is one `<h5>` heading per section followed by a `<div class="px-4">` wrapping the section's `<ul>`, which is the indented body under a
+ * flush heading that matches the rhythm of the hand-authored sections a webUI support tab surrounds it with. The indent belongs to the wrapper rather than to the
+ * list because a list's indentation is its own padding, which a padding utility on the list element replaces rather than composes with. Href derivation follows the
+ * surface: in-README anchors on `"readme"`, absolute blob URLs elsewhere. A `"doc-footer"` render omits the current document (via `currentFile`) and drops any
+ * section left empty by that omission, so a doc's own footer never links back to itself.
  *
  * @param input
  * @param input.currentFile - The doc file being rendered into, relative to the plugin root. Only consulted for the `"doc-footer"` surface, to omit the self-link.
@@ -307,7 +309,15 @@ export function renderDocIndex({ currentFile, manifest, surface }: { currentFile
           escapeHtmlText(entry.blurb) + "</li>";
       });
 
-      return "<h5>" + escapeHtmlText(section.title) + "</h5>\n<ul dir=\"auto\">\n" + items.join("\n") + "\n</ul>";
+      /* The heading stays flush and its body indents, which is the rhythm the hand-authored sections of a support tab establish - a generated region that broke it
+       * would break it exactly where the hand-authored copy ends. The indent lives on a wrapper the list sits inside rather than on the list itself, because a
+       * list's visible indentation IS its own padding: a padding utility on the `<ul>` replaces that built-in padding with its own smaller value instead of adding
+       * to it, so the list ends up less indented than a bare one. A padded wrapper composes with the list's own padding, which is the geometry the hand-authored
+       * regions already demonstrate.
+       *
+       * This is presentation for one surface, which is why it lives here rather than in the markdown branches - a bullet list has nowhere to carry it and no need.
+       */
+      return "<h5>" + escapeHtmlText(section.title) + "</h5>\n<div class=\"px-4\">\n<ul dir=\"auto\">\n" + items.join("\n") + "\n</ul>\n</div>";
     });
 
     return sections.join("\n\n");

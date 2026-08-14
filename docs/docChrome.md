@@ -344,9 +344,11 @@ function renderDocIndex(input): string;
 ```
 
 Render the documentation index for a surface. On the markdown surfaces (`"readme"`, `"doc-footer"`) the output is one bullet per section with a nested bullet per
-entry; on `"webui"` it is one `<h5>` heading and `<ul>` per section. Href derivation follows the surface: in-README anchors on `"readme"`, absolute blob URLs
-elsewhere. A `"doc-footer"` render omits the current document (via `currentFile`) and drops any section left empty by that omission, so a doc's own footer never links
-back to itself.
+entry; on `"webui"` it is one `<h5>` heading per section followed by a `<div class="px-4">` wrapping the section's `<ul>`, which is the indented body under a
+flush heading that matches the rhythm of the hand-authored sections a webUI support tab surrounds it with. The indent belongs to the wrapper rather than to the
+list because a list's indentation is its own padding, which a padding utility on the list element replaces rather than composes with. Href derivation follows the
+surface: in-README anchors on `"readme"`, absolute blob URLs elsewhere. A `"doc-footer"` render omits the current document (via `currentFile`) and drops any
+section left empty by that omission, so a doc's own footer never links back to itself.
 
 #### Parameters
 

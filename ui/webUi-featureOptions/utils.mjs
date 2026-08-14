@@ -79,12 +79,12 @@ export function createElement(tag, props = {}, children = []) {
 
   for(const [ key, value ] of Object.entries(attrs)) {
 
-    // Use setAttribute for two cases that don't reflect via property assignment:
+    // Use setAttribute for cases that don't reflect via property assignment:
     //   1. Dashed attributes (`data-*`, `aria-*`, etc.) - no corresponding JS property to set.
     //   2. JS reserved words mapped to non-obvious DOM property names. `for` is the canonical case: setting `label.for = id` creates a JS expando property
     //      with no effect on the HTML attribute (the reflective property is `htmlFor`, not `for`). Without this branch, `<label for="...">` ends up without
     //      its `for` attribute and native label-for click-to-toggle silently doesn't work. Other reserved-word collisions (`class` -> className) are handled
-    //      via the `classList` destructuring above; `for` is the only remaining case the renderer relies on.
+    //      via the `classList` destructuring above; `for` is the remaining case the renderer relies on.
     if(key.includes("-") || (key === "for")) {
 
       element.setAttribute(key, value);

@@ -4,9 +4,9 @@
  * cleanup, preservation of non-version entries, source-side validation), the pure {@link prepareDocs} transform (catalog validation, scope-hook forwarding,
  * atomic-write marker splicing), the pure {@link prepareChrome} transform (multi-region stamping across the README, docs, and webUI, external project-source
  * resolution, and all-or-nothing writes), the {@link runCli} dispatcher (argument routing, exit codes, usage banner), and the entry-point execution invoked through
- * a symlink (the real bin invocation path that a direct-path test never exercises). Every surface but the last runs against AsyncDisposable tmpdir
- * scratch roots and `process.stderr` capture helpers; the entry-point test alone spawns the CLI as a subprocess through a symlink. No test touches a real install
- * or modifies the working tree.
+ * a symlink (the real bin invocation path that a direct-path test never exercises). Every surface runs against an AsyncDisposable tmpdir scratch root; only
+ * the entry-point test forgoes the in-process `captureStderr()` helper, instead spawning the CLI as a real subprocess and reading its stderr pipe directly.
+ * No test touches a real install or modifies the working tree.
  */
 import * as docChrome from "../docChrome.ts";
 import * as webuiLoader from "../webui-loader.ts";
@@ -266,9 +266,9 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
 
-    // Pre-seed the destination with multiple historical builds to verify the sweep targets every prior-shape entry: bare-semver dirs that pre-date this CLI
-    // version's content-hash convention, hash-suffixed dirs from earlier iterations of the same release version, and pre-release-tagged versions. All three
-    // shapes match the VERSION_PATTERN regex and should be removed.
+    // Pre-seed the destination with multiple historical builds to verify the sweep targets every prior-shape entry: bare-semver dirs matching the pattern but
+    // lacking a hash suffix, hash-suffixed dirs from earlier iterations of the same release version, and pre-release-tagged versions. All three shapes match
+    // the VERSION_PATTERN regex and should be removed.
     await mkdir(join(dest, "1.0.0"), { recursive: true });
     await writeFile(join(dest, "1.0.0", "old.mjs"), "v1");
     await mkdir(join(dest, "1.37.0-abc1234567890def0"), { recursive: true });
@@ -923,7 +923,7 @@ describe("runCli", () => {
   });
 });
 
-// A minimal but complete doc-chrome manifest covering every entry kind the stamper handles: a README-anchor entry, a doc entry that receives a masthead, and a doc
+// A minimal but complete doc-chrome manifest covering both DocEntry kinds the stamper handles: a README-anchor entry, a doc entry that receives a masthead, and a doc
 // entry (the changelog) that opts out of the masthead. Serialized to a `.mjs` module by writeManifest so the genuine dynamic-import load path is exercised. Tests
 // spread over it to add a project source or drop a field.
 const BASE_MANIFEST = {
@@ -1353,8 +1353,8 @@ describe("CLI entry point (invoked through a symlink)", () => {
 
     assert.equal(result.code, 0, "the CLI invoked through a symlink must exit 0; stderr: " + result.stderr);
 
-    // The manifest exists only if the entry check fired (the bug was a silent no-op here) AND prepareUi resolved sourceRoot to the synthetic pkgRoot. Asserting the
-    // version came from the synthetic package.json confirms both: the CLI ran, and it read the right package root.
+    // The manifest exists only if isEntryPoint's realpath check identifies this invocation as the program entry AND prepareUi resolved sourceRoot to the
+    // synthetic pkgRoot. Asserting the version came from the synthetic package.json confirms both: the CLI ran, and it read the right package root.
     const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { subdir: string; version: string };
 
     assert.equal(manifest.version, "9.9.9", "manifest version must come from the synthetic package.json");

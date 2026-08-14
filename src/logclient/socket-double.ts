@@ -80,6 +80,9 @@ export class TestWebSocket implements WebSocketLike {
   public addEventListener(type: "open", listener: () => void): void;
   public addEventListener(type: "close" | "error" | "message" | "open", listener: unknown): void {
 
+    // Each branch casts the untyped `listener` parameter to the event-specific callback shape for its `type` literal. The cast is safe because the four public
+    // overloads declared above constrain every caller to pass a listener already shaped for the given type; this broader signature exists only to unify them for
+    // the switch below.
     switch(type) {
 
       case "close": {

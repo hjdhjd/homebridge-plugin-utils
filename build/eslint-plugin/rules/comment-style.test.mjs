@@ -178,7 +178,7 @@ ruleTester.run("comment-style", rule, {
     // Block comment using the structured `/* * */` continuation marker convention is fine - the asterisks are inside the body but not banner-shaped runs.
     "/* Header.\n *\n * Body line.\n */",
 
-    // Unicode in string literals is never touched. The following cases are the load-bearing proof of the comment-only scope.
+    // The following cases prove Unicode in string literals is never touched, confirming the rule's comment-only scope.
     "const s = \"→\";",
     "const s = \"—\";",
     "const s = \"─\";",

@@ -429,10 +429,10 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
       }
     } catch(error: unknown) {
 
-      // Single classification point. Every rejection this loop can produce lands here, classified into one of two reasons today: our composed signal aborted
-      // (already carries a structured `signal.reason`, `this.aborted` is true, pass through unchanged) or the source emitted an `"error"` event (the emitted error
-      // is our `cause`, wrap into the `"failed"` reason so every consumer sees the same taxonomy). Parser failures would also land here if the parser ever threw,
-      // which today it does not - `#handleBox` is synchronous and side-effect-only.
+      // Single classification point. Every rejection this loop can produce is classified here: our composed signal aborted (already carries a structured
+      // `signal.reason`, `this.aborted` is true, pass through unchanged) or the source emitted an `"error"` event (the emitted error is our `cause`, wrap it
+      // into the `"failed"` reason so every consumer sees the same taxonomy). Parser failures would also land here if the parser ever threw - `#handleBox` is
+      // synchronous and side-effect-only, so it does not.
       if(!this.aborted) {
 
         this.#controller.abort(new HbpuAbortError("failed", { cause: error }));

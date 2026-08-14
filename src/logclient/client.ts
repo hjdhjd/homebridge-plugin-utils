@@ -22,7 +22,7 @@
  *   static `token` credential is returned verbatim with no network call, so it is never "refreshed"; an expired static token instead surfaces later when the socket
  *   handshake is rejected.
  * - **Leak-free per-call teardown.** Each channel is an async generator wrapper, mirroring `mp4-assembler.ts`. It builds a per-call {@link LogSocketLike} through the
- *   injected {@link LogSocketFactory} seam under a per-call abort controller composed with the client's lifetime, and its `finally` disposes that socket and aborts the
+ *   injected {@link LogSocketFactory} under a per-call abort controller composed with the client's lifetime, and its `finally` disposes that socket and aborts the
  *   per-call controller. Both `await using stream = client.follow()` and an early `break` out of the iteration therefore tear the per-call socket down with no leak.
  *
  * Lifetime is a composed {@link AbortSignal}: the optional caller `signal` composed with the client's own controller. Disposing the client (or aborting the caller
@@ -64,7 +64,7 @@ export interface LogStream extends AsyncIterable<LogRecord>, AsyncDisposable {}
  * @property log           - Optional logger for connection lifecycle and diagnostics. Defaults to a silent no-op sink when omitted.
  * @property port          - The TCP port the server listens on. Defaults to `8581`.
  * @property signal        - Optional parent {@link AbortSignal} composed with the client's internal controller. When it aborts, every in-flight channel tears down.
- * @property socketFactory - Optional factory seam for constructing the live-log socket. Defaults to {@link logSocketFactory}. Injected so the client is testable without
+ * @property socketFactory - Optional factory for constructing the live-log socket. Defaults to {@link logSocketFactory}. Injected so the client is testable without
  *                           a WebSocket.
  * @property tls           - When `true`, use the secure (`https`/`wss`) schemes; when `false` or omitted, plaintext (`http`/`ws`).
  *
@@ -174,9 +174,9 @@ export class HomebridgeLogClient implements AsyncDisposable {
     this.signal = composeSignals(options.signal, this.#controller.signal);
 
     // Build the token provider once. The `signal` parameter is part of the `TokenProvider` contract (the socket forwards each connect attempt's signal so an in-flight
-    // acquisition can be cancelled), but `acquireToken` exposes no signal seam of its own today, so the closure does not forward it - hence the underscore prefix. Each
-    // invocation re-derives the token from the stored credentials, which is exactly the "re-auth on reconnect for password/noauth, return-verbatim for token" behavior
-    // the token lifecycle requires.
+    // acquisition can be cancelled), but `acquireToken` exposes no signal parameter of its own today, so the closure does not forward it - hence the underscore prefix.
+    // Each invocation re-derives the token from the stored credentials, which is exactly the "re-auth on reconnect for password/noauth, return-verbatim for token"
+    // behavior the token lifecycle requires.
     this.#tokenProvider = (_signal: AbortSignal): Promise<string> => acquireToken(this.#credentials, { fetch: this.#fetch, host: this.#host, port: this.#port,
       tls: this.#tls });
   }
@@ -229,9 +229,9 @@ export class HomebridgeLogClient implements AsyncDisposable {
   /**
    * Live-tail the log over the socket channel.
    *
-   * Builds a {@link LogSocketLike} through the injected factory seam and yields each parsed {@link LogRecord} the server streams - the ~500-line seed first, then
-   * genuinely new lines indefinitely. The stream terminates only when the caller stops iterating (an early `break`, which disposes the socket), the per-call signal
-   * aborts, or the client is disposed.
+   * Builds a {@link LogSocketLike} through the injected {@link LogSocketFactory} and yields each parsed {@link LogRecord} the server streams - the ~500-line seed
+   * first, then genuinely new lines indefinitely. The stream terminates only when the caller stops iterating (an early `break`, which disposes the socket), the
+   * per-call signal aborts, or the client is disposed.
    *
    * @param options        - Optional per-call options.
    * @param options.signal - Optional per-call abort signal composed with the client's lifetime; aborting it terminates only this stream.
@@ -251,7 +251,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
    *
    * - `history` - delegates to {@link HomebridgeLogClient.history} with the request's quantity.
    * - `follow` - delegates to {@link HomebridgeLogClient.follow}.
-   * - `follow-history` - the socket-first join: the socket connects and buffers its seed plus any live lines that arrive during the REST download into a bounded ring,
+   * - `follow-history` - the socket-first join: the socket connects and buffers its seed plus any live lines that arrive during the REST download into an ordered list,
    *   then the REST history is downloaded and trimmed to the request's quantity, then the two are joined by {@link stitchLive} so the boundary overlap is removed without
    *   dropping a distinct live line, and finally the live stream continues. Connecting the socket first is what guarantees no live line produced during the download is
    *   lost.
@@ -365,7 +365,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
     }
   }
 
-  // Follow channel implementation. Builds a per-call socket through the factory seam and yields each parsed line. The socket is disposed in the `finally` so an early
+  // Follow channel implementation. Builds a per-call socket through the injected factory and yields each parsed line. The socket is disposed in the `finally` so an early
   // `break` or client disposal tears it down leak-free, mirroring the `await using` discipline `mp4-assembler.ts` relies on for its source.
   async *#follow(callSignal: AbortSignal): AsyncGenerator<LogRecord> {
 
@@ -385,10 +385,10 @@ export class HomebridgeLogClient implements AsyncDisposable {
   }
 
   // Follow-history channel implementation - the socket-first join. The socket connects first (so no live line produced during the REST download is lost) and its seed
-  // plus any live lines that arrive during the download are buffered into a bounded ring; the REST history is downloaded and trimmed to `quantity`; the two are joined by
-  // `stitchLive` (minimal overlap, so no distinct live line is dropped); the stitched result is yielded; then the live stream continues. A single in-flight live pull is
-  // carried across the stitch boundary so a line that was requested-but-not-yet-arrived when the download finished becomes the first live-continuation line rather than
-  // being lost or double-counted.
+  // plus any live lines that arrive during the download are buffered into an ordered list; the REST history is downloaded and trimmed to `quantity`; the two are
+  // joined by `stitchLive` (minimal overlap, so no distinct live line is dropped); the stitched result is yielded; then the live stream continues. A single in-flight
+  // live pull is carried across the stitch boundary so a line that was requested-but-not-yet-arrived when the download finished becomes the first live-continuation
+  // line rather than being lost or double-counted.
   async *#followHistory(quantity: LogQuantity, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
 
     const socket = this.#createSocket(callSignal);
@@ -842,8 +842,8 @@ export class HomebridgeLogClient implements AsyncDisposable {
     }
   }
 
-  // Construct a per-call live-log socket through the injected factory seam, wired with the client's connection target, the shared token provider, and the per-call signal
-  // so the socket's lifetime is bounded by the call's. Routing construction through the seam (rather than `new LogSocket(...)`) is what lets a test substitute a fake
+  // Construct a per-call live-log socket through the injected factory, wired with the client's connection target, the shared token provider, and the per-call signal
+  // so the socket's lifetime is bounded by the call's. Routing construction through the factory (rather than `new LogSocket(...)`) is what lets a test substitute a fake
   // socket and exercise the client without a WebSocket. `refreshable` is derived from the credential DU once at construction (a `password`/`noauth` credential re-
   // authenticates on each connect, so a handshake rejection is transient; a static `token` cannot be refreshed, so a handshake rejection is permanent and the socket
   // fails fast instead of retrying the same doomed token forever).

@@ -96,6 +96,9 @@ describe("hblog integration (live server)", { skip: !hblogIntegrationEnabled }, 
     assert.equal(code, 0, "a completed history retrieval against the live server must exit 0");
 
     const lines = stdout.text.split("\n").filter((line) => line.length > 0);
+
+    // The cast is trusted rather than validated: `--json` mode serializes each line through `formatRecord` in `cli-run.ts` as `JSON.stringify(record)` of the
+    // same `LogRecord` shape defined in `types.ts`, and `plugin` and `raw` are exactly the two fields the assertions below read from that record.
     const records = lines.map((line) => JSON.parse(line) as { plugin: unknown; raw: unknown });
 
     assert.ok(records.length >= 1, "history mode must produce at least one parsed record");

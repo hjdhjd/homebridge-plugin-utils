@@ -64,8 +64,8 @@ export interface Masthead {
  * One documentation-index entry. A discriminated union on `kind`: a `"doc"` entry points at a file under the plugin's `docs/` tree (and may opt out of the masthead via
  * `masthead: false`, or of the documentation-footer region via `footer: false` - with both opted out, a linked file such as the changelog stays entirely free of stamped
  * chrome while remaining listed in every documentation index), while a `"readme-anchor"` entry points at a section anchor within the README itself. The renderer derives
- * the correct href
- * per surface from this one canonical shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere else.
+ * the correct href per surface from this one canonical shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere
+ * else.
  *
  * @category Doc Chrome
  */

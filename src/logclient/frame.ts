@@ -44,7 +44,7 @@ const SOCKET_EVENT = "2";
 const SOCKET_CONNECT_ERROR = "4";
 
 /**
- * A decoded protocol event, discriminated on `kind`.
+ * A decoded protocol event, modeled as a discriminated union on `kind`.
  *
  * The union collapses the two-layer Engine.IO/Socket.IO wire format into the handful of events the log client actually reacts to: the Engine.IO handshake (`open`) and
  * heartbeat (`ping`/`pong`), and the Socket.IO namespace lifecycle (`namespaceConnect`/`namespaceError`) and payload delivery (`message`). Any unrecognized string
@@ -64,10 +64,10 @@ export type ProtocolEvent = { readonly kind: "message"; readonly event: string; 
 /**
  * An outbound protocol event to serialize, discriminated on `kind`.
  *
- * The OutboundEvent union models three frame shapes: a namespace connect (`connect`), a namespace event with a JSON payload (`event` - this is how `tail-log` is
- * requested), and a heartbeat pong (`pong`). A fourth outbound frame, the namespace DISCONNECT, is hand-assembled separately (see {@link LOG_NAMESPACE_PATH}) because its
- * fixed, argument-free shape needs no serialization through this codec. Modeling the outbound set as its own narrow union keeps {@link encodeFrame} total over exactly
- * what it models, rather than re-using the wider inbound {@link ProtocolEvent} and leaving unserializable arms.
+ * The OutboundEvent union models the namespace connect (`connect`), namespace event with a JSON payload (`event` - this is how `tail-log` is requested), and
+ * heartbeat pong (`pong`) frame shapes. The namespace DISCONNECT is hand-assembled separately (see {@link LOG_NAMESPACE_PATH}) because its fixed, argument-free shape
+ * needs no serialization through this codec. Modeling the outbound set as its own narrow union keeps {@link encodeFrame} total over exactly what it models, rather
+ * than re-using the wider inbound {@link ProtocolEvent} and leaving unserializable arms.
  *
  * @category Log Client
  */
@@ -250,7 +250,8 @@ export function decodeFrame(frame: string): ProtocolEvent {
     case ENGINE_OPEN: {
 
       // The Engine.IO open handshake. Its JSON body carries `pingInterval` and `pingTimeout` (milliseconds), which the socket uses to size its liveness watchdog. A
-      // malformed or absent handshake decodes to zero intervals, which the consumer treats as "fall back to defaults."
+      // malformed or absent handshake decodes to zero intervals, which the consumer treats as a zero contribution, leaving only the fixed MARGIN_MS margin as the
+      // watchdog window.
       const handshake = safeJsonParse(body);
       const intervalValue = isRecord(handshake) ? handshake["pingInterval"] : undefined;
       const timeoutValue = isRecord(handshake) ? handshake["pingTimeout"] : undefined;

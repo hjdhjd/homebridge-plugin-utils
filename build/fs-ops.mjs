@@ -20,7 +20,7 @@ import { BROWSER_MODULES } from "./browser-modules.mjs";
 // `npm run build-docs` on every run. Add entries to this set when introducing another file that should survive regeneration.
 const PRESERVED_DOCS = new Set([ "Changelog.md", "Overview.md" ]);
 
-// Recursively remove every path in the list. `rm` with `force: true` already silences ENOENT, so missing paths are a no-op and the behavior matches shx's `rm -rf`.
+// Recursively remove every path in the list. `rm` with `force: true` already silences ENOENT, so missing paths are a no-op, matching POSIX `rm -f` semantics.
 async function clean(paths) {
 
   await Promise.all(paths.map((path) => rm(path, { force: true, recursive: true })));
@@ -115,7 +115,7 @@ async function cleanDocs() {
 }
 
 // Utility shared by cleanDocs: list a directory and remove every entry that matches the predicate. A missing parent directory resolves as a no-op rather than
-// surfacing ENOENT, since a fresh clone won't have `docs/` at all and the build-docs flow needs to tolerate that.
+// surfacing ENOENT, tolerating any working tree or export where `docs/` or `docs/ffmpeg/` is absent entirely.
 async function cleanDir(dir, matches) {
 
   let entries;

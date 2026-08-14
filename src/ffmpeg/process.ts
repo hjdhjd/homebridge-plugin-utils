@@ -562,10 +562,10 @@ export class FfmpegProcess implements AsyncDisposable {
   //   - Anything else                    -> DEBUG with a generic message.
   //
   // Lifting a teardown branch into a `protected` method lets subclasses substitute a level / message for a teardown shape they characterize differently, without
-  // re-implementing the whole teardown policy or trying to pre-empt the base's listener ordering. Two such seams exist: `logFailedTeardown` (the recording subclass
-  // substitutes a friendly message for known benign HKSV error shapes, returning early to suppress the canonical ERROR dump; non-matching subclasses call
-  // `super.logFailedTeardown(reason)` and the dump fires) and `logTimeoutTeardown` (the recording subclass demotes the benign inter-segment timeout to debug, while the
-  // default stays WARN because a stall on a general - streaming - process genuinely is a problem).
+  // re-implementing the whole teardown policy or trying to pre-empt the base's listener ordering. Each named-reason branch is independently overridable:
+  // `logFailedTeardown` (the recording subclass substitutes a friendly message for known benign HKSV error shapes, returning early to suppress the canonical ERROR
+  // dump; non-matching subclasses call `super.logFailedTeardown(reason)` and the dump fires) and `logTimeoutTeardown` (the recording subclass demotes the benign
+  // inter-segment timeout to debug, while the default stays WARN because a stall on a general - streaming - process genuinely is a problem).
   #logTeardown(): void {
 
     const reason: unknown = this.signal.reason;

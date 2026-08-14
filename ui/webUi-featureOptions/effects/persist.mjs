@@ -49,7 +49,7 @@ const DEBOUNCE_MS = 300;
  *
  * @param {Object} args
  * @param {{toast?: {error?: (message: string, id: string) => void}}} args.host - The Homebridge bridge, used only for the failure toast channel.
- * @param {{commit: (patch: Object) => Promise<void>}} args.session - The config session; option saves persist through its single write seam.
+ * @param {{commit: (patch: Object) => Promise<void>}} args.session - The config session; option saves persist through its single write path.
  * @param {AbortSignal} args.signal - The lifecycle signal. Aborting tears down the effect.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store the effect subscribes against.
  * @returns {{flush: () => Promise<void>}} A handle whose `flush()` drains any pending edit to disk now; called at the page's navigate-away / browser-exit edges.
@@ -157,7 +157,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
         store.dispatch({ error, type: "persist:failed" });
 
         // Surface the failure via the host's toast channel so the user sees an actionable indication that their last edit did not reach disk. The single
-        // toast-emission seam keeps the user-facing notification policy in one place; effects elsewhere that dispatch persist:failed have the same path
+        // toast-emission path keeps the user-facing notification policy in one place; effects elsewhere that dispatch persist:failed have the same path
         // available through this effect's subscription.
         host.toast?.error?.(error?.message ?? String(error), "config-persist");
 
@@ -172,7 +172,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
     fn: () => {
 
       // Reference-equality dirty check: when configuredOptions matches the anchor, there is nothing new to persist. Handles both the registration-time immediate
-      // call (initial state shares one empty-array reference across the three options-array fields) and any genuine no-op mutation that produced the same reference
+      // call (initial state shares one empty-array reference across every options-array field) and any genuine no-op mutation that produced the same reference
       // (e.g., an option:cleared against an option that did not exist - applyClearOption returns the input reference unchanged, so the reducer's spread preserves
       // configuredOptions).
       if(store.state.configuredOptions === store.state.persistedAnchor) {

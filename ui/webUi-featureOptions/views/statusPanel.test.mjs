@@ -1,9 +1,9 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webUi-featureOptions/views/statusPanel.test.mjs: The parity suite for the live device-status panel. Each test maps to a behavior-contract ledger row or
- * to the stale-push guard and reset semantics, driven against a Happy-DOM window, a real FeatureOptionsStore, and the evented fake homebridge bridge whose emitPush
- * delivers the host's exact MessageEvent-with-data push shape. The component is imported through its production `./statusPanel.mjs` specifier, which in turn imports
- * `../../webui-status.js`; the test loader redirects that to the TypeScript source, so an unredirected specifier would fail loudly here.
+ * webUi-featureOptions/views/statusPanel.test.mjs: The parity suite for the live device-status panel. Each test's own title states the behavior it proves, driven
+ * against a Happy-DOM window, a real FeatureOptionsStore, and the evented fake homebridge bridge whose emitPush delivers the host's exact MessageEvent-with-data push
+ * shape. The component is imported through its production `./statusPanel.mjs` specifier, which in turn imports `../../webui-status.js`; the test loader redirects
+ * that to the TypeScript source, so an unredirected specifier would fail loudly here.
  */
 "use strict";
 
@@ -628,10 +628,10 @@ describe("statusPanel - lifecycle", () => {
     const requestsBeforePreAborted = viewRequests.length;
 
     // A pre-aborted mount short-circuits the effect and registers no push listener, so a selection and a push both render nothing. This suite installs no timer mock, so
-    // the detector's setInterval is a REAL Node timer here - and the arm's `if(!signal.aborted)` guard is what keeps a pre-aborted mount from arming one. That guard is
-    // pinned at runtime: this mount's controller is never handed to mountPanel, so the suite-wide afterEach cannot reclaim it, and a leaked real interval would keep the
-    // node:test process alive - the suite's prompt exit is the proof the guard held. A missing guard would also skip on this null-device tick, so counting a probe cannot
-    // catch it; the leak is what does.
+    // the detector's setInterval is a REAL Node timer here - and the subscribe call's `if(signal?.aborted) return` guard is what keeps a pre-aborted mount from ever
+    // calling arm. That guard is pinned at runtime: this mount's controller is never handed to mountPanel, so the suite-wide afterEach cannot reclaim it, and a leaked
+    // real interval would keep the node:test process alive - the suite's prompt exit is the proof the guard held. A missing guard would also skip on this null-device
+    // tick, so counting a probe cannot catch it; the leak is what does.
     const preAborted = new AbortController();
 
     preAborted.abort();
@@ -1549,8 +1549,8 @@ describe("statusPanel - the link-lost watchdog", () => {
     assert.equal(button.parentElement, reloadLine, "the button is the reload line's own element");
     assert.equal(root.querySelector(".fo-status-message button"), null, "the reload button is not inside the message line");
 
-    // Clicking the reload action does not throw. The reload targets the top frame, a seat-read concern: happy-dom's standalone window has window.top === window, so
-    // top-versus-self is not structurally distinguishable in the harness - stated honestly rather than dressed up in a weak assertion.
+    // Clicking the reload action does not throw. The reload targets the top frame; happy-dom's standalone window has window.top === window, so top-versus-self is
+    // not structurally distinguishable in the harness.
     assert.doesNotThrow(() => button.click(), "clicking the reload action does not throw");
 
     // An error render after the trip carries NO reload action line: the marker gates the button, not the message string.
@@ -1880,7 +1880,9 @@ describe("statusPanel - the shared liveness delegation", () => {
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 10, placeholderRows: PLACEHOLDER_ROWS }, store);
 
-    // Heal the initial view request so the mount starts with no pending deadline.
+    // This test body runs synchronously with no flush, so the initial view request's watchdog timer armed by selectDevice is still pending when the first
+    // handle.watchRequest call below runs - that call rides the same still-armed deadline rather than starting from a healed state. The shared-timer assertion below
+    // holds either way, since the pending timer is never cleared in between.
     selectDevice(store, "AA");
 
     handle.watchRequest(hangingPromise());

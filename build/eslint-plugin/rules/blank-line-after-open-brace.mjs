@@ -91,6 +91,9 @@ const ruleBlankAfterOpenBrace = {
 
         for(const property of node.body) {
 
+          // Only a TSPropertySignature member whose annotation is itself a TSTypeLiteral can carry another brace to recurse into; the guard skips
+          // properties with no type annotation, skips non-property members such as method or index signatures, and skips properties annotated with
+          // any other type.
           if(!property.typeAnnotation || (property.type !== "TSPropertySignature") || (property.typeAnnotation.typeAnnotation.type !== "TSTypeLiteral")) {
 
             continue;
@@ -111,6 +114,9 @@ const ruleBlankAfterOpenBrace = {
 
         for(const member of node.typeAnnotation.members) {
 
+          // Only a TSPropertySignature member whose annotation is itself a TSTypeLiteral can carry another brace to recurse into; the guard skips
+          // members with no type annotation, skips non-property members such as method or index signatures, and skips properties annotated with
+          // any other type.
           if(!member.typeAnnotation || (member.type !== "TSPropertySignature") || (member.typeAnnotation.typeAnnotation.type !== "TSTypeLiteral")) {
 
             continue;

@@ -346,8 +346,8 @@ const buildControllersList = ({ controllerLabel, globalGlyph, mode, onReenter, r
   }
 
   // The controllers section. In controller-based mode there is always at least one controller by the time the sidebar builds (the orchestrator shows the
-  // no-controllers message and never mounts the nav otherwise), so the non-empty guard is belt-and-suspenders here - but routing through appendSection keeps every
-  // section under one rule rather than special-casing this one.
+  // no-controllers message and returns before model:loaded is ever dispatched, so this effect never fires with an empty list), so the non-empty guard is
+  // belt-and-suspenders here - but routing through appendSection keeps every section under one rule rather than special-casing this one.
   appendSection({
 
     action: (refresh && (refreshDock(mode) === "controllers")) ? refreshAction({ onReenter, refresh, signal }) : undefined,

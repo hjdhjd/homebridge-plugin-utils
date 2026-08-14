@@ -166,7 +166,7 @@ describe("makeTrunBox", () => {
 
   test("sets every requested flag bit independently in the flags header", () => {
 
-    // Coverage for each individual flag-set branch in the helper. Combine all four optional flags and verify each bit is set.
+    // Coverage for each individual flag-set branch in the helper. Combine every optional flag and verify each bit is set.
     const trun = makeTrunBox({
 
       includeDuration: true,

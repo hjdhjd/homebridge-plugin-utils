@@ -4,7 +4,7 @@
  */
 
 /**
- * The webUI's liveness layer: three primitives that answer one question - is the host bridge still there?
+ * The webUI's liveness layer: a small set of primitives that answer one question - is the host bridge still there?
  *
  * The Homebridge UI bridge is a postMessage round trip with no timeout and no cancellation on any of its methods, so a relay that dies mid-flight leaves every
  * outstanding call pending forever - no rejection, no console signal, nothing for a caller to route into a recovery surface. A page that awaits such a call simply

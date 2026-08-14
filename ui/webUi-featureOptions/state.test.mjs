@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../featureOptions.js";
 
 // Shared catalog fixture - small enough to be readable, varied enough to exercise the reducer's interaction with the pure transforms (value options, grouped
-// options, and a plain boolean across two categories).
+// options, and a plain boolean across a small set of categories).
 const CATEGORIES = [
 
   { description: "Motion Options", name: "Motion" },

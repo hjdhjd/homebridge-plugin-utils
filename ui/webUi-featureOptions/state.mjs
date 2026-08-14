@@ -10,7 +10,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * State shape, action vocabulary, and reducer for the feature options webUI.
  *
  * This module is the SSOT for what state the UI carries and how that state transitions. Every dispatch lands here; every component reads from {@link FeatureOptionsState}
- * and derives its view via selectors. Discriminated unions encode the variant types the UI moves through, each listed below:
+ * and derives its view via selectors. Scope and LifecycleStatus are the discriminated unions encoding the variant types the UI moves through; Catalog is a
+ * third, differently-motivated bundled type listed alongside them below, for the same overview of what state shape looks like:
  *
  *   - {@link Scope} - `{kind: "global"}` | `{kind: "controller", controllerId}` | `{kind: "device", controllerId, deviceId}`. The selection pointer. Discriminated
  *     because each kind carries different data; merging them into a flat record would smear the guarantees across two fields and force consumers to recover the
@@ -109,9 +110,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * LifecycleStatus - The page-state pointer. Discriminated because the variants carry different per-state payloads. Drop a status variant when it stops being a
  * named UI state; add one when a new named state surfaces.
  *
- * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps three text slots without
- * hardcoding any prose. The two suppliers (the reducer's fetch-failure transition on {@link devices:loaded} and the orchestrator's config-sync-failure
- * {@link connection:error} dispatch) each carry copy appropriate to their failure.
+ * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps each text slot
+ * without hardcoding any prose. Each supplier (the reducer's fetch-failure transition on {@link devices:loaded} and the orchestrator's config-sync-failure
+ * {@link connection:error} dispatch) carries copy appropriate to its failure.
  *
  * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "persisting", snapshot: readonly string[]} | {kind: "persist-error", error: Error}
  *           | {kind: "connection-error", guidance: string, headline: string, message: string}} LifecycleStatus
@@ -477,7 +478,7 @@ export const reducer = (state, action) => {
 
     case "option:disarmed": {
 
-      // The armed row stood down without a value committing - the input emptied out, or the user unchecked the row. Idempotent when nothing is armed.
+      // The armed row stood down without a value committing - the input emptied out, or the user unchecked the row. A no-op when nothing is armed.
       return { ...state, armedOption: null };
     }
 

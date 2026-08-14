@@ -92,7 +92,7 @@ describe("createElement - classList handling", () => {
 
     const el = createElement("div", { classList: "a b" });
 
-    // The element still carries exactly the two classes we asked for - a broken implementation that reassigned `element.classList` would end up with either a stringified
+    // The element still carries the classes we asked for - a broken implementation that reassigned `element.classList` would end up with either a stringified
     // representation or a broken token list.
     assert.deepEqual(Array.from(el.classList).sort(), [ "a", "b" ]);
   });
@@ -393,7 +393,7 @@ describe("delay - signal-aware sleep primitive", () => {
 
     controller.abort(reason);
 
-    await assert.rejects(() => delay(10_000, controller.signal), (error) => error === reason);
+    await assert.rejects(() => delay(10000, controller.signal), (error) => error === reason);
   });
 
   test("rejects with signal.reason when the signal aborts mid-delay and never schedules the resolution callback", async () => {

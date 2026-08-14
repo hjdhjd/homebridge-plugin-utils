@@ -230,7 +230,10 @@ describe("BackpressureWriter - abort and teardown", () => {
 
     writer.abort(reason);
 
-    // Both writes must reject with the explicit reason - the queued entry via the teardown path, the in-flight entry via the drain-abort path.
+    // Both writes reject with the explicit reason via `#teardown`, which is registered in the constructor before the drain loop's own `events.once` listener
+    // and so fires first, synchronously splicing the whole queue - including the still in-flight entry - and rejecting both resolvers directly. The drain
+    // loop's later catch-branch reject on the in-flight entry is a harmless no-op second settle, the same tolerance already noted for the stream-error
+    // escalation test below.
     await assert.rejects(first, (error: unknown) => error === reason);
     await assert.rejects(second, (error: unknown) => error === reason);
   });

@@ -124,9 +124,9 @@ const DEFAULT_LINK_LOST_TIMEOUT_SECONDS = 10;
 // narrowing posture the hello handler shares) - falls back to the module default.
 const resolveLinkLostSeconds = (configured) => (Number.isFinite(configured) && (configured > 0)) ? configured : DEFAULT_LINK_LOST_TIMEOUT_SECONDS;
 
-// The Status cell's text while the panel is waiting on a device's first push. It is a named constant because three paths write it - a fresh selection, a "connecting"
-// push, and the hello-driven recovery below - and they must agree: a placeholder that drifted between them would leave the cell reading one thing after a selection and
-// another after a recovery.
+// The Status cell's text while the panel is waiting on a device's first push. It is a named constant because every path that writes this placeholder text - a fresh
+// selection, a "connecting" push, or the hello-driven recovery below - must agree, so a placeholder that drifted between call sites would leave the cell reading one
+// thing after a selection and another after a recovery.
 const CONNECTING_STATUS_TEXT = "Connecting...";
 
 // The widest candidates for the Status cell's column, living beside the vocabulary they measure. "Disconnected", the encrypted "Connected" label, and the link-lost
@@ -199,7 +199,7 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
 /**
  * Mount the live device-status panel into the device-stats region.
  *
- * All render state is closure-local to this mount, so it is fresh for every show() cycle: the viewed device object (its serialNumber always read from that one
+ * All render state is closure-local to this mount, so it is fresh for every showDetails() cycle: the viewed device object (its serialNumber always read from that one
  * object), the per-serialNumber highest-token guard, the current row template set, the status text and panel message, the live node references, and one latch timer per
  * row id. The panel subscribes to selection changes, to the host's status push events, and - when the page supplied a resume detector - to page resumes; every listener
  * is `{ signal }`-scoped, and the one abort listener the mount registers clears every pending latch timer. Liveness detection is the shared watchdog primitive, whose
@@ -468,8 +468,8 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
   // message and its reload action are now dishonest: nulling the message and rebuilding drops them even for the kinds ("connecting", "availability", "row") that do not
   // otherwise touch the message line. When the marker was already clear this is a no-op, so every per-kind render can call it unconditionally.
   //
-  // It clears the message line alone and leaves the Status cell to its caller, because every one of its call sites is a push that sets that cell itself with the state
-  // the push carries. The hello path has no such push behind it, so it uses the dedicated restore below rather than widening this.
+  // It clears the message line alone and leaves the Status cell to its caller. Every call site but "row" sets that cell itself with the state the push carries; "row"
+  // leaves the correction to a later status-bearing push. The hello path has no such push behind it, so it uses the dedicated restore below rather than widening this.
   const clearLinkLost = () => {
 
     if(!linkLost) {

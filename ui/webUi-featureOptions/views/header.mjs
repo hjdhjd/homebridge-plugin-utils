@@ -16,8 +16,9 @@ import { effect } from "../store.mjs";
  *
  * Runs on `model:loaded`, `connection:error`, and `devices:loaded`; other dispatches never invoke it because they are not subscribed, and a subscribed dispatch
  * that leaves the status reference unchanged skips via the memo below. On `connection:error` (and the loading
- * status), `fn` yields inside its `status.kind` checks. In practice the header content is rendered once, at `model:loaded`. The connection-error and no-controllers
- * views render their own content into the same container, so this view yields when the status indicates either of those states.
+ * status), `fn` yields inside its `status.kind` checks. In practice the header content renders once, at `model:loaded`. The no-controllers scenario never dispatches
+ * `model:loaded` at all, so this view's loading-status guard is what keeps it from rendering; the connection-error case is the only explicit `status.kind` check this
+ * view yields to.
  *
  * @param {Object} args
  * @param {HTMLElement} args.root - The `#headerInfo` container.

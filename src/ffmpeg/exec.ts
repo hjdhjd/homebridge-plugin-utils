@@ -140,7 +140,8 @@ export class FfmpegExec extends FfmpegProcess {
     // Canned stdin: write and end on the next microtask so synchronous caller code that runs between construction and the first await (e.g., attaching `"drain"` or
     // `"error"` listeners on the inherited `stdin` writable, inspecting `proc.signal`, wiring diagnostic hooks) executes before stdin I/O starts. We guard against a
     // pre-aborted composed signal so we do not write to a stream that the kill path has already destroyed - the write would surface an EPIPE we would then have to
-    // swallow. The base class's own stdin error listener already swallows EPIPE generally, so this guard is belt-and-braces, not strictly required for correctness.
+    // swallow. The base class's own stdin error listener already swallows EPIPE generally, so this guard is a redundant safeguard, not strictly required for
+    // correctness.
     if(init.stdin !== undefined) {
 
       const stdinBuffer = init.stdin;

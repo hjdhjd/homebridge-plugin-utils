@@ -1383,7 +1383,7 @@ describe("mqttFeatureOptions - canonical MQTT feature-option group", () => {
 
     // Topic defaults enabled, so with nothing configured anywhere `value()` falls through to the default registered by the catalog - the single-source-of-truth
     // point of the group, and the reason a consuming plugin carries no topic fallback of its own. Url defaults disabled, so the same unconfigured state resolves to
-    // null, which is the unambiguous "MQTT is off" answer. Flipping either default reds exactly one of these two assertions.
+    // null, which is the unambiguous "MQTT is off" answer. Flipping either default fails exactly one of these two assertions.
     assert.equal(featureOptions.value("Mqtt.Topic"), "hydrawise");
     assert.equal(featureOptions.value("Mqtt.Url"), null);
   });

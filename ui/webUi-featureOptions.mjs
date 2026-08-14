@@ -50,7 +50,7 @@ export const BOOT_AWAIT_DEADLINE_SECONDS = 30;
 // plugin's control keeps its content, its listeners, and its state across an entire show(), which is what put plugin chrome outside this list to begin with.
 const REGION_IDS = [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ];
 
-// The two regions global-only mode never reveals: the device sidebar and the precedence header bar. The reduced global-only reveal set is derived by filtering these
+// The regions global-only mode never reveals: the device sidebar and the precedence header bar. The reduced global-only reveal set is derived by filtering these
 // out of REGION_IDS, so the reduced set can never name a region the full set does not.
 const GLOBAL_ONLY_HIDDEN_REGION_IDS = [ "headerInfo", "sidebar" ];
 
@@ -111,7 +111,8 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   switching controllers while an error is showing), and a retry click reboots the page cycle through `show()`, so a failed retry re-invokes the hook in a fresh
  *   mount with a fresh panel and a fresh signal.
  * @property {(args: { config: Object }) => Promise<ControllerListResult>} [getControllers] - Handler resolving the plugin's {@link ControllerListResult}.
- * @property {(controller: (Controller|null)) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's {@link DeviceListResult}.
+ * @property {(controller: (Controller|null), args: { config: Object }) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's
+ *   {@link DeviceListResult}. Called with the selected controller and an options bag carrying the live platform config.
  * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is pinned to
  *   global for the page's life (the reducer refuses any other scope in this mode), and the {@link FeatureOptionsConfig.infoPanel} callback always receives an undefined
  *   device. Mutually exclusive with `getControllers`, an explicitly supplied `getDevices`, and `statusPanel` - each throws a TypeError at construction. The `sidebar`
@@ -210,8 +211,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * carrying the `data-fo-region` attribute: such an element hides and reveals with the page in every mode and is never cleared, so a control the plugin builds and owns
  * survives a whole cycle intact while still following the page's visibility.
  *
- * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle seam that boots and tears them down. The one
- * piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the store.
+ * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle boundary that boots and tears them down. The
+ * one piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the
+ * store.
  *
  * @example
  *
@@ -287,7 +289,7 @@ export class webUiFeatureOptions {
   #store;
 
   // The configuredOptions array captured at the FIRST show()'s `model:loaded`. Survives subsequent cleanup() / show() cycles so a re-show that loads a set-equal
-  // (possibly reordered) options array preserves the original snapshot for revert-to-saved. The set-equality probe in show() is the seam where this is decided.
+  // (possibly reordered) options array preserves the original snapshot for revert-to-saved. The set-equality probe in show() is the boundary where this is decided.
   // Set on first model:loaded; updated only when the loaded options are NOT set-equal to the stored snapshot.
   #initialOptions;
 
@@ -485,7 +487,7 @@ export class webUiFeatureOptions {
    *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
-   *        persisted config and the seam through which option edits are persisted.
+   *        persisted config and the interface through which option edits are persisted.
    * @returns {Promise<void>}
    * @public
    */
@@ -585,8 +587,8 @@ export class webUiFeatureOptions {
     registerKeyboardEffect({ signal, store: this.#store });
 
     // Notify the plugin's optional edit hook after any option mutation has transitioned the store, so a consumer reading editedConfig from inside the callback sees
-    // the post-edit state. We subscribe to exactly the four mutation events the persist effect writes to disk (see effects/persist.mjs); the two subscriptions must
-    // stay in lockstep, since every mutation the persist effect commits is one the consumer should hear about. The effect() immediate-run pass hands the body
+    // the post-edit state. We subscribe to exactly the mutation events the persist effect writes to disk (see effects/persist.mjs); the two subscriptions must stay
+    // in lockstep, since every mutation the persist effect commits is one the consumer should hear about. The effect() immediate-run pass hands the body
     // `undefined`, so we notify only on a real dispatch, never at registration before model:loaded. Registered on the page signal so teardown detaches it.
     effect({
 
@@ -1399,13 +1401,13 @@ export class webUiFeatureOptions {
   }
 
   // Resolve a controller's DeviceListResult, injecting the live platform config the plugin's getDevices needs to recover the controller's credentials. This is the
-  // single seam every device fetch crosses - the initial fetch in show() and the on-click fetch in the nav view both route through it - and the config is read fresh
-  // from the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
+  // single boundary every device fetch crosses - the initial fetch in show() and the on-click fetch in the nav view both route through it - and the config is read
+  // fresh from the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
   //
   // The full rich contract is enforced here with a fail-fast guard: the hook must resolve an object carrying a `devices` array and a string `error`. The error half
   // is what guarantees every downstream reader (the connection-error view's DOM construction, whose createElement child loop passes a non-string message straight to
-  // appendChild) receives a string. A resolved value that does not match trips a TypeError naming the contract, so a shape mistake surfaces loudly at the seam rather
-  // than as a corrupted render deeper in.
+  // appendChild) receives a string. A resolved value that does not match trips a TypeError naming the contract, so a shape mistake surfaces loudly at that boundary
+  // rather than as a corrupted render deeper in.
   async #devicesFor(controller) {
 
     const result = await this.#config.getDevices(controller, { config: this.#session?.platform });
@@ -1497,7 +1499,7 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
  * plugin has no controllers configured" and says so - advice that sends the user to a settings page which is already correct. Naming the contract instead puts the
  * mistake where it happened rather than three screens later, wearing a message about something else.
  *
- * The two callers route the failure differently, and deliberately: show() catches it into the connection-error view, because no plugin code is on its call stack to
+ * Each caller routes the failure differently, and deliberately: show() catches it into the connection-error view, because no plugin code is on its call stack to
  * receive it, while refreshControllers lets it reach the caller that asked for the refresh and wrote the hook.
  */
 const assertControllerListResult = (result) => {

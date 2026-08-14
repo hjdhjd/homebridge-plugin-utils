@@ -524,9 +524,9 @@ describe("optionRow - label color", () => {
 
     using _dom = createTestDom();
 
-    // A value-centric option that defaults to ENABLED. Configuring only its value (the enabled-state still matches the default-on) is a value-only deviation: the
-    // option is modified, but on the value axis, not the boolean axis. Per the v1-parity rule the label must stay text-body. The shared fixture has no default-on value
-    // option, so we build a bespoke one-option catalog to isolate the case.
+    // A value-centric option that defaults to ENABLED. Configuring only its value (the enabled-state still matches the default-on) is a value-only deviation: the option
+    // is modified, but on the value axis, not the boolean axis. The modification cue is boolean-deviation-only by design, so the label must stay text-body. The shared
+    // fixture has no default-on value option, so we build a bespoke one-option catalog to isolate the case.
     const categories = [{ description: "Audio Options", name: "Audio" }];
     const options = { Audio: [{ default: true, defaultValue: 50, description: "Audio volume level.", name: "Volume" }] };
     const catalog = { ...buildCatalogIndex(categories, options), validators: { isController: () => false, validOption: () => true, validOptionCategory: () => true } };
@@ -1030,8 +1030,9 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
 describe("triStateTransition - the upstream probe honors declared scopes", () => {
 
-  // A declared option and an undeclared one, differing in nothing else, so any difference in the probe's verdict is attributable to the declaration alone. Both
-  // default on, and each test configures a single GLOBAL entry - the level the declared option does not admit - on a device view, the shape the regression turns on.
+  // A declared option and an undeclared one, differing in nothing else, so any difference in the probe's verdict is attributable to the declaration alone. Both default
+  // on, and each test configures a single GLOBAL entry - the level the declared option does not admit - on a device view, the shape that would wrongly resolve as
+  // inheritance if declared scopes were ignored.
   const PROBE_CATEGORIES = [{ description: "Probe Options", name: "Probe" }];
 
   const PROBE_OPTIONS = {

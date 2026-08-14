@@ -15,7 +15,7 @@
  *
  *   - {@link renderFeatureOptionsReference} - the projection itself. It derives every key via {@link expandOption}, decides value-ness via {@link isValueOption}, and
  *     builds the catalog index once via {@link buildCatalogIndex}; it never re-derives any of those. Plugin-private scope prose is supplied through two optional render
- *     hooks that mirror the webUI's field-blind `validOption` / `validOptionCategory` predicate seam, lifted from *filter* (boolean) to *describe* (string). No
+ *     hooks that mirror the webUI's field-blind `validOption` / `validOptionCategory` predicate boundary, lifted from *filter* (boolean) to *describe* (string). No
  *     plugin-specific field name appears anywhere in this file.
  *
  *   - {@link spliceMarkedRegion} - the in-place splice that replaces the region between {@link FEATURE_OPTIONS_DOC_BEGIN} / {@link FEATURE_OPTIONS_DOC_END} in an

@@ -9,10 +9,10 @@
  * place, and dynamically imports the plugin's entry module. It is identical across the family, so this module renders it from one template: the plugin declares its
  * entry and cache-bust list in a config comment, and `prepare-ui` stamps the rendered region into the marker-fenced block on every build.
  *
- * The region carries three pieces in boot order. A hidden status panel a screenshot turns into a complete support report. A boot monitor - a classic inline script, so
+ * The region carries, in boot order, a hidden status panel a screenshot turns into a complete support report; a boot monitor - a classic inline script, so
  * it runs during HTML parse ahead of any deferred module evaluation - that owns the on-page failure surface: it reveals the panel with a plain-language message
  * classified by the boot stage that failed, arms a ten-second watchdog for a boot that hangs, stands down when the app signals it rendered, and holds the bundle stamp
- * across boots so a page pinned to a bundle that has since been replaced says so instead of half-loading. And the loader - the importmap/cache-bust module script -
+ * across boots so a page pinned to a bundle that has since been replaced says so instead of half-loading; and the loader - the importmap/cache-bust module script -
  * stage-instrumented so a fetch, importmap, or entry-import failure routes to the monitor with the stage that failed. The classic-versus-module split is for execution
  * ordering alone, not old-engine compatibility: the classic script runs during parse while the module script is deferred.
  *
@@ -137,11 +137,14 @@ export function parseWebUiLoaderConfig(html: string, htmlPath: string): WebUiLoa
     throw new Error("webui-loader: the `WEBUI LOADER CONFIG` `bust` field in " + htmlPath + " must be an array of strings.");
   }
 
+  // The `Array.isArray`/`.some()` guard above already proved `config.bust`'s shape; the cast here only restores what that check established, since TypeScript's
+  // control-flow analysis cannot carry the narrowing through the compound negated condition against a property typed `unknown`.
   return { bust: (config.bust as string[] | undefined) ?? [], entry: config.entry };
 }
 
 // The plain-language boot-failure copy the status panel shows, approved in design and expanded to complete sentences. The browser, delivery, and generic strings are
-// the three classified message buckets the boot monitor reveals by stage; the slow notice is the watchdog's still-working signal; the headline sits above them all.
+// the three classified message buckets the boot monitor reveals by stage; a fourth, reload, is shown separately by checkStamp() on a stamp mismatch. The slow notice
+// is the watchdog's still-working signal; the headline sits above them all.
 // The copy lives here as panel text content, not as monitor script constants, so it renders exactly and contiguously on the page and stays clear of this file's
 // line-width wrap - HTML text content carries no such limit, and a long single-sentence string cannot be broken without splitting it away from a support grep.
 const BOOT_HEADLINE = "The settings interface couldn't load.";

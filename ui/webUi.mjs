@@ -61,6 +61,14 @@ const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the pl
  */
 export class webUi {
 
+  /**
+   * The composed feature-options orchestrator that renders the feature-options page.
+   *
+   * Constructed once in the constructor and never reassigned afterward; a plugin reaches through this field directly for the feature-options surface - discovery,
+   * the options view and its skin, sidebar navigation, and search - as the class-level documentation above describes.
+   *
+   * @type {webUiFeatureOptions}
+   */
   featureOptions;
 
   /**
@@ -429,7 +437,7 @@ export class webUi {
       try {
 
         // onSubmit is the one write hook: it validates credentials and persists them. It receives both the current config and a `commit` bound to the session's
-        // single write seam, so the hook owns the shape of the write (it knows credentials live under the controllers array) while the session owns persistence.
+        // single write path, so the hook owns the shape of the write (it knows credentials live under the controllers array) while the session owns persistence.
         if(!(await this.#processHandler(this.#firstRun.onSubmit, { commit: (patch) => this.#session.commit(patch), config: this.#session.platform }))) {
 
           return;
@@ -446,10 +454,10 @@ export class webUi {
         homebridge.enableSaveButton();
       } catch(err) {
 
-        // A first-run submit can throw from two places, and where it threw decides what the user is left looking at. A rejected onSubmit (a failed login or
-        // configuration validation) throws before the page swap, so the first-run page stays fully visible for another attempt. A rejection from
-        // featureOptions.show() after a successful submit throws after the swap, so the main shell is visible with the menu still usable for recovery. In both cases
-        // the toast is the diagnostic, and the finally below brings the spinner down.
+        // A first-run submit can throw from either the onSubmit handler or the feature-options handoff, and where it threw decides what the user is left looking
+        // at. A rejected onSubmit (a failed login or configuration validation) throws before the page swap, so the first-run page stays fully visible for another
+        // attempt. A rejection from featureOptions.show() after a successful submit throws after the swap, so the main shell is visible with the menu still usable
+        // for recovery. Either way the toast is the diagnostic, and the finally below brings the spinner down.
         toastError(err);
       } finally {
 
@@ -593,8 +601,9 @@ export class webUi {
     // later reader sees.
     //
     // This is the page's FIRST bridge call, and an unbounded one would be the worst place to hang: nothing has rendered, so the user sees a spinner over an empty
-    // frame with no diagnostic and no way forward. The deadline takes no signal because none exists to take - the launch runs once per page load with no cycle that
-    // could supersede it - and its failure surfaces through show()'s toast with the menu left usable for another attempt.
+    // frame with no diagnostic and no way forward. The epoch signal exists here but is deliberately not bound to this deadline: a settlement that arrives after a
+    // supersession is caught afterward in show()'s catch via `this.#epochSignal.aborted`, so binding the deadline itself would add no correctness benefit, and its
+    // failure surfaces through show()'s toast with the menu left usable for another attempt.
     this.#session = await withDeadline({ promise: PluginConfigSession.open({ host: homebridge, name: this.#name }), seconds: BOOT_AWAIT_DEADLINE_SECONDS });
 
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
@@ -661,7 +670,7 @@ export class webUi {
    * The first-run hooks accept either a function (synchronous or asynchronous - both forms are awaited via the `await handler()` call below) or a literal truthy
    * value (e.g., a caller that always wants the flow to continue can pass `true`). This helper unifies both shapes into a single `Promise<boolean>` answer so the
    * call sites stay flat. The context object is forwarded to the function form so each hook is a pure function of its injected config (and, for `onSubmit`, the
-   * write seam) rather than reaching for the session or the host itself.
+   * commit callback) rather than reaching for the session or the host itself.
    *
    * @param {Function|*} handler - Caller-supplied handler. When a function, it is awaited; otherwise it is treated as a truthy/falsy continuation flag.
    * @param {FirstRunContext} [context] - The injected context forwarded to the function form of the handler.

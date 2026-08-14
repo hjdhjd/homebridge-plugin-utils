@@ -1231,7 +1231,7 @@ export class FfmpegOptions {
 
     // HKSV is strict about bitrates and format, so smart quality is always disabled for recordings. Every other concern - default merging, clamping hardware flags
     // against the resolved class config, dispatch to the per-platform handler - is identical to the livestream path. The shape below reflects that: `recordEncoder`
-    // overrides smartQuality, then flows through the same machinery as `streamEncoder`. Raspberry Pi is the one platform-specific divergence - its hardware v4l2m2m
+    // overrides smartQuality, then flows through the same machinery as `streamEncoder`. Raspberry Pi is a platform-specific divergence - its hardware v4l2m2m
     // encoder is unreliable for HKSV event recording, so we fall back to libx264 regardless of the resolved `hardwareTranscoding` flag. On every other platform the
     // streaming dispatcher handles the rest.
     const recordingInput: VideoEncoderOptions = { ...options, smartQuality: false };

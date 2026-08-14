@@ -46,6 +46,7 @@ const ruleParenComparisonsInLogical = {
 
     const sourceCode = context.sourceCode;
 
+    // Report and autofix a single comparison operand by wrapping it in parentheses; a no-op when the node is not a comparison or is already parenthesized.
     function reportIfViolation(node) {
 
       if(!isComparison(node) || isParenthesized(sourceCode, node)) {

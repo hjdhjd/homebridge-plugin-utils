@@ -16,9 +16,9 @@ import { installErmPolyfills } from "./polyfills.ts";
  * would leak across every other suite in the process and would say nothing the parametric target does not: the installer's behavior is a function of what its target
  * carries, and a bare object carries nothing, exactly like the runtime floor this module bridges.
  *
- * Importing this module also runs its own top-level install against the real `globalThis`, which is how a consumer's single side-effect import works. On a runtime that
- * already ships the constructors - which every environment this suite runs on does - that install is a no-op by design, so there is nothing observable to assert about
- * it here; the tests below pin the installer's behavior on both arms directly instead.
+ * Importing this module also runs its own top-level install against the real `globalThis`, which is how a consumer's single side-effect import works. Whether the
+ * current runtime ships the constructors natively or sits below the platform floor, that install either supplies the missing shims or is a no-op, so there is nothing
+ * observable to assert about it here regardless of which regime the runtime falls into; the tests below pin the installer's behavior on both arms directly instead.
  */
 
 // Stand-ins that are NOT this package's constructors, so "left untouched" is proven by reference identity rather than by two references that happen to be the same

@@ -1,9 +1,10 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ui/webUi-featureOptions-connection-error.test.mjs: Tests for the connection-error retry display. The path runs when getControllers is provided and
- * getDevices(controller) returns empty: the orchestrator dispatches connection:error and the connection-error view (webUi-featureOptions/views/connectionError.mjs)
- * renders a friendly error block with a retry button that becomes enabled after a configurable delay and, on click, calls show() to attempt a fresh connection. The
- * retry path performs no explicit cleanup(): show()'s internal `await this.hide()` flushes any pending edit and tears down the prior cycle before re-rendering.
+ * getDevices(controller) resolves a non-empty error: the orchestrator dispatches connection:error and the connection-error view
+ * (webUi-featureOptions/views/connectionError.mjs) renders a friendly error block with a retry button that becomes enabled after a configurable delay
+ * and, on click, calls show() to attempt a fresh connection. The retry path performs no explicit cleanup(): show()'s internal `await this.hide()`
+ * flushes any pending edit and tears down the prior cycle before re-rendering.
  */
 "use strict";
 

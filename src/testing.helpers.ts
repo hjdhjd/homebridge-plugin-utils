@@ -87,8 +87,19 @@ export function silentLog(): HomebridgePluginLogging {
  */
 export interface TestLogEntry {
 
+  /**
+   * The severity the log method was called at.
+   */
   level: "debug" | "error" | "info" | "warn";
+
+  /**
+   * The message passed to the log method.
+   */
   message: string;
+
+  /**
+   * The remaining arguments passed to the log method alongside `message`.
+   */
   params: unknown[];
 }
 

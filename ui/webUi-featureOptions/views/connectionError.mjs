@@ -14,8 +14,8 @@ import { selectedController } from "../selectors.mjs";
  * Subscribes to `connection:error`, `devices:loaded`, and `model:loaded`. On `model:loaded` this view yields - it aborts its retry window and stops rendering - and the
  * shared `#headerInfo` container is reclaimed by the header view; it does not itself clear the error display.
  *
- * Renders into the same `#headerInfo` container the priority-chain header uses. The two views coordinate via the `state.status` tag: header yields when
- * status is connection-error; this view yields when status is anything else.
+ * Renders into the same `#headerInfo` container the priority-chain header uses. Views sharing this container coordinate via the `state.status` tag: header
+ * yields when status is connection-error; this view yields when status is anything else.
  *
  * Renders:
  *
@@ -25,7 +25,8 @@ import { selectedController } from "../selectors.mjs";
  *     recovering controller.
  *   - A progress bar that fills during the retry-delay window so the user has visual feedback that the retry button is coming alive.
  *
- * The retry button's click invokes the caller-supplied `onRetry` callback (typically the orchestrator's cleanup + show() sequence).
+ * The retry button's click invokes the caller-supplied `onRetry` callback (typically the orchestrator's show() re-entry, which itself flushes any pending
+ * edit before tearing down and rebuilding the page).
  *
  * An optional `connectionErrorPanel` hook docks plugin-owned content beneath that error block - the surface a plugin uses to offer repair or removal for the very
  * controller the page cannot reach. The framework's own affordances stay primary: the retry flow is entirely the framework's, and the hook neither replaces nor

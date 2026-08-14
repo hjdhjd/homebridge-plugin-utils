@@ -13,7 +13,7 @@ import { selectedDevice } from "../selectors.mjs";
  *
  * Re-renders on every scope change so the stats panel reflects the currently-selected device. The view delegates the actual stats rendering to a caller-supplied
  * `infoPanel` callback - plugins override this to surface plugin-specific device metadata (firmware version, model, status indicators). When no override is
- * supplied, the default callback ({@link defaultInfoPanel}) renders a four-column grid of firmware / serial / model / manufacturer.
+ * supplied, the default callback ({@link defaultInfoPanel}) renders a grid of the device's identity fields.
  *
  * The container is shown when any device is in scope (controller-as-device or regular device) and cleared when the scope is global (no specific device to show
  * stats for - the global view aggregates options across every device).
@@ -58,8 +58,8 @@ export const mountDeviceInfoView = ({ infoPanel = defaultInfoPanel, root, signal
 
 /**
  * The default device identity field set: firmware, serial number, model, and manufacturer, each a `{ label, value }` pair with a missing value rendered as `"N/A"`.
- * The single source for the identity quartet, shared by two renderers - {@link defaultInfoPanel} draws it as the device-stats grid, and the live-status panel imports
- * it as its own identity default - so the field set is defined once rather than mirrored.
+ * The single source for the identity field set, shared by more than one renderer - {@link defaultInfoPanel} draws it as the device-stats grid, and the
+ * live-status panel imports it as its own identity default - so the field set is defined once rather than mirrored.
  *
  * @param {import("../state.mjs").Device} device - The device whose identity fields to read.
  * @returns {{ label: string, value: string }[]} The identity fields in display order.
@@ -80,7 +80,8 @@ export const defaultIdentityFields = (device) => [
  * rendered HTML. Container is rebuilt on every call - replaceChildren handles both the initial render and any subsequent device switch.
  *
  * Takes the same options bag a plugin's own renderer does, so the internal default and the plugin-facing contract are one signature rather than two shapes an
- * adapter has to bridge. It reads only the two keys it needs; the bag's `signal` is for a renderer that registers something, and this one registers nothing.
+ * adapter has to bridge. It reads only the keys it needs (device and panel); the bag's `signal` is for a renderer that registers something, and this one registers
+ * nothing.
  *
  * @param {Object} args
  * @param {import("../state.mjs").Device | undefined} args.device - The device to render stats for, or undefined for global view.

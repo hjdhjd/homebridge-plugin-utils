@@ -210,8 +210,8 @@ ruleTester.run("split-type-imports", rule, {
       output: "import type { A } from \"x\" /* odd */ with { type: \"json\" };\nimport { foo } from \"x\" /* odd */ with { type: \"json\" };"
     },
 
-    // Same-line trailing comment after the declaration's semicolon. The comment survives the rewrite but lands visually attached to the last emitted
-    // declaration, even though the author wrote it for the whole import. Treated as unpreservable.
+    // Same-line trailing comment after the declaration's semicolon. If the autofix ran, the comment would survive but land only on the last emitted
+    // declaration, even though the author wrote it for the whole import - so it is treated as unpreservable and the autofix is suppressed.
     {
 
       code: "import { type A, foo } from \"x\"; // legacy import",

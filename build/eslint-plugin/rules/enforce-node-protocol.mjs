@@ -16,7 +16,7 @@ const NODE_BUILTIN_MODULES = new Set([
 // Find the source literal that should be rewritten with a `node:` prefix, or null when the reference is not a built-in or already correctly prefixed. We
 // look at the top-level module name (split on first `/`) so subpath references match too. For every supported visitor - Import / Export declarations
 // and `ImportExpression` (dynamic `import("x")`) - the typescript-eslint AST places the source literal at `node.source`. A null result means either the
-// value isn't a string (which also covers a declaration with no source clause at all, e.g. `export { foo };`, since `node.source` is then undefined) or
+// value isn't a string (which also covers a declaration with no source clause at all, e.g. `export { foo };`, since `node.source` is then `null`) or
 // the module isn't a builtin.
 function findBuiltinSourceToPrefix(node, value) {
 
@@ -32,6 +32,8 @@ function findBuiltinSourceToPrefix(node, value) {
     return null;
   }
 
+  // By this point value has already been validated as a string, and a string value can only come from a truthy node.source, so the `?? null` fallback
+  // is defensive rather than a path this function actually takes.
   return node.source ?? null;
 }
 

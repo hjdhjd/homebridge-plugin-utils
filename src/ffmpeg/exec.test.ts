@@ -178,7 +178,7 @@ describe("FfmpegExec - stdoutBuffer abnormal-termination contract", () => {
     // Accessing `_stdout` from outside the subclass is unorthodox but intentional: the test exercises the internal collector's error-handling branch, which only
     // fires when the readable surfaces an error. The structural cast reaches past the public `declare readonly stdout: never` narrowing that `FfmpegExec` applies
     // to its own public surface.
-    const script = [ "-e", "process.stderr.write(\"ready\\n\"); process.stdout.write(\"prefix-bytes\"); setInterval(() => {}, 10_000);" ];
+    const script = [ "-e", "process.stderr.write(\"ready\\n\"); process.stdout.write(\"prefix-bytes\"); setInterval(() => {}, 10000);" ];
 
     await using exec = new FfmpegExec(makeOptions(), { args: script });
 

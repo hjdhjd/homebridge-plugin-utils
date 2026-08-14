@@ -17,8 +17,8 @@ import { effect } from "../store.mjs";
  * The view's responsibilities, in order of complexity:
  *
  *   1. **Initial build** on `model:loaded`: builds the empty config table (no categories yet - those come from the first scope-render).
- *   2. **Scope-aware render** on `scope:changed`: detaches the prior view's DOM into a per-device cache, restores or builds the new view's DOM, applies persisted
- *      category-expansion state from localStorage.
+ *   2. **Scope-aware render** on `scope:changed` (and `model:loaded` / `devices:loaded`, which route through the same pass): detaches the prior view's DOM into
+ *      a per-device cache, restores or builds the new view's DOM, applies persisted category-expansion state from localStorage.
  *   3. **Lazy row materialization**: builds a category's row elements the first time that category needs them, which is either the user's own disclosure toggle or
  *      the first projection pass that finds the category open. A category nobody has opened carries no rows at all.
  *   4. **Per-row updates** on `option:set` / `option:cleared` / `options:reset` / `model:reverted` / `persist:failed`: walks the projection and re-derives each
@@ -30,7 +30,8 @@ import { effect } from "../store.mjs";
  *   6. **Busy rendering** while a controller's device list is in flight: the table goes inert - every input disabled, the rows dimmed through a marker class - so
  *      no gesture can land a write at the wrong scope during the window. Derived at every row-state application; see {@link applyBusyState}.
  *   7. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), text-input changes (value-commit
- *      transition + action dispatch). A gesture the model rejects restores the row through the shared applyRowState writer instead of dispatching.
+ *      transition + action dispatch). A gesture that leaves `configuredOptions` unchanged - a rejection, or an arm/disarm - restores the row through the shared
+ *      applyRowState writer instead of relying on the projection walk.
  *   8. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
  *
  * The per-device DOM cache lets navigating from device A to device B and back return to A's previously-rendered DOM without re-running the projection or
@@ -300,6 +301,8 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
 
       pendingPostToggleSync = null;
 
+      // Bail if the page has torn down or nothing is currently mounted - a model:loaded reset can set mountedKey back to undefined while this microtask is
+      // still pending.
       if(signal.aborted || (mountedKey === undefined)) {
 
         return;
@@ -353,11 +356,10 @@ const invalidateCacheForMutation = ({ action, cache, controllers }) => {
   // Device-scope mutation: no cache action. The mounted device is not in the cache, and no other cached view inherits from a leaf device.
 };
 
-// The pre-reactive-store architecture wrote category-state entries under context keys of shape `"Global Options"` (for the global view) or the bare device serial
-// (for any per-device view). The reactive-store refactor unified these under {@link scopeCacheKey}'s output ("global", "controller:X", "device:X/Y"). This helper
-// maps a scope back to the legacy key shape it would have been written under so the restore path can do a one-time migration. Returns null when no legacy shape
-// existed for the given scope kind - the prior architecture never persisted a controller-only view (the controller link click was transient, resolving immediately
-// to a device-view), so controller-scope migrations have no source to read from.
+// Category-state entries may still be stored on disk under an older key shape: `"Global Options"` for the global view, or the bare device serial for a
+// per-device view. This helper maps a scope to that older shape so the restore path can migrate it once. Returns null when no older shape exists for the
+// given scope kind - a controller-only view is never persisted under its own key, since the controller link click is transient and resolves immediately
+// to a device view, so controller-scope migrations have nothing to read from.
 const legacyContextKey = (scope) => {
 
   switch(scope.kind) {
@@ -591,9 +593,10 @@ const applyBusyState = ({ configTable, root = configTable, state }) => {
 // unavailable in some DOM environments (including the test harness), so a manual regex fallback covers those cases.
 const cssEscape = (value) => ((typeof CSS !== "undefined") && CSS.escape) ? CSS.escape(value) : value.replace(/[^\w-]/g, "\\$&");
 
-// Resolve the row element and its projection entry for any input element inside an option row. Shared by the two gesture handlers in handleChange so the checkbox
-// and the value input work from the same projection state. The checkbox's id carries the option's expanded name for both, since the value input has no identity of
-// its own. Returns null when the element sits outside a materialized row or the projection no longer carries the option.
+// Resolve the row element and its projection entry for any input element inside an option row. Shared by handleChange and handleFocusOut (and within
+// handleChange, by both its checkbox and value-input branches), so every caller works from the same projection state. The checkbox's id carries the option's
+// expanded name for both, since the value input has no identity of its own. Returns null when the element sits outside a materialized row or the projection no
+// longer carries the option.
 //
 // The presented view scope rides back alongside the entry, read off the same projection the entry came from, so a handler re-deriving a single row describes the
 // page at exactly the scope the render pass gave every other row.

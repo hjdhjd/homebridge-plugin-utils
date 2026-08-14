@@ -11,9 +11,10 @@ function isInlineTypeSpecifier(specifier) {
   return (specifier.importKind ?? specifier.exportKind) === "type";
 }
 
-// Slide an exclusive end offset forward past a trailing semicolon. The typescript-eslint parser's declaration range[1] usually stops at the source
-// string's closing quote (or the import-attributes clause), leaving the terminating `;` as a separate punctuator token. Sliding forward when the
-// character at the current end is `;` makes the replacement range cover the original semicolon so the rewritten text supplies its own without doubling.
+// Slide an exclusive end offset forward past a trailing semicolon, if present. Under the parser this rule runs against, a declaration's range[1]
+// already extends past a trailing semicolon whenever one is present, so this guard is a no-op in the cases this rule actually parses; it exists to
+// tolerate a parser or grammar variant where the semicolon instead sits just past the declaration's reported end, so the replacement range still
+// covers the original semicolon rather than leaving the rewritten text to double it.
 function includeTrailingSemicolon(sourceCode, end) {
 
   return (sourceCode.text[end] === ";") ? (end + 1) : end;
@@ -21,7 +22,7 @@ function includeTrailingSemicolon(sourceCode, end) {
 
 // Slide an exclusive end offset back past a trailing semicolon. The mirror of `includeTrailingSemicolon` for the case where range[1] already covers the
 // terminator: when the character just before `end` is `;`, return `end - 1` so the resulting offset stops at the last token of the declaration's body.
-// The two helpers together let downstream code work uniformly against either parser configuration.
+// Together the two helpers keep offset math correct whether or not the declaration's reported range happens to include the trailing semicolon.
 function excludeTrailingSemicolon(sourceCode, end) {
 
   return (sourceCode.text[end - 1] === ";") ? (end - 1) : end;
@@ -70,9 +71,9 @@ function declarationIndent(sourceCode, node) {
   return line.slice(0, node.loc.start.column);
 }
 
-// Derive the kind-discriminant strings for a declaration in one place. The rule branches on whether the node is an `ImportDeclaration` or an
+// Derive the kind-tag strings for a declaration in one place. The rule branches on whether the node is an `ImportDeclaration` or an
 // `ExportNamedDeclaration` to pick the message wording, the declaration head keyword, and the kind keyword used by the value-side renderer; centralizing
-// the discriminant derivations keeps them from drifting and gives every downstream consumer one object to read from instead of separate ternaries to evaluate.
+// the tag derivations keeps them from drifting and gives every downstream consumer one object to read from instead of separate ternaries to evaluate.
 function declarationFlavor(node) {
 
   const isImport = node.type === "ImportDeclaration";
@@ -216,7 +217,7 @@ function renderValueDeclaration({ defaultSpec, flavor, sourceText, tailSuffix, v
 // Render the canonical replacement text for a declaration that contains inline `type` specifiers. When the declaration's remaining content (after lifting
 // out the inline types) is empty - no value specifiers and no default - the result is a single top-level `import type` / `export type` declaration. When
 // content remains, the result is two declarations: a type-only declaration first, then a regular declaration carrying the values and any default.
-// Invariant at the call site: `typeSpecs.length > 0` (the `checkDeclaration` short-circuit). By the ECMAScript `ImportClause` grammar this implies no
+// The call site guarantees `typeSpecs.length > 0` (the `checkDeclaration` short-circuit). By the ECMAScript `ImportClause` grammar this implies no
 // namespace specifier sits alongside the named specifiers; by the parser's specifier-kind contract it also implies the declaration is not itself top-level
 // type-only (such a declaration parses with `importKind === "value"` on its specifiers, so `typeSpecs` would have stayed empty).
 function renderSplit({ defaultSpec, flavor, node, sourceCode, typeSpecs, valueSpecs }) {
@@ -291,6 +292,7 @@ const ruleSplitTypeImports = {
       const sourceText = sourceCode.getText(node.source);
       const baseMessage = flavor.kindWord + " from " + sourceText + ": type specifiers must live in a separate `" + flavor.head +
         "` declaration, not as inline `type` qualifiers.";
+      // Narrow the reported range to the type-marked specifiers so the diagnostic underlines the offending tokens rather than the whole declaration.
       const loc = { end: typeSpecs.at(-1).loc.end, start: typeSpecs[0].loc.start };
 
       if(hasUnpreservableCommentInDeclaration(sourceCode, node)) {

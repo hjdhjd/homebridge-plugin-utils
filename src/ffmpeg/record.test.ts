@@ -323,7 +323,7 @@ describe("FfmpegRecordingProcess - nested recording init shape", () => {
 
     await using proc = new FfmpegRecordingProcess(makeOptions(logger), {
 
-      recording: { probesize: 2_500_000, timeshift: 1500 },
+      recording: { probesize: 2500000, timeshift: 1500 },
       recordingConfig: makeRecordingConfig()
     });
 
@@ -425,6 +425,9 @@ async function livestreamArgsWithAudio(audioInput: unknown, overrides: { enableA
 
   await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
 
+    // audioInput arrives typed unknown so each call site can hand this helper a bare string, a partial FMp4AudioInputConfig object, or any other loosely-shaped test
+    // value without pre-satisfying the union up front. Casting through never - TypeScript's bottom type, assignable to any position - forces the value into the
+    // livestream config's audioInput field without pinning it to a specific member of the FMp4AudioInputConfig | string union at this call site.
     livestream: { audioInput: audioInput as never, enableAudio: overrides.enableAudio, url: "rtsp://primary/stream" }
   });
 
@@ -815,6 +818,9 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
     assert.equal(isHbpuAbortReason(proc.signal.reason, "failed"), true,
       "the bridge must forward the assembler's \"failed\" reason onto the process signal when the stdout source errors");
 
+    // The assertion above already establishes, at runtime, that signal.reason is a failed HbpuAbortError; the assembler classification described above attaches
+    // the synthetic stream error as its cause. signal.reason itself stays typed unknown at the AbortSignal boundary, so this cast narrows only for the type
+    // checker, not for a fact TypeScript could otherwise see.
     const reason = proc.signal.reason as { cause?: unknown };
 
     assert.equal(reason.cause, sourceError,

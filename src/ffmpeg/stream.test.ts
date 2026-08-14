@@ -137,9 +137,9 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
     // `"listening"`. The `assert.ok` narrows the `FfmpegStreamingReturnPort | undefined` union for TypeScript.
     assert.ok(proc.returnPort, "fixture pre-condition: returnPort must be set because we configured it");
 
-    // Send exactly ONE datagram and await its delivery. This is the arming packet: it proves the watchdog only fires AFTER liveness is established, which is the
-    // regression guard that the fix did not simply delete the watchdog. Awaiting `sendDatagram` guarantees the packet has been handed to the kernel - and therefore the
-    // message handler has armed - before the silence window opens below.
+    // Send exactly ONE datagram and await its delivery. This is the arming packet: it proves the watchdog only fires AFTER liveness is established, rather than
+    // being armed unconditionally at construction. Awaiting `sendDatagram` guarantees the packet has been handed to the kernel - and therefore the message handler
+    // has armed - before the silence window opens below.
     await sendDatagram(proc.returnPort.port, HEALTH_PAYLOAD);
 
     // Now go silent for longer than the window. The watchdog was armed by the single packet above, so with no further packets it must count down and fire. 250ms is
@@ -155,7 +155,7 @@ describe("FfmpegStreamingProcess - teardown propagation", () => {
 
   test("aborting the process also tears down the health socket", async () => {
 
-    await using proc = new FfmpegStreamingProcess(makeOptions(), { args: stderrThenIdle(), healthTimeout: 5_000, returnPort: { ipFamily: "ipv4", port: 0 } });
+    await using proc = new FfmpegStreamingProcess(makeOptions(), { args: stderrThenIdle(), healthTimeout: 5000, returnPort: { ipFamily: "ipv4", port: 0 } });
 
     await proc.ready;
     assert.ok(proc.returnPort, "fixture pre-condition: returnPort must be set because we configured it");
@@ -180,7 +180,7 @@ describe("FfmpegStreamingProcess - teardown propagation", () => {
     await using proc = new FfmpegStreamingProcess(makeOptions(), {
 
       args: stderrThenIdle(),
-      healthTimeout: 5_000,
+      healthTimeout: 5000,
       returnPort: { ipFamily: "ipv4", port: 0 },
       signal: parent.signal
     });
@@ -228,7 +228,7 @@ describe("FfmpegStreamingProcess - pre-aborted-signal short circuit", () => {
       await using proc = new FfmpegStreamingProcess(makeOptions(), {
 
         args: stderrThenIdle(),
-        healthTimeout: 5_000,
+        healthTimeout: 5000,
         returnPort: { ipFamily: "ipv4", port },
         signal: parent.signal
       });
@@ -266,7 +266,7 @@ describe("FfmpegStreamingProcess - health socket error path", () => {
     await using proc = new FfmpegStreamingProcess(makeOptions(), {
 
       args: stderrThenIdle(),
-      healthTimeout: 5_000,
+      healthTimeout: 5000,
       returnPort: { ipFamily: "ipv4", port: holder.port }
     });
 

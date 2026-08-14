@@ -1,8 +1,9 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-featureOptions-events.test.mjs: Tests for the event delegation that lives in the views (options / search / nav) and the keyboard effect, not in
- * the orchestrator. Companion to webUi-featureOptions.test.mjs - that file pins the show/hide/render/nav lifecycle, this one pins the click / change / input /
- * keydown routes that dispatch user actions into the store, which the reducer and the persistence effect then consume. Tests synthesize DOM events on the live
+ * ui/webUi-featureOptions-events.test.mjs: Tests for the event delegation that lives in the views (options / search / nav) and the keyboard effect, plus the
+ * orchestrator's own window-blur commit-and-flush handler. Companion to webUi-featureOptions.test.mjs - that file pins the show/hide/render/nav lifecycle,
+ * this one pins the click / change / input / keydown routes that dispatch user actions into the store, which the reducer and the persistence effect then
+ * consume, along with the blur handler that commits and flushes a pending edit when focus leaves the page. Tests synthesize DOM events on the live
  * orchestrator instance after show() so the full delegation path runs end-to-end.
  */
 "use strict";

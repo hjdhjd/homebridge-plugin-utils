@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/recording-process.test.ts: Unit tests for the RecordingProcess dependency-inversion seam - the compile-time conformance of the production class and factory,
+ * ffmpeg/recording-process.test.ts: Unit tests for the RecordingProcess dependency-inversion boundary - the compile-time conformance of the production class and factory,
  * plus the shipped FFmpeg-free TestRecordingProcess / TestRecordingProcessFactory doubles (init / segment yielding, abort with a real reason, the pre-init init reject,
  * dual-signal segment termination, the recording stdin sink, and the factory's create-call recording).
  */

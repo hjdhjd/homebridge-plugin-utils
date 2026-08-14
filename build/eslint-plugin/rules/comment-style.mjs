@@ -34,8 +34,9 @@ function formatCodePoint(ch) {
 }
 
 // Find the source range to remove for a decorative-banner-line violation, or null when the comment is not a removable banner. A removable banner is a
-// line comment (block comments use `=`/`-` runs as part of structured JSDoc syntax) whose body matches the banner regex and which is the only content on
-// its source line - banners that share a line with code are left to the contents pass so removing the line does not also delete the code.
+// line comment whose body matches the banner regex and which is the only content on its source line - banners that share a line with code are left to
+// the contents pass so removing the line does not also delete the code. Block comments are excluded because deleting a single interior source line of
+// a multi-line `/* */` comment, rather than the whole comment, risks corrupting its structure, unlike a self-contained line comment.
 function findCommentBannerRange(sourceCode, comment) {
 
   if(comment.type !== "Line") {
@@ -58,6 +59,8 @@ function findCommentBannerRange(sourceCode, comment) {
 
   const lineStart = sourceCode.getIndexFromLoc({ column: 0, line: comment.loc.start.line });
   const nextLine = comment.loc.start.line + 1;
+
+  // Falls back to the end of the source text when the banner is on the last line with no following newline.
   const lineEnd = (nextLine <= sourceCode.lines.length) ?
     sourceCode.getIndexFromLoc({ column: 0, line: nextLine }) :
     sourceCode.text.length;

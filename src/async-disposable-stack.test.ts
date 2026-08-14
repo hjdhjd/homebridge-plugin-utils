@@ -534,8 +534,8 @@ describe("AsyncDisposableStack - differential oracle against the platform global
 
   const nativeAsyncDisposableStack = globalThis.AsyncDisposableStack;
 
-  // Skip only when the platform global is absent, which never happens on the library's test environments. It is documented here for completeness: the oracle needs a
-  // reference implementation to differ against, and that reference is the platform class.
+  // Skip when the platform global is absent. The package's engines floor sits below Node 24, where the platform AsyncDisposableStack first ships as a runtime
+  // global, so a test run on an older Node has no reference implementation for the oracle to differ against and this describe block is skipped entirely.
   const skip = (typeof nativeAsyncDisposableStack === "function") ? false : "the platform AsyncDisposableStack global is absent";
   const scenarios: { name: string; run: (makeStack: StackFactory) => Promise<unknown> }[] = [
 

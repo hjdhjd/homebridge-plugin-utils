@@ -455,13 +455,11 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     channels: recordingConfig.audioCodec.audioChannels,
     codec: recordingConfig.audioCodec.type,
     filters: fMp4Options.audioFilters,
-    // homebridge types `audioCodec.samplerate` more loosely than our local enum, but HKSV only ever supplies a valid `AudioRecordingSamplerate` member, so the `as`
-    // narrows a known-good value into the exhaustive translation table.
-    samplerate: recordingConfig.audioCodec.samplerate as AudioRecordingSamplerate
+    samplerate: recordingConfig.audioCodec.samplerate
   } : undefined;
 
   // The default mirrors FFmpeg's own default probesize and is sufficient to discover the fMP4 stream's parameters before decoding begins.
-  const probesize = recording.probesize ?? 5_000_000;
+  const probesize = recording.probesize ?? 5000000;
   const timeshift = recording.timeshift ?? 0;
 
   // Recording input: read fMP4 data from standard input with low-delay optimizations and an optional timeshift for HKSV event alignment.
@@ -795,7 +793,7 @@ export interface RecordingProcessFactory {
  * ```ts
  * await using proc = new FfmpegRecordingProcess(ffmpegOptions, {
  *
- *   recording: { fps: 30, probesize: 5_000_000, timeshift: 0 },
+ *   recording: { fps: 30, probesize: 5000000, timeshift: 0 },
  *   recordingConfig,
  *   signal: delegate.abortController.signal
  * });

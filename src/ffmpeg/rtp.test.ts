@@ -350,8 +350,8 @@ describe("RtpDemuxer - heartbeat (always-on RTCP replay)", () => {
 
     await demuxer.ready;
 
-    // Send RTCPs spaced under the cadence so each arrival re-arms the heartbeat watchdog before it can fire. We send eight datagrams across roughly one cadence
-    // window plus a margin to make the test's claim stronger: even a near-miss where the gap approaches the cadence still suppresses the heartbeat.
+    // Send RTCPs spaced under the cadence so each arrival re-arms the heartbeat watchdog before it can fire. We send several datagrams across roughly one
+    // cadence window plus a margin to make the test's claim stronger: even a near-miss where the gap approaches the cadence still suppresses the heartbeat.
     const arrivalsTarget = 8;
     const spacingMs = Math.floor(RTCP_HEARTBEAT_INTERVAL / 6);
 
@@ -527,7 +527,7 @@ describe("RtpDemuxer - signal-driven teardown", () => {
 
       parent.abort(parentReason);
 
-      // Give the abort listener a microtask to run.
+      // Give the abort listener a turn of the event loop to run.
       await delay(10);
 
       assert.equal(demuxer.aborted, true);
@@ -798,7 +798,7 @@ describe("PortReservation - disposal", () => {
 describe("RtpPortAllocator - retry and collision paths", () => {
 
   // The retry / collision paths in `#acquirePort` are real production code for hosts under genuine port contention. From outside the class, exercising them
-  // deterministically is constrained by the architecture's commitment to encapsulation (no test-only seams) and by the kernel's port-allocation strategy (modern
+  // deterministically is constrained by the architecture's commitment to encapsulation (no test-only hooks) and by the kernel's port-allocation strategy (modern
   // kernels hand back fresh ports from a 32K-wide ephemeral range, so a collision against a small `#inUse` set is rare). The stress test below makes the collision
   // statistically certain by holding hundreds of count=2 reservations - density rises quadratically in the pool size and the secondPort retry / `#inUse` collision
   // branches both fire reliably long before the loop completes.
@@ -809,9 +809,6 @@ describe("RtpPortAllocator - retry and collision paths", () => {
   //   - Bind failure on a specific port. Requires an external process to hold `firstPort + 1` AND the kernel to randomly hand us that exact firstPort.
   //   - Max-attempts exhaustion. Requires 10 consecutive null returns; cumulative probability is essentially zero without seeding `#inUse` to densities that
   //     would consume the entire ephemeral range.
-  //   - Socket-error re-entry guard. Requires a socket `"error"` event after the demuxer aborts; closing a UDP socket does not normally emit errors, and
-  //     `AbortController.abort()` is already a no-op on a repeat so the guard's real purpose is suppressing a misleading log line during teardown rather than protecting
-  //     the signal reason. The intent is clearly documented in the source comment.
   test("dense pool exercises the secondPort retry and #inUse collision paths", async () => {
 
     // Why this works: each successful count=2 reservation adds two ports to `#inUse`. After N successful reservations there are 2N ports in `#inUse`. The next

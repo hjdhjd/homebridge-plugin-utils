@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 const protocolShapeExercises = (): void => {
 
   // Every kind of the event union constructs at its declared shape.
+  const hello: StatusEvent = { generation: 1, kind: "hello" };
   const connecting: StatusEvent = { kind: "connecting", serialNumber: "abc", session: 1 };
   const snapshot: StatusEvent = { encrypted: true, kind: "snapshot", online: true, rows: [], serialNumber: "abc", session: 2 };
   const row: StatusEvent = { kind: "row", row: { id: "door", value: "Open" }, serialNumber: "abc", session: 3 };
@@ -38,7 +39,7 @@ const protocolShapeExercises = (): void => {
   // @ts-expect-error - encrypted: true paired with online: false is not a member of the union.
   const encryptedOffline: StatusEvent = { encrypted: true, kind: "availability", online: false, serialNumber: "abc", session: 7 };
 
-  void [ connecting, snapshot, row, onlineAvailability, offlineAvailability, errored, template, fullRow, latchRow, viewRequest, emptySizer, encryptedOffline ];
+  void [ hello, connecting, snapshot, row, onlineAvailability, offlineAvailability, errored, template, fullRow, latchRow, viewRequest, emptySizer, encryptedOffline ];
 };
 
 void protocolShapeExercises;

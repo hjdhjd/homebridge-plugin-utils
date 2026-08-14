@@ -191,7 +191,7 @@ export function isTimeoutReason(reason: unknown): boolean {
  * that take a parent signal and attach teardown logic via `addEventListener` silently skip that teardown when the parent is pre-aborted. This helper unifies the
  * register-or-dispatch-immediately shape so every caller handles both cases without re-implementing the check.
  *
- * Returning a `Disposable` serves two patterns through one primitive:
+ * Returning a `Disposable` serves more than one usage pattern through one primitive:
  *
  * - **Long-lived resource-class registrations** (the common case): every HBPU resource class registers its `#teardown` handler in its constructor, intending the
  *   listener to live until the composed signal aborts. These callers discard the return value; the `{ once: true }` listener auto-unregisters on fire.
@@ -573,7 +573,7 @@ export type Logger = HomebridgePluginLogging | Logging;
  * @param base   - The logger that receives the prefixed calls and owns formatting and gating.
  * @param prefix - Supplier for the prefix, evaluated on every call.
  *
- * @returns A {@link HomebridgePluginLogging} whose four levels route to the corresponding levels of `base`.
+ * @returns A {@link HomebridgePluginLogging} whose levels route to the corresponding levels of `base`.
  *
  * @example
  *
@@ -601,7 +601,7 @@ export function prefixedLog(base: Logger, prefix: () => string): HomebridgePlugi
 
 // Re-export the magnitude-and-percentage formatters from the browser-safe `formatters.ts` module. `featureOptions.ts` imports them directly from there (so it can
 // ship into `dist/ui/` without dragging in any of util.ts's Node-only imports); util.ts surfaces them here so server-side consumers see the same public API they
-// always did. The single SSOT is `formatters.ts`; this file is just a forwarding seam.
+// always did. The single SSOT is `formatters.ts`; this file is just a forwarding re-export.
 export { formatBps, formatBytes, formatMs, formatPercent, formatSeconds } from "./formatters.ts";
 
 /**
@@ -642,7 +642,7 @@ export function formatErrorMessage(error: unknown): string {
  */
 export function defaultRetryBackoff(attempt: number): number {
 
-  return Math.min(30_000, 1_000 * (2 ** (attempt - 2)));
+  return Math.min(30000, 1000 * (2 ** (attempt - 2)));
 }
 
 /**
@@ -667,8 +667,8 @@ export interface RetryOptions {
   /**
    * Optional predicate consulted after an attempt throws and attempts remain. Receives the rejected error and the 1-indexed number of the attempt that just failed;
    * return `false` to stop immediately and rethrow that error (no backoff wait, no further attempts), or `true` to retry per the backoff policy. When omitted, every
-   * error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the seam that lets a caller retry some failures and fail fast on others
-   * (e.g. retry network faults but give up on an authentication error) without owning the attempt loop itself.
+   * error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the mechanism that lets a caller retry some failures and fail fast on
+   * others (e.g. retry network faults but give up on an authentication error) without owning the attempt loop itself.
    */
   shouldRetry?: (error: unknown, attemptNumber: number) => boolean;
 
@@ -703,7 +703,7 @@ export interface RetryOptions {
  * const device = await retry(async (signal) => fetchDevice(id, { signal }), {
  *
  *   attempts: 5,
- *   backoff: (attempt) => 1_000 * attempt,
+ *   backoff: (attempt) => 1000 * attempt,
  *   signal: controller.signal
  * });
  * ```
@@ -1230,8 +1230,8 @@ export function guardedDispatch<C extends DispatchCallback>(options:
   const { label, log } = options;
 
   // The callback-less path: with no completion callback to carry a failure, run the handler and log any fault. A synchronous throw and an asynchronous rejection both
-  // surface through the same `await` inside the inner async function, matching the swallow-or-surface envelope `superviseLoop` uses. The `in` check tells the two arities
-  // apart: the callback-less member has no `callback` property at all, so it narrows here while the callback member falls through below.
+  // surface through the same `await` inside the inner async function, matching the swallow-or-surface envelope `superviseLoop` uses. The `in` check tells the callback
+  // and callback-less branches apart: the callback-less member has no `callback` property at all, so it narrows here while the callback member falls through below.
   if(!("callback" in options)) {
 
     const { handler } = options;

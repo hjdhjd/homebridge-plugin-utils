@@ -596,7 +596,7 @@ describe("buildBaseCss - the page kit", () => {
 
     /* The card is the framework's own container frame offered to a plugin's custom views, so its two declared values are the ones every framework container
      * already wears. Happy-DOM expands the `border` shorthand into longhands when its value carries a `var()`, so the color half is read off `border-color` here
-     * rather than out of the shorthand; the source string's byte fidelity is the rule-parity rig's business, and this row's is the declared values.
+     * rather than out of the shorthand; this row checks the declared values, not the shorthand's exact source text.
      */
     assert.match(text, /\.fo-card\s*\{[^}]*1px solid/, "the frame is a hairline border");
     assert.match(text, /\.fo-card\s*\{[^}]*border-color:\s*var\(--fo-border-accent\)/, "and it takes its color from the shared container-frame token");

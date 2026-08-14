@@ -118,8 +118,9 @@ export function makeHdlrBox(handlerType: number, truncate = false): Buffer {
  *
  * @param options                   - Options that shape the emitted box.
  * @param options.useFirstSampleFlags - When `true`, set `TRUN_FLAG_FIRST_SAMPLE_FLAGS` and emit the first-sample-flags field after the optional data_offset.
- * @param options.usePerSampleFlags - When `true`, set `TRUN_FLAG_SAMPLE_FLAGS` and emit a single per-sample flags field after any duration/size slots. Ignored when
- *                                    `useFirstSampleFlags` is also `true` because the predicate consults first_sample_flags first.
+ * @param options.usePerSampleFlags - When `true`, set `TRUN_FLAG_SAMPLE_FLAGS` and emit a single per-sample flags field after any duration/size slots, regardless of
+ *                                    `useFirstSampleFlags`. When `useFirstSampleFlags` is also `true`, `isKeyframe` never reads these trailing bytes because it
+ *                                    returns immediately after consulting `first_sample_flags`.
  * @param options.includeDuration   - When `true`, set `TRUN_FLAG_SAMPLE_DURATION` and reserve a 4-byte per-sample duration slot before the flags slot.
  * @param options.includeSize       - When `true`, set `TRUN_FLAG_SAMPLE_SIZE` and reserve a 4-byte per-sample size slot before the flags slot.
  * @param options.sampleFlagsValue  - The 32-bit value to write into the chosen flags field (first_sample_flags or per-sample flags). Use `0` for a keyframe; use

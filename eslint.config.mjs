@@ -1,11 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * eslint.config.mjs: Linting defaults for Homebridge plugins.
+ * eslint.config.mjs: Applies the shared `hbPluginUtils` lint config, exported to other Homebridge plugins as `./eslint`, to this package's own sources.
  */
 import hbPluginUtils from "./build/eslint-plugin/index.mjs";
 
 export default hbPluginUtils({
 
+  // Every linted file already belongs to a project declared in tsconfig.json's include list, so none need typescript-eslint's default-project fallback.
   allowDefaultProject: [],
 
   // Test-file relaxation. Node's test runner registers `describe()` / `test()` calls as side-effects and awaits them itself, so the "await or explicitly void"

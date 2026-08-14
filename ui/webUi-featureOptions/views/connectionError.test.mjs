@@ -34,6 +34,10 @@ const recordingPanelHook = (bags) => (bag) => {
   }
 };
 
+// Assembles one test's fixture: a fresh `FeatureOptionsStore`, a `root` element mounted in the document, and an `AbortController` whose signal drives
+// `mountConnectionErrorView`'s lifecycle. `connectionErrorPanel`, `onRetry`, and `retryDelayMs` pass straight through to the mount, and supplying `controllers`
+// seeds the store before mounting. Returns `{ abort, root, signal, store }` so a test can dispatch further actions, inspect the mounted DOM, and tie assertions to
+// the same signal the view was mounted with.
 const setup = ({ connectionErrorPanel, controllers, onRetry = () => {}, retryDelayMs = 50 } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });

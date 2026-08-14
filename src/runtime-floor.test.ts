@@ -60,8 +60,8 @@ const SUNSET_CLEANUP = [
 ].join(" ");
 
 // Detect a bare `new DisposableStack()` construction. The shim exists precisely so this reads against an imported class rather than the platform global; the sweep
-// confirms every occurrence in shipped source is backed by the shim import. `using`/`await using` declarations are intentionally NOT swept: the ES2024 compile target
-// downlevels that syntax, so only bare global references survive to the runtime and could break on the Node 22 floor.
+// confirms every occurrence in shipped source is backed by the shim import. `using`/`await using` declarations need no separate detector: the bare construction call
+// the regex targets appears identically regardless of the declaring keyword.
 const NEW_DISPOSABLE_STACK = /new\s+DisposableStack\s*\(/;
 
 // Detect a bare `new AsyncDisposableStack()` construction, held to the same shim-import rule as its synchronous sibling.

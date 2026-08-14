@@ -2,7 +2,8 @@
  *
  * disposable-stack.test.ts: Unit tests for the internal DisposableStack shim - the TC39 Explicit Resource Management contract (last-in-first-out disposal,
  * use()-time dispose-method capture, null/undefined passthrough, registration and move guards, single- and multi-failure aggregation), a forced-fallback control
- * that exercises the in-package SuppressedError branch Node 22 relies on, and a differential oracle that compares the shim against the platform global.
+ * that exercises the in-package SuppressedError branch a pre-Node-24 engines floor relies on, and a differential oracle that compares the shim against the
+ * platform global.
  */
 import { describe, test } from "node:test";
 import { DisposableStack } from "./disposable-stack.ts";

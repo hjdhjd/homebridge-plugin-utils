@@ -6,10 +6,10 @@
 /**
  * The `hblog` command-line logic, written pure-by-injection.
  *
- * {@link runHblog} is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, working/home directories, and
- * the filesystem and transport seams as arguments rather than reading them from globals, and it returns the process exit code rather than calling `process.exit`. That
- * makes the entire flow - argument parsing, `~/.hblog.json` resolution, credential/request mapping, transport orchestration, output formatting, signal handling, and exit
- * codes - exercisable in tests against captured streams and fake transports, with no live server and no real process signals.
+ * {@link runHblog} is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, working/home directories,
+ * and the filesystem and transport dependencies as arguments rather than reading them from globals, and it returns the process exit code rather than calling
+ * `process.exit`. That makes the entire flow - argument parsing, `~/.hblog.json` resolution, credential/request mapping, transport orchestration, output formatting,
+ * signal handling, and exit codes - exercisable in tests against captured streams and fake transports, with no live server and no real process signals.
  *
  * The bin (`cli.ts`) is a thin shell that resolves its own real directory, dynamic-imports this module, and calls {@link runHblog} with the real `process` streams,
  * environment, and directories. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code. The
@@ -110,18 +110,20 @@ export interface CliStream {
 }
 
 /**
- * Options accepted by {@link runHblog}. Every external dependency the CLI touches is an injected seam, so the whole flow runs deterministically in tests.
+ * Options accepted by {@link runHblog}. Every external dependency the CLI touches is passed in as an argument, so the whole flow runs deterministically in tests.
  *
  * @property argv          - The argument vector (typically `process.argv.slice(2)`).
  * @property cwd           - The current working directory. Reserved for future relative-path resolution; the home directory is the config-file anchor today.
  * @property env           - The environment map (typically `process.env`).
- * @property fetch         - Optional `fetch` seam forwarded to the engine's auth and REST transports. Defaults to the global `fetch`.
+ * @property fetch         - Optional `fetch` implementation forwarded to the engine's auth and REST transports. Defaults to the global `fetch`.
  * @property homedir       - The user's home directory, used to locate `~/.hblog.json` unless `HBLOG_CONFIG` overrides the path.
  * @property now           - Optional wall-clock epoch source (milliseconds) used to resolve the `--since`/`--until` time-range expressions against a single deterministic
  *                           instant. Defaults to `systemClock.now`; a test injects a fixed clock so a windowed run's bounds are reproducible.
- * @property readFile      - Optional file-read seam forwarded to the config loader and used to read the package version. Defaults to `node:fs/promises` `readFile`.
- * @property socketFactory - Optional socket-factory seam forwarded to the engine, so a test drives the live tail without a WebSocket. Defaults to the real factory.
- * @property stat          - Optional file-stat seam forwarded to the config loader for the permissions warning. Defaults to `node:fs/promises` `stat`.
+ * @property readFile      - Optional file-read implementation forwarded to the config loader and used to read the package version. Defaults to `node:fs/promises`
+ *                           `readFile`.
+ * @property socketFactory - Optional socket-factory implementation forwarded to the engine, so a test drives the live tail without a WebSocket. Defaults to the real
+ *                           factory.
+ * @property stat          - Optional file-stat implementation forwarded to the config loader for the permissions warning. Defaults to `node:fs/promises` `stat`.
  * @property stderr        - The diagnostics/warnings stream. Production passes `process.stderr`.
  * @property stdout        - The log-data stream. Production passes `process.stdout`.
  *
@@ -462,6 +464,7 @@ function deriveLevels(rawLevels: readonly string[]): ("debug" | "error" | "info"
       throw new UsageError("Unknown --level value \"" + raw + "\"; valid levels are debug, error, info, success, warn.");
     }
 
+    // The cast is safe: the guard above has just confirmed `level` is a member of the literal union via `VALID_LEVELS.has`.
     levels.push(level as "debug" | "error" | "info" | "success" | "warn");
   }
 
@@ -559,7 +562,7 @@ function formatRecord(record: LogRecord, json: boolean, color: boolean): string 
  * authentication failure returns 1. Token redaction is applied at the hard-error stderr writes (the setup failure, a captured stdout write error on either the
  * normal-completion or the catch path, and the streaming catch's generic error); the usage and advisory writes never carry a token.
  *
- * @param options - The injected argument vector, environment, streams, directories, and seams. See {@link RunHblogOptions}.
+ * @param options - The injected argument vector, environment, streams, directories, and dependencies. See {@link RunHblogOptions}.
  *
  * @returns The process exit code: 0 success / clean signal / help / version, 1 connection or auth failure, 2 usage error.
  *
@@ -615,8 +618,9 @@ export async function runHblog(options: RunHblogOptions): Promise<number> {
     connection = resolveConnection({ env: environmentSlice(env), file, flags: connectionFlags(flags) });
     credentials = deriveCredentials(connection);
 
-    // Evaluate the wall-clock seam EXACTLY ONCE so both time-range bounds resolve against a single instant (no cross-flag drift), then derive the window and the request.
-    // The window's bounds are consumed only here (to build the request); the engine's `window` channel owns the time-bounded selection, so nothing downstream re-filters.
+    // Evaluate the wall-clock source EXACTLY ONCE so both time-range bounds resolve against a single instant (no cross-flag drift), then derive the window and the
+    // request. The window's bounds are consumed only here (to build the request); the engine's `window` channel owns the time-bounded selection, so nothing downstream
+    // re-filters.
     const now = (options.now ?? systemClock.now)();
     const windowBounds = deriveWindow(flags, now);
 
@@ -644,7 +648,8 @@ export async function runHblog(options: RunHblogOptions): Promise<number> {
   return streamRecords({ color: wantColor, connection, credentials, filter, flags, levelFilterActive, options, request });
 }
 
-// The default file-read seam: read the file as UTF-8 via `node:fs/promises`. Lazily imported so a caller that injects its own seam pays no Node-filesystem import cost.
+// The default file-read implementation: read the file as UTF-8 via `node:fs/promises`. Lazily imported so a caller that injects its own implementation pays no
+// Node-filesystem import cost.
 async function defaultReadFile(path: string): Promise<string> {
 
   const { readFile } = await import("node:fs/promises");
@@ -861,16 +866,16 @@ function registerSignalHandlers(onSignal: () => void): () => void {
   };
 }
 
-// Wait until the output stream can accept more data (its `drain` event) or the run aborts - whichever comes first. This is the seam-adapted twin of the
+// Wait until the output stream can accept more data (its `drain` event) or the run aborts - whichever comes first. This is the `CliStream`-adapted twin of the
 // `events.once(stream, "drain", { signal })` idiom the BackpressureWriter uses: the narrow `CliStream` is not a full `EventEmitter`, so we race the stream's `drain`
-// against the controller's `abort` over the seam's `on`/`off` hooks by hand. Tying the wait to the signal is required, not decorative - a broken pipe (or a SIGINT)
-// during backpressure aborts the controller, and without the race the run would block forever on a `drain` that a closed pipe never emits. A seam that reports
+// against the controller's `abort` over its `on`/`off` hooks by hand. Tying the wait to the signal is required, not decorative - a broken pipe (or a SIGINT)
+// during backpressure aborts the controller, and without the race the run would block forever on a `drain` that a closed pipe never emits. A `CliStream` that reports
 // backpressure but exposes no event hooks (a capturing test sink) cannot signal drain, so we resolve at once and let the loop proceed.
 function awaitWritable(stream: CliStream, signal: AbortSignal): Promise<void> {
 
-  // A run that is already aborting has nothing to wait for, and a seam that exposes no event hooks (a capturing test sink) cannot signal drain - either way, resolve at
-  // once and let the loop proceed. Guarding the aborted case here also means `onAbort` below never fires its handler inline, so `finish` runs on a later tick when
-  // `registration` is fully initialized.
+  // A run that is already aborting has nothing to wait for, and a `CliStream` that exposes no event hooks (a capturing test sink) cannot signal drain - either way,
+  // resolve at once and let the loop proceed. Guarding the aborted case here also means `onAbort` below never fires its handler inline, so `finish` runs on a later tick
+  // when `registration` is fully initialized.
   if(signal.aborted || !stream.on || !stream.off) {
 
     return Promise.resolve();

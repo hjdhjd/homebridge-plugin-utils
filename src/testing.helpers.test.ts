@@ -52,8 +52,9 @@ describe("silentLog", () => {
 
   test("returns an object with debug/error/info/warn methods that do nothing", () => {
 
-    // Trivial factory, but the test pins the entire surface so a future addition to the HomebridgePluginLogging interface that adds a new method without
-    // updating silentLog would cause silent test failures elsewhere - this test surfaces the gap directly.
+    // Trivial factory, but the test pins the current method surface explicitly rather than relying on structural typing to catch drift. Because silentLog
+    // spreads the typed noOpLog object, TypeScript already rejects a HomebridgePluginLogging addition that noOpLog fails to implement - the real gap this
+    // test guards is a method that compiles cleanly on both the interface and noOpLog but is never added to the assertions below.
     const log = silentLog();
 
     assert.equal(typeof log.debug, "function", "silentLog must expose a .debug method");
@@ -119,8 +120,8 @@ describe("capturingLog", () => {
   test("the entries view is readonly at the type level", () => {
 
     // Per the CapturingLog typedef, `entries` is `readonly TestLogEntry[]`. Tests can read but not push; this prevents accidental in-test corruption of captured
-    // state mid-run. The type-level check is the only enforcement mechanism since `readonly` is erased at runtime - the assignment below would silently succeed
-    // without `@ts-expect-error` policing it.
+    // state mid-run. The type-level check is the only enforcement mechanism since `readonly` is erased at runtime - the property access below would silently
+    // succeed without `@ts-expect-error` policing it.
     const log: CapturingLog = capturingLog();
 
     log.info("anchor");

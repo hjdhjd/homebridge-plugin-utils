@@ -9,8 +9,8 @@ import { describe, test } from "node:test";
 import { parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } from "./docChrome.ts";
 import assert from "node:assert/strict";
 
-// The canonical worked-example manifest. Two masthead badges, one dashboard badge, and two nav sections that between them cover every entry kind: a README anchor, a
-// plain doc, and a doc whose blurb carries "&" and "<...>" so the markdown-verbatim and HTML-escaped surfaces can be told apart.
+// The canonical worked-example manifest. Two masthead badges, one dashboard badge, and two nav sections that between them cover both entry kinds: a README anchor
+// and a plain doc, plus a second doc whose blurb carries "&" and "<...>" so the markdown-verbatim and HTML-escaped surfaces can be told apart.
 const MANIFEST: DocChromeManifest = {
 
   devBadges: [
@@ -151,7 +151,7 @@ describe("renderDocIndex", () => {
 
     /* Heading flush, body indented is the rhythm the hand-authored sections of a support tab establish, so the generated region has to match it or the tab breaks
      * exactly where the hand-authored copy ends. The indent is presentation for that one surface: a markdown bullet list has nowhere to put a class and no reason
-     * to, so the two markdown surfaces are asserted free of it rather than left unstated.
+     * to, so the readme and doc-footer surfaces are asserted free of it rather than left unstated.
      */
     assert.match(webui, /<div class="px-4">\n<ul dir="auto">/, "each webUI section list sits inside the padded wrapper that carries the indent");
     assert.doesNotMatch(webui, /<ul[^>]*class=/, "the list itself carries no class: a padding utility on it would replace its own indentation rather than add to it");

@@ -80,7 +80,7 @@ function stripAnsi(text: string): string {
  *
  * Feed each text chunk through {@link LogLineSplitter.consume} and iterate the raw lines it yields. The splitter carries the bytes of an incomplete trailing line across
  * calls, so a line split across two chunks is reassembled transparently, and it recognizes all four newline conventions the PTY-driven stream mixes (`\r\n`, `\n\r`,
- * `\r`, `\n`) as single line breaks. Crucially, a chunk that ends with a lone `\r` or `\n` holds that terminator in the carry rather than yielding immediately: the next
+ * `\r`, `\n`) as single line breaks. A chunk that ends with a lone `\r` or `\n` holds that terminator in the carry rather than yielding immediately, because the next
  * chunk may begin with the matching second half of a `\n\r`/`\r\n` pair, and emitting eagerly would split one line break into two and inject a phantom blank line.
  *
  * The scan is a single integer cursor over the carried buffer; the buffer is rebuilt once per `consume` (the residual tail becomes the next carry), not once per line,
@@ -124,7 +124,7 @@ export class LogLineSplitter {
     // Prepend the carry only when there is one, keeping the common "chunk completes its own lines and nothing is pending" path free of an empty-string concatenation.
     const buffer = this.#carry.length > 0 ? this.#carry + chunk : chunk;
 
-    // `start` marks the beginning of the current line; `cursor` scans forward looking for terminators. We slice each line's content from `[start, breakStart)` and never
+    // `start` marks the beginning of the current line; `cursor` scans forward looking for terminators. We slice each line's content from `[start, cursor)` and never
     // rebuild `buffer` mid-loop - the residual tail is computed once at the end.
     let start = 0;
     let cursor = 0;

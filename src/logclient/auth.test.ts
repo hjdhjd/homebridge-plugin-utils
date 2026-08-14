@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 // The connection target every test reuses. The auth flow builds `http://localhost:8581/api/auth/...` from these.
 const TARGET = { host: "localhost", port: 8581 };
 
-// Build a `fetch` seam double that captures every request and returns a caller-supplied response. The captured calls let a test assert the URL, method, and body the auth
+// Build a `fetch` double that captures every request and returns a caller-supplied response. The captured calls let a test assert the URL, method, and body the auth
 // flow produced; the response factory lets each test steer success / status / network outcomes.
 function fakeFetch(responder: (url: string, init: RequestInit | undefined) => Promise<Response> | Response): {
   calls: { init: RequestInit | undefined; url: string }[];
@@ -168,9 +168,9 @@ describe("acquireToken - permanent vs transient classification", () => {
 
   test("classifies a 400 from noauth as a permanent protocol error, not an auth-disabled hint", async () => {
 
-    // Fastify (homebridge-config-ui-x 5.x) answers a malformed request with 400, whereas a server that simply is not in no-auth mode answers the no-auth path with 401. A
-    // 400 must therefore read as a request/protocol problem and must never be misreported as "authentication is not disabled" - the exact misdiagnosis a real no-auth
-    // server once produced when the bodyless POST was sent with a JSON content-type.
+    // Fastify (the homebridge-config-ui-x HTTP server) answers a malformed request with 400, whereas a server that simply is not in no-auth mode answers the no-auth
+    // path with 401. A 400 must therefore read as a request/protocol problem and must never be misreported as "authentication is not disabled": a bodyless POST with a
+    // declared JSON content-type is a malformed-request condition, not a credential condition.
     const { fetch } = fakeFetch(() => jsonResponse({ message: "Body cannot be empty when content-type is set to 'application/json'" }, 400));
 
     const error = await acquireToken({ kind: "noauth" }, { ...TARGET, fetch }).catch((e: unknown) => e);

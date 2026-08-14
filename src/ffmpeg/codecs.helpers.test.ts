@@ -40,8 +40,8 @@ describe("makeCodecs - overrides", () => {
   test("ffmpegVersion override flows through to ffmpegMajorVersion and ffmpegAtLeast", () => {
 
     // The version-derived surface delegates to the same parseFfmpegVersionParts / ffmpegVersionAtLeast primitives the real class uses. A version override must
-    // propagate to ffmpegMajorVersion (top-of-triple) and to ffmpegAtLeast comparisons - the masterclass contract is that test code never branches on version
-    // semantics that the production code doesn't.
+    // propagate to ffmpegMajorVersion (top-of-triple) and to ffmpegAtLeast comparisons - the contract is that test code never branches on version semantics
+    // that the production code doesn't.
     const codecs = makeCodecs({ ffmpegVersion: "8.1.2" });
 
     assert.equal(codecs.ffmpegVersion, "8.1.2", "ffmpegVersion getter returns the override verbatim");

@@ -10,8 +10,8 @@ import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../featureOptions.js";
 
-// Catalog fixture: two categories with a mix of boolean, grouped, value-centric, and ungrouped options. Drives visibility, modification, dependency, and value
-// resolution paths.
+// Catalog fixture: a small set of categories with a mix of boolean, grouped, value-centric, and ungrouped options. Drives visibility, modification,
+// dependency, and value resolution paths.
 const CATEGORIES = [
 
   { description: "Motion Options", name: "Motion" },

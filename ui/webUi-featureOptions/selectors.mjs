@@ -87,7 +87,7 @@ export const selectedDeviceId = (state) => {
  * key and no two variants collide.
  *
  * Used as the SSOT identifier for "which view is this" wherever a view's identity matters across mutations or navigations: the in-memory DOM cache keys its
- * entries by this, and the category-state localStorage projection uses the same key as its context identifier. Sharing one identifier across the two consumers
+ * entries by this, and the category-state localStorage projection uses the same key as its context identifier. Sharing one identifier across its consumers
  * means a navigation and a localStorage lookup observe the same notion of "view," and any future code that needs to address a view by id picks up the same
  * convention without inventing a parallel scheme.
  *
@@ -102,7 +102,7 @@ export const selectedDeviceId = (state) => {
  * Delimiter contract: the device-key format relies on serial values not containing the `"/"` character, which matches the MAC-derived hex format Homebridge uses
  * for device and controller serials. A serial containing `"/"` would let the prefix match in {@link mountOptionsView}'s scope-aware cache invalidation over-match
  * unrelated entries. If that assumption ever needs to weaken (e.g., a plugin starts surfacing user-chosen serials), encode the components with
- * `encodeURIComponent` at this seam before composing the key.
+ * `encodeURIComponent` at this point before composing the key.
  *
  * @param {import("./state.mjs").Scope} scope - The scope tag.
  * @returns {string} A stable string key identifying the view.

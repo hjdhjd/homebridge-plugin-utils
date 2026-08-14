@@ -103,7 +103,7 @@ export interface RtpDemuxerInit {
  * ```ts
  * await using demuxer = new RtpDemuxer({
  *
- *   inactivityTimeout: 5_000,
+ *   inactivityTimeout: 5000,
  *   inputPort: audioIncomingPort,
  *   ipFamily: "ipv4",
  *   log,
@@ -383,6 +383,9 @@ export class RtpDemuxer implements AsyncDisposable {
       this.#socket.close();
     });
 
+    // The guard below is necessary: `onAbort` invokes its handler synchronously when the signal is already aborted, and the handler registered immediately above
+    // has already closed the socket and rejected the ready/mediaReady promises by this point. Without it, construction would fall through to `#socket.bind()`
+    // below and operate on a socket that has already been closed.
     if(this.signal.aborted) {
 
       return;
@@ -550,7 +553,7 @@ export class RtpPortAllocator {
     const { count = 1, ipFamily = "ipv4", signal } = init;
 
     // Sanity-check the count. The type system narrows `count` to `1 | 2` at the call site, but a JS consumer can bypass the types and pass anything; widening to
-    // `number` here lets the runtime guard catch the out-of-range case with a clear message rather than an infinite reservation loop.
+    // `number` here lets the runtime guard catch the out-of-range case with a clear message rather than silently treating it as a two-port reservation.
     const requestedCount: number = count;
 
     if((requestedCount !== 1) && (requestedCount !== 2)) {
@@ -564,7 +567,7 @@ export class RtpPortAllocator {
 
       signal?.throwIfAborted();
 
-      // Two-phase commit via ES 2023 Explicit Resource Management. `#acquirePort` atomically adds to `#inUse` and registers the matching release on the stack, so a
+      // Two-phase commit via TC39 Explicit Resource Management. `#acquirePort` atomically adds to `#inUse` and registers the matching release on the stack, so a
       // successful acquire always leaves the port paired with its cleanup. If we return a reservation, `stack.move()` transfers ownership away from scope-bound
       // disposal and the ports stay in `#inUse`. Every other exit path - null-retry `continue`, thrown caller abort, any future exception - hits `using`'s automatic
       // disposal and releases the tentative ports. This is the platform-standard pattern for "acquire, maybe commit, release on failure."

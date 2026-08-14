@@ -134,7 +134,7 @@ class CaptureStream implements CliStream {
   }
 }
 
-// Build a `fetch` seam double. Auth endpoints (login/noauth) answer with a token; the REST log download answers with the supplied lines, or rejects with `downloadError`
+// Build a `fetch` double. Auth endpoints (login/noauth) answer with a token; the REST log download answers with the supplied lines, or rejects with `downloadError`
 // when one is provided (to exercise the failure and redaction paths). Every requested URL is captured for assertions on which channel/credential ran.
 function fakeFetch(options: { downloadError?: Error; lines?: readonly string[] } = {}): { calls: string[]; fetch: typeof fetch } {
 
@@ -184,8 +184,8 @@ function realSocketFactory(): { socketFactory: LogSocketFactory; wsFactory: Test
   return { socketFactory, wsFactory };
 }
 
-// A default `readFile` seam that always reports the file is missing (an ENOENT-shaped rejection), so the config loader never touches the real `~/.hblog.json` and
-// resolution falls through to env/flags/defaults. Tests that exercise `--version` or the config file override `readFile` with their own.
+// A default `readFile` implementation that always reports the file is missing (an ENOENT-shaped rejection), so the config loader never touches the real `~/.hblog.json`
+// and resolution falls through to env/flags/defaults. Tests that exercise `--version` or the config file override `readFile` with their own.
 async function missingFileReadFile(): Promise<string> {
 
   const error = new Error("ENOENT") as Error & { code: string };
@@ -195,7 +195,7 @@ async function missingFileReadFile(): Promise<string> {
   throw error;
 }
 
-// Build the base runHblog options with capturing streams and a default environment/home. Individual tests override `argv`, `env`, the streams, and the transport seams.
+// Build the base runHblog options with capturing streams and a default environment/home. Individual tests override `argv`, `env`, the streams, and the transport doubles.
 function makeOptions(overrides: Partial<RunHblogOptions> & { argv: readonly string[] }): { options: RunHblogOptions; stderr: CaptureStream; stdout: CaptureStream } {
 
   const stdout = (overrides.stdout as CaptureStream | undefined) ?? new CaptureStream();
@@ -665,7 +665,7 @@ describe("runHblog - backpressure", () => {
   });
 });
 
-// Build a `fetch` seam whose REST log-download resolves only when the returned `resolveHistory` is invoked, mirroring client.test.ts. The deferred history lets a
+// Build a `fetch` double whose REST log-download resolves only when the returned `resolveHistory` is invoked, mirroring client.test.ts. The deferred history lets a
 // follow-history test buffer the socket's full seed before history finishes, making the socket-first stitch ordering deterministic rather than timing-dependent.
 function deferredFetch(historyLines: readonly string[]): { fetch: typeof fetch; resolveHistory: () => void } {
 

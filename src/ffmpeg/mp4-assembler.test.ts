@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/mp4-assembler.test.ts: Unit tests for the Mp4SegmentAssembler - init/segment split contract, timeout semantics, signal-aware termination, and
- * AsyncDisposable teardown driven by in-memory fixture Readables.
+ * ffmpeg/mp4-assembler.test.ts: Unit tests for the Mp4SegmentAssembler - init/segment split contract, timeout semantics, signal-aware termination,
+ * AsyncDisposable teardown, the permanent source-error absorber, and the kind-tagged stream() view, driven by in-memory fixture Readables.
  */
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";

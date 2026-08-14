@@ -98,8 +98,8 @@ export class RtpPacketParser {
       return;
     }
 
-    // Payload type lives in the low seven bits of the second header byte (the top bit is the marker bit in RTP and the padding bit in RTCP; we only care about the
-    // low seven here).
+    // Payload type lives in the low seven bits of the second header byte (the top bit is the marker bit in RTP and simply the high bit of the 8-bit Packet
+    // Type field in RTCP; we only care about the low seven here).
     const payloadType = datagram.readUInt8(1) & 0x7F;
 
     // Classification follows the RFC 5761 demux rule: values above 90 and the distinguished value 0 are RTP; everything else is RTCP. The split is intentionally

@@ -50,6 +50,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
 
   let debounceTimer = null;
 
+  // Clear any pending debounce timer on teardown so a stale filter:changed never dispatches against a torn-down store.
   signal.addEventListener("abort", () => {
 
     clearTimeout(debounceTimer);
@@ -75,7 +76,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
   });
 
   // Counts and visible-toggle pill highlight update on any state change that touches the projection. Reading the projection here hits the memoized cache when
-  // nothing relevant changed (e.g., a scope:changed that resolves to the same view returns the cached projection in O(1)).
+  // nothing relevant changed (e.g., a devices:loaded outcome that misses the pending request returns state unchanged, so the read hits the cached projection).
   effect({
 
     events: [ "model:loaded", "option:set", "option:cleared", "options:reset", "model:reverted", "filter:changed", "scope:changed", "devices:loaded" ],

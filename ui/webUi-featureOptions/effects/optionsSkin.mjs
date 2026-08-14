@@ -78,8 +78,8 @@ const buildOptionsSkinCss = () => [
   // `contain-intrinsic-size` provides a placeholder height (heuristic 200px average) so scroll position stays stable as open categories enter and leave the viewport.
   // It MUST stay scoped to `details[open]`: a collapsed category's rows container is empty (rows materialize lazily on first expand), and leaving content-visibility on
   // it makes the browser hold the `contain-intrinsic-size` placeholder height instead of letting the closed disclosure collapse the container to zero. This is the
-  // defined behavior of content-visibility, not an engine quirk - it was observed identically in Chromium and WebKit, and was the source of the large empty gaps
-  // between collapsed categories. Scoping to open categories keeps the optimization where rows actually exist and lets collapsed categories collapse to zero.
+  // defined behavior of content-visibility, not an engine quirk, confirmed identically in Chromium and WebKit. Scoping to open categories keeps the optimization where
+  // rows actually exist and lets collapsed categories collapse to zero.
   "details[open] > .fo-category-rows { content-visibility: auto; contain-intrinsic-size: 0 200px; }",
 
   // Per-row subgrid inheriting the parent's column tracks. The checkbox top-aligns (align-items: start) so that on a multi-line label - or a value option whose field
@@ -158,11 +158,12 @@ const buildOptionsSkinCss = () => [
   // link-lost message already uses. The class selector outweighs the `code` element's own default color.
   ".fo-failure-text { color: var(--fo-text-attention); }",
 
-  // Responsive hiding for device stats grid. `@container` (not `@media`) so the breakpoints fire on the panel's actual width, not the viewport. Progressive
-  // degradation: as the container narrows, the last stat hides first, then the second-to-last, etc., so the most-important left-most stat (Firmware) stays visible
-  // longest. Each rule qualifies the grid with `:not(.fo-status-grid)` so the status panel is exempt: the status grid reserves every column at its maximum width and
-  // never hides a cell, and the exemption keyed on the grid token encodes that no-hide policy explicitly, so a page that later nests the container under a container
-  // ancestor cannot silently reintroduce cell-hiding for it.
+  // Responsive hiding for device stats grid. `@container` (not `@media`) so the breakpoints fire on the panel's actual width, not the viewport. Progressive degradation:
+  // as the container narrows, the last stat hides first, then the second-to-last, etc., so the most-important left-most stat (Firmware) stays visible longest. Each rule
+  // qualifies the grid with `:not(.fo-status-grid)` so the status panel is exempt: the status grid reserves every column at its maximum width and never hides a cell, and
+  // the exemption keyed on the grid token encodes that no-hide policy explicitly, so a page that later nests the container under a container ancestor cannot silently
+  // reintroduce cell-hiding for it. The final rule, hiding `#statusInfo` at 400px, targets a different element entirely, the search view's own status bar rather than a
+  // `.device-stats-grid` stat item, so its threshold sits on an independent scale instead of continuing the stat items' descending sequence.
   "@container (max-width: 700px) { .device-stats-grid:not(.fo-status-grid) .stat-item:nth-last-of-type(1) { display: none !important; } }",
   "@container (max-width: 500px) { .device-stats-grid:not(.fo-status-grid) .stat-item:nth-last-of-type(2) { display: none !important; } }",
   "@container (max-width: 300px) { .device-stats-grid:not(.fo-status-grid) .stat-item:nth-last-of-type(3) { display: none !important; } }",
@@ -180,11 +181,11 @@ const buildOptionsSkinCss = () => [
   ".nav-header { border-bottom: 1px solid var(--fo-border-subtle); margin-bottom: var(--fo-space-xxs); " +
     "padding: var(--fo-space-xs) var(--fo-space-md) !important; font-size: var(--fo-font-size-xs) !important; line-height: 1.2; }",
   "#devicesContainer .nav-header, #controllersContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: var(--fo-space-sm) !important; }",
-  /* Global Options: a row that keys with the page's control vocabulary. Everything control-shaped here reads uppercase - the host's own stylesheet uppercases every
-   * button it renders, and the section headings are uppercase by the rule above - so a row in sentence case is the one thing on the page that looks like neither,
-   * anchored to no section and matching no control. Wearing the heading family's case, scale, and weight settles it into that vocabulary, while what separates it
-   * from an actual heading stays exactly what it was: the row container it is built as, the hover tint, the accent fill when selected, and the kind glyph. The
-   * affordances carry "clickable", never the case.
+  /* Global Options: a row that keys with the page's control vocabulary. Everything control-shaped reads uppercase - the host's own stylesheet uppercases every button
+   * it renders, and the section headings are uppercase from the `text-uppercase` utility class the nav view stamps in markup - so a row in sentence case is the one thing
+   * on the page that looks like neither, anchored to no section and matching no control. Wearing the heading family's case, scale, and weight settles it into that
+   * vocabulary, while what separates it from an actual heading stays what it was: the row container it is built as, the hover tint, the accent fill when selected,
+   * and the kind glyph. The affordances carry "clickable", never the case.
    *
    * The type comes from the heading family and reads its token rather than restating a value: `--fo-font-size-xs` is the size the section headings resolve to, and 600
    * is their weight, so the row and the headings track one scale and a change to it moves both. The token is what "the heading scale" means here, since a heading

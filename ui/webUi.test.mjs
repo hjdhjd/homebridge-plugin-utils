@@ -1,10 +1,14 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi.test.mjs: Unit tests for the webUi orchestrator - constructor wiring, show() lifecycle, the two routing branches (feature-options vs first-run), the
- * first-run click flow, menu listeners over whichever buttons the page carries, and the #processHandler function-vs-truthy normalization. The orchestrator's
- * inner webUiFeatureOptions instance is constructed against the real implementation so the constructor's DOM-binding contract is exercised end-to-end, but the
- * inner instance's `show()` and `hide()` methods are stubbed per-test so the orchestrator's call ordering is verified without re-exercising the entire feature-
- * options rendering pipeline (which has its own dedicated suite in `webUi-featureOptions.test.mjs`).
+ * ui/webUi.test.mjs: Unit tests for the webUi orchestrator - constructor wiring and page-epoch claiming, show() lifecycle across the feature-options and
+ * first-run routing branches, the first-run click flow, menu listeners over whichever buttons the page carries, the #processHandler function-vs-truthy
+ * normalization, the boot-monitor handshake, the deadline-bounded launch race, the epochSignal/epochBounded/on() epoch-composition surfaces, the liveness
+ * resume detector threaded end to end through a mounted status panel, and the page-lifetime theming registration. The orchestrator's inner webUiFeatureOptions
+ * instance is constructed against the real implementation so the constructor's DOM-binding contract is exercised end-to-end. By default the harness stubs the
+ * inner instance's `show()` and `hide()` methods so the orchestrator's call ordering is verified without re-exercising the entire feature-options rendering
+ * pipeline (which has its own dedicated suite in `webUi-featureOptions.test.mjs`); the tab-switch reconciliation ordering, the real menu-path re-entry walk,
+ * the deadline-bounded launch race, and the end-to-end resume-detector suites instead opt into the harness's `unstubbed: true` mode to drive the real pipeline,
+ * since a stub's call record cannot express the orderings those suites verify.
  */
 "use strict";
 
@@ -438,8 +442,8 @@ describe("webUi.show - menu wiring", () => {
     harness.featureOptionsCalls.length = 0;
     harness.skeleton.menuSettings.click();
 
-    // #showSettings is now async (it awaits featureOptions.hide() before revealing the schema form), so the class swap and showSchemaForm land in the handler's
-    // try/finally after the awaited hide(). Flush past the handler's microtasks before asserting the post-reveal state.
+    // #showSettings awaits featureOptions.hide() before revealing the schema form, so the class swap and showSchemaForm land in the handler's try/finally
+    // after the awaited hide(). Flush past the handler's microtasks before asserting the post-reveal state.
     await flushPending();
 
     // The settings tab is the schema-form view: the orchestrator hides the inner feature-options instance, calls homebridge.showSchemaForm, and paints the menu with
@@ -465,7 +469,7 @@ describe("webUi.show - menu wiring", () => {
     harness.featureOptionsCalls.length = 0;
     harness.skeleton.menuHome.click();
 
-    // #showSupport is now async (it awaits featureOptions.hide() before revealing the support page), so flush past the handler's microtasks before asserting.
+    // #showSupport awaits featureOptions.hide() before revealing the support page, so flush past the handler's microtasks before asserting.
     await flushPending();
 
     assert.deepEqual(harness.featureOptionsCalls, ["hide"], "menuHome click must hide the inner feature-options view");
@@ -488,10 +492,10 @@ describe("webUi.show - menu wiring", () => {
      * after the skeleton is built and before show() runs is what puts the launch in front of it, since the binds happen inside the launch rather than in the
      * constructor.
      *
-     * The first two assertions are the ones that tell a page that tolerates the gap from a page that merely survives it. An unconditional bind throws on the absent
-     * button BEFORE the launch routes to the initial view, and show()'s catch turns that throw into a toast rather than a rethrow - so a launch that leaves the
-     * feature-options view unshown and an error toast behind is the failure this pins, and clicking afterwards would not reveal it (the menu-button handler re-runs
-     * the launch on its own when no session was established).
+     * The featureOptionsCalls and toasts assertions below are the ones that tell a page that tolerates the gap from a page that merely survives it. An
+     * unconditional bind throws on the absent button BEFORE the launch routes to the initial view, and show()'s catch turns that throw into a toast rather than
+     * a rethrow - so a launch that leaves the feature-options view unshown and an error toast behind is the failure this pins, and clicking afterwards would not
+     * reveal it (the menu-button handler re-runs the launch on its own when no session was established).
      */
     harness.skeleton.menuSettings.remove();
 
@@ -551,8 +555,8 @@ describe("webUi.show - menu listener idempotence across repeated launches", () =
       firstRun: { isRequired: () => false }
     });
 
-    // Two full launch cycles against the same page. #launchWebUI binds the persistent menu listeners once for the page lifetime; before the fix it re-registered
-    // all three on every launch with no removal, so the second cycle stacked a second handler on each button and a single click then fired its handler twice.
+    // Two full launch cycles against the same page. #launchWebUI binds the persistent menu listeners once for the page lifetime; the one-shot #menuBound guard
+    // exists because a repeated launch must not stack a second handler on each button, which would fire every tab switch twice.
     await harness.ui.show();
     await harness.ui.show();
 
@@ -741,9 +745,10 @@ describe("webUi - first-run handler normalization", () => {
 
   test("with only isRequired supplied, the default onStart / onSubmit drive a complete first-run cycle", async () => {
 
-    // Exercise of the two no-op default handlers in one cycle. The plugin supplies only `isRequired: () => true` to opt into the first-run route; onStart and onSubmit
-    // stay at their `() => true` defaults. onStart's default lets the first-run page render; onSubmit's default lets the click handler swap to the menu and enable
-    // save. This pins that a plugin author who provides only the gate - the minimal first-run opt-in - drives a working end-to-end flow through the unmodified defaults.
+    // Exercise of the onStart / onSubmit no-op defaults in one cycle. The plugin supplies only `isRequired: () => true` to opt into the first-run route; onStart
+    // and onSubmit stay at their `() => true` defaults. onStart's default lets the first-run page render; onSubmit's default lets the click handler swap to the
+    // menu and enable save. This pins that a plugin author who provides only the gate - the minimal first-run opt-in - drives a working end-to-end flow through
+    // the unmodified defaults.
     using harness = makeWebUiHarness({ firstRun: { isRequired: () => true }, name: "MyPlugin" });
 
     await harness.ui.show();
@@ -885,7 +890,7 @@ describe("webUi - real menu-path re-entry (the full pipeline through webUi's own
     assert.fail("the page did not render on " + leg);
   };
 
-  // Walk the real menu the way a user does, through webUi's own click listeners, asserting a full re-render on every return to Feature Options. The S1-era gap this
+  // Walk the real menu the way a user does, through webUi's own click listeners, asserting a full re-render on every return to Feature Options. The gap this
   // closes is that a stubbed inner instance can only prove the handler fired - it cannot prove the page came back.
   const walkTheMenu = async ({ featureOptions }) => {
 
@@ -1958,7 +1963,7 @@ describe("webUi.registerTheming - the page-lifetime theming surface", () => {
     await harness.ui.show();
     await flush();
 
-    // The three sheets the page carries while the options view is on screen, told apart by a rule only each one declares.
+    // The sheets the page carries while the options view is on screen, told apart by a rule only each one declares.
     const sheetTexts = () => document.adoptedStyleSheets.map((sheet) => [...sheet.cssRules].map((r) => r.cssText).join("\n"));
     const carries = (needle) => sheetTexts().some((text) => text.includes(needle));
 

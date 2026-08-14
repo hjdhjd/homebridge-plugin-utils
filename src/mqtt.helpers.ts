@@ -16,7 +16,7 @@
  * - `RtpDemuxer` tests bind real UDP sockets on localhost ephemeral ports (real wire, real OS networking).
  * - `webUiFeatureOptions` tests run against happy-dom (real DOM API surface).
  *
- * MQTT testing now joins that family: real `mqtt.connect()` over real TCP loopback to a real (in-process) broker. Drift risk against mqtt.js's evolving API is
+ * MQTT testing follows the same real-substrate pattern: real `mqtt.connect()` over TCP loopback to an in-process broker. Drift risk against mqtt.js's evolving API is
  * structurally eliminated - aedes and mqtt.js are co-developed by the same maintainers, and this helper interacts with both through their stable public surfaces.
  *
  * Files matching `*.helpers.ts` are excluded from both the compiled `dist/` build emit (see `tsconfig.build.json`) and the TypeDoc API docs output (see `typedoc.json`)
@@ -212,6 +212,9 @@ export function recordClientPublishes(broker: TestBroker): ClientPublishRecorder
       return;
     }
 
+    // The packet's `payload` field is typed as `Buffer | string` to accommodate locally-constructed publish packets, but a packet arriving through this event was
+    // parsed off the wire by mqtt-packet, which slices the payload directly out of the incoming byte stream as a Buffer - the string branch never applies to a
+    // client-originated publish.
     entries.push({ payload: (packet.payload as Buffer).toString(), topic: packet.topic });
     first.resolve();
   });

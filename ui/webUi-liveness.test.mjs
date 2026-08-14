@@ -177,8 +177,8 @@ describe("createRequestWatchdog", () => {
 
     watchdog.watch(hangingPromise());
 
-    // Advance most of the way to the first arm's deadline, THEN watch a second request. A implementation that re-armed on every watch would push the trip out to
-    // eight seconds from here; the shared timer must still fire on the FIRST arm's schedule, two seconds from here.
+    // Advance most of the way to the first arm's deadline, THEN watch a second request. An implementation that re-armed on every watch would push the trip out
+    // to ten seconds from here; the shared timer must still fire on the FIRST arm's schedule, two seconds from here.
     t.mock.timers.tick(8000);
     watchdog.watch(hangingPromise());
 

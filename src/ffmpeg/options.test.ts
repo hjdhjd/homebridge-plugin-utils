@@ -91,7 +91,8 @@ const RASPBIAN_CODECS: CodecsInit = {
 };
 
 // Hardware-mode presets. Named combinations of the two plugin-level flags (`hardwareDecoding`, `hardwareTranscoding`) that the tests branch on. Software-only
-// mode is the default - `makeOptions(codecs)` with no second arg produces it - so it needs no preset. Per-test boolean sprawl migrates to these three names.
+// mode is the default - `makeOptions(codecs)` with no second arg produces it - so it needs no preset. Tests use these three named presets instead of repeating
+// hardwareDecoding/hardwareTranscoding booleans per call site.
 const HW_FULL:      MakeOptionsFlags = { hardwareDecoding: true,  hardwareTranscoding: true  };
 const HW_TRANSCODE: MakeOptionsFlags = { hardwareDecoding: false, hardwareTranscoding: true  };
 const HW_DECODE:    MakeOptionsFlags = { hardwareDecoding: true,  hardwareTranscoding: false };
@@ -1601,7 +1602,7 @@ describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)",
   const scaleVtChain = "scale_vt=-2:min(ih\\, 1080)";
   const vppQsvChain = "vpp_qsv=format=same:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)";
 
-  // The caller filters as the encoder appends them: the leading separator that joins them onto a non-empty chain, then the two filters comma-joined.
+  // The caller filters as the encoder appends them: the leading separator that joins them onto a non-empty chain, then the caller's filters comma-joined.
   const callerTail = ", " + CALLER_VIDEO_FILTERS.join(", ");
 
   test("software path appends the caller filters at the chain tail with a single separator", () => {

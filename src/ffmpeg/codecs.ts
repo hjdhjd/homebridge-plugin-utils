@@ -38,7 +38,7 @@ const execFileAsync = promisify(execFile);
 // Default watchdog timeout, in milliseconds, applied to every probe invocation so a slow or hung FFmpeg binary cannot stall the host plugin indefinitely. Thirty
 // seconds comfortably exceeds the realistic worst-case probe (the hardware-acceleration validation on slow Raspberry Pi hosts) while keeping a crashed binary from
 // parking a plugin forever.
-const PROBE_DEFAULT_TIMEOUT_MS = 30_000;
+const PROBE_DEFAULT_TIMEOUT_MS = 30000;
 
 // Codec-line regexes for `parseFfmpegCodecs`. Compiled once at module scope to match the convention used for `VALID_HOMEKIT_NAME`, `NON_PRINTABLE_CHARS`, and the other
 // hot-path patterns in this package - regex construction per call is wasted work, even on the cold probe path, when one regex serves every line of every probe.
@@ -705,7 +705,7 @@ function probeHwOs(): { hostSystem: string; cpuGeneration: number } {
             cpuGeneration = 1;
           } else if(skuStr.length > 4) {
 
-            // For five-digit SKUs, the generation are the leading digits before the last three.
+            // For five-digit SKUs, the generation is the leading digits before the last three.
             cpuGeneration = Number(skuStr.slice(0, skuStr.length - 3));
           } else {
 
@@ -837,6 +837,7 @@ async function probeCmd(command: string, commandLineArgs: string[], processOutpu
     return true;
   } catch(error) {
 
+    // execFileAsync is the promisified execFile, which rejects with a Node ExecException-shaped error - that convention is what makes this cast safe.
     const execError = error as ExecException;
 
     if(execError.code === "ENOENT") {

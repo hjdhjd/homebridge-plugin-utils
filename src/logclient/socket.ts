@@ -27,9 +27,9 @@
  * - A Socket.IO CONNECT_ERROR (`44/log,`) on the namespace is surfaced as a connect-phase failure - transient and retried for a refreshable credential (password/noauth),
  *   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
  *
- * Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, clears the
- * watchdog, and settles the parked stdout waiter exactly once. The class introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a
- * near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
+ * Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, and settles
+ * the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. The class
+ * introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
  *
  * @module
  */
@@ -47,11 +47,12 @@ import { socketUrl } from "./endpoints.ts";
 const DEFAULT_STDOUT_HIGH_WATER = 10000;
 
 /**
- * A minimal WebSocket surface the {@link LogSocket} depends on, so the concrete implementation (the platform global `WebSocket`, or a test double) is an injected seam.
+ * A minimal WebSocket surface the {@link LogSocket} depends on, so the concrete implementation (the platform global `WebSocket`, or a test double) is an injected
+ * dependency.
  *
  * The shape is the subset of the DOM `WebSocket` interface the socket actually uses: the four lifecycle events via `addEventListener`, `send` for outbound frames,
- * `close` for teardown, and `readyState` (compared against {@link WEBSOCKET_OPEN}) so teardown can gate the namespace-disconnect frame on an open connection. Modeling
- * the seam as this narrow interface rather than the full `WebSocket` keeps a test double small and makes the socket's exact dependency surface explicit.
+ * `close` for teardown, and `readyState` (compared against {@link WEBSOCKET_OPEN}) so teardown can gate the namespace-disconnect frame on an open connection. Keeping
+ * this interface narrow, rather than the full `WebSocket`, keeps a test double small and makes the socket's exact dependency surface explicit.
  *
  * @category Log Client
  */
@@ -67,7 +68,7 @@ export interface WebSocketLike {
 }
 
 /**
- * The factory seam that constructs a {@link WebSocketLike} for a given connect URL.
+ * The factory that constructs a {@link WebSocketLike} for a given connect URL.
  *
  * The production factory wraps the platform global `WebSocket`; a test substitutes a factory that returns a controllable double, so the whole socket state machine -
  * handshake, ping/pong, reconnect, teardown - is exercised without a real network.
@@ -93,20 +94,20 @@ export type WebSocketFactory = (url: string) => WebSocketLike;
 export type TokenProvider = (signal: AbortSignal) => Promise<string>;
 
 /**
- * The numeric `readyState` value denoting an open WebSocket. The DOM `WebSocket.OPEN` constant is `1`; we name it as a module constant so the seam interface does not
- * have to carry the static constant and teardown can gate on it without depending on the concrete class.
+ * The numeric `readyState` value denoting an open WebSocket. The DOM `WebSocket.OPEN` constant is `1`; we name it as a module constant so the {@link WebSocketLike}
+ * interface does not have to carry the static constant and teardown can gate on it without depending on the concrete class.
  *
  * @category Log Client
  */
 export const WEBSOCKET_OPEN = 1;
 
 /**
- * The production {@link WebSocketFactory}: constructs the platform global `WebSocket`. A consumer holds the factory typed as the seam abstraction; a test substitutes a
- * double. The platform `WebSocket` begins connecting on construction, which is exactly the factory contract.
+ * The production {@link WebSocketFactory}: constructs the platform global `WebSocket`. A consumer holds the factory typed as the {@link WebSocketFactory} abstraction;
+ * a test substitutes a double. The platform `WebSocket` begins connecting on construction, which is exactly the factory contract.
  *
  * @param url - The connect URL.
  *
- * @returns A live platform `WebSocket`, typed as the {@link WebSocketLike} seam.
+ * @returns A live platform `WebSocket`, typed as the {@link WebSocketLike} interface.
  *
  * @category Log Client
  */
@@ -182,8 +183,9 @@ export function reconnectBackoff(attempt: number, random: () => number = Math.ra
 }
 
 // A single connected session: the live WebSocket, the per-session controller whose signal ends the streaming phase, the ping cadence the Engine.IO open handshake
-// advertised (used to size the liveness watchdog), and a one-shot `closed` latch. The controller is composed under the socket's lifetime signal, so a socket-level abort
-// ends the session too; a session-level abort (close, error, watchdog) ends only this session and lets the outer loop reconnect. The `closed` latch makes the WebSocket
+// advertised (used to size the liveness watchdog), and a one-shot `closed` latch. A composed signal built fresh from the socket's lifetime signal and the controller's
+// own signal governs both the connect-phase and streaming-phase teardown, so a socket-level abort ends the session too; a session-level abort (close, error, watchdog)
+// ends only this session and lets the outer loop reconnect. The `closed` latch makes the WebSocket
 // teardown safe to run twice: both the streaming phase's post-end cleanup and the socket-level teardown can race to close the same session, and the latch ensures the
 // DISCONNECT-and-close sequence runs exactly once rather than twice.
 interface Session {
@@ -197,7 +199,7 @@ interface Session {
 
 /**
  * The consumer-facing surface of a live-log socket: the minimal interface a client reads off a {@link LogSocket}. This is the product half of the socket
- * dependency-inversion seam, so a client depends on this narrow interface rather than the concrete {@link LogSocket} and a test can substitute a fake that yields
+ * dependency-inversion boundary, so a client depends on this narrow interface rather than the concrete {@link LogSocket} and a test can substitute a fake that yields
  * caller-supplied lines without standing up a WebSocket. Every member is defined on {@link LogSocket}, so the real class satisfies it by `implements` with zero runtime
  * change.
  *
@@ -236,9 +238,10 @@ export interface LogSocketLike extends AsyncDisposable {
 }
 
 /**
- * The creational half of the socket dependency-inversion seam: build a {@link LogSocketLike} from the socket init. A client holds this factory typed as the abstraction
- * and constructs through it, so a test can substitute a factory that returns a fake socket. The production factory is {@link logSocketFactory}, whose `create` is exactly
- * the {@link LogSocket} constructor call, so routing construction through this seam is behavior-neutral - mirroring the `RecordingProcessFactory` precedent.
+ * The creational half of the socket dependency-inversion boundary: build a {@link LogSocketLike} from the socket init. A client holds this factory typed as the
+ * abstraction and constructs through it, so a test can substitute a factory that returns a fake socket. The production factory is {@link logSocketFactory}, whose
+ * `create` is exactly the {@link LogSocket} constructor call, so routing construction through this factory is behavior-neutral - mirroring the `RecordingProcessFactory`
+ * precedent.
  *
  * @category Log Client
  */
@@ -388,7 +391,10 @@ export class LogSocket implements LogSocketLike {
     if(this.#loopTask) {
 
       // The loop is written to always resolve; the catch is belt-and-suspenders so disposal never surfaces a cleanup-side failure the caller cannot react to.
-      await this.#loopTask.catch(() => { /* Cleanup swallows outcome. */ });
+      await this.#loopTask.catch(() => {
+
+        // Any rejection here is swallowed; there is nothing further for disposal to do with a cleanup-time failure.
+      });
     }
   }
 
@@ -633,8 +639,8 @@ export class LogSocket implements LogSocketLike {
 
   // Streaming phase. The session is connected; split `stdout` chunks into lines and route them into the bounded queue, answer pings with pongs and re-arm the liveness
   // watchdog, and end the session on close / error / watchdog timeout. Resolves when the session's signal aborts - which the outer loop reads to decide whether to
-  // reconnect. The watchdog window is sized from the server's advertised ping cadence plus a margin; the watchdog uses real timers (no `Clock` seam), so tests drive it
-  // with `mock.timers`.
+  // reconnect. The watchdog window is sized from the server's advertised ping cadence plus a margin; the watchdog uses real timers (no injected `Clock`), so tests
+  // drive it with `mock.timers`.
   async #stream(session: Session): Promise<void> {
 
     this.#session = session;
@@ -648,8 +654,8 @@ export class LogSocket implements LogSocketLike {
 
     // The liveness watchdog, sized from the server's advertised ping cadence captured during the connect handshake: one ping interval plus the ping timeout plus a fixed
     // margin, so a single late ping does not trip it. A zero/absent cadence (malformed handshake) falls back to the margin alone. Each inbound ping re-arms it; if the
-    // window lapses with no ping, it aborts the SESSION (not the whole socket), so the outer loop reconnects. The watchdog uses real timers (no `Clock` seam), so tests
-    // drive its firing with `node:test` `mock.timers`.
+    // window lapses with no ping, it aborts the SESSION (not the whole socket), so the outer loop reconnects. The watchdog uses real timers (no injected `Clock`), so
+    // tests drive its firing with `node:test` `mock.timers`.
     const windowMs = ((session.pingInterval > 0) ? session.pingInterval : 0) + ((session.pingTimeout > 0) ? session.pingTimeout : 0) + MARGIN_MS;
     const watchdog = new Watchdog({ onFire: (): void => session.controller.abort(new HbpuAbortError("timeout")), signal: composed, timeoutMs: windowMs });
 
@@ -844,8 +850,9 @@ export class LogSocket implements LogSocketLike {
 }
 
 /**
- * The production {@link LogSocketFactory}: builds the concrete WebSocket-backed {@link LogSocket}. A client holds the factory typed as the seam abstraction; a test
- * substitutes a fake factory. `create` is exactly the {@link LogSocket} constructor call, so wiring construction through this seam is behavior-neutral.
+ * The production {@link LogSocketFactory}: builds the concrete WebSocket-backed {@link LogSocket}. A client holds the factory typed as the {@link LogSocketFactory}
+ * abstraction; a test substitutes a fake factory. `create` is exactly the {@link LogSocket} constructor call, so wiring construction through this factory is
+ * behavior-neutral.
  *
  * @category Log Client
  */

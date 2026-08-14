@@ -100,7 +100,8 @@ export interface FMp4Box {
  * Walks the standard box headers (4-byte big-endian size + 4-byte ASCII type) starting at `start` and ending at `end`. Returns the offset and size of the first
  * matching box. Returns `null` when no box of the requested type is found in range, and also when the walk encounters a box whose declared size is invalid - below
  * the header size, extending past the search range, or an extended/open-ended size (64-bit size field, uncommon in fMP4 livestream contexts and unsupported here) -
- * since a malformed size makes it unsafe to keep walking; the two cases are indistinguishable from the return value alone.
+ * since a malformed size makes it unsafe to keep walking; every rejection reason collapses to the same null return, so callers cannot distinguish which one
+ * occurred from the return value alone.
  *
  * @param buffer       - The buffer containing ISO BMFF box data.
  * @param type         - The 4-character ASCII box type to search for (e.g. "moof", "traf", "trun"). Must be exactly 4 characters.
@@ -164,7 +165,6 @@ export function findBox(buffer: Buffer, type: string, start = 0, end?: number): 
  */
 export function isKeyframe(segment: Buffer): boolean {
 
-  // Locate the moof box at the top level.
   const moof = findBox(segment, "moof");
 
   if(!moof) {
@@ -180,7 +180,6 @@ export function isKeyframe(segment: Buffer): boolean {
     return false;
   }
 
-  // Locate the trun box inside the traf.
   const trun = findBox(segment, "trun", traf.offset + BOX_HEADER_SIZE, traf.offset + traf.size);
 
   if(!trun) {
@@ -259,7 +258,6 @@ export function isKeyframe(segment: Buffer): boolean {
  */
 export function hasAudioTrack(initSegment: Buffer): boolean {
 
-  // Locate the moov box at the top level.
   const moov = findBox(initSegment, "moov");
 
   if(!moov) {
@@ -283,12 +281,10 @@ export function hasAudioTrack(initSegment: Buffer): boolean {
       return false;
     }
 
-    // Locate the mdia box inside this trak.
     const mdia = findBox(initSegment, "mdia", trak.offset + BOX_HEADER_SIZE, trak.offset + trak.size);
 
     if(mdia) {
 
-      // Locate the hdlr box inside the mdia.
       const hdlr = findBox(initSegment, "hdlr", mdia.offset + BOX_HEADER_SIZE, mdia.offset + mdia.size);
 
       // Read the handler_type field. In a hdlr fullbox, the layout after the standard box header is: version/flags (4 bytes) + pre_defined (4 bytes) + handler_type

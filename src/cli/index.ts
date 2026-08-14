@@ -34,8 +34,8 @@ import { realpathSync } from "node:fs";
 // Semver-shaped subdir names that {@link prepareUi} owns. Only entries matching this pattern are candidates for the stale-build sweep; anything else in the
 // destination is left alone. Pattern matches `MAJOR.MINOR.PATCH` plus the optional pre-release (`-...`) and build-metadata (`+...`) segments semver permits, so a
 // plugin author who happens to name a subdir `assets` or `i18n` is never at risk of having it removed. The hash-suffixed shape this CLI writes (e.g.,
-// `2.0.0-abc1234567890def`) falls into the pre-release segment, so the same pattern catches stale released-version directories from prior tooling and stale
-// hash-suffixed directories from prior runs alike.
+// `2.0.0-abc1234567890def`) falls into the pre-release segment, so the same pattern catches any bare-semver directory left behind by a plugin author or other
+// tooling, alongside this CLI's own hash-suffixed directories from prior runs.
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/;
 
 // Truncated SHA-256 length used for the content-hash segment of the subdir name. 16 hex chars (64 bits) put the birthday-paradox collision threshold near ~2^32
@@ -72,7 +72,7 @@ export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
  */
 async function computeContentHash(root: string): Promise<string> {
 
-  // Node 22's recursive readdir plus `withFileTypes: true` gives us a flat Dirent[] for the entire tree in one syscall, eliminating the manual stack-walk that
+  // Node's recursive readdir plus `withFileTypes: true` gives us a flat Dirent[] for the entire tree in one syscall, eliminating the manual stack-walk that
   // older Node versions required. `parentPath` is the non-deprecated way to recover each entry's directory (the `path` alias was deprecated in Node 20.12 /
   // 21.4); using it here keeps the implementation aligned with current Node idioms.
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
@@ -147,9 +147,9 @@ export async function prepareUi({ dest, loader, sourceRoot, splice }: {
   const sourceUiDir = join(sourceRoot, "dist", "ui");
   const sourcePackageJson = join(sourceRoot, "package.json");
 
-  // Validate the source side first so failures name the corrective action rather than the operation we couldn't perform. The two ways the source can be wrong are
-  // structurally distinct: `dist/ui` missing means HBPU hasn't been built; `package.json` missing or version-less means the package is malformed. Both surface as
-  // typed errors with the path that diagnosed the problem.
+  // Validate the source side first so failures name the corrective action rather than the operation we couldn't perform. Each way the source can be wrong is
+  // structurally distinct: `dist/ui` missing means HBPU hasn't been built; `package.json` missing or version-less means the package is malformed. Each surfaces
+  // as a typed error with the path that diagnosed the problem.
   let sourceUiStat;
 
   try {
@@ -401,10 +401,10 @@ function parseJsonFramed(raw: string, describe: string): unknown {
   }
 }
 
-// Load a documentation-chrome manifest, dispatching on the path's extension: a `.json` file is read and parsed as data, while a `.js`/`.mjs` module is dynamically
-// imported and its `docChrome` (or default) export taken. Both paths converge on one in-memory value the caller validates, so a plugin may author its manifest as a
-// typed module or a static JSON file with no change to the mechanism. The dynamic import goes through a `file:` URL for the same portability reason `prepareDocs`
-// converts the catalog path.
+// Load a documentation-chrome manifest, dispatching on the path's extension: a `.json` file is read and parsed as data, while any other path is dynamically
+// imported as a module and its `docChrome` (or default) export taken. Both paths converge on one in-memory value the caller validates, so a plugin may author its
+// manifest as a typed module or a static JSON file with no change to the mechanism. The dynamic import goes through a `file:` URL for the same portability reason
+// `prepareDocs` converts the catalog path.
 async function loadDocChromeManifest(manifestPath: string): Promise<unknown> {
 
   if(manifestPath.endsWith(".json")) {
@@ -538,8 +538,8 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
   // Resolve the optional project source to inline data before rendering; the renderers never perform I/O.
   const projects = await resolveProjects(manifest.projects, { fetchImpl, manifestPath, parseEntries: parseProjectEntries, pluginRoot });
 
-  // Build the per-file edit plan. Each target file collects the ordered marked-region splices that apply to it; a file may carry more than one region (the README
-  // carries three), each spliced independently against its own marker pair.
+  // Build the per-file edit plan. Each target file collects the ordered marked-region splices that apply to it; a file may carry more than one region - the
+  // README carries the masthead, the documentation index, and, when declared, the dashboard badges - each spliced independently against its own marker pair.
   const plan = new Map<string, { begin: string; content: string; end: string }[]>();
 
   const addRegion = (path: string, begin: string, end: string, content: string): void => {

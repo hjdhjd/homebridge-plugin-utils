@@ -95,7 +95,7 @@ const BUILT_IN_FORMATTERS: Readonly<Record<FeatureOptionFormatter, (value: strin
 
   // Bitrate stored as kilobits per second. We scale into bits and reuse formatBps so the magnitude selection stays identical to the bps formatter - the only
   // difference between bps and kbps is the storage convention the plugin chose, never the displayed form.
-  kbps: (value: string): string => formatBps(Number.parseFloat(value) * 1_000),
+  kbps: (value: string): string => formatBps(Number.parseFloat(value) * 1000),
 
   // Duration stored as milliseconds. formatMs promotes through ms / s / min / hr based on magnitude.
   ms: (value: string): string => formatMs(Number.parseFloat(value)),
@@ -110,8 +110,8 @@ const BUILT_IN_FORMATTERS: Readonly<Record<FeatureOptionFormatter, (value: strin
 
 // Resolve a built-in formatter by name. Accepts an arbitrary string (not just a `FeatureOptionFormatter` literal) so the lookup naturally returns `undefined` when a
 // caller bypasses the type system - via JS, an `as` cast, or an out-of-date type definition - and passes an unrecognized name. Encapsulating the type-widening cast
-// here keeps the call site clean and names the intent: "look up a registered formatter by name; the result may not exist." Without the widening at this single seam,
-// TypeScript narrows the literal-keyed indexing tightly enough that the runtime safety check at the call site looks dead, and the runtime guard would either be
+// here keeps the call site clean and names the intent: "look up a registered formatter by name; the result may not exist." Without the widening at this single
+// boundary, TypeScript narrows the literal-keyed indexing tightly enough that the runtime safety check at the call site looks dead, and the runtime guard would either be
 // suppressed (silently weakening defense against JS callers) or removed (allowing the silent-fallback failure mode the design exists to prevent).
 function resolveBuiltInFormatter(name: string): ((value: string) => string) | undefined {
 
@@ -1148,16 +1148,13 @@ function parseOptionNumeric(option: Nullable<string | undefined>, convert: (valu
     return (option === null) ? null : undefined;
   }
 
-  // Convert it to a number, if needed.
   const convertedValue = convert(option);
 
-  // Let's validate to make sure it's really a number.
   if(Number.isNaN(convertedValue)) {
 
     return undefined;
   }
 
-  // Return the value.
   return convertedValue;
 }
 
@@ -1509,6 +1506,8 @@ export class FeatureOptions {
       return;
     }
 
+    // Same readonly-to-mutable cast rationale as the categories getter below: the pure functional core returns a readonly array for purity, while this private
+    // field keeps the historically mutable type its consumers depend on. See setOption below for the same cast at the other mutation site.
     this.#configuredOptions = next as string[];
 
     // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
@@ -1552,6 +1551,7 @@ export class FeatureOptions {
       return;
     }
 
+    // Same readonly-to-mutable cast rationale as clearOption above.
     this.#configuredOptions = next as string[];
 
     // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.

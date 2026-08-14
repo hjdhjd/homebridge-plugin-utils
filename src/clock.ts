@@ -1,16 +1,16 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * clock.ts: An injectable wall-clock seam - the current time and an abortable delay - so time-dependent code can be driven deterministically under test.
+ * clock.ts: An injectable wall-clock interface - the current time and an abortable delay - so time-dependent code can be driven deterministically under test.
  */
 
 /**
- * An injectable wall-clock time seam.
+ * An injectable wall-clock interface.
  *
  * Time-dependent code reads the platform time primitives it needs: the current epoch time (`Date.now()`) and a delay that can be cancelled (`node:timers/promises`
  * `setTimeout`). Calling those directly bakes real wall-clock time into the code, so a test cannot exercise a pacing or timeout path without multi-second real waits, and
  * `node:test`'s mock timers do not patch the `node:timers/promises` primitives. Holding a {@link Clock} instead - the abstraction over those primitives - inverts the
- * dependency: production wires {@link systemClock}, whose `now()` IS `Date.now()` and whose `delay()` IS `node:timers/promises` `setTimeout`, so routing through the seam
- * is behavior-neutral; a test wires a `TestClock` (see `clock-double.ts`) that advances virtual time explicitly, so the consumer's time-dependent path runs
+ * dependency: production wires {@link systemClock}, whose `now()` IS `Date.now()` and whose `delay()` IS `node:timers/promises` `setTimeout`, so routing through Clock is
+ * behavior-neutral; a test wires a `TestClock` (see `clock-double.ts`) that advances virtual time explicitly, so the consumer's time-dependent path runs
  * deterministically and instantly.
  *
  * This module imports `node:timers/promises` and is therefore Node-only (not browser-safe), like `util.ts`. A browser-targeted consumer cannot resolve that import.

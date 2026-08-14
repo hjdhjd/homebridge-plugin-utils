@@ -40,8 +40,9 @@ export type { IpFamily };
 // Create a dgram socket and bind it on the loopback interface for the supplied family. Resolves with the bound socket on "listening"; rejects with the kernel error
 // if bind fails (typically EADDRINUSE). `events.once` attaches single-shot listeners for both "listening" (resolve) and "error" (reject) and removes both on
 // settlement, so the returned socket carries no lingering handlers from the bind step. This mirrors the production bind pattern in `RtpPortAllocator.#acquirePort`.
-// Every public helper in this module composes against this primitive so the bind shape lives in exactly one place - a single future tweak to the bind wiring
-// (dual-stack, SO_REUSEADDR, etc.) has exactly one site to update.
+// Every public helper that binds a receiving socket composes against this primitive, so the bind shape for listener-side helpers lives in exactly one place - a
+// single future tweak to the bind wiring (dual-stack, SO_REUSEADDR, etc.) has exactly one site to update. sendDatagram is the exception: it only sends and never
+// binds, so it does not route through this primitive.
 async function bindLoopback(port: number, ipFamily: IpFamily): Promise<Socket> {
 
   const socket = createDgramSocket(ipFamily);

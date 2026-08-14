@@ -20,6 +20,18 @@
  * @module
  */
 
+// The magnitude ladders that `formatBytes` and `formatMs` test and divide against. Each rung is written as a multiple of the rung below it rather than as a long
+// digit run, so the 1024-based and 60-based relationships read straight off the declarations and no value has to be checked digit by digit to be trusted.
+// `formatBps` and `formatSeconds` keep their thresholds inline, because their values stay legible as plain digits at the comparison that uses them.
+const BYTES_PER_KB = 1024;
+const BYTES_PER_MB = 1024 * BYTES_PER_KB;
+const BYTES_PER_GB = 1024 * BYTES_PER_MB;
+const BYTES_PER_TB = 1024 * BYTES_PER_GB;
+
+const MS_PER_SECOND = 1000;
+const MS_PER_MINUTE = 60 * MS_PER_SECOND;
+const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+
 // Shared magnitude-rendering helper used by every magnitude-based formatter, applying the module's precision policy (see the module doc): whole numbers render with
 // no trailing decimal place, fractional numbers to one decimal place.
 function formatMagnitude(value: number): string {
@@ -49,17 +61,17 @@ function formatMagnitude(value: number): string {
  */
 export function formatBps(value: number): string {
 
-  if(value < 1_000) {
+  if(value < 1000) {
 
     return value.toString() + " bps";
   }
 
-  if(value < 1_000_000) {
+  if(value < 1000000) {
 
-    return formatMagnitude(value / 1_000) + " kbps";
+    return formatMagnitude(value / 1000) + " kbps";
   }
 
-  return formatMagnitude(value / 1_000_000) + " Mbps";
+  return formatMagnitude(value / 1000000) + " Mbps";
 }
 
 /**
@@ -73,40 +85,40 @@ export function formatBps(value: number): string {
  * @example
  *
  * ```ts
- * formatBytes(512);                  // "512 bytes".
- * formatBytes(2048);                 // "2 KB".
- * formatBytes(1536);                 // "1.5 KB".
- * formatBytes(1_048_576);            // "1 MB".
- * formatBytes(2_621_440);            // "2.5 MB".
- * formatBytes(1_073_741_824);        // "1 GB".
- * formatBytes(1_099_511_627_776);    // "1 TB".
+ * formatBytes(512);              // "512 bytes".
+ * formatBytes(2048);             // "2 KB".
+ * formatBytes(1536);             // "1.5 KB".
+ * formatBytes(1048576);          // "1 MB".
+ * formatBytes(2621440);          // "2.5 MB".
+ * formatBytes(1073741824);       // "1 GB".
+ * formatBytes(1099511627776);    // "1 TB".
  * ```
  *
  * @category Utilities
  */
 export function formatBytes(value: number): string {
 
-  if(value < 1_024) {
+  if(value < BYTES_PER_KB) {
 
     return value.toString() + " bytes";
   }
 
-  if(value < 1_048_576) {
+  if(value < BYTES_PER_MB) {
 
-    return formatMagnitude(value / 1_024) + " KB";
+    return formatMagnitude(value / BYTES_PER_KB) + " KB";
   }
 
-  if(value < 1_073_741_824) {
+  if(value < BYTES_PER_GB) {
 
-    return formatMagnitude(value / 1_048_576) + " MB";
+    return formatMagnitude(value / BYTES_PER_MB) + " MB";
   }
 
-  if(value < 1_099_511_627_776) {
+  if(value < BYTES_PER_TB) {
 
-    return formatMagnitude(value / 1_073_741_824) + " GB";
+    return formatMagnitude(value / BYTES_PER_GB) + " GB";
   }
 
-  return formatMagnitude(value / 1_099_511_627_776) + " TB";
+  return formatMagnitude(value / BYTES_PER_TB) + " TB";
 }
 
 /**
@@ -120,33 +132,33 @@ export function formatBytes(value: number): string {
  * @example
  *
  * ```ts
- * formatMs(250);          // "250 ms".
- * formatMs(1500);         // "1.5 s".
- * formatMs(15000);        // "15 s".
- * formatMs(90000);        // "1.5 min".
- * formatMs(5_400_000);    // "1.5 hr".
+ * formatMs(250);        // "250 ms".
+ * formatMs(1500);       // "1.5 s".
+ * formatMs(15000);      // "15 s".
+ * formatMs(90000);      // "1.5 min".
+ * formatMs(5400000);    // "1.5 hr".
  * ```
  *
  * @category Utilities
  */
 export function formatMs(value: number): string {
 
-  if(value < 1_000) {
+  if(value < MS_PER_SECOND) {
 
     return value.toString() + " ms";
   }
 
-  if(value < 60_000) {
+  if(value < MS_PER_MINUTE) {
 
-    return formatMagnitude(value / 1_000) + " s";
+    return formatMagnitude(value / MS_PER_SECOND) + " s";
   }
 
-  if(value < 3_600_000) {
+  if(value < MS_PER_HOUR) {
 
-    return formatMagnitude(value / 60_000) + " min";
+    return formatMagnitude(value / MS_PER_MINUTE) + " min";
   }
 
-  return formatMagnitude(value / 3_600_000) + " hr";
+  return formatMagnitude(value / MS_PER_HOUR) + " hr";
 }
 
 /**
@@ -199,10 +211,10 @@ export function formatSeconds(value: number): string {
     return value.toString() + " s";
   }
 
-  if(value < 3_600) {
+  if(value < 3600) {
 
     return formatMagnitude(value / 60) + " min";
   }
 
-  return formatMagnitude(value / 3_600) + " hr";
+  return formatMagnitude(value / 3600) + " hr";
 }

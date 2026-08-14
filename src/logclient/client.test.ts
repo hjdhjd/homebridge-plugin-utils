@@ -61,7 +61,7 @@ function logResponse(lines: readonly string[]): Response {
   return new Response(body, { status: 200 });
 }
 
-// Build a `fetch` seam double whose REST log-download responses resolve only when the returned `resolveHistory` is invoked. Auth endpoints (login/noauth) resolve
+// Build a `fetch` double whose REST log-download responses resolve only when the returned `resolveHistory` is invoked. Auth endpoints (login/noauth) resolve
 // immediately with a token so the token-provider closure never blocks. The deferred history lets a follow-history test buffer the socket's full seed before history
 // finishes, making the socket-first ordering deterministic rather than timing-dependent.
 function deferredFetch(historyLines: readonly string[]): { calls: FetchCall[]; fetch: typeof fetch; resolveHistory: () => void } {
@@ -89,7 +89,7 @@ function deferredFetch(historyLines: readonly string[]): { calls: FetchCall[]; f
   return { calls, fetch: fetchImpl, resolveHistory: (): void => gate.resolve() };
 }
 
-// Build a `fetch` seam double whose REST log-download responds immediately (no gate). Auth endpoints answer with a token. The captured calls let a test assert whether
+// Build a `fetch` double whose REST log-download responds immediately (no gate). Auth endpoints answer with a token. The captured calls let a test assert whether
 // the REST channel was exercised at all.
 function immediateFetch(historyLines: readonly string[] = []): { calls: FetchCall[]; fetch: typeof fetch } {
 
@@ -478,14 +478,14 @@ describe("HomebridgeLogClient - token lifecycle", () => {
 
   test("a static-token client whose socket handshake is rejected ends terminally rather than spinning", async () => {
 
-    // Drive a REAL LogSocket (through the WebSocket seam) from the client so the end-to-end token-lifecycle remediation is exercised: the client derives `refreshable:
+    // Drive a REAL LogSocket (through the WebSocket factory) from the client so the end-to-end token-lifecycle remediation is exercised: the client derives `refreshable:
     // false` from the static `token` credential, the socket raises a permanent LogAuthError on the handshake rejection, and the connect-phase veto makes the socket abort
     // terminally. The `follow()` stream's iteration therefore ends rather than reconnecting forever against a doomed token.
     const wsFactory = new TestWebSocketFactory();
 
     const socketFactory: LogSocketFactory = {
 
-      // The client populates the init (including `refreshable`, derived from the credential); we forward it to a real LogSocket but inject the WebSocket seam and a
+      // The client populates the init (including `refreshable`, derived from the credential); we forward it to a real LogSocket but inject the WebSocket factory and a
       // near-zero backoff so the (would-be) reconnect runs without real waits.
       create: (init: LogSocketInit): LogSocketLike => new LogSocket({ ...init, backoff: () => 0, webSocketFactory: wsFactory.create })
     };
@@ -643,7 +643,7 @@ class ScriptedSocket implements LogSocketLike {
 //                                 download's own child controller with `HbpuAbortError("replaced")` DURING the run, distinct from the `"shutdown"` the teardown later
 //                                 issues, so a test distinguishes "superseded early" from "torn down at the end" by the reason rather than by mere aborted-ness.
 // @property downloadStarted     - Whether the `/log/download` request was issued at all.
-// @property fetch               - The `fetch` seam to inject.
+// @property fetch               - The `fetch` implementation to inject.
 interface WindowFetch {
 
   downloadAbortReason: () => unknown;

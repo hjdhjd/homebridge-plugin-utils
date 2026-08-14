@@ -406,7 +406,7 @@ const scopeLabel = (scopeKind) => {
 };
 
 // Decide whether the entry is "inherited from above" relative to the current view. The view is at viewKind; the entry resolved at resolvedScope. An entry is
-// inherited when the resolved scope is strictly higher than the view scope. The switch covers the three current scope kinds; an unrecognized kind silently resolves to
+// inherited when the resolved scope is strictly higher than the view scope. The switch covers every declared scope kind; an unrecognized kind silently resolves to
 // "not inheriting" rather than throwing.
 const isInheritingView = (viewKind, resolvedScope) => {
 

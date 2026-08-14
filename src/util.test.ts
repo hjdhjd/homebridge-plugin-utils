@@ -1,9 +1,9 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, onAbort, waitWithSignal,
- * markHandled, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream, loopFaultReporter, Watchdog, and the
- * string/number helpers (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase,
- * sanitizeName, validateName).
+ * markHandled, sameEntries, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream, loopFaultReporter, guardedDispatch,
+ * Watchdog, prefixedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage, defaultRetryBackoff,
+ * runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds,
   guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort, sameEntries,
@@ -701,8 +701,8 @@ describe("takeLast", () => {
 
   test("recovers correct oldest-to-newest order across a wrap that does not land on slot zero", async () => {
 
-    // Seven values into a ring of four wraps three times; the write cursor lands at index 3 (7 % 4), so the rotation that reconstructs order must read from slot 3
-    // forward, wrapping once. The expected tail is the final four values in order, which only holds if the wrap math is correct.
+    // Seven values into a ring of four carries the write cursor past its zero boundary once; it lands at index 3 (7 % 4), so the rotation that reconstructs order
+    // must read from slot 3 forward, wrapping once. The expected tail is the final four values in order, which only holds if the wrap math is correct.
     assert.deepEqual(await takeLast(asyncFrom([ 1, 2, 3, 4, 5, 6, 7 ]), 4), [ 4, 5, 6, 7 ]);
   });
 
@@ -2014,15 +2014,15 @@ describe("formatBps", () => {
 
   test("returns integer Mbps for round million boundaries", () => {
 
-    // Parallel contract to the kbps path: exact multiples of 1_000_000 bits per second carry no decimal.
-    assert.equal(formatBps(1_000_000), "1 Mbps");
-    assert.equal(formatBps(5_000_000), "5 Mbps");
+    // Parallel contract to the kbps path: exact multiples of 1000000 bits per second carry no decimal.
+    assert.equal(formatBps(1000000), "1 Mbps");
+    assert.equal(formatBps(5000000), "5 Mbps");
   });
 
   test("returns one-decimal Mbps for non-round megabit values", () => {
 
-    assert.equal(formatBps(2_560_000), "2.6 Mbps");
-    assert.equal(formatBps(1_500_000), "1.5 Mbps");
+    assert.equal(formatBps(2560000), "2.6 Mbps");
+    assert.equal(formatBps(1500000), "1.5 Mbps");
   });
 });
 
@@ -2052,37 +2052,37 @@ describe("formatBytes", () => {
 
   test("returns integer MB at megabyte boundaries", () => {
 
-    assert.equal(formatBytes(1_048_576), "1 MB");
-    assert.equal(formatBytes(5 * 1_048_576), "5 MB");
+    assert.equal(formatBytes(1048576), "1 MB");
+    assert.equal(formatBytes(5 * 1048576), "5 MB");
   });
 
   test("returns one-decimal MB for non-round megabyte values", () => {
 
-    assert.equal(formatBytes(2_621_440), "2.5 MB");
-    assert.equal(formatBytes(1_572_864), "1.5 MB");
+    assert.equal(formatBytes(2621440), "2.5 MB");
+    assert.equal(formatBytes(1572864), "1.5 MB");
   });
 
   test("returns integer GB at gigabyte boundaries", () => {
 
-    assert.equal(formatBytes(1_073_741_824), "1 GB");
-    assert.equal(formatBytes(2 * 1_073_741_824), "2 GB");
+    assert.equal(formatBytes(1073741824), "1 GB");
+    assert.equal(formatBytes(2 * 1073741824), "2 GB");
   });
 
   test("returns one-decimal GB for non-round gigabyte values", () => {
 
-    assert.equal(formatBytes(1.5 * 1_073_741_824), "1.5 GB");
+    assert.equal(formatBytes(1.5 * 1073741824), "1.5 GB");
   });
 
   test("returns integer TB at terabyte boundaries", () => {
 
     // Pins the cap-tier promotion: once a value reaches 1024 GB it must surface as "1 TB" rather than awkwardly continuing in the GB tier as "1024 GB".
-    assert.equal(formatBytes(1_099_511_627_776), "1 TB");
-    assert.equal(formatBytes(2 * 1_099_511_627_776), "2 TB");
+    assert.equal(formatBytes(1099511627776), "1 TB");
+    assert.equal(formatBytes(2 * 1099511627776), "2 TB");
   });
 
   test("returns one-decimal TB for non-round terabyte values", () => {
 
-    assert.equal(formatBytes(1.5 * 1_099_511_627_776), "1.5 TB");
+    assert.equal(formatBytes(1.5 * 1099511627776), "1.5 TB");
   });
 });
 
@@ -2135,23 +2135,23 @@ describe("formatMs", () => {
 
   test("returns seconds at the second boundary, with one decimal for fractional values", () => {
 
-    assert.equal(formatMs(1_000), "1 s");
-    assert.equal(formatMs(1_500), "1.5 s");
-    assert.equal(formatMs(15_000), "15 s");
-    assert.equal(formatMs(59_500), "59.5 s");
+    assert.equal(formatMs(1000), "1 s");
+    assert.equal(formatMs(1500), "1.5 s");
+    assert.equal(formatMs(15000), "15 s");
+    assert.equal(formatMs(59500), "59.5 s");
   });
 
   test("returns minutes once values reach the minute boundary", () => {
 
-    assert.equal(formatMs(60_000), "1 min");
-    assert.equal(formatMs(90_000), "1.5 min");
-    assert.equal(formatMs(1_800_000), "30 min");
+    assert.equal(formatMs(60000), "1 min");
+    assert.equal(formatMs(90000), "1.5 min");
+    assert.equal(formatMs(1800000), "30 min");
   });
 
   test("returns hours once values reach the hour boundary", () => {
 
-    assert.equal(formatMs(3_600_000), "1 hr");
-    assert.equal(formatMs(5_400_000), "1.5 hr");
+    assert.equal(formatMs(3600000), "1 hr");
+    assert.equal(formatMs(5400000), "1.5 hr");
   });
 });
 
@@ -2188,13 +2188,13 @@ describe("formatSeconds", () => {
 
     assert.equal(formatSeconds(60), "1 min");
     assert.equal(formatSeconds(90), "1.5 min");
-    assert.equal(formatSeconds(1_800), "30 min");
+    assert.equal(formatSeconds(1800), "30 min");
   });
 
   test("returns hours once values reach the hour boundary", () => {
 
-    assert.equal(formatSeconds(3_600), "1 hr");
-    assert.equal(formatSeconds(5_400), "1.5 hr");
+    assert.equal(formatSeconds(3600), "1 hr");
+    assert.equal(formatSeconds(5400), "1.5 hr");
   });
 });
 
@@ -2202,24 +2202,24 @@ describe("defaultRetryBackoff", () => {
 
   test("starts at 1 second for the second attempt", () => {
 
-    // retry() never calls backoff for attempt 1 - the first attempt runs immediately - so the policy's anchor is attempt 2 at 1_000ms.
-    assert.equal(defaultRetryBackoff(2), 1_000);
+    // retry() never calls backoff for attempt 1 - the first attempt runs immediately - so the policy's anchor is attempt 2 at 1000ms.
+    assert.equal(defaultRetryBackoff(2), 1000);
   });
 
   test("doubles exponentially until the 30-second ceiling", () => {
 
-    assert.equal(defaultRetryBackoff(3), 2_000);
-    assert.equal(defaultRetryBackoff(4), 4_000);
-    assert.equal(defaultRetryBackoff(5), 8_000);
-    assert.equal(defaultRetryBackoff(6), 16_000);
+    assert.equal(defaultRetryBackoff(3), 2000);
+    assert.equal(defaultRetryBackoff(4), 4000);
+    assert.equal(defaultRetryBackoff(5), 8000);
+    assert.equal(defaultRetryBackoff(6), 16000);
   });
 
   test("caps at 30 seconds regardless of attempt number", () => {
 
-    // The Math.min(30_000, ...) clamp is the contract: arbitrarily large attempt numbers stay at the ceiling.
-    assert.equal(defaultRetryBackoff(7), 30_000);
-    assert.equal(defaultRetryBackoff(10), 30_000);
-    assert.equal(defaultRetryBackoff(100), 30_000);
+    // The Math.min(30000, ...) clamp is the contract: arbitrarily large attempt numbers stay at the ceiling.
+    assert.equal(defaultRetryBackoff(7), 30000);
+    assert.equal(defaultRetryBackoff(10), 30000);
+    assert.equal(defaultRetryBackoff(100), 30000);
   });
 });
 
@@ -2227,7 +2227,7 @@ describe("runWithAbort", () => {
 
   test("returns the factory's value when neither timeout nor external signal fires", async () => {
 
-    const result = await runWithAbort(async () => "ok", { timeout: 1_000 });
+    const result = await runWithAbort(async () => "ok", { timeout: 1000 });
 
     assert.equal(result, "ok");
   });
@@ -2305,7 +2305,7 @@ describe("runWithAbort", () => {
       observedReason = signal.reason;
 
       throw signal.reason;
-    }, { signal: controller.signal, timeout: 5_000 });
+    }, { signal: controller.signal, timeout: 5000 });
 
     assert.equal(result, null);
     assert.equal(observedReason, reason);

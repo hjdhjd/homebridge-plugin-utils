@@ -7,15 +7,15 @@
  * CLI-layer configuration for the `hblog` tool: loading the optional `~/.hblog.json` file and the pure merge of file / environment / flags into a connection.
  *
  * This module lives at the CLI layer on purpose: the engine ({@link logclient/client!HomebridgeLogClient | HomebridgeLogClient} and its transports) never reads the
- * user's home directory or any config file - all file I/O stays here, behind injectable seams, so the engine is portable and side-effect-free. This module exports the
- * following pieces:
+ * user's home directory or any config file - all file I/O stays here, behind the injected filesystem and warning callbacks, so the engine is portable and
+ * side-effect-free. This module exports the following pieces:
  *
  * - {@link resolveConfigPath} - resolve the absolute config-file path, honoring the `HBLOG_CONFIG` environment override over the home-directory default
  *   ({@link DEFAULT_CONFIG_FILENAME}).
  * - {@link loadConfigFile} - read and parse the optional `~/.hblog.json`. A missing file resolves to `undefined` silently (the file is optional); a malformed file raises
  *   a clear, actionable error; unknown keys are ignored; and a file whose permissions are group/other-readable triggers a single one-line warning recommending `chmod
- *   600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`, and `warn` seams are injected so the loader is unit-tested
- *   without touching the real filesystem.
+ *   600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`, and `warn` functions are injected so the loader is
+ *   unit-tested without touching the real filesystem.
  * - {@link resolveConnection} - a PURE merge of the configuration sources into one resolved connection, applying the precedence flags > environment > file > defaults.
  *   It performs no I/O of its own; the caller supplies the already-loaded file, the environment slice, and the parsed flags.
  *
@@ -25,8 +25,12 @@ import { DEFAULT_HOST, DEFAULT_PORT } from "./settings.ts";
 import type { Nullable } from "../util.ts";
 import { formatErrorMessage } from "../util.ts";
 
-// The default path of the optional config file, relative to the user's home directory. Home-dir only (no project-local file) so a config carrying a password or token is
-// never tempting to commit alongside a plugin's source. The CLI resolves this against the real home directory; the `HBLOG_CONFIG` environment variable overrides it.
+/**
+ * The default path of the optional config file, relative to the user's home directory. Home-dir only (no project-local file) so a config carrying a password or token is
+ * never tempting to commit alongside a plugin's source. The CLI resolves this against the real home directory; the `HBLOG_CONFIG` environment variable overrides it.
+ *
+ * @category Log Client
+ */
 export const DEFAULT_CONFIG_FILENAME = ".hblog.json";
 
 // The permission mask that flags a config file as too permissive: any group or other read/write/execute bit set. A file carrying a plaintext credential should be owner-
@@ -109,7 +113,7 @@ export interface HblogConnectionFlags {
 /**
  * The fully-resolved connection produced by {@link resolveConnection}: the connection target plus the credential material the CLI uses to build a
  * {@link logclient/types!LogClientCredentials | LogClientCredentials} discriminated union. `host`, `port`, and `tls` always carry a concrete value (defaults applied);
- * the credential fields are {@link Nullable} because none, some, or all of them may have been supplied across the three sources.
+ * the credential fields are {@link Nullable} because none, some, or all of them may have been supplied across the configured sources.
  *
  * @property host     - The resolved hostname or IP.
  * @property otp      - The resolved one-time passcode, or `null` when none was supplied.
@@ -133,8 +137,8 @@ export interface ResolvedConnection {
 }
 
 /**
- * Options accepted by {@link loadConfigFile}: the injectable filesystem and warning seams. All default to the real Node implementations / a `process.stderr` writer, so a
- * caller (the CLI) can omit them in production and a test can supply doubles.
+ * Options accepted by {@link loadConfigFile}: the injectable filesystem and warning functions. All default to the real Node implementations / a `process.stderr` writer,
+ * so a caller (the CLI) can omit them in production and a test can supply doubles.
  *
  * @property readFile - Reads the file's UTF-8 text. Defaults to `node:fs/promises` `readFile`. A rejection whose `code` is `ENOENT` is treated as "file absent."
  * @property stat     - Stats the file for its permission mode. Defaults to `node:fs/promises` `stat`. Used only for the group/other-readable security warning.
@@ -150,8 +154,8 @@ export interface LoadConfigFileOptions {
   readonly warn?: (message: string) => void;
 }
 
-// The default `readFile` seam: read the file as UTF-8 text via `node:fs/promises`. Imported lazily inside the default so a caller that always injects its own seam pays
-// no `node:fs/promises` import cost, and the engine-adjacent module stays free of an unconditional Node filesystem dependency at load time.
+// The default `readFile` implementation: read the file as UTF-8 text via `node:fs/promises`. Imported lazily inside the default so a caller that always injects its own
+// function pays no `node:fs/promises` import cost, and the engine-adjacent module stays free of an unconditional Node filesystem dependency at load time.
 async function defaultReadFile(path: string): Promise<string> {
 
   const { readFile } = await import("node:fs/promises");
@@ -159,8 +163,8 @@ async function defaultReadFile(path: string): Promise<string> {
   return readFile(path, "utf8");
 }
 
-// The default `stat` seam: stat the file via `node:fs/promises`, narrowing to just the `mode` field the permission check needs. Lazily imported for the same reason as
-// the read seam.
+// The default `stat` implementation: stat the file via `node:fs/promises`, narrowing to just the `mode` field the permission check needs. Lazily imported for the same
+// reason as the read function.
 async function defaultStat(path: string): Promise<{ readonly mode: number }> {
 
   const { stat } = await import("node:fs/promises");
@@ -215,11 +219,11 @@ function readBoolean(record: Record<string, unknown>, key: string): boolean | un
  * The file is optional: when it does not exist (ENOENT) this resolves to `undefined` silently. Every other failure is thrown as a clear, actionable error naming the
  * path: a non-ENOENT read failure (a permission or I/O fault), a file that cannot be parsed as JSON, or a file whose top-level value is not a JSON object. Recognized
  * keys ({@link HblogConfigFile}) are picked out by type (a wrong-typed field is ignored, not coerced); any unknown key is ignored. As a security courtesy, if the file's
- * permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted through the `warn` seam, because the file may
- * store a password or a long-lived token in plaintext.
+ * permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted through the `warn` function, because the file
+ * may store a password or a long-lived token in plaintext.
  *
  * @param path    - The absolute path of the config file to load (the CLI resolves `~/.hblog.json`, or honors `HBLOG_CONFIG`).
- * @param options - The injectable filesystem and warning seams. See {@link LoadConfigFileOptions}.
+ * @param options - The injectable filesystem and warning functions. See {@link LoadConfigFileOptions}.
  *
  * @returns The parsed {@link HblogConfigFile}, or `undefined` when the file is absent (ENOENT).
  *
@@ -298,7 +302,7 @@ export async function loadConfigFile(path: string, options: LoadConfigFileOption
  * The `HBLOG_CONFIG` environment variable overrides everything when set to a non-empty value (handy for tests and non-standard layouts); otherwise the default
  * {@link DEFAULT_CONFIG_FILENAME} (`.hblog.json`) under the supplied home directory is used. Home-dir only - there is no project-local config file, so a config carrying
  * a password or token is never tempting to commit alongside a plugin's source. The join uses a single forward slash, which both POSIX and Windows accept in a path passed
- * to `readFile`, so no `node:path` import is needed on this hot setup path.
+ * to `readFile`, so no `node:path` import is needed on this setup path.
  *
  * @param sources         - The path inputs.
  * @param sources.env     - The environment map; only `HBLOG_CONFIG` is consulted.
@@ -320,15 +324,15 @@ export function resolveConfigPath(sources: { env: NodeJS.ProcessEnv; homedir: st
   return sources.homedir.replace(/[/\\]+$/, "") + "/" + DEFAULT_CONFIG_FILENAME;
 }
 
-// Resolve one optional string across the three sources in precedence order (flags > env > file), returning `null` when none supplied. The first defined value wins; an
-// empty string is a defined value (the user explicitly passed it) so it is honored rather than skipped.
+// Resolve one optional string across the configured sources in precedence order (flags > env > file), returning `null` when none supplied. The first defined value wins;
+// an empty string is a defined value (the user explicitly passed it) so it is honored rather than skipped.
 function pickString(flag: string | undefined, env: string | undefined, file: string | undefined): Nullable<string> {
 
   return flag ?? env ?? file ?? null;
 }
 
 /**
- * Resolve the three configuration sources into a single {@link ResolvedConnection}, applying the precedence flags > environment > file > defaults.
+ * Resolve every configuration source into a single {@link ResolvedConnection}, applying the precedence flags > environment > file > defaults.
  *
  * This is a PURE function: it reads only its arguments and allocates only the result, performing no I/O. The caller is responsible for having loaded the file (via
  * {@link loadConfigFile}), extracted the environment slice, and parsed the flags. `host`, `port`, and `tls` always resolve to a concrete value (their defaults are
@@ -336,7 +340,7 @@ function pickString(flag: string | undefined, env: string | undefined, file: str
  * {@link logclient/types!LogClientCredentials | LogClientCredentials} arm the resolved material implies. The `port` from the environment is a string, so it is
  * parsed here; a non-numeric `HBLOG_PORT` is ignored (falls through to the next source) rather than producing a `NaN` port.
  *
- * @param sources       - The three configuration sources.
+ * @param sources       - The configured sources.
  * @param sources.env   - The environment slice. See {@link HblogEnv}.
  * @param sources.file  - The loaded config file, or `undefined` when absent. See {@link HblogConfigFile}.
  * @param sources.flags - The parsed command-line flags. See {@link HblogConnectionFlags}.

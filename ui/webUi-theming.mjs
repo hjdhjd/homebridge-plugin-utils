@@ -291,10 +291,11 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
   return false;
 };
 
-// The page base stylesheet: the rules that belong to a plugin's whole page rather than to any one view - the reset, the forced canvas pair, the dark corrections
-// for Bootstrap's page-wide text utilities, the shared utility classes, and the page kit a custom view opts into. Color, radius, spacing, and opacity values
-// reference the `--fo-*` tokens declared by the tokens effect; the reset uses raw values since it is not a design-token concern. Every rule here is safe on a page
-// the framework does not otherwise render: each is either framework-named with no host counterpart, or matches the semantics a colliding host utility carries.
+// The page base stylesheet: the rules that belong to a plugin's whole page rather than to any one view - among them the reset, the forced canvas pair, the secret-field
+// controls, the dark corrections for Bootstrap's page-wide text utilities, the menu-tab and action ghost vocabulary, the shared utility classes, and the page kit a
+// custom view opts into. Color, radius, spacing, and opacity values reference the `--fo-*` tokens declared by the tokens effect; the reset uses raw values since it is
+// not a design-token concern. Every rule here is safe on a page the framework does not otherwise render: each is either framework-named with no host counterpart, or
+// matches the semantics a colliding host utility carries.
 const buildBaseCss = () => [
 
   // Base layout reset.
@@ -366,15 +367,15 @@ const buildBaseCss = () => [
   // Accessibility.
   "@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }",
 
-  /* The page kit: the classes a plugin puts on its own custom views so they wear the framework's look. `.fo-card` is the accent-derived frame every framework
-   * container already wears, `.fo-monospace` is the per-field monospace opt-in, and `.fo-page` is the marker that scopes the dark form-control corrections - a
-   * plugin puts it on a custom-page container and that container's plain form controls become dark-mode-correct, with nothing outside it touched. `.fo-action` is
-   * the fourth, declared above beside the menu rules it shares its definition with: a plugin puts it on its own sidebar controls so they wear the framework's quiet
-   * action treatment. That placement is deliberate, because the ghost is one definition serving both vocabularies and the source-order reasoning that keeps the
-   * active tab's fill intact reads as one piece. The vocabulary rule a consumer needs is the whole of it: the solid accent means "where you are", so it belongs to
-   * the page's own navigation, while the ghost means "something you can do". Those
-   * corrections are needed because the host retints a plugin frame's theme classes but never restyles a plain form control, so an unthemed field stays light on a
-   * dark page; light mode is deliberately left to Bootstrap, exactly as the framework treats its own fields.
+  /* The page kit: the classes a plugin puts on its own custom views so they wear the framework's look. `.fo-card` is the accent-derived frame every framework container
+   * already wears, `.fo-monospace` is the per-field monospace opt-in, and `.fo-page` is the marker that scopes the dark form-control corrections - a plugin puts it on a
+   * custom-page container and that container's plain form controls become dark-mode-correct, with nothing outside it touched. `.fo-action` rounds out the page kit,
+   * declared above beside the menu rules it shares its definition with: a plugin puts it on its own sidebar controls so they wear the framework's quiet action
+   * treatment. That placement is deliberate, because the ghost is one definition serving both vocabularies and the source-order reasoning that keeps the active tab's
+   * fill intact reads as one piece. The vocabulary rule a consumer needs is the whole of it: the solid accent means "where you are", so it belongs to the page's own
+   * navigation, while the ghost means "something you can do". The dark form-control corrections tied to `.fo-page` are needed because the host retints a plugin frame's
+   * theme classes but never restyles a plain form control, so an unthemed field stays light on a dark page; light mode is deliberately left to Bootstrap, exactly as the
+   * framework treats its own fields.
    *
    * Every value reads a token with no literal fallback beside it. The registration surface that adopts this sheet adopts the token sheet first, so the tokens are
    * in force wherever these rules are, by that surface's own construction.

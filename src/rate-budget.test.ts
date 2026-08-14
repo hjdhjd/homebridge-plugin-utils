@@ -2,7 +2,8 @@
  *
  * rate-budget.test.ts: Unit tests for the sliding-window rate budget - constructor validation, capacity-then-pace admission with no signals anywhere, the exact window
  * boundary, first-in-first-out service on distinct virtual ticks, capacity conservation under contention, and the per-call/lifetime cancellation surface (pre-turn and
- * mid-wait aborts consuming no slot, pre-aborted rejections, and lifetime precedence). Every scenario is driven by a TestClock, so nothing waits on real time.
+ * mid-wait aborts consuming no slot, pre-aborted rejections, and lifetime precedence). Every scenario but the system-clock default is driven by a TestClock, so
+ * nothing else waits on real time.
  */
 import { describe, test } from "node:test";
 import type { Clock } from "./clock.ts";

@@ -27,9 +27,9 @@ import { formatErrorMessage } from "../util.ts";
 import { httpBaseUrl } from "./endpoints.ts";
 
 // The auth API returns these status codes for a genuine credential or precondition problem: 401 (wrong username/password, or the no-auth path used against a server not
-// in "none" mode), 403 (account disabled or action not permitted), and 412 (a one-time passcode is required but was not supplied). All three keep failing until the
-// caller changes the credentials or supplies an OTP, so they are classified permanent and the reconnect loop must not retry them. A 400 is handled separately (see
-// throwForStatus): it is a malformed-request / protocol mismatch, not a credential problem, so it carries a different message even though it too is permanent.
+// in "none" mode), 403 (account disabled or action not permitted), and 412 (a one-time passcode is required but was not supplied). Every code in this set keeps failing
+// until the caller changes the credentials or supplies an OTP, so they are classified permanent and the reconnect loop must not retry them. A 400 is handled separately
+// (see throwForStatus): it is a malformed-request / protocol mismatch, not a credential problem, so it carries a different message even though it too is permanent.
 const CREDENTIAL_STATUS = new Set<number>([ 401, 403, 412 ]);
 
 /**
@@ -105,7 +105,7 @@ export function isPermanentAuthError(error: unknown): boolean {
 }
 
 /**
- * Options accepted by {@link acquireToken}: the connection target plus an injectable `fetch` seam.
+ * Options accepted by {@link acquireToken}: the connection target plus an injectable `fetch` implementation.
  *
  * @property fetch - The fetch implementation to use. Defaults to the global `fetch`. Injected so the auth flow is testable without a live server.
  * @property host  - The hostname or IP of the homebridge-config-ui-x server.
@@ -237,7 +237,7 @@ function networkFailure(pathLabel: string, error: unknown): LogAuthError {
  * body) or transient (network fault, 5xx, 429), so the reconnect loop can fail fast on permanent failures and retry transient ones.
  *
  * @param credentials - The credentials to authenticate with. See {@link LogClientCredentials}.
- * @param options     - The connection target and the injectable `fetch` seam. See {@link AcquireTokenOptions}.
+ * @param options     - The connection target and the injectable `fetch` implementation. See {@link AcquireTokenOptions}.
  *
  * @returns A promise resolving to the raw bearer token (the bare JWT, with no `Bearer` prefix).
  *

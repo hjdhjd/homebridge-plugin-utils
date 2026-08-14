@@ -165,6 +165,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   the page until a terminal state takes it - the revealed page, the connection-error view, or the no-controllers helper - so it is the only thing on screen for a boot
  *   whose device fetch is slow. The framework default says nothing about what is being waited on, because only the plugin knows: a plugin whose boot is dominated by a
  *   controller login supplies copy that names it.
+ * @property {string} [ui.controllerFailureGuidance] - The guidance line shown when a controller cannot be reached, replacing the framework's own. The default says
+ *   what to verify without naming where to do it, because where a user repairs a controller is plugin topology: a plugin whose controller settings live on this very
+ *   page, or behind an affordance of its own, says so here. It reaches every controller-failure surface at once - the controller-list failure, the device-list failure,
+ *   and a sidebar click's failure - and deliberately does not reach the plugin-stopped-responding copy, which is not controller trouble.
  * @property {number} [ui.controllerRetryEnableDelayMs=5000] - Interval before enabling a retry button when connecting to a controller.
  * @property {Function} [ui.isController] - Identifies the controller-as-device row in a device list. The nav view groups the sidebar by it, and the projection
  *   derives the controller's scoping identity - the serial its controller-scope entries are keyed by - from the row it names.
@@ -360,6 +364,10 @@ export class webUiFeatureOptions {
 
       connectingMessage: ui.connectingMessage ?? "Loading...",
       connectionErrorPanel,
+
+      // No default: an absent value is what tells the copy table to keep the framework's own guidance, so a plugin that says nothing gets the neutral wording rather
+      // than a default this class would have to keep in step with the table.
+      controllerFailureGuidance: ui.controllerFailureGuidance,
       controllerRetryEnableDelayMs: ui.controllerRetryEnableDelayMs ?? 5000,
       getControllers,
 
@@ -804,7 +812,12 @@ export class webUiFeatureOptions {
       outcome = await withDeadline({ promise: devicesPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
     } catch(err) {
 
-      const { guidance, headline } = connectionFailureCopy({ expired: err instanceof DeadlineExpiredError, site: "devices" });
+      const { guidance, headline } = connectionFailureCopy({
+
+        controllerFailureGuidance: this.#config.controllerFailureGuidance,
+        expired: err instanceof DeadlineExpiredError,
+        site: "devices"
+      });
 
       // Clearing the affordance and rendering the failure are one terminal action, so they ride the staleness guard together. A cycle superseded while parked on this
       // await reaches this catch after the cycle that replaced it has installed an affordance of its own, and its own was retired by its abort listener the moment it
@@ -835,7 +848,18 @@ export class webUiFeatureOptions {
 
     const { devices, error } = outcome;
 
-    this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, devices, error, seq: devicesSeq, type: "devices:loaded" });
+    // The plugin's controller-failure guidance rides along unconditionally, the way the nav view's click carries it: this is the dispatch a hook that REPORTS a failure
+    // travels through - an empty device list beside a non-empty error - and the reducer reads the guidance only on the fold that error triggers, ignoring it entirely on
+    // a success. Carrying it here is what makes a boot that cannot reach its controller read exactly as a click that cannot, whichever way the hook reported it.
+    this.#store.dispatch({
+
+      controllerId: initialController?.serialNumber ?? null,
+      devices,
+      error,
+      guidance: this.#config.controllerFailureGuidance,
+      seq: devicesSeq,
+      type: "devices:loaded"
+    });
 
     // Gate every follow-up on the reducer's own verdict: my outcome applied only when the sequence I carried is the one the reducer recorded. A controller click that
     // raced this initial fetch would have superseded it - its outcome owns the store, and this stale continuation must neither reveal the page over it nor overwrite
@@ -1037,7 +1061,12 @@ export class webUiFeatureOptions {
    */
   #failConnection({ err, signal, site }) {
 
-    const { guidance, headline } = connectionFailureCopy({ expired: err instanceof DeadlineExpiredError, site });
+    const { guidance, headline } = connectionFailureCopy({
+
+      controllerFailureGuidance: this.#config.controllerFailureGuidance,
+      expired: err instanceof DeadlineExpiredError,
+      site
+    });
 
     this.#unlessStale({ run: () => {
 
@@ -1324,6 +1353,7 @@ export class webUiFeatureOptions {
 
         deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS,
         deviceContent: this.#config.renderDeviceContent,
+        failureGuidance: this.#config.controllerFailureGuidance,
         getDevices: (controller) => this.#devicesFor(controller),
         labelControllers: this.#config.labelControllers,
         labelDevices: this.#config.labelDevices,

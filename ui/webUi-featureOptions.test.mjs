@@ -3212,6 +3212,154 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
   });
 });
 
+describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", () => {
+
+  // Where a user repairs an unreachable controller is plugin topology, so the guidance is the plugin's to write and the framework's default names no place. These
+  // tests pin the default, the override reaching every controller-failure route, and the one route it must not reach: a plugin that stopped answering at all.
+  const PLUGIN_GUIDANCE = "Open the controller editor on this page to correct its address or credentials.";
+
+  const arrange = () => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    return { fake, homebridgeGuard, skeleton };
+  };
+
+  test("the framework's neutral default renders when a plugin supplies none, naming no host tab", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [], error: "Connection refused: 192.0.2.1:443" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /Verify the controller's connection details are correct, then retry\./,
+      "the neutral default is what an unconfigured plugin shows");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Settings tab/, "and it names no host tab, which a consumer may not have");
+
+    orchestrator.cleanup();
+  });
+
+  test("a configured guidance renders verbatim on a boot-path device failure", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+      getDevices: async () => ({ devices: [], error: "Controller unreachable." }),
+      ui: { controllerFailureGuidance: PLUGIN_GUIDANCE }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "precondition: the boot failure rendered the connection-error view");
+    assert.match(skeleton.headerInfo.textContent, /Open the controller editor on this page/, "the plugin's own guidance is what the boot failure shows");
+
+    orchestrator.cleanup();
+  });
+
+  test("a configured guidance renders verbatim on a sidebar click's device failure", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    // Controller A answers so the page renders and its sidebar is clickable; controller B is the unreachable one the click meets.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
+      getDevices: async (controller) => (controller?.serialNumber === "CTRL-A") ?
+        { devices: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" } : { devices: [], error: "Controller unreachable." },
+      ui: { controllerFailureGuidance: PLUGIN_GUIDANCE }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").click();
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "precondition: the click's failure rendered the connection-error view");
+    assert.match(skeleton.headerInfo.textContent, /Open the controller editor on this page/, "a click's failure reads exactly as the boot's does");
+
+    orchestrator.cleanup();
+  });
+
+  test("a configured guidance renders verbatim on a reported controller-list failure", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [], error: "Connection refused: 192.0.2.1:443" }),
+      ui: { controllerFailureGuidance: PLUGIN_GUIDANCE }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /Open the controller editor on this page/, "the controller-list failure takes the plugin's guidance too");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Verify the controller's connection details/, "and the framework's default gives way to it entirely");
+
+    orchestrator.cleanup();
+  });
+
+  test("a deadline expiry keeps the plugin-stopped-responding guidance, which is not controller trouble", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: () => new Promise(() => {}),
+      ui: { controllerFailureGuidance: PLUGIN_GUIDANCE }
+    });
+
+    const showPromise = orchestrator.show(await openTestSession());
+
+    await flush();
+    t.mock.timers.tick(30001);
+
+    await showPromise;
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /Retry once the plugin is responding again\./,
+      "a hook that never answered is the plugin's silence, not the controller's");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Open the controller editor on this page/, "so the plugin's controller guidance stays out of it");
+
+    orchestrator.cleanup();
+  });
+});
+
 describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
   // The optional onOptionsEdited hook fires after any option mutation has transitioned the store, giving a plugin's own webUI code the moment an edit lands. These

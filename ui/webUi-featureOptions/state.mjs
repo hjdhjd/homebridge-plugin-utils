@@ -173,12 +173,17 @@ export const EMPTY_CATALOG = {
   }
 };
 
+// What the user is told to do about a controller the page could not reach. Every row that speaks about controller trouble reads this one string, which is also what
+// lets a plugin replace all of them at once through `ui.controllerFailureGuidance`: where a user repairs a controller is plugin topology, and a framework that named a
+// place would be naming one some consumers do not have. The wording therefore says what to verify and not where to go.
+const CONTROLLER_FAILURE_GUIDANCE = "Verify the controller's connection details are correct, then retry.";
+
 // The connection-error display copy for a controller fetch failure. The reducer supplies it at its one fetch-failure transition (on devices:loaded), so this
 // controller wording lives here rather than being hardcoded in the connection-error view, which maps every text slot from the status. The per-fetch failure
 // message travels back on the outcome and is layered on as `message`.
 const CONTROLLER_FAILURE_STATUS = {
 
-  guidance: "Check the Settings tab to verify the controller details are correct.",
+  guidance: CONTROLLER_FAILURE_GUIDANCE,
   headline: "Unable to connect to the controller.",
   kind: "connection-error"
 };
@@ -198,7 +203,7 @@ const CONNECTION_FAILURE_COPY = {
     },
     failed: {
 
-      guidance: "Check the Settings tab to verify the controller details are correct.",
+      guidance: CONTROLLER_FAILURE_GUIDANCE,
       headline: "Unable to retrieve the controller list."
     }
   },
@@ -211,7 +216,7 @@ const CONNECTION_FAILURE_COPY = {
     },
     failed: {
 
-      guidance: "Check the Settings tab to verify the controller details are correct.",
+      guidance: CONTROLLER_FAILURE_GUIDANCE,
       headline: "Unable to retrieve the device list."
     }
   },
@@ -247,13 +252,19 @@ const CONNECTION_FAILURE_COPY = {
  * Resolve the display copy for a failed await. An unregistered site throws, matching the reducer's unknown-action policy: a copy key typo is a bug at the dispatch
  * site, and surfacing it loudly beats rendering a failure banner with two empty text slots.
  *
+ * A plugin's own controller-failure guidance, when it supplies one, replaces the guidance on exactly the rows that speak about the controller. Which rows those are is
+ * this table's knowledge and stays here: a row carrying the shared controller-failure guidance is one of them, so a caller passes the plugin's copy without having to
+ * know which sites can fail for controller reasons. The expiry rows are deliberately outside that set - a plugin that stopped answering is not controller trouble, and
+ * telling the user to check controller details would send them after the wrong thing.
+ *
  * @param {Object} args
+ * @param {string} [args.controllerFailureGuidance] - The plugin's replacement guidance for a controller that cannot be reached. Absent leaves the framework's copy.
  * @param {boolean} args.expired - True when the deadline elapsed, false when the request itself failed.
  * @param {string} args.site - The await that failed: `"controllers"`, `"devices"`, `"features"`, or `"sync"`.
  * @returns {{ guidance: string, headline: string }} The headline and guidance for that failure.
  * @throws {Error} When no copy is registered for the supplied site.
  */
-export const connectionFailureCopy = ({ expired, site }) => {
+export const connectionFailureCopy = ({ controllerFailureGuidance = undefined, expired, site }) => {
 
   const copy = CONNECTION_FAILURE_COPY[site];
 
@@ -262,7 +273,14 @@ export const connectionFailureCopy = ({ expired, site }) => {
     throw new Error("FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"" + site + "\".");
   }
 
-  return expired ? copy.expired : copy.failed;
+  const resolved = expired ? copy.expired : copy.failed;
+
+  if(controllerFailureGuidance && (resolved.guidance === CONTROLLER_FAILURE_GUIDANCE)) {
+
+    return { ...resolved, guidance: controllerFailureGuidance };
+  }
+
+  return resolved;
 };
 
 /**

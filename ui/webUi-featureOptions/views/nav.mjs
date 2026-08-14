@@ -42,6 +42,8 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.
  * @param {((device: import("../../webUi-featureOptions.mjs").Device) => Node | string | null) | undefined} args.deviceContent - Plugin-provided hook composing a
  *        device link's rendered content in place of its name; a null or undefined return falls through to the name. Applies to device links only.
+ * @param {string} [args.failureGuidance] - The plugin's own guidance for a controller that cannot be reached, carried on this view's outcome dispatches so a click
+ *        that fails reads the same way a boot that fails does. Absent leaves the reducer on the framework's shared controller-failure wording.
  * @param {((controller: import("../state.mjs").Controller | null) =>
  *           Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>) | undefined} args.getDevices
  *        - Plugin-provided fetcher resolving a controller's DeviceListResult. Called on controller-link click.
@@ -52,7 +54,8 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountNavView = ({ deadlineSeconds, deviceContent, getDevices, labelControllers, labelDevices, rootControllers, rootDevices, signal, store }) => {
+export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, labelControllers, labelDevices, rootControllers, rootDevices,
+  signal, store }) => {
 
   // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - the facade's controllers-only refresh path.
   effect({
@@ -112,7 +115,7 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, getDevices, label
 
   // Click delegation: one listener on each container resolves the clicked nav link's `data-navigation` and dispatches the appropriate scope-change. The
   // last-request-wins race a controller click can open is owned by the reducer's fetch sequence, so the handler holds no per-mount generation state of its own.
-  const onClick = (event) => handleNavClick({ deadlineSeconds, event, getDevices, signal, store });
+  const onClick = (event) => handleNavClick({ deadlineSeconds, event, failureGuidance, getDevices, signal, store });
 
   rootControllers.addEventListener("click", onClick, { signal });
   rootDevices.addEventListener("click", onClick, { signal });
@@ -257,8 +260,9 @@ const applyDevicesHighlight = (root, scope) => {
 };
 
 // Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally
-// fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback.
-const handleNavClick = async ({ deadlineSeconds, event, getDevices, signal, store }) => {
+// fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback, carrying the plugin's controller-failure guidance on the outcome so a
+// click that cannot reach its controller reads exactly as a boot that cannot.
+const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevices, signal, store }) => {
 
   const navLink = event.target.closest(".nav-link[data-navigation]");
 
@@ -313,7 +317,9 @@ const handleNavClick = async ({ deadlineSeconds, event, getDevices, signal, stor
           return;
         }
 
-        store.dispatch({ controllerId: deviceSerial, devices, error, seq, type: "devices:loaded" });
+        // The guidance rides along unconditionally: the reducer reads it only on the fold a non-empty error triggers and ignores it on a success, so one dispatch
+        // shape serves both outcomes.
+        store.dispatch({ controllerId: deviceSerial, devices, error, guidance: failureGuidance, seq, type: "devices:loaded" });
 
         // Gate the follow-up on the reducer's own verdict: select the controller-as-device entry only when my outcome is the one that applied, carried no failure,
         // and returned at least one device. A superseded outcome, a connection failure (the reducer moved the store to connection-error), or an empty controller each
@@ -335,7 +341,7 @@ const handleNavClick = async ({ deadlineSeconds, event, getDevices, signal, stor
           return;
         }
 
-        store.dispatch({ controllerId: deviceSerial, devices: [], error: errorMessage(err), seq, type: "devices:loaded" });
+        store.dispatch({ controllerId: deviceSerial, devices: [], error: errorMessage(err), guidance: failureGuidance, seq, type: "devices:loaded" });
       }
 
       return;

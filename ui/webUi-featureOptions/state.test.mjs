@@ -271,7 +271,7 @@ describe("reducer - devices:loaded", () => {
     const next = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
 
     assert.equal(next.status.headline, "Unable to connect to the controller.", "an outcome with no headline keeps the shared controller-failure headline");
-    assert.equal(next.status.guidance, "Check the Settings tab to verify the controller details are correct.", "and the shared guidance with it");
+    assert.equal(next.status.guidance, "Verify the controller's connection details are correct, then retry.", "and the shared guidance with it");
   });
 
   test("an outcome carrying copy overrides renders them instead, so a bounded await's failure reads as itself", () => {
@@ -310,7 +310,7 @@ describe("reducer - devices:loaded", () => {
     });
 
     assert.equal(next.status.headline, "Unable to retrieve the device list.", "the supplied headline applies");
-    assert.equal(next.status.guidance, "Check the Settings tab to verify the controller details are correct.", "the absent guidance falls back to the shared constant");
+    assert.equal(next.status.guidance, "Verify the controller's connection details are correct, then retry.", "the absent guidance falls back to the shared constant");
   });
 
   test("a successful outcome ignores copy overrides entirely - they only ever decorate a failure", () => {
@@ -362,6 +362,39 @@ describe("connectionFailureCopy", () => {
       message: "FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"devcies\".",
       name: "Error"
     }, "a copy key typo is a bug at the dispatch site and must surface loudly, the reducer's own unknown-action policy");
+  });
+
+  test("the controller-failure rows share one guidance, and it names no place the plugin may not have", () => {
+
+    const controllers = connectionFailureCopy({ expired: false, site: "controllers" });
+    const devices = connectionFailureCopy({ expired: false, site: "devices" });
+
+    assert.equal(controllers.guidance, "Verify the controller's connection details are correct, then retry.", "the controller-list failure reads the shared guidance");
+    assert.equal(devices.guidance, controllers.guidance, "and the device-list failure reads the same one, so the two cannot drift apart");
+    assert.doesNotMatch(controllers.guidance, /Settings tab/,
+      "the framework's own copy names no host tab, because a consumer may keep its controller settings elsewhere");
+  });
+
+  test("a plugin's guidance replaces the controller-failure rows and leaves every other row alone", () => {
+
+    const plugin = "Open the controller editor below to correct its address or credentials.";
+
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: false, site: "controllers" }).guidance, plugin,
+      "a controller-list failure takes the plugin's guidance");
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: false, site: "devices" }).guidance, plugin,
+      "and so does a device-list failure, the other way a controller reports trouble");
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: true, site: "devices" }).guidance, "Retry once the plugin is responding again.",
+      "an expiry keeps the plugin-stopped-responding guidance - a host that went quiet is not controller trouble");
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: false, site: "sync" }).guidance,
+      "Retry once the Homebridge server is reachable again.", "and a config-read failure is untouched, since it says nothing about a controller");
+  });
+
+  test("the headline is never touched by the guidance override", () => {
+
+    const overridden = connectionFailureCopy({ controllerFailureGuidance: "Repair it here.", expired: false, site: "devices" });
+
+    assert.equal(overridden.headline, connectionFailureCopy({ expired: false, site: "devices" }).headline,
+      "what failed is the framework's to say, whoever wrote the remedy");
   });
 });
 

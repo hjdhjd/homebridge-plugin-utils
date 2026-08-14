@@ -6,7 +6,7 @@
 
 import { BOOT_AWAIT_DEADLINE_SECONDS, webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 import { DeadlineExpiredError, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
-import { swapMenuClasses, toastError } from "./webUi-featureOptions/utils.mjs";
+import { paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
 import { registerThemeEffect } from "./webUi-theming.mjs";
 import { registerTokensEffect } from "./webUi-tokens.mjs";
@@ -510,8 +510,8 @@ export class webUi {
   /**
    * Show the main plugin configuration tab.
    *
-   * Hides the feature-options view, swaps the menu button states (home and feature-options become primary; settings becomes elegant to indicate the active tab),
-   * and asks Homebridge to render its built-in schema-driven settings form. The spinner brackets the swap so transient layout shifts are not visible to the user.
+   * Hides the feature-options view, paints the menu with Settings as the active tab, and asks Homebridge to render its built-in schema-driven settings form. The
+   * spinner brackets the paint so transient layout shifts are not visible to the user.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the schema form so any debounced-but-unwritten option edit is flushed into Homebridge's in-memory config model
    * first - the Settings form then renders against the flushed config rather than a stale snapshot. The try/finally guarantees the spinner comes down and the tab
@@ -529,9 +529,7 @@ export class webUi {
       await this.featureOptions.hide();
     } finally {
 
-      swapMenuClasses("menuHome", "btn-elegant", "btn-primary");
-      swapMenuClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
-      swapMenuClasses("menuSettings", "btn-primary", "btn-elegant");
+      paintMenuTabs("menuSettings");
 
       document.getElementById("pageSupport").style.display = "none";
       document.getElementById("pageFeatureOptions").style.display = "none";
@@ -545,8 +543,8 @@ export class webUi {
   /**
    * Show the support tab.
    *
-   * Hides the feature-options view and the schema form, swaps the menu button states (home becomes elegant as the active tab; feature-options and settings revert
-   * to primary), and reveals the static support page. Spinner brackets the swap to mask transient layout shifts.
+   * Hides the feature-options view and the schema form, paints the menu with Home as the active tab, and reveals the static support page. The spinner brackets the
+   * paint to mask transient layout shifts.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the support page so any debounced-but-unwritten option edit is flushed first, matching the Settings path. The
    * try/finally guarantees the spinner comes down and the tab reveals even if the drain rejects (the drain's own failure path already toasts via `persist:failed`).
@@ -564,9 +562,7 @@ export class webUi {
       await this.featureOptions.hide();
     } finally {
 
-      swapMenuClasses("menuHome", "btn-primary", "btn-elegant");
-      swapMenuClasses("menuFeatureOptions", "btn-elegant", "btn-primary");
-      swapMenuClasses("menuSettings", "btn-elegant", "btn-primary");
+      paintMenuTabs("menuHome");
 
       document.getElementById("pageSupport").style.display = "block";
       document.getElementById("pageFeatureOptions").style.display = "none";

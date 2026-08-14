@@ -212,16 +212,15 @@ export function setCategoryExpanded(details, expanded) {
 }
 
 /**
- * Swap one Bootstrap button class for another on a menu button, tolerating a button the page does not carry.
+ * Move an element addressed by id from one class to another, tolerating an element the page does not carry.
  *
- * The menu uses the Bootstrap (Material Design for Bootstrap) `btn-primary` / `btn-elegant` pair to encode active versus inactive tabs. Every menu paint in the
- * webUI routes through here - the orchestrator's tab-switch handlers and the feature-options view's own menu-state pass alike - so what the class pair means lives
- * in one place while the exact swap each tab needs stays at its call site.
+ * A generic two-state swap with no opinion about what the classes mean: a consumer's own page chrome uses it to move an element between mutually exclusive states
+ * without writing the lookup and the null check at each site. What the framework's own menu tabs wear is {@link paintMenuTabs}' business, not this helper's.
  *
- * A plugin's markup declares which menu surfaces it offers, so a swap aimed at a button the markup omits is a deliberate no-op rather than a failure: a plugin whose
- * configuration is expressed entirely in feature options carries no schema-form button, and a paint that would have styled it finds nothing to style.
+ * A plugin's markup declares which surfaces it offers, so a swap aimed at an element the markup omits is a deliberate no-op rather than a failure: the caller runs
+ * the same code whether or not the page carries the element.
  *
- * @param {string} id          - The element ID of the menu button to update.
+ * @param {string} id          - The element ID to update.
  * @param {string} removeClass - The class to remove.
  * @param {string} addClass    - The class to add.
  */
@@ -236,6 +235,43 @@ export function swapMenuClasses(id, removeClass, addClass) {
 
   element.classList.remove(removeClass);
   element.classList.add(addClass);
+}
+
+// The page's menu buttons, in the order the markup lays them out. This list is the single source of truth for which buttons a menu paint reaches: every paint site
+// names only the tab it is activating, so a page that gains or loses a menu surface is one edit here rather than one at each site.
+const MENU_IDS = [ "menuHome", "menuFeatureOptions", "menuSettings" ];
+
+/**
+ * Paint the menu tabs, marking exactly one of them active.
+ *
+ * One declarative call in place of per-button class juggling at each tab-switch site: the caller names the tab that is now active, and this owns everything else -
+ * which buttons the page has, what the framework's menu vocabulary is, and normalizing away the Bootstrap variant a consumer's markup ships its buttons with. That
+ * normalization runs on every paint, which is what makes the first paint the one that converts the markup's classes with no first-run special case anywhere.
+ *
+ * The `fo-` classes carry the whole visual state: `fo-menu` is the quiet ghost every tab wears and `fo-menu-active` adds the theme's accent fill over it, so the
+ * eye-catching treatment marks the tab the user is on. Both are styled in the page-lifetime theme sheet, which is in force on every tab including Support.
+ *
+ * A button the page does not carry is a no-op, the same posture {@link swapMenuClasses} takes toward a missing element.
+ *
+ * @param {string} activeId - The element ID of the tab that is now active. An id no menu button carries leaves every tab inactive.
+ */
+export function paintMenuTabs(activeId) {
+
+  for(const id of MENU_IDS) {
+
+    const element = document.getElementById(id);
+
+    if(!element) {
+
+      continue;
+    }
+
+    // Both Bootstrap variants a menu button might arrive wearing come off, so the framework's own classes are the only thing describing the tab's state and no host
+    // variant styling competes with the theme sheet for it. The `btn` class itself stays: it carries the button's geometry, which these classes do not restate.
+    element.classList.remove("btn-elegant", "btn-primary");
+    element.classList.add("fo-menu");
+    element.classList.toggle("fo-menu-active", id === activeId);
+  }
 }
 
 /**

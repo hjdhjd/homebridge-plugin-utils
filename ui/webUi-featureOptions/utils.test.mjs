@@ -12,6 +12,7 @@ import {
   captureCategoryStates,
   createElement,
   delay,
+  paintMenuTabs,
   setCategoryExpanded,
   showToast,
   swapMenuClasses
@@ -237,6 +238,89 @@ describe("swapMenuClasses", () => {
     // A plugin's markup declares which menu surfaces it offers, so a paint aimed at a button the markup omits has nothing to do. The helper must return rather than
     // throw, which is what lets a plugin that leaves a menu surface out run the same paint code as one that carries it.
     assert.doesNotThrow(() => swapMenuClasses("menuSettings", "btn-primary", "btn-elegant"));
+  });
+});
+
+describe("paintMenuTabs", () => {
+
+  // The menu as a consumer's markup ships it: every button wearing Bootstrap's own variant, which the first paint is expected to normalize away.
+  function makeMenu(ids = [ "menuHome", "menuFeatureOptions", "menuSettings" ]) {
+
+    const buttons = {};
+
+    for(const id of ids) {
+
+      const button = document.createElement("button");
+
+      button.id = id;
+      button.classList.add("btn", "btn-primary");
+      document.body.appendChild(button);
+      buttons[id] = button;
+    }
+
+    return buttons;
+  }
+
+  test("paints every tab with the framework's own classes and marks exactly one active", () => {
+
+    using _dom = createTestDom();
+
+    const buttons = makeMenu();
+
+    paintMenuTabs("menuFeatureOptions");
+
+    for(const [ id, button ] of Object.entries(buttons)) {
+
+      assert.equal(button.classList.contains("fo-menu"), true, id + " wears the shared menu class");
+      assert.equal(button.classList.contains("btn-primary"), false, id + " no longer carries the markup's Bootstrap variant");
+      assert.equal(button.classList.contains("btn-elegant"), false, id + " carries neither Bootstrap variant");
+      assert.equal(button.classList.contains("btn"), true, id + " keeps the geometry class the framework does not restate");
+    }
+
+    assert.equal(buttons.menuFeatureOptions.classList.contains("fo-menu-active"), true, "the named tab is the active one");
+    assert.equal(buttons.menuHome.classList.contains("fo-menu-active"), false, "and every other tab is not");
+    assert.equal(buttons.menuSettings.classList.contains("fo-menu-active"), false, "for each of them");
+  });
+
+  test("a repaint moves the active mark rather than accumulating one", () => {
+
+    using _dom = createTestDom();
+
+    const buttons = makeMenu();
+
+    paintMenuTabs("menuHome");
+    paintMenuTabs("menuSettings");
+
+    assert.equal(buttons.menuSettings.classList.contains("fo-menu-active"), true, "the newly-named tab is active");
+    assert.equal(buttons.menuHome.classList.contains("fo-menu-active"), false, "and the tab it replaced is not, so exactly one is ever marked");
+  });
+
+  test("a menu surface the page omits is a silent no-op, and the tabs it does carry still paint", () => {
+
+    using _dom = createTestDom();
+
+    // A plugin expressed entirely in feature options carries no schema-form button, so the paint must reach the buttons that exist and pass over the one that does
+    // not, rather than failing partway and leaving the menu half-painted.
+    const buttons = makeMenu([ "menuHome", "menuFeatureOptions" ]);
+
+    assert.doesNotThrow(() => paintMenuTabs("menuFeatureOptions"));
+    assert.equal(buttons.menuFeatureOptions.classList.contains("fo-menu-active"), true, "the active tab painted");
+    assert.equal(buttons.menuHome.classList.contains("fo-menu"), true, "and so did the sibling the page does carry");
+  });
+
+  test("an id no button carries leaves every tab inactive rather than throwing", () => {
+
+    using _dom = createTestDom();
+
+    const buttons = makeMenu();
+
+    paintMenuTabs("menuNothing");
+
+    for(const [ id, button ] of Object.entries(buttons)) {
+
+      assert.equal(button.classList.contains("fo-menu"), true, id + " is still painted");
+      assert.equal(button.classList.contains("fo-menu-active"), false, id + " is inactive, since the named tab is not one of them");
+    }
   });
 });
 

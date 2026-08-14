@@ -442,14 +442,14 @@ describe("webUi.show - menu wiring", () => {
     // try/finally after the awaited hide(). Flush past the handler's microtasks before asserting the post-reveal state.
     await flushPending();
 
-    // The settings tab is the schema-form view: the orchestrator hides the inner feature-options instance, calls homebridge.showSchemaForm, and swaps Bootstrap
-    // classes so menuSettings carries `btn-elegant` (active) while the two sibling buttons carry `btn-primary` (inactive). Active = elegant is the project's local
-    // convention - the inverse of vanilla Bootstrap's `btn-primary`-as-active idiom - so the test pins both halves of the swap to catch a future revert.
+    // The settings tab is the schema-form view: the orchestrator hides the inner feature-options instance, calls homebridge.showSchemaForm, and paints the menu with
+    // menuSettings active. Both halves are pinned - the active mark on one tab and its absence on the siblings - because a paint that marked every tab, or none,
+    // would leave the user without the "you are here" reading the accent fill exists to give.
     assert.deepEqual(harness.featureOptionsCalls, ["hide"], "menuSettings click must hide the inner feature-options view");
     assert.equal(harness.fake.observed.state.schemaFormVisible, true, "menuSettings click must surface the schema form");
-    assert.equal(harness.skeleton.menuSettings.classList.contains("btn-elegant"), true, "active settings tab must carry btn-elegant");
-    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("btn-primary"), true, "inactive feature-options tab must carry btn-primary");
-    assert.equal(harness.skeleton.menuHome.classList.contains("btn-primary"), true, "inactive home tab must carry btn-primary");
+    assert.equal(harness.skeleton.menuSettings.classList.contains("fo-menu-active"), true, "the active settings tab must carry the accent-fill class");
+    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("fo-menu-active"), false, "the inactive feature-options tab must not");
+    assert.equal(harness.skeleton.menuHome.classList.contains("fo-menu-active"), false, "and neither must the inactive home tab");
   });
 
   test("clicking menuHome reveals the support page and hides the schema form", async () => {
@@ -471,9 +471,9 @@ describe("webUi.show - menu wiring", () => {
     assert.deepEqual(harness.featureOptionsCalls, ["hide"], "menuHome click must hide the inner feature-options view");
     assert.equal(harness.fake.observed.state.schemaFormVisible, false, "menuHome click must hide the schema form");
     assert.equal(harness.skeleton.pageSupport.style.display, "block", "menuHome click must reveal the support page");
-    assert.equal(harness.skeleton.menuHome.classList.contains("btn-elegant"), true, "active home tab must carry btn-elegant");
-    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("btn-primary"), true, "inactive feature-options tab must carry btn-primary");
-    assert.equal(harness.skeleton.menuSettings.classList.contains("btn-primary"), true, "inactive settings tab must carry btn-primary");
+    assert.equal(harness.skeleton.menuHome.classList.contains("fo-menu-active"), true, "the active home tab must carry the accent-fill class");
+    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("fo-menu-active"), false, "the inactive feature-options tab must not");
+    assert.equal(harness.skeleton.menuSettings.classList.contains("fo-menu-active"), false, "and neither must the inactive settings tab");
   });
 
   test("a page whose markup omits a menu button launches, switches its remaining views, and paints around the gap", async () => {
@@ -503,9 +503,9 @@ describe("webUi.show - menu wiring", () => {
     harness.skeleton.menuHome.click();
     await flushPending();
 
-    // The buttons the markup does carry still switch views, and the class swap each switch performs steps over the absent button instead of dereferencing it.
+    // The buttons the markup does carry still switch views, and the paint each switch performs steps over the absent button instead of dereferencing it.
     assert.equal(harness.skeleton.pageSupport.style.display, "block", "the support view must still open from the button the markup carries");
-    assert.equal(harness.skeleton.menuHome.classList.contains("btn-elegant"), true, "the active home tab must still be painted");
+    assert.equal(harness.skeleton.menuHome.classList.contains("fo-menu-active"), true, "the active home tab must still be painted");
 
     harness.skeleton.menuFeatureOptions.click();
     await flushPending();
@@ -531,13 +531,13 @@ describe("webUi.show - the feature-options view paints the menu whenever it show
     });
 
     // The real pipeline, not the stub: the menu paint belongs to the feature-options view rather than to the orchestrator's tab-switch handlers, so it is only
-    // observable when that view actually shows. Active = elegant is the project's local convention, the inverse of vanilla Bootstrap's, which is why the inactive
-    // halves are pinned alongside the active one.
+    // observable when that view actually shows. The inactive halves are pinned alongside the active one because "exactly one tab is marked" is the whole reading.
     await harness.ui.show();
 
-    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("btn-elegant"), true, "the feature-options tab is the active one while its view shows");
-    assert.equal(harness.skeleton.menuHome.classList.contains("btn-primary"), true, "the home tab is inactive while the feature-options view shows");
-    assert.equal(harness.skeleton.menuSettings.classList.contains("btn-primary"), true, "the settings tab is inactive while the feature-options view shows");
+    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("fo-menu-active"), true, "the feature-options tab is the active one while its view shows");
+    assert.equal(harness.skeleton.menuHome.classList.contains("fo-menu-active"), false, "the home tab is inactive while the feature-options view shows");
+    assert.equal(harness.skeleton.menuSettings.classList.contains("fo-menu-active"), false, "the settings tab is inactive while the feature-options view shows");
+    assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("btn-primary"), false, "and the markup's Bootstrap variant is normalized away by the paint");
   });
 });
 

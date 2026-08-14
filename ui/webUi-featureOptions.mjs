@@ -7,7 +7,7 @@
 import { DeadlineExpiredError, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
-import { createElement, delay, errorMessage, swapMenuClasses, toastError } from "./webUi-featureOptions/utils.mjs";
+import { createElement, delay, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
 import { buildCatalogIndex } from "./featureOptions.js";
 import { modelLoaded } from "./webUi-featureOptions/selectors.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
@@ -1386,21 +1386,9 @@ export class webUiFeatureOptions {
   }
 }
 
-// Update the menu button states to reflect the current page. Swap between the elegant and primary button styles to show active/inactive.
-const updateMenuState = () => {
-
-  const menuStates = [
-
-    { id: "menuHome", primary: true },
-    { id: "menuFeatureOptions", primary: false },
-    { id: "menuSettings", primary: true }
-  ];
-
-  for(const { id, primary } of menuStates) {
-
-    swapMenuClasses(id, primary ? "btn-elegant" : "btn-primary", primary ? "btn-primary" : "btn-elegant");
-  }
-};
+// Mark the feature-options tab as the active one. The shared paint owns which buttons the menu has and what active and inactive look like, so this call site names
+// only the page it speaks for.
+const updateMenuState = () => paintMenuTabs("menuFeatureOptions");
 
 // Clear stale DOM from any prior cycle. Each region's view repopulates it.
 const clearContainers = () => {

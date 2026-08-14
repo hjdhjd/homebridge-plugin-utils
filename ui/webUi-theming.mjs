@@ -327,6 +327,31 @@ const buildBaseCss = () => [
   ":root.fo-dark .text-body { color: var(--fo-text-muted) !important; }",
   ":root.fo-dark .text-muted { color: var(--fo-text-muted) !important; }",
 
+  /* The menu tabs. The active tab takes the accent fill and the inactive ones a quiet ghost, which puts the eye-catching treatment on the tab the user is actually
+   * on. That reading holds in both modes by construction: a saturated fill against a transparent ghost cannot invert the way two Bootstrap variants can, whichever
+   * canvas they land on. The fill is the host-probed accent, so a host that re-themes carries the tabs with it and no value here needs revisiting.
+   *
+   * The ghost's colors are the mode-aware neutrals - muted text and a subtle border - whose dark overrides give the quiet light-on-dark reading a dark canvas wants.
+   * Both states declare the same hairline border so the geometry never shifts as the active tab moves, and the active one declares it transparent so the fill alone
+   * describes the state. Everything else about a tab's size is the `btn` class the markup already carries, which these rules deliberately leave alone.
+   *
+   * The hover tint is an affordance for a tab the user can move to, so it is scoped away from the active tab: hovering the tab you are already on offers nothing and
+   * must not lift the accent fill off it.
+   *
+   * Every state a tab can be in is spelled out here rather than left to whatever the page around us says, because the host stylesheet carries its own stateful `.btn`
+   * rules and a class-plus-pseudo-class selector outranks a bare class. A tab wearing no Bootstrap variant resolves those rules' color variables to nothing, so an
+   * unpinned state shows the canvas through the button. Pinning is limited to background, text, and border color: box-shadow and outline stay the host's, which is
+   * what keeps its focus ring intact.
+   *
+   * Where our own selectors tie on specificity - the ghost's states against the active tab's - source order decides, so the active rule is written last and the fill
+   * holds on the tab the user is on.
+   */
+  ".fo-menu { background: transparent; border: 1px solid var(--fo-border-subtle); color: var(--fo-text-muted); }",
+  ".fo-menu:hover, .fo-menu:focus, .fo-menu:active { border-color: var(--fo-border-subtle); color: var(--fo-text-muted); }",
+  ".fo-menu:not(.fo-menu-active):hover { background: var(--fo-accent-hover); }",
+  ".fo-menu-active, .fo-menu-active:hover, .fo-menu-active:focus, .fo-menu-active:active { background: var(--fo-accent-bg); " +
+    "border: 1px solid transparent; color: var(--fo-accent-fg); }",
+
   // Utility styles.
   ".btn-xs { font-size: var(--fo-font-size-xs) !important; padding: var(--fo-space-xxs) var(--fo-space-sm) !important; line-height: 1.5; touch-action: manipulation; }",
   ".cursor-pointer { cursor: pointer; }",

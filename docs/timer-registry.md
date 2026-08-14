@@ -30,6 +30,8 @@ The surface is minimal on purpose:
   - `schedule(callback, delay)` arms an anonymous one-shot: tracked for disposal, self-removing on fire, never replacing anything, so concurrent anonymous timers
     coexist.
   - `clear(key)` cancels and removes a keyed timer; `has(key)` reports whether one is currently armed.
+  - `clearAll()` drains every pending timer, keyed and anonymous alike, and leaves the registry armed: the shape for an owner whose pending work must all cancel on a
+    state change while the re-arms that follow still need to take.
   - `dispose()` (and `[Symbol.dispose]`) drains every pending timer and retires the registry: subsequent registrations are no-ops. An `options.signal` binds the same
     drain to the owner's lifetime, so the owner never has to unwire the registry by hand at teardown.
 
@@ -103,6 +105,21 @@ Cancel and remove the keyed timer under `key`. Silently does nothing when no tim
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `key` | `string` | The identity to clear. |
+
+###### Returns
+
+`void`
+
+##### clearAll()
+
+```ts
+clearAll(): void;
+```
+
+Cancel and remove every pending timer, keyed and anonymous alike, while leaving the registry armed for later registrations. This is the drain without the
+retirement: reach for it when an owner's pending work must all cancel on a state change but the owner itself lives on, so the re-arms that follow the change still
+need to take. Safe to call in any state and a no-op on repeat - draining empty containers does nothing, and a call on an already-disposed registry neither throws
+nor revives it.
 
 ###### Returns
 

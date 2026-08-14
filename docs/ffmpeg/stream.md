@@ -126,6 +126,7 @@ get hasError(): boolean;
 ```
 
 `true` when the abort reason was `HbpuAbortError("failed")`. Covers spawn failures and non-zero natural exits. Derived from `this.signal.reason`; no stored flag.
+The value is final by the time any listener on `this.signal` runs, so a consumer's abort handler can read it synchronously rather than waiting on `exited`.
 
 ###### Returns
 

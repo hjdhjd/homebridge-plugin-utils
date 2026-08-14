@@ -1072,6 +1072,64 @@ const result3 = await runWithAbort((signal) => once(emitter, "data", { signal })
 
 ***
 
+### sameEntries()
+
+```ts
+function sameEntries<T>(
+   a, 
+   b, 
+   same): boolean;
+```
+
+Compare two arrays entry by entry, deciding equality of each pair through a caller-supplied comparator.
+
+The use case this exists for is persist-on-change: a plugin holds the last state it wrote, computes the current state, and wants to write only when something
+actually differs. The entries are usually small records - a device summary, a channel row - whose equality is a matter of the two or three fields that matter to
+the caller rather than a deep structural comparison, and the comparator is where that judgement lives.
+
+Arrays of different lengths are unequal without any comparison. Otherwise the walk is index-wise and short-circuits at the first unequal pair, so the cost is the
+length of the common prefix rather than the whole array.
+
+Undefined slots are settled before the comparator is consulted, which is what keeps a sparse or short-read array from slipping past a comparator that reads
+fields off its arguments: a pair with exactly one undefined side is unequal, a pair with both sides undefined is equal, and the comparator runs only when both
+sides are present. A comparator therefore never has to defend against an undefined argument.
+
+Node-side by scope, and deliberately so. It has no runtime dependencies of its own, but util.ts is where the library's Node-side helpers live and every filed
+consumer of this one is Node-side; the browser-safe surface is formatters.ts, which is the SSOT for formatting alone, by name and by scope. Should a browser-side
+consumer ever appear, relocating this is a deliberate, versioned act rather than something to pre-empt here.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` | The entry type. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `a` | readonly `T`[] | The first array. |
+| `b` | readonly `T`[] | The second array. |
+| `same` | (`x`, `y`) => `boolean` | Equality predicate for one pair of entries, invoked only when both entries are present. |
+
+#### Returns
+
+`boolean`
+
+True when the arrays are the same length and every pair is equal, false otherwise.
+
+#### Example
+
+```ts
+// Write only when the device list actually changed.
+if(!sameEntries(this.persisted, devices, (x, y) => (x.id === y.id) && (x.name === y.name))) {
+
+  await this.persist(devices);
+}
+```
+
+***
+
 ### sanitizeName()
 
 ```ts

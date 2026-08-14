@@ -13,9 +13,9 @@ The module exports two complementary surfaces:
   - **Pure functional core.** Catalog and config indices ([CatalogIndex](#catalogindex), [ConfigIndex](#configindex)) carry every derived view of the catalog and configured options;
     pure builders ([buildCatalogIndex](#buildcatalogindex), [buildConfigIndex](#buildconfigindex)) construct them from raw inputs; pure transforms ([applySetOption](#applysetoption),
     [applyClearOption](#applyclearoption), [normalizeConfiguredOptions](#normalizeconfiguredoptions)) compute new configured-options arrays without mutation; pure queries ([resolveScope](#resolvescope),
-    [getDefaultValue](#getdefaultvalue), [isValueOption](#isvalueoption), [hasValueContent](#hasvaluecontent), [optionExists](#optionexists), [isDependencyMet](#isdependencymet-1), [expandOption](#expandoption-1)) answer
-    scope-aware questions over those indices. This is the single source of truth for option-array semantics, consumed wherever immutable state is the
-    discipline (reducer-driven UIs, server-side renderers, time-travel debuggers, future consumers we have not built yet).
+    [getDefaultValue](#getdefaultvalue), [isValueOption](#isvalueoption), [hasValueContent](#hasvaluecontent), [optionExists](#optionexists), [isDependencyMet](#isdependencymet-1), [expandOption](#expandoption-1),
+    [enumerateConfiguredEntries](#enumerateconfiguredentries)) answer scope-aware questions over those indices. This is the single source of truth for option-array semantics, consumed
+    wherever immutable state is the discipline (reducer-driven UIs, server-side renderers, time-travel debuggers, future consumers we have not built yet).
 
   - **Imperative class façade.** [FeatureOptions](#featureoptions) bundles a [CatalogIndex](#catalogindex), a configured-options array, and a [ConfigIndex](#configindex) into one object whose
     mutating methods (`setOption` / `clearOption` / the setters) delegate to the pure transforms internally. This is the legacy-friendly surface used by every
@@ -63,6 +63,24 @@ that declares nothing is valid at every level, which is what lets a plugin narro
 
 ## Feature Options
 
+### ConfiguredOptionEntry
+
+One configured entry's reading of a single feature option: where it sits, what it says, and the value it carries when it carries one. Yielded by
+[enumerateConfiguredEntries](#enumerateconfiguredentries), one record per entry that addresses the option.
+
+Distinct from [ResolvedOptionEntry](#resolvedoptionentry), which answers "what applies here" after walking the hierarchy. This answers "what did the user write", entry by
+entry, with no precedence applied and no catalog default substituted.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="enabled"></a> `enabled` | `boolean` | True for an `Enable` entry, false for a `Disable` entry. |
+| <a id="id-1"></a> `id` | `string` | The device or controller identifier the entry addresses, in the casing the entry carried. The empty string for a global entry. |
+| <a id="value-1"></a> `value?` | `string` | The raw value the entry carries, in the casing the entry carried. Absent when the entry carries none - a boolean option, a `Disable`, or a bare enable of a value option. Present and empty for a canonical entry whose payload is empty, which is the same reading the lookup index registers for it. |
+
+***
+
 ### FeatureOptionFormatter
 
 ```ts
@@ -77,6 +95,53 @@ available for bespoke needs that the registry does not cover.
 The set targets the unit categories that recur across plugin catalogs: bitrate (in either of the two common storage conventions), data size, percentages, and
 durations. Extend the union when a new format is genuinely shared across multiple plugins. Resist adding a formatter speculatively - the function escape
 hatch already covers one-off needs, and an unused formatter is dead surface that downstream plugins still see in their IDE autocomplete.
+
+***
+
+### enumerateConfiguredEntries()
+
+```ts
+function enumerateConfiguredEntries(args): Generator<ConfiguredOptionEntry, void, undefined>;
+```
+
+Enumerate every configured entry that addresses one feature option, decoding each through the engine's own grammar. This is the supported way to discover which
+scopes a plugin's users have configured an option at, and with what - a plugin that scans the configured-options array itself is re-implementing the storage
+format, and the two readings drift the moment the grammar grows.
+
+Yields one [ConfiguredOptionEntry](#configuredoptionentry) per addressing entry, in the order the entries appear in the array, and nothing at all for an option nobody configured.
+Matching folds case, because the storage format does; the yielded identifiers and values keep the casing the entry was written in, because that is the text the
+user typed and a consumer displaying it should show it back unchanged.
+
+Two things this deliberately does not do, both of which belong to [resolveScope](#resolvescope): it applies no precedence - a device entry and a global entry for the
+same option are two records here, not one winner - and it substitutes no catalog default, so an option with no entries yields nothing rather than a record
+carrying its default. Ask this what the user wrote; ask [resolveScope](#resolvescope) what applies. Duplicate entries addressing the same scope each yield a record, so
+the first-write-wins rule the lookup index applies is visible here as two records rather than resolved away.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | \{ `catalog`: [`CatalogIndex`](#catalogindex); `category?`: `string` \| [`FeatureCategoryEntry`](#featurecategoryentry)\<`unknown`\>; `configuredOptions`: readonly `string`[]; `option`: `string` \| [`FeatureOptionEntry`](#featureoptionentry)\<`unknown`\>; \} | - |
+| `args.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index, which defines what counts as a value-centric option and which names are options in their own right. |
+| `args.category?` | `string` \| [`FeatureCategoryEntry`](#featurecategoryentry)\<`unknown`\> | Optional. The option's category, composed with `option` exactly as [expandOption](#expandoption-1) composes them. Omit it when `option` is already the expanded name. |
+| `args.configuredOptions` | readonly `string`[] | The raw configured-options array. |
+| `args.option` | `string` \| [`FeatureOptionEntry`](#featureoptionentry)\<`unknown`\> | The feature option to enumerate: an option entry or name to be composed with `category`, or the expanded name on its own. |
+
+#### Returns
+
+`Generator`\<[`ConfiguredOptionEntry`](#configuredoptionentry), `void`, `undefined`\>
+
+A generator over the configured entries addressing the option.
+
+#### Example
+
+```ts
+// Every device that has this option configured, and the value each one carries.
+for(const entry of enumerateConfiguredEntries({ catalog, configuredOptions, option: "Audio.Volume" })) {
+
+  log.info("Volume is configured.", { enabled: entry.enabled, scope: entry.id.length ? entry.id : "global", value: entry.value });
+}
+```
 
 ***
 
@@ -851,6 +916,7 @@ const options: Record<string, FeatureOptionEntry[]> = {
 | <a id="name-1"></a> `name` | `string` | Name of the feature option (used in option strings). |
 | <a id="render"></a> `render?` | \| [`FeatureOptionFormatter`](#featureoptionformatter) \| ((`value`) => `string`) | Optional. Maps the raw stored value of a value-centric option to a display string. Either a [FeatureOptionFormatter](#featureoptionformatter) string naming a built-in formatter (preferred when the format already exists in the registry, since this keeps the enclosing catalog JSON-serializable and lets every plugin share one implementation) or an inline function for bespoke formatting the registry does not cover. Consulted by [FeatureOptions.logFeature](#logfeature) when emitting deviation lines so the catalog stays the single source of truth for how an option's value renders; ignored for plain boolean options. When absent, values render as the raw string returned by [FeatureOptions.value](#value). An unrecognized formatter name throws at catalog-rebuild time, surfacing the misconfiguration loudly rather than silently producing the raw-value fallback. |
 | <a id="scopes-1"></a> `scopes?` | readonly \[[`FeatureOptionScope`](#featureoptionscope), [`FeatureOptionScope`](#featureoptionscope)\] | Optional. The scope levels this option may be configured at - one or more of them, named in the [FeatureOptionScope](#featureoptionscope) vocabulary. Absent means every level, which is what an entry that declares nothing gets. Declared, it is true at every surface the framework owns: the option renders only on views the declaration admits - a global view needs `"global"`, a controller view needs `"controller"`, and a device view needs either `"controller"` or `"device"` - it resolves only at the declared levels, and a row inherits from a higher scope only through them. What you cannot resolve, you are neither offered nor promised through inheritance. Which devices see a device-view row stays with the plugin's `validOption`, refining the rows the declaration already admits. Declare consistent levels across a group: a child's dependency check resolves the PARENT's option, so a parent declared narrower than its children ignores parent configuration at exactly the levels the children are still editable from. The tuple is non-empty by construction, since an option declaring no level at all would render nowhere and resolve nowhere. |
+| <a id="secret"></a> `secret?` | `boolean` | Optional. True declares that the option's value is a secret the settings page must not display in clear text by default: the field renders masked, with a reveal the user operates when they want to read or check what they typed. Presentation only - parsing, storage, scope resolution, and the documentation renderer treat a secret option exactly like any other value option, and its value lands in `config.json` as plain text like every other value. What the masking buys is protection from someone reading the settings page over the user's shoulder; it is not secrecy at rest, and a plugin handling real credentials should say so in the option's description. |
 
 ***
 
@@ -864,7 +930,7 @@ value-centric options. This single traversal result serves both boolean queries 
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="enabled"></a> `enabled` | `boolean` | The resolved enabled state at the highest-precedence scope where the option was found. |
+| <a id="enabled-1"></a> `enabled` | `boolean` | The resolved enabled state at the highest-precedence scope where the option was found. |
 | <a id="optionvalue"></a> `optionValue?` | `string` | The raw string value when a value-centric option was set with an explicit value at the resolved scope. Absent otherwise. |
 | <a id="scope-1"></a> `scope` | [`OptionScope`](#optionscope) | The scope where the option resolved, or "none" when no explicit entry was found at any scope. |
 
@@ -879,10 +945,10 @@ and optional value for value-centric options.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="enabled-1"></a> `enabled` | `boolean` | True to enable, false to disable. |
-| <a id="id-1"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. |
+| <a id="enabled-2"></a> `enabled` | `boolean` | True to enable, false to disable. |
+| <a id="id-2"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. |
 | <a id="option-1"></a> `option` | `string` | Feature option to set (case-insensitive). |
-| <a id="value-1"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry always carries a value. |
+| <a id="value-2"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry always carries a value. |
 
 ***
 

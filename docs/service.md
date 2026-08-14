@@ -172,6 +172,49 @@ setServiceName - to update the current name on a service.
 
 ***
 
+### setAccessoryName()
+
+```ts
+function setAccessoryName(accessory, name): void;
+```
+
+Updates the display name of an accessory and of its AccessoryInformation service to the specified value.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `accessory` | `PlatformAccessory` | The accessory to rename. |
+| `name` | `string` | The new name to apply to the accessory. |
+
+#### Returns
+
+`void`
+
+#### Remarks
+
+An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to two names. This writes all
+of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName` owns the accessory display names (the
+`PlatformAccessory`'s own and the HAP accessory's beneath it), and [setServiceName](#setservicename) owns the AccessoryInformation service's `ConfiguredName` and `Name`
+characteristics. `ConfiguredName` is what makes a rename stick in the Home app, since it is the name a user can edit there.
+
+The name is sanitized through the same HomeKit naming rules [acquireService](#acquireservice) applies, so a caller may pass a raw device name straight through. A name with
+nothing left after sanitizing is not applied anywhere: an accessory has to answer to something, and a blank one is worse than the name it already had.
+
+#### Example
+
+```typescript
+// Rename an accessory after the device reports a new name.
+setAccessoryName(accessory, device.name);
+```
+
+#### See
+
+ - setServiceName - the per-service equivalent this delegates its characteristic writes to.
+ - getServiceName - to retrieve the current name set on a service.
+
+***
+
 ### setServiceName()
 
 ```ts
@@ -200,6 +243,7 @@ characteristics when supported by the service type.
 
  - acquireService - to add or retrieve services.
  - getServiceName - to retrieve the current name set on a service.
+ - setAccessoryName - the accessory-level equivalent, which delegates its information-service write here.
 
 ***
 

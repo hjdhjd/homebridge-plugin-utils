@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.3.1 (2026-08-15)
+  * Fix: the shared ESLint preset flags undefined identifiers in plain-JavaScript files, which have no TypeScript compiler behind them to catch a mistyped name.
+  * Housekeeping.
+
 ## 2.3.0 (2026-08-14)
   * Breaking change: a plugin's `infoPanel` hook now receives a single options bag - `infoPanel({ device, panel, signal })` - instead of positional arguments. Named keys can't disagree about argument order the way two positional signatures can, and the bag carries something the old shape had no room for: `signal`, the mount's lifetime. Convert your hook when you rebuild against this release... an unconverted positional hook receives the bag as its first argument and renders nothing rather than failing loudly. `defaultInfoPanel` takes the same shape, so the internal default and the plugin-facing contract are one signature rather than two.
   * Breaking change: the feature-options webUI's `getControllers` hook now resolves `{ controllers, error }` instead of a bare controller array - the same shape `getDevices` adopted in 2.1.0, carrying a connection failure back with the response it belongs to. A reported failure lands on the connection-error view with its retry affordance instead of the "no controllers configured" helper text - two situations whose remedies have nothing in common, and only one of which you can act on from that page. A hook still resolving the bare array fails loudly with an error naming the contract rather than degrading quietly, and the public `refreshControllers()` resolves false on a reported error and leaves the current view standing, since an explicit refresh belongs to the caller that asked for it. Convert your hook when you rebuild against this release.

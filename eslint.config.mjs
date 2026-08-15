@@ -15,14 +15,32 @@ export default hbPluginUtils({
   // for unused vars (supporting the `using _dom = createTestDom()` pattern for disposal-only bindings) now lives in the shared `tsRules` / `jsRules` because the
   // same idiom applies in production `src/` code too (e.g., `using _abortRegistration = onAbort(...)` in `util.ts`), so a split test-only relaxation would be an
   // artificial asymmetry.
-  extraConfigs: [{
+  extraConfigs: [ {
 
     files: [ "src/**/*.test.ts", "src/**/*.fixtures.ts", "src/**/*.helpers.ts", "ui/**/*.test.mjs", "ui/**/*.fixtures.mjs", "ui/**/*.helpers.mjs" ],
     rules: {
 
       "@typescript-eslint/no-floating-promises": "off"
     }
-  }],
+  },
+
+  // Node-environment declaration. The build tooling under `build/` and the test-side files under `ui/` execute under Node rather than in a browser, so
+  // `no-undef` needs their host globals declared before it can accept the references they make. The shared preset supplies the browser vocabulary to
+  // everything matching the `ui` globs, and flat config merges `globals` across every block a file matches, so the test-side `ui/` files - which build a
+  // DOM and run it under the Node test runner - end up carrying both vocabularies at once.
+  {
+
+    files: [ "build/**/*.mjs", "ui/**/*.fixtures.mjs", "ui/**/*.helpers.mjs", "ui/**/*.test.mjs" ],
+    languageOptions: {
+
+      globals: {
+
+        process: "readonly",
+        setImmediate: "readonly",
+        structuredClone: "readonly"
+      }
+    }
+  } ],
   js: [ "build/**/*.mjs", "ui/**/*.@(js|mjs)", "eslint.config.mjs" ],
   ts: ["src/**/*.ts"],
   ui: ["ui/**/*.@(js|mjs)"]

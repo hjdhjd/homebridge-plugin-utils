@@ -41,10 +41,15 @@ const plugins = {
 };
 
 /**
- * Rule preset for TypeScript source files. Builds on `typescript-eslint`'s strict and stylistic type-checked configs, then layers project-specific
- * overrides: type-aware lint rules (`await-thenable`, `no-floating-promises`, `prefer-nullish-coalescing`, etc.) at warn level, explicit return-type and
- * module-boundary requirements, and `@stylistic/member-delimiter-style`. Disables the JavaScript-recommended versions of rules that have TypeScript-aware
- * equivalents to avoid double-flagging.
+ * Rule preset for TypeScript source files. Opens with `typescript-eslint`'s compatibility overlay, builds on that plugin's strict and stylistic
+ * type-checked configs, then layers project-specific overrides: type-aware lint rules (`await-thenable`, `no-floating-promises`,
+ * `prefer-nullish-coalescing`, etc.) at warn level, explicit return-type and module-boundary requirements, and `@stylistic/member-delimiter-style`.
+ * Disables the JavaScript-recommended versions of rules that have TypeScript-aware equivalents to avoid double-flagging.
+ *
+ * The compatibility overlay switches off the base ESLint rules whose errors the TypeScript compiler reports for itself - `no-undef`, `no-redeclare`, and
+ * their siblings. That redundancy argument holds only where the compiler actually runs, which is why the overlay belongs to this preset rather than the
+ * language-neutral {@link commonRules}: plain-JavaScript files have no compiler behind them and keep the full ESLint-recommended baseline. Upstream scopes
+ * the overlay to the TypeScript file extensions for that same reason, so spreading it here matches how it is meant to apply.
  *
  * Deliberately omits `@typescript-eslint/promise-function-async` and forces `@typescript-eslint/require-await` (and the base `require-await`) off. The pair
  * encodes a tight coupling between Promise return types and the `async` keyword that predates the Disposable protocol: `[Symbol.asyncDispose]()` must be declared
@@ -56,6 +61,7 @@ const plugins = {
  */
 const tsRules = {
 
+  ...ts.configs.eslintRecommended.rules,
   ...configRules(ts.configs.strictTypeChecked, "typescript-eslint/strict-type-checked"),
   ...configRules(ts.configs.stylisticTypeChecked, "typescript-eslint/stylistic-type-checked"),
   "@stylistic/member-delimiter-style": "warn",
@@ -73,9 +79,6 @@ const tsRules = {
   "@typescript-eslint/no-unused-vars": [ "warn", { "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_", "varsIgnorePattern": "^_" } ],
   "@typescript-eslint/prefer-nullish-coalescing": "warn",
   "@typescript-eslint/require-await": "off",
-  "no-dupe-class-members": "off",
-  "no-redeclare": "off",
-  "no-undef": "off",
   "no-unused-expressions": "off",
   "no-unused-vars": "off",
   "require-await": "off"
@@ -98,17 +101,17 @@ const jsRules = {
 };
 
 /**
- * Rule preset applied to every linted file regardless of language. Disables the base ESLint rules that are redundant once TypeScript's own compiler
- * and syntax already catch the same errors, mirroring the `typescript-eslint` compatibility overlay it spreads in; the enabled ESLint-recommended
- * baseline itself comes from the separate `eslintJs.configs.recommended` block pushed in {@link config}. Layers on top of that the full `@hjdhjd/*`
- * rule set, the `@stylistic/*` whitespace and formatting rules, and the project's opinionated `sort-imports` / `sort-keys` / `quotes` / `eqeqeq` /
- * `curly` constraints.
+ * Rule preset applied to every linted file regardless of language: the full `@hjdhjd/*` rule set, the `@stylistic/*` whitespace and formatting rules, the
+ * project's opinionated `sort-imports` / `sort-keys` / `quotes` / `eqeqeq` / `curly` constraints, and the modernization rules (`no-var`,
+ * `prefer-rest-params`, `prefer-spread`) that read the same way in every language.
+ *
+ * The enabled ESLint-recommended baseline comes from the separate `eslintJs.configs.recommended` block pushed in {@link config}, and the compatibility
+ * overlay that trades parts of that baseline away for compiler diagnostics lives in {@link tsRules}, scoped to the files the compiler actually covers.
  *
  * Spread into the `rules:` slot of the all-files block of a flat config.
  */
 const commonRules = {
 
-  ...ts.configs.eslintRecommended.rules,
   "@hjdhjd/blank-line-after-open-brace": "warn",
   "@hjdhjd/comment-style": "error",
   "@hjdhjd/enforce-node-protocol": "warn",
@@ -168,8 +171,11 @@ const commonRules = {
   "no-await-in-loop": "warn",
   "no-console": "warn",
   "no-restricted-syntax": [ "warn", "TemplateLiteral" ],
+  "no-var": "error",
   "prefer-arrow-callback": "warn",
   "prefer-const": "warn",
+  "prefer-rest-params": "error",
+  "prefer-spread": "error",
   "quotes": [ "warn", "double", { "allowTemplateLiterals": false, "avoidEscape": false } ],
   "sort-imports": "warn",
   "sort-keys": "warn",
@@ -182,8 +188,8 @@ const commonRules = {
  *
  * Pass into the `languageOptions.globals` slot of a flat config block scoped to UI files.
  */
-const globalsUi = Object.fromEntries([ "clearTimeout", "console", "container", "document", "fetch", "getComputedStyle", "homebridge", "setTimeout", "window" ]
-  .map((key) => [ key, "readonly" ]));
+const globalsUi = Object.fromEntries([ "clearInterval", "clearTimeout", "console", "container", "document", "fetch", "getComputedStyle", "homebridge",
+  "setInterval", "setTimeout", "window" ].map((key) => [ key, "readonly" ]));
 
 /**
  * Build a ready-to-use ESLint flat config array. Consumers call this function and export default the result.

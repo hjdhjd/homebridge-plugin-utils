@@ -1,6 +1,6 @@
 {
   "name": "homebridge-plugin-utils",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "displayName": "Homebridge Plugin Utilities",
   "description": "Opinionated utilities to provide common capabilities and create rich configuration webUI experiences for Homebridge plugins.",
   "author": {
@@ -57,17 +57,17 @@
     "hblog": "dist/logclient/cli.js"
   },
   "devDependencies": {
-    "@homebridge/hap-nodejs": "2.1.9",
+    "@homebridge/hap-nodejs": "2.2.0",
     "@stylistic/eslint-plugin": "5.10.0",
-    "@types/node": "26.1.1",
+    "@types/node": "26.2.0",
     "aedes": "1.0.2",
     "eslint": "9.39.2",
-    "happy-dom": "20.11.0",
-    "homebridge": "2.2.1",
+    "happy-dom": "20.11.2",
+    "homebridge": "2.3.1",
     "typedoc": "0.28.20",
     "typedoc-plugin-markdown": "4.12.0",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.64.0"
+    "typescript-eslint": "8.67.0"
   },
   "dependencies": {
     "mqtt": "5.15.2"

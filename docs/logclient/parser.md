@@ -32,7 +32,7 @@ Cursor-based incremental line splitter for the log text stream.
 
 Feed each text chunk through [LogLineSplitter.consume](#consume) and iterate the raw lines it yields. The splitter carries the bytes of an incomplete trailing line across
 calls, so a line split across two chunks is reassembled transparently, and it recognizes all four newline conventions the PTY-driven stream mixes (`\r\n`, `\n\r`,
-`\r`, `\n`) as single line breaks. Crucially, a chunk that ends with a lone `\r` or `\n` holds that terminator in the carry rather than yielding immediately: the next
+`\r`, `\n`) as single line breaks. A chunk that ends with a lone `\r` or `\n` holds that terminator in the carry rather than yielding immediately, because the next
 chunk may begin with the matching second half of a `\n\r`/`\r\n` pair, and emitting eagerly would split one line break into two and inject a phantom blank line.
 
 The scan is a single integer cursor over the carried buffer; the buffer is rebuilt once per `consume` (the residual tail becomes the next carry), not once per line,

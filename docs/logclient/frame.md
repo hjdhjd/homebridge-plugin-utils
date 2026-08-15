@@ -42,10 +42,10 @@ type OutboundEvent =
 
 An outbound protocol event to serialize, discriminated on `kind`.
 
-The OutboundEvent union models three frame shapes: a namespace connect (`connect`), a namespace event with a JSON payload (`event` - this is how `tail-log` is
-requested), and a heartbeat pong (`pong`). A fourth outbound frame, the namespace DISCONNECT, is hand-assembled separately (see [LOG\_NAMESPACE\_PATH](#log_namespace_path)) because its
-fixed, argument-free shape needs no serialization through this codec. Modeling the outbound set as its own narrow union keeps [encodeFrame](#encodeframe) total over exactly
-what it models, rather than re-using the wider inbound [ProtocolEvent](#protocolevent) and leaving unserializable arms.
+The OutboundEvent union models the namespace connect (`connect`), namespace event with a JSON payload (`event` - this is how `tail-log` is requested), and
+heartbeat pong (`pong`) frame shapes. The namespace DISCONNECT is hand-assembled separately (see [LOG\_NAMESPACE\_PATH](#log_namespace_path)) because its fixed, argument-free shape
+needs no serialization through this codec. Modeling the outbound set as its own narrow union keeps [encodeFrame](#encodeframe) total over exactly what it models, rather
+than re-using the wider inbound [ProtocolEvent](#protocolevent) and leaving unserializable arms.
 
 ***
 
@@ -85,7 +85,7 @@ type ProtocolEvent =
 };
 ```
 
-A decoded protocol event, discriminated on `kind`.
+A decoded protocol event, modeled as a discriminated union on `kind`.
 
 The union collapses the two-layer Engine.IO/Socket.IO wire format into the handful of events the log client actually reacts to: the Engine.IO handshake (`open`) and
 heartbeat (`ping`/`pong`), and the Socket.IO namespace lifecycle (`namespaceConnect`/`namespaceError`) and payload delivery (`message`). Any unrecognized string

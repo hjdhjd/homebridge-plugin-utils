@@ -77,13 +77,13 @@ Returns the value as a human-readable string.
 #### Example
 
 ```ts
-formatBytes(512);                  // "512 bytes".
-formatBytes(2048);                 // "2 KB".
-formatBytes(1536);                 // "1.5 KB".
-formatBytes(1_048_576);            // "1 MB".
-formatBytes(2_621_440);            // "2.5 MB".
-formatBytes(1_073_741_824);        // "1 GB".
-formatBytes(1_099_511_627_776);    // "1 TB".
+formatBytes(512);              // "512 bytes".
+formatBytes(2048);             // "2 KB".
+formatBytes(1536);             // "1.5 KB".
+formatBytes(1048576);          // "1 MB".
+formatBytes(2621440);          // "2.5 MB".
+formatBytes(1073741824);       // "1 GB".
+formatBytes(1099511627776);    // "1 TB".
 ```
 
 ***
@@ -112,11 +112,11 @@ Returns the value as a human-readable string.
 #### Example
 
 ```ts
-formatMs(250);          // "250 ms".
-formatMs(1500);         // "1.5 s".
-formatMs(15000);        // "15 s".
-formatMs(90000);        // "1.5 min".
-formatMs(5_400_000);    // "1.5 hr".
+formatMs(250);        // "250 ms".
+formatMs(1500);       // "1.5 s".
+formatMs(15000);      // "15 s".
+formatMs(90000);      // "1.5 min".
+formatMs(5400000);    // "1.5 hr".
 ```
 
 ***

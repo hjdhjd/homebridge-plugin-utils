@@ -593,7 +593,7 @@ so the base's WARN would be alarming.
 ```ts
 await using proc = new FfmpegRecordingProcess(ffmpegOptions, {
 
-  recording: { fps: 30, probesize: 5_000_000, timeshift: 0 },
+  recording: { fps: 30, probesize: 5000000, timeshift: 0 },
   recordingConfig,
   signal: delegate.abortController.signal
 });

@@ -11,10 +11,10 @@ reports its own boot failures on the page, injects an importmap mapping the bare
 place, and dynamically imports the plugin's entry module. It is identical across the family, so this module renders it from one template: the plugin declares its
 entry and cache-bust list in a config comment, and `prepare-ui` stamps the rendered region into the marker-fenced block on every build.
 
-The region carries three pieces in boot order. A hidden status panel a screenshot turns into a complete support report. A boot monitor - a classic inline script, so
+The region carries, in boot order, a hidden status panel a screenshot turns into a complete support report; a boot monitor - a classic inline script, so
 it runs during HTML parse ahead of any deferred module evaluation - that owns the on-page failure surface: it reveals the panel with a plain-language message
 classified by the boot stage that failed, arms a ten-second watchdog for a boot that hangs, stands down when the app signals it rendered, and holds the bundle stamp
-across boots so a page pinned to a bundle that has since been replaced says so instead of half-loading. And the loader - the importmap/cache-bust module script -
+across boots so a page pinned to a bundle that has since been replaced says so instead of half-loading; and the loader - the importmap/cache-bust module script -
 stage-instrumented so a fetch, importmap, or entry-import failure routes to the monitor with the stage that failed. The classic-versus-module split is for execution
 ordering alone, not old-engine compatibility: the classic script runs during parse while the module script is deferred.
 

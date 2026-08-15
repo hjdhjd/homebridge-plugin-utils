@@ -9,15 +9,15 @@
 CLI-layer configuration for the `hblog` tool: loading the optional `~/.hblog.json` file and the pure merge of file / environment / flags into a connection.
 
 This module lives at the CLI layer on purpose: the engine ([HomebridgeLogClient](client.md#homebridgelogclient) and its transports) never reads the
-user's home directory or any config file - all file I/O stays here, behind injectable seams, so the engine is portable and side-effect-free. This module exports the
-following pieces:
+user's home directory or any config file - all file I/O stays here, behind the injected filesystem and warning callbacks, so the engine is portable and
+side-effect-free. This module exports the following pieces:
 
 - [resolveConfigPath](#resolveconfigpath) - resolve the absolute config-file path, honoring the `HBLOG_CONFIG` environment override over the home-directory default
   ([DEFAULT\_CONFIG\_FILENAME](#default_config_filename)).
 - [loadConfigFile](#loadconfigfile) - read and parse the optional `~/.hblog.json`. A missing file resolves to `undefined` silently (the file is optional); a malformed file raises
   a clear, actionable error; unknown keys are ignored; and a file whose permissions are group/other-readable triggers a single one-line warning recommending `chmod
-  600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`, and `warn` seams are injected so the loader is unit-tested
-  without touching the real filesystem.
+  600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`, and `warn` functions are injected so the loader is
+  unit-tested without touching the real filesystem.
 - [resolveConnection](#resolveconnection) - a PURE merge of the configuration sources into one resolved connection, applying the precedence flags > environment > file > defaults.
   It performs no I/O of its own; the caller supplies the already-loaded file, the environment slice, and the parsed flags.
 
@@ -81,8 +81,8 @@ The environment-variable slice consulted by [resolveConnection](#resolveconnecti
 
 ### LoadConfigFileOptions
 
-Options accepted by [loadConfigFile](#loadconfigfile): the injectable filesystem and warning seams. All default to the real Node implementations / a `process.stderr` writer, so a
-caller (the CLI) can omit them in production and a test can supply doubles.
+Options accepted by [loadConfigFile](#loadconfigfile): the injectable filesystem and warning functions. All default to the real Node implementations / a `process.stderr` writer,
+so a caller (the CLI) can omit them in production and a test can supply doubles.
 
 #### Properties
 
@@ -98,7 +98,7 @@ caller (the CLI) can omit them in production and a test can supply doubles.
 
 The fully-resolved connection produced by [resolveConnection](#resolveconnection): the connection target plus the credential material the CLI uses to build a
 [LogClientCredentials](types.md#logclientcredentials) discriminated union. `host`, `port`, and `tls` always carry a concrete value (defaults applied);
-the credential fields are [Nullable](../util.md#nullable) because none, some, or all of them may have been supplied across the three sources.
+the credential fields are [Nullable](../util.md#nullable) because none, some, or all of them may have been supplied across the configured sources.
 
 #### Properties
 
@@ -114,6 +114,17 @@ the credential fields are [Nullable](../util.md#nullable) because none, some, or
 
 ***
 
+### DEFAULT\_CONFIG\_FILENAME
+
+```ts
+const DEFAULT_CONFIG_FILENAME: ".hblog.json" = ".hblog.json";
+```
+
+The default path of the optional config file, relative to the user's home directory. Home-dir only (no project-local file) so a config carrying a password or token is
+never tempting to commit alongside a plugin's source. The CLI resolves this against the real home directory; the `HBLOG_CONFIG` environment variable overrides it.
+
+***
+
 ### loadConfigFile()
 
 ```ts
@@ -125,15 +136,15 @@ Load and parse the optional `~/.hblog.json` config file.
 The file is optional: when it does not exist (ENOENT) this resolves to `undefined` silently. Every other failure is thrown as a clear, actionable error naming the
 path: a non-ENOENT read failure (a permission or I/O fault), a file that cannot be parsed as JSON, or a file whose top-level value is not a JSON object. Recognized
 keys ([HblogConfigFile](#hblogconfigfile)) are picked out by type (a wrong-typed field is ignored, not coerced); any unknown key is ignored. As a security courtesy, if the file's
-permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted through the `warn` seam, because the file may
-store a password or a long-lived token in plaintext.
+permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted through the `warn` function, because the file
+may store a password or a long-lived token in plaintext.
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `path` | `string` | The absolute path of the config file to load (the CLI resolves `~/.hblog.json`, or honors `HBLOG_CONFIG`). |
-| `options` | [`LoadConfigFileOptions`](#loadconfigfileoptions) | The injectable filesystem and warning seams. See [LoadConfigFileOptions](#loadconfigfileoptions). |
+| `options` | [`LoadConfigFileOptions`](#loadconfigfileoptions) | The injectable filesystem and warning functions. See [LoadConfigFileOptions](#loadconfigfileoptions). |
 
 #### Returns
 
@@ -158,7 +169,7 @@ Resolve the absolute path of the config file to load.
 The `HBLOG_CONFIG` environment variable overrides everything when set to a non-empty value (handy for tests and non-standard layouts); otherwise the default
 [DEFAULT\_CONFIG\_FILENAME](#default_config_filename) (`.hblog.json`) under the supplied home directory is used. Home-dir only - there is no project-local config file, so a config carrying
 a password or token is never tempting to commit alongside a plugin's source. The join uses a single forward slash, which both POSIX and Windows accept in a path passed
-to `readFile`, so no `node:path` import is needed on this hot setup path.
+to `readFile`, so no `node:path` import is needed on this setup path.
 
 #### Parameters
 
@@ -182,7 +193,7 @@ The absolute path to load the config file from.
 function resolveConnection(sources): ResolvedConnection;
 ```
 
-Resolve the three configuration sources into a single [ResolvedConnection](#resolvedconnection), applying the precedence flags > environment > file > defaults.
+Resolve every configuration source into a single [ResolvedConnection](#resolvedconnection), applying the precedence flags > environment > file > defaults.
 
 This is a PURE function: it reads only its arguments and allocates only the result, performing no I/O. The caller is responsible for having loaded the file (via
 [loadConfigFile](#loadconfigfile)), extracted the environment slice, and parsed the flags. `host`, `port`, and `tls` always resolve to a concrete value (their defaults are
@@ -194,7 +205,7 @@ parsed here; a non-numeric `HBLOG_PORT` is ignored (falls through to the next so
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `sources` | \{ `env`: [`HblogEnv`](#hblogenv); `file`: [`HblogConfigFile`](#hblogconfigfile) \| `undefined`; `flags`: [`HblogConnectionFlags`](#hblogconnectionflags); \} | The three configuration sources. |
+| `sources` | \{ `env`: [`HblogEnv`](#hblogenv); `file`: [`HblogConfigFile`](#hblogconfigfile) \| `undefined`; `flags`: [`HblogConnectionFlags`](#hblogconnectionflags); \} | The configured sources. |
 | `sources.env` | [`HblogEnv`](#hblogenv) | The environment slice. See [HblogEnv](#hblogenv). |
 | `sources.file` | [`HblogConfigFile`](#hblogconfigfile) \| `undefined` | The loaded config file, or `undefined` when absent. See [HblogConfigFile](#hblogconfigfile). |
 | `sources.flags` | [`HblogConnectionFlags`](#hblogconnectionflags) | The parsed command-line flags. See [HblogConnectionFlags](#hblogconnectionflags). |
@@ -204,11 +215,3 @@ parsed here; a non-numeric `HBLOG_PORT` is ignored (falls through to the next so
 [`ResolvedConnection`](#resolvedconnection)
 
 The fully-resolved connection.
-
-## Other
-
-### DEFAULT\_CONFIG\_FILENAME
-
-```ts
-const DEFAULT_CONFIG_FILENAME: ".hblog.json" = ".hblog.json";
-```

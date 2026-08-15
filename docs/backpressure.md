@@ -252,8 +252,8 @@ Enqueue `chunk` for writing. Concurrent calls serialize in FIFO order via the in
 
 [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
 
-A promise that resolves when the chunk has been flushed to the underlying stream (including any required drain wait), or immediately if the provider
-         returned `null` at dispatch time (drop semantics). The promise rejects in the following cases:
+A promise that resolves when the chunk has been flushed to the underlying stream (including any required drain wait), or, once the drain loop reaches
+         this entry, immediately if the provider then returns `null` (drop semantics). The promise rejects in the following cases:
 
 - `this.signal.reason` - the writer aborted before or during the write.
 - [BackpressureOverflowError](#backpressureoverflowerror) (thrown synchronously) - `highWaterMark` is configured and the queue depth already equals or exceeds it.

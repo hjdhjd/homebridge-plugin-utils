@@ -8,10 +8,10 @@
 
 The `hblog` command-line logic, written pure-by-injection.
 
-[runHblog](#runhblog) is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, working/home directories, and
-the filesystem and transport seams as arguments rather than reading them from globals, and it returns the process exit code rather than calling `process.exit`. That
-makes the entire flow - argument parsing, `~/.hblog.json` resolution, credential/request mapping, transport orchestration, output formatting, signal handling, and exit
-codes - exercisable in tests against captured streams and fake transports, with no live server and no real process signals.
+[runHblog](#runhblog) is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, working/home directories,
+and the filesystem and transport dependencies as arguments rather than reading them from globals, and it returns the process exit code rather than calling
+`process.exit`. That makes the entire flow - argument parsing, `~/.hblog.json` resolution, credential/request mapping, transport orchestration, output formatting,
+signal handling, and exit codes - exercisable in tests against captured streams and fake transports, with no live server and no real process signals.
 
 The bin (`cli.ts`) is a thin shell that resolves its own real directory, dynamic-imports this module, and calls [runHblog](#runhblog) with the real `process` streams,
 environment, and directories. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code. The
@@ -88,7 +88,7 @@ genuine write fault such as `ENOSPC`), while `"drain"` delivers nothing and mere
 
 ### RunHblogOptions
 
-Options accepted by [runHblog](#runhblog). Every external dependency the CLI touches is an injected seam, so the whole flow runs deterministically in tests.
+Options accepted by [runHblog](#runhblog). Every external dependency the CLI touches is passed in as an argument, so the whole flow runs deterministically in tests.
 
 #### Properties
 
@@ -97,12 +97,12 @@ Options accepted by [runHblog](#runhblog). Every external dependency the CLI tou
 | <a id="argv"></a> `argv` | `readonly` | readonly `string`[] | The argument vector (typically `process.argv.slice(2)`). |
 | <a id="cwd"></a> `cwd` | `readonly` | `string` | The current working directory. Reserved for future relative-path resolution; the home directory is the config-file anchor today. |
 | <a id="env"></a> `env` | `readonly` | `ProcessEnv` | The environment map (typically `process.env`). |
-| <a id="fetch"></a> `fetch?` | `readonly` | \{ (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; \} | Optional `fetch` seam forwarded to the engine's auth and REST transports. Defaults to the global `fetch`. |
+| <a id="fetch"></a> `fetch?` | `readonly` | \{ (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; \} | Optional `fetch` implementation forwarded to the engine's auth and REST transports. Defaults to the global `fetch`. |
 | <a id="homedir"></a> `homedir` | `readonly` | `string` | The user's home directory, used to locate `~/.hblog.json` unless `HBLOG_CONFIG` overrides the path. |
 | <a id="now"></a> `now?` | `readonly` | () => `number` | Optional wall-clock epoch source (milliseconds) used to resolve the `--since`/`--until` time-range expressions against a single deterministic instant. Defaults to `systemClock.now`; a test injects a fixed clock so a windowed run's bounds are reproducible. |
-| <a id="readfile"></a> `readFile?` | `readonly` | (`path`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`string`\> | Optional file-read seam forwarded to the config loader and used to read the package version. Defaults to `node:fs/promises` `readFile`. |
-| <a id="socketfactory"></a> `socketFactory?` | `readonly` | [`LogSocketFactory`](socket.md#logsocketfactory) | Optional socket-factory seam forwarded to the engine, so a test drives the live tail without a WebSocket. Defaults to the real factory. |
-| <a id="stat"></a> `stat?` | `readonly` | (`path`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<\{ `mode`: `number`; \}\> | Optional file-stat seam forwarded to the config loader for the permissions warning. Defaults to `node:fs/promises` `stat`. |
+| <a id="readfile"></a> `readFile?` | `readonly` | (`path`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`string`\> | Optional file-read implementation forwarded to the config loader and used to read the package version. Defaults to `node:fs/promises` `readFile`. |
+| <a id="socketfactory"></a> `socketFactory?` | `readonly` | [`LogSocketFactory`](socket.md#logsocketfactory) | Optional socket-factory implementation forwarded to the engine, so a test drives the live tail without a WebSocket. Defaults to the real factory. |
+| <a id="stat"></a> `stat?` | `readonly` | (`path`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<\{ `mode`: `number`; \}\> | Optional file-stat implementation forwarded to the config loader for the permissions warning. Defaults to `node:fs/promises` `stat`. |
 | <a id="stderr"></a> `stderr` | `readonly` | [`CliStream`](#clistream) | The diagnostics/warnings stream. Production passes `process.stderr`. |
 | <a id="stdout"></a> `stdout` | `readonly` | [`CliStream`](#clistream) | The log-data stream. Production passes `process.stdout`. |
 
@@ -127,7 +127,7 @@ normal-completion or the catch path, and the streaming catch's generic error); t
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`RunHblogOptions`](#runhblogoptions) | The injected argument vector, environment, streams, directories, and seams. See [RunHblogOptions](#runhblogoptions). |
+| `options` | [`RunHblogOptions`](#runhblogoptions) | The injected argument vector, environment, streams, directories, and dependencies. See [RunHblogOptions](#runhblogoptions). |
 
 #### Returns
 

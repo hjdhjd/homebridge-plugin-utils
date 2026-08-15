@@ -142,7 +142,7 @@ Build a `trun` fullbox describing a single sample, with the flags and sample-fla
 | `options.sampleFlagsValue` | `number` | The 32-bit value to write into the chosen flags field (first_sample_flags or per-sample flags). Use `0` for a keyframe; use `SAMPLE_FLAG_NON_SYNC` for a non-keyframe. |
 | `options.truncate?` | `boolean` | When `true`, emit a trun whose payload stops short of the flags field the predicate would read. Exercises the "insufficient bytes" guard inside `isKeyframe` without changing the declared box size. |
 | `options.useFirstSampleFlags?` | `boolean` | When `true`, set `TRUN_FLAG_FIRST_SAMPLE_FLAGS` and emit the first-sample-flags field after the optional data_offset. |
-| `options.usePerSampleFlags?` | `boolean` | When `true`, set `TRUN_FLAG_SAMPLE_FLAGS` and emit a single per-sample flags field after any duration/size slots. Ignored when `useFirstSampleFlags` is also `true` because the predicate consults first_sample_flags first. |
+| `options.usePerSampleFlags?` | `boolean` | When `true`, set `TRUN_FLAG_SAMPLE_FLAGS` and emit a single per-sample flags field after any duration/size slots, regardless of `useFirstSampleFlags`. When `useFirstSampleFlags` is also `true`, `isKeyframe` never reads these trailing bytes because it returns immediately after consulting `first_sample_flags`. |
 
 #### Returns
 

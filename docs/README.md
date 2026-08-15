@@ -25,7 +25,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | ------ | ------ |
 | [async-disposable-stack](async-disposable-stack.md) | A drop-in implementation of the TC39 Explicit Resource Management `AsyncDisposableStack`. |
 | [backpressure](backpressure.md) | AsyncDisposable write queue that serializes Buffer writes onto a Node [Writable](https://nodejs.org/api/stream.html#class-streamwritable), respects backpressure via the stream's `drain` event, and composes into the library's `AbortSignal`-driven lifecycle so a parent signal can tear the writer down uniformly with every other HBPU resource class. |
-| [clock](clock.md) | An injectable wall-clock time seam. |
+| [clock](clock.md) | An injectable wall-clock interface. |
 | [clock-double](clock-double.md) | A reusable, controllable [Clock](clock.md#clock) test double. |
 | [disposable-stack](disposable-stack.md) | A drop-in implementation of the TC39 Explicit Resource Management `DisposableStack`. |
 | [docChrome](docChrome.md) | A shared documentation-chrome renderer for the family's plugins. |

@@ -20,9 +20,9 @@ Two details matter here:
 - We MUST call `splitter.flush()` at end-of-response. The splitter withholds a chunk-final lone line-feed pending a possible split `\n\r`/`\r\n` pair in the next
   chunk; at end-of-response no next chunk arrives, so without a flush the final line of the file would be stranded in the carry and silently lost.
 
-The transport asks for `colour=yes` (the raw file with ANSI intact) rather than `colour=no`, because the server's color stripping shifts byte offsets and, more
-importantly, the ANSI color IS the severity-level signal the parser reads. When the log method is `systemd`/`custom` the endpoint returns 400; we map that to a clear
-"no log file on disk; use --follow" error rather than surfacing a bare HTTP status.
+The transport asks for `colour=yes` (the raw file with ANSI intact) rather than `colour=no`, because the server's color stripping shifts byte offsets, and the ANSI
+color IS the severity-level signal the parser reads. When the log method is `systemd`/`custom` the endpoint returns 400; we map that to a clear "no log file on
+disk; use --follow" error rather than surfacing a bare HTTP status.
 
 The `fetch` implementation is injected (defaulting to the global `fetch`) so the whole flow is exercised in tests without a live server.
 
@@ -30,7 +30,7 @@ The `fetch` implementation is injected (defaulting to the global `fetch`) so the
 
 ### DownloadLogOptions
 
-Options accepted by [downloadLog](#downloadlog): the connection target plus the raw token, an injectable `fetch` seam, and an optional abort signal.
+Options accepted by [downloadLog](#downloadlog): the connection target plus the raw token, an injectable `fetch` dependency, and an optional abort signal.
 
 #### Extends
 

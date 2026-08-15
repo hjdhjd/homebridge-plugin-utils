@@ -72,7 +72,7 @@ Error.constructor
 
 ### AcquireTokenOptions
 
-Options accepted by [acquireToken](#acquiretoken): the connection target plus an injectable `fetch` seam.
+Options accepted by [acquireToken](#acquiretoken): the connection target plus an injectable `fetch` implementation.
 
 #### Extends
 
@@ -139,7 +139,7 @@ body) or transient (network fault, 5xx, 429), so the reconnect loop can fail fas
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `credentials` | [`LogClientCredentials`](types.md#logclientcredentials) | The credentials to authenticate with. See [LogClientCredentials](types.md#logclientcredentials). |
-| `options` | [`AcquireTokenOptions`](#acquiretokenoptions) | The connection target and the injectable `fetch` seam. See [AcquireTokenOptions](#acquiretokenoptions). |
+| `options` | [`AcquireTokenOptions`](#acquiretokenoptions) | The connection target and the injectable `fetch` implementation. See [AcquireTokenOptions](#acquiretokenoptions). |
 
 #### Returns
 

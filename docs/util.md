@@ -250,7 +250,7 @@ Options accepted by [retry](#retry).
 | ------ | ------ | ------ |
 | <a id="attempts"></a> `attempts?` | `number` | Total number of attempts, including the first. Must be >= 1. Defaults to 3. Values less than 1 throw synchronously (rejected promise) at the top of `retry()`. Pass `Infinity` for unbounded attempts - the loop then terminates only on success, an abort, or a `shouldRetry` veto, never on an exhausted budget. |
 | <a id="backoff"></a> `backoff?` | (`attempt`) => `number` | Backoff policy, invoked with the attempt number (1-indexed) about to be run. The returned value is the delay in milliseconds before running that attempt. Called only between attempts (i.e., never with `attempt === 1`). Defaults to [defaultRetryBackoff](#defaultretrybackoff) (exponential with a 30-second ceiling). |
-| <a id="shouldretry"></a> `shouldRetry?` | (`error`, `attemptNumber`) => `boolean` | Optional predicate consulted after an attempt throws and attempts remain. Receives the rejected error and the 1-indexed number of the attempt that just failed; return `false` to stop immediately and rethrow that error (no backoff wait, no further attempts), or `true` to retry per the backoff policy. When omitted, every error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the seam that lets a caller retry some failures and fail fast on others (e.g. retry network faults but give up on an authentication error) without owning the attempt loop itself. |
+| <a id="shouldretry"></a> `shouldRetry?` | (`error`, `attemptNumber`) => `boolean` | Optional predicate consulted after an attempt throws and attempts remain. Receives the rejected error and the 1-indexed number of the attempt that just failed; return `false` to stop immediately and rethrow that error (no backoff wait, no further attempts), or `true` to retry per the backoff policy. When omitted, every error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the mechanism that lets a caller retry some failures and fail fast on others (e.g. retry network faults but give up on an authentication error) without owning the attempt loop itself. |
 | <a id="signal"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional abort signal. Aborting cancels any in-flight backoff wait and is forwarded verbatim to `operation` as its own signal argument, so well-behaved operations cancel too. An abort at any point - mid-attempt, mid-backoff, or before the first attempt - rejects the outer promise with the signal's reason. |
 
 ***
@@ -875,7 +875,7 @@ Closes the well-known pitfall in `AbortSignal.addEventListener("abort", ...)`: l
 that take a parent signal and attach teardown logic via `addEventListener` silently skip that teardown when the parent is pre-aborted. This helper unifies the
 register-or-dispatch-immediately shape so every caller handles both cases without re-implementing the check.
 
-Returning a `Disposable` serves two patterns through one primitive:
+Returning a `Disposable` serves more than one usage pattern through one primitive:
 
 - **Long-lived resource-class registrations** (the common case): every HBPU resource class registers its `#teardown` handler in its constructor, intending the
   listener to live until the composed signal aborts. These callers discard the return value; the `{ once: true }` listener auto-unregisters on fire.
@@ -962,7 +962,7 @@ the parameters at the sink.
 
 [`HomebridgePluginLogging`](#homebridgepluginlogging)
 
-A [HomebridgePluginLogging](#homebridgepluginlogging) whose four levels route to the corresponding levels of `base`.
+A [HomebridgePluginLogging](#homebridgepluginlogging) whose levels route to the corresponding levels of `base`.
 
 #### Example
 
@@ -1016,7 +1016,7 @@ const controller = new AbortController();
 const device = await retry(async (signal) => fetchDevice(id, { signal }), {
 
   attempts: 5,
-  backoff: (attempt) => 1_000 * attempt,
+  backoff: (attempt) => 1000 * attempt,
   signal: controller.signal
 });
 ```

@@ -59,7 +59,7 @@ watchdogs compose against the same lifetime signal, so disposal cleans them up u
 ```ts
 await using demuxer = new RtpDemuxer({
 
-  inactivityTimeout: 5_000,
+  inactivityTimeout: 5000,
   inputPort: audioIncomingPort,
   ipFamily: "ipv4",
   log,

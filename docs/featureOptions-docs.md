@@ -17,7 +17,7 @@ The module exports two pure string functions:
 
   - [renderFeatureOptionsReference](#renderfeatureoptionsreference) - the projection itself. It derives every key via [expandOption](featureOptions.md#expandoption-1), decides value-ness via [isValueOption](featureOptions.md#isvalueoption), and
     builds the catalog index once via [buildCatalogIndex](featureOptions.md#buildcatalogindex); it never re-derives any of those. Plugin-private scope prose is supplied through two optional render
-    hooks that mirror the webUI's field-blind `validOption` / `validOptionCategory` predicate seam, lifted from *filter* (boolean) to *describe* (string). No
+    hooks that mirror the webUI's field-blind `validOption` / `validOptionCategory` predicate boundary, lifted from *filter* (boolean) to *describe* (string). No
     plugin-specific field name appears anywhere in this file.
 
   - [spliceMarkedRegion](#splicemarkedregion) - the in-place splice that replaces the region between [FEATURE\_OPTIONS\_DOC\_BEGIN](#feature_options_doc_begin) / [FEATURE\_OPTIONS\_DOC\_END](#feature_options_doc_end) in an

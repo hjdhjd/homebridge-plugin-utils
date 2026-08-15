@@ -29,9 +29,9 @@ Lifecycle, in one pass:
 - A Socket.IO CONNECT_ERROR (`44/log,`) on the namespace is surfaced as a connect-phase failure - transient and retried for a refreshable credential (password/noauth),
   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
 
-Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, clears the
-watchdog, and settles the parked stdout waiter exactly once. The class introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a
-near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
+Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, and settles
+the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. The class
+introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
 
 ## Log Client
 
@@ -210,9 +210,10 @@ An async generator yielding raw log lines in stream order.
 
 ### LogSocketFactory
 
-The creational half of the socket dependency-inversion seam: build a [LogSocketLike](#logsocketlike) from the socket init. A client holds this factory typed as the abstraction
-and constructs through it, so a test can substitute a factory that returns a fake socket. The production factory is [logSocketFactory](#logsocketfactory-1), whose `create` is exactly
-the [LogSocket](#logsocket) constructor call, so routing construction through this seam is behavior-neutral - mirroring the `RecordingProcessFactory` precedent.
+The creational half of the socket dependency-inversion boundary: build a [LogSocketLike](#logsocketlike) from the socket init. A client holds this factory typed as the
+abstraction and constructs through it, so a test can substitute a factory that returns a fake socket. The production factory is [logSocketFactory](#logsocketfactory-1), whose
+`create` is exactly the [LogSocket](#logsocket) constructor call, so routing construction through this factory is behavior-neutral - mirroring the `RecordingProcessFactory`
+precedent.
 
 #### Methods
 
@@ -263,7 +264,7 @@ Construction-time options for [LogSocket](#logsocket).
 ### LogSocketLike
 
 The consumer-facing surface of a live-log socket: the minimal interface a client reads off a [LogSocket](#logsocket). This is the product half of the socket
-dependency-inversion seam, so a client depends on this narrow interface rather than the concrete [LogSocket](#logsocket) and a test can substitute a fake that yields
+dependency-inversion boundary, so a client depends on this narrow interface rather than the concrete [LogSocket](#logsocket) and a test can substitute a fake that yields
 caller-supplied lines without standing up a WebSocket. Every member is defined on [LogSocket](#logsocket), so the real class satisfies it by `implements` with zero runtime
 change.
 
@@ -317,11 +318,12 @@ An async generator yielding raw log lines in stream order.
 
 ### WebSocketLike
 
-A minimal WebSocket surface the [LogSocket](#logsocket) depends on, so the concrete implementation (the platform global `WebSocket`, or a test double) is an injected seam.
+A minimal WebSocket surface the [LogSocket](#logsocket) depends on, so the concrete implementation (the platform global `WebSocket`, or a test double) is an injected
+dependency.
 
 The shape is the subset of the DOM `WebSocket` interface the socket actually uses: the four lifecycle events via `addEventListener`, `send` for outbound frames,
-`close` for teardown, and `readyState` (compared against [WEBSOCKET\_OPEN](#websocket_open)) so teardown can gate the namespace-disconnect frame on an open connection. Modeling
-the seam as this narrow interface rather than the full `WebSocket` keeps a test double small and makes the socket's exact dependency surface explicit.
+`close` for teardown, and `readyState` (compared against [WEBSOCKET\_OPEN](#websocket_open)) so teardown can gate the namespace-disconnect frame on an open connection. Keeping
+this interface narrow, rather than the full `WebSocket`, keeps a test double small and makes the socket's exact dependency surface explicit.
 
 #### Properties
 
@@ -464,7 +466,7 @@ A promise resolving to the raw bearer token (the bare JWT, no `Bearer` prefix).
 type WebSocketFactory = (url) => WebSocketLike;
 ```
 
-The factory seam that constructs a [WebSocketLike](#websocketlike) for a given connect URL.
+The factory that constructs a [WebSocketLike](#websocketlike) for a given connect URL.
 
 The production factory wraps the platform global `WebSocket`; a test substitutes a factory that returns a controllable double, so the whole socket state machine -
 handshake, ping/pong, reconnect, teardown - is exercised without a real network.
@@ -489,8 +491,9 @@ A [WebSocketLike](#websocketlike) that begins connecting immediately, exactly as
 const logSocketFactory: LogSocketFactory;
 ```
 
-The production [LogSocketFactory](#logsocketfactory): builds the concrete WebSocket-backed [LogSocket](#logsocket). A client holds the factory typed as the seam abstraction; a test
-substitutes a fake factory. `create` is exactly the [LogSocket](#logsocket) constructor call, so wiring construction through this seam is behavior-neutral.
+The production [LogSocketFactory](#logsocketfactory): builds the concrete WebSocket-backed [LogSocket](#logsocket). A client holds the factory typed as the [LogSocketFactory](#logsocketfactory)
+abstraction; a test substitutes a fake factory. `create` is exactly the [LogSocket](#logsocket) constructor call, so wiring construction through this factory is
+behavior-neutral.
 
 ***
 
@@ -500,8 +503,8 @@ substitutes a fake factory. `create` is exactly the [LogSocket](#logsocket) cons
 const WEBSOCKET_OPEN: 1 = 1;
 ```
 
-The numeric `readyState` value denoting an open WebSocket. The DOM `WebSocket.OPEN` constant is `1`; we name it as a module constant so the seam interface does not
-have to carry the static constant and teardown can gate on it without depending on the concrete class.
+The numeric `readyState` value denoting an open WebSocket. The DOM `WebSocket.OPEN` constant is `1`; we name it as a module constant so the [WebSocketLike](#websocketlike)
+interface does not have to carry the static constant and teardown can gate on it without depending on the concrete class.
 
 ***
 
@@ -511,8 +514,8 @@ have to carry the static constant and teardown can gate on it without depending 
 const webSocketFactory: WebSocketFactory;
 ```
 
-The production [WebSocketFactory](#websocketfactory-1): constructs the platform global `WebSocket`. A consumer holds the factory typed as the seam abstraction; a test substitutes a
-double. The platform `WebSocket` begins connecting on construction, which is exactly the factory contract.
+The production [WebSocketFactory](#websocketfactory-1): constructs the platform global `WebSocket`. A consumer holds the factory typed as the [WebSocketFactory](#websocketfactory-1) abstraction;
+a test substitutes a double. The platform `WebSocket` begins connecting on construction, which is exactly the factory contract.
 
 #### Param
 
@@ -522,7 +525,7 @@ The connect URL.
 
 #### Returns
 
-A live platform `WebSocket`, typed as the [WebSocketLike](#websocketlike) seam.
+A live platform `WebSocket`, typed as the [WebSocketLike](#websocketlike) interface.
 
 ***
 

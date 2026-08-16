@@ -255,6 +255,35 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
   });
 });
 
+describe("buildOptionsSkinCss - the heading action's glyph", () => {
+
+  test("seats the glyph on the button's line box rather than on a font metric", () => {
+
+    using _dom = createTestDom();
+
+    /* The guard and the rule are asserted as one nested match because the guard is what makes the declarations land together or not at all: the glyph's box grows
+     * to the line box and then sits flush at its top, and a browser resolving only the alignment would seat the glyph worse than a browser resolving neither.
+     *
+     * Happy-DOM's CSS parser drops the `lh` unit from a declaration value, so `height: 1lh` cannot be read back off the adopted sheet at all. A regex for it would
+     * match the guard's own condition text and pass whether or not the declaration survived, which is why the height is absent from these assertions rather than
+     * pinned by a check that cannot fail. The guard condition and `vertical-align: top` are what the sheet does expose, and the height rides the same rule.
+     */
+    assert.match(skinCss(), /@supports \(height: 1lh\) \{\s*\.nav-header \.fo-action svg \{[^}]*vertical-align:\s*top/,
+      "the glyph rule sits inside the feature guard, seating its box flush in the button's line box");
+  });
+
+  test("reaches the glyph from inside the guard only, so the seat cannot land half-applied", () => {
+
+    using _dom = createTestDom();
+
+    // An unguarded copy of the rule is precisely the failure the guard exists to prevent, and the nested match above would still pass with one present - so the
+    // count is what pins it. One occurrence, placed inside the guard by the assertion above, is the whole contract.
+    const occurrences = skinCss().match(/\.nav-header \.fo-action svg/g) ?? [];
+
+    assert.equal(occurrences.length, 1, "exactly one rule reaches the heading action's glyph");
+  });
+});
+
 describe("buildOptionsSkinCss - the Global Options row", () => {
 
   // One rule owns the row's whole presentation, so the row is asserted as one thing: the type that keys it with the page's control vocabulary, the flex centering

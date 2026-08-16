@@ -181,6 +181,21 @@ const buildOptionsSkinCss = () => [
   ".nav-header { border-bottom: 1px solid var(--fo-border-subtle); margin-bottom: var(--fo-space-xxs); " +
     "padding: var(--fo-space-xs) var(--fo-space-md) !important; font-size: var(--fo-font-size-xs) !important; line-height: 1.2; }",
   "#devicesContainer .nav-header, #controllersContainer .nav-header { font-weight: 600; margin-top: 0 !important; padding-top: var(--fo-space-sm) !important; }",
+
+  /* The heading action's glyph seats on the button's own line box rather than on a font metric. `1lh` is exactly that line box's height, so the glyph's box fills
+   * it, and `vertical-align: top` puts the filled box flush against the line box's top. The artwork inside stays at text scale and centered on its own: the width
+   * attribute still asks for `1em`, and a square viewBox under the default `xMidYMid meet` centers the drawing in whatever viewport it is handed. No font metric
+   * enters anywhere, where a baseline-relative seat keys off the host font's x-height and lands off the button's center by an amount that moves with the typeface.
+   *
+   * The button keeps its inline layout so that line box exists at all: a flex interior would collapse the control's height, since flex ignores `line-height`, and
+   * putting that height back would restate the `.btn-xs` geometry in a second file. The guard is what keeps the declarations together - a browser that cannot
+   * resolve `1lh` keeps the baseline seat and its fraction of a pixel, which reads better than `vertical-align: top` landing alone on a glyph box that never grew.
+   *
+   * `.nav-header` scopes this to the framework's own heading-docked action...a plugin's `.fo-action` controls sit outside a heading and keep the page kit's
+   * treatment untouched.
+   */
+  "@supports (height: 1lh) { .nav-header .fo-action svg { height: 1lh; vertical-align: top; } }",
+
   /* Global Options: a row that keys with the page's control vocabulary. Everything control-shaped reads uppercase - the host's own stylesheet uppercases every button
    * it renders, and the section headings are uppercase from the `text-uppercase` utility class the nav view stamps in markup - so a row in sentence case is the one thing
    * on the page that looks like neither, anchored to no section and matching no control. Wearing the heading family's case, scale, and weight settles it into that

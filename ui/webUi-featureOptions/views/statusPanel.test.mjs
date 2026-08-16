@@ -239,7 +239,7 @@ describe("statusPanel - selection and the view request", () => {
     assert.equal(phantomsFor(root, "Door")[0].textContent, "Stopped (100%)");
   });
 
-  test("P2: the view request fires exactly once per genuinely-new selection; a same-device re-fire sends nothing and rebuilds from harvested values", () => {
+  test("P2: the view request fires exactly once per genuinely-new selection; a same-device re-fire sends nothing and rebuilds from the device's own state", () => {
 
     using _dom = createTestDom();
 
@@ -257,7 +257,7 @@ describe("statusPanel - selection and the view request", () => {
 
     assert.deepEqual(viewRequests, [ { serialNumber: "AA" }, { serialNumber: "BB" } ], "two requests total, in order - a first-selection-only bug fails on B");
 
-    // Back to A, then a same-device re-fire: no new request, and the harvested door value survives the rebuild.
+    // Back to A, then a same-device re-fire: no new request, and the door value A's entry holds survives the rebuild.
     selectDevice(store, "AA");
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 2, "door", "Closed"));
 
@@ -266,10 +266,10 @@ describe("statusPanel - selection and the view request", () => {
     refireDevices(store, [ DEVICE_A, DEVICE_B ]);
 
     assert.equal(viewRequests.length, requestsBeforeRefire, "a same-device re-fire sends no view request");
-    assert.equal(valueFor(root, "Door"), "Closed", "the same-device rebuild harvests the live door value");
+    assert.equal(valueFor(root, "Door"), "Closed", "the same-device rebuild renders the door value from A's entry");
   });
 
-  test("P13: select A, switch to global, reselect A - the second selection is genuinely new (skeleton re-rendered, a second view request fired)", () => {
+  test("P13: select A, switch to global, reselect A - the second selection is genuinely new (a second view request fired) and renders A's remembered state", () => {
 
     using _dom = createTestDom();
 
@@ -289,8 +289,11 @@ describe("statusPanel - selection and the view request", () => {
     selectDevice(store, "AA");
 
     assert.deepEqual(viewRequests, [ { serialNumber: "AA" }, { serialNumber: "AA" } ], "the reselection is genuinely new - a second view request fires");
-    assert.equal(valueFor(root, "Status"), "Connecting...", "the reselection re-renders the skeleton");
-    assert.equal(valueFor(root, "Door"), "-", "the reselection resets the door to its placeholder");
+
+    // The door renders the value A's entry has held since the first push rather than the placeholder dash: the view was cleared, A's state was not. The Status cell
+    // still reads Connecting... because the only push A ever sent was a row update, which says nothing about the connection - so nothing ever told the entry more.
+    assert.equal(valueFor(root, "Door"), "Open", "the reselection renders A's last-known door value");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the Status cell stands at Connecting... - no push ever told A's entry anything about the connection");
   });
 
   test("P11: global and controller scope both clear the panel and send nothing; a device-scope selection under controller mode renders normally", () => {
@@ -418,7 +421,7 @@ describe("statusPanel - push handling by kind", () => {
     assert.equal(valueFor(root, "Status"), LOCKED_CONNECTED, "the lock returns for the next encrypted online event");
   });
 
-  test("P8: a same-device rebuild harvests the live rendered values, never a phantom sizer or a placeholder", () => {
+  test("P8: a rebuild renders the device's own row values, never a phantom sizer or a placeholder", () => {
 
     using _dom = createTestDom();
 
@@ -431,13 +434,13 @@ describe("statusPanel - push handling by kind", () => {
 
     selectDevice(store, "AA");
 
-    // The door's live value "Open" differs from its sizer "Stopped (100%)", so a harvested value cannot be confused with a harvested phantom.
+    // The door's live value "Open" differs from its sizer "Stopped (100%)", so the rendered value cannot be confused with the phantom the column reserves.
     fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }]));
 
-    // An error rebuilds the panel; the harvest must carry the live door value forward, not reset it and not pick up the phantom.
+    // An error rebuilds the panel; the rebuild must carry the door value forward from A's entry, not reset it and not pick up the phantom.
     fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 2, "timeout"));
 
-    assert.equal(valueFor(root, "Door"), "Open", "the rebuild harvested the live door value");
+    assert.equal(valueFor(root, "Door"), "Open", "the rebuild rendered the door value from A's entry");
     assert.equal(messageText(root), "This device connected but did not push its state.", "the error message renders inside the box");
   });
 
@@ -461,6 +464,153 @@ describe("statusPanel - push handling by kind", () => {
     fake.observed.emitPush(STATUS_EVENT, { kind: "unknown-kind", serialNumber: "AA", session: 2 });
 
     assert.equal(valueFor(root, "Status"), "Connected", "neither a null payload nor an unknown kind changed the panel");
+  });
+});
+
+describe("statusPanel - per-device state memory", () => {
+
+  test("a snapshot for an unviewed device drives no DOM, and selecting that device renders its connected label and row values at once", () => {
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "AOpen" }]));
+
+    const requestsBeforeB = viewRequests.length;
+
+    // B's snapshot lands while A is on screen: it must reduce into B's own state and leave the viewed panel exactly as it was.
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "BOpen" }], true));
+    assert.equal(valueFor(root, "Door"), "AOpen", "B's push left A's door value alone");
+    assert.equal(valueFor(root, "Status"), "Connected", "B's push left A's Status alone");
+
+    // Selecting B renders B's remembered state synchronously. No push follows this selection, so everything on screen came from the entry alone - the skeleton and
+    // its "Connecting..." placeholder are what a build reading no state would show here.
+    selectDevice(store, "BB");
+    assert.equal(valueFor(root, "Status"), LOCKED_CONNECTED, "B renders the encrypted connected label it last pushed");
+    assert.equal(valueFor(root, "Door"), "BOpen", "B renders the door value it last pushed");
+
+    // The authoritative re-read still goes out: the entry is memory, not a substitute for asking.
+    assert.deepEqual(viewRequests.slice(requestsBeforeB), [{ serialNumber: "BB" }], "the selection still fires B's view request");
+  });
+
+  test("an error pushed for an unviewed device renders its label and message the moment that device is selected", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, errorEvent("BB", 1, "auth-invalid"));
+    assert.equal(messageText(root), null, "the unviewed error rendered no message on A's panel");
+
+    // The copy is resolved when the error is reduced, so the entry carries the finished label and message rather than a reason to re-resolve later.
+    selectDevice(store, "BB");
+    assert.equal(valueFor(root, "Status"), "Auth failed", "B renders the error label from its entry");
+    assert.equal(messageText(root), "This device rejected the configured credentials.", "and the error message with it");
+  });
+
+  test("an offline availability pushed for an unviewed device renders Disconnected the moment that device is selected", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, availabilityEvent("BB", 1, false, false));
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the unviewed availability left A's Status alone");
+
+    selectDevice(store, "BB");
+    assert.equal(valueFor(root, "Status"), "Disconnected", "B renders the offline state it last pushed");
+  });
+
+  test("a momentary value latches on the unviewed device's own clock, so a later selection shows it only while it is still true", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // B's momentary value arrives while A is on screen, arming B's five-second latch against B's own state.
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("BB", 1, "motion", "Detected"));
+
+    // Two seconds in the value is still true, so selecting B shows it.
+    t.mock.timers.tick(2000);
+    selectDevice(store, "BB");
+    assert.equal(valueFor(root, "Motion"), "Detected", "B renders the momentary value that is still within its latch");
+
+    // Past the five-second deadline B's own push set, the value expires. The clock ran from that push and not from the selection: a latch that restarted when B came
+    // on screen would still be three seconds from firing here.
+    t.mock.timers.tick(3001);
+    assert.equal(valueFor(root, "Motion"), "-", "the value cleared on the deadline B's own push set");
+  });
+
+  test("a trailing-session push for an unviewed device writes nothing to its state", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Two snapshots for the unviewed B, the second trailing the first's session. The floor runs before any state write, so the trailing one is dropped whole.
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 5, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "B5" }]));
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 4, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "B4" }]));
+
+    // Selecting B is what makes the drop visible: a state write that slipped above the floor guard would have left "B4" in B's entry to render here.
+    selectDevice(store, "BB");
+    assert.equal(valueFor(root, "Door"), "B5", "B's state holds the higher session's value - the trailing push never reached it");
+  });
+
+  test("a push of an unrecognized kind creates no state for its device - it advances the floor and nothing else", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // An unrecognized kind for the unviewed B. The floor advances to 5 as it does for any device event, but the reduction has no case for it.
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, { kind: "unknown-kind", serialNumber: "BB", session: 5 });
+
+    // A session-4 snapshot trails that floor and is dropped. That drop is the proof the floor did advance - had the unknown kind left the floor at zero, this
+    // snapshot would apply and B would render "B4" below.
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 4, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "B4" }]));
+
+    selectDevice(store, "BB");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "B renders the pristine skeleton - nothing wrote a status for it");
+    assert.equal(valueFor(root, "Door"), "-", "and its placeholder rows carry no value");
   });
 });
 
@@ -534,12 +684,13 @@ describe("statusPanel - the stale-push guard", () => {
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 101, "door", "Reopened"));
     assert.equal(valueFor(root, "Door"), "Reopened", "a higher session is applied");
 
-    // Switch to B. Its guard floor is 5 from the non-viewed snapshot: a session-4 snapshot is stale and dropped, but a session-6 snapshot applies - a single global
-    // floor of 100 (A's) would have dropped both, so applying session 6 proves the guards are independent per device.
+    // Switch to B. That off-screen snapshot populated B's entry, so B renders its own last-known value the moment it is selected. Its guard floor is 5 from the same
+    // snapshot: a session-4 snapshot is stale and dropped, but a session-6 snapshot applies - a single global floor of 100 (A's) would have dropped both, so applying
+    // session 6 proves the guards are independent per device.
     selectDevice(store, "BB");
-    assert.equal(valueFor(root, "Door"), "-", "B renders its placeholder skeleton");
+    assert.equal(valueFor(root, "Door"), "B5", "B renders the last-known value from its own entry");
     fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 4, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "B4" }]));
-    assert.equal(valueFor(root, "Door"), "-", "a session below B's advanced floor is dropped");
+    assert.equal(valueFor(root, "Door"), "B5", "a session below B's advanced floor is dropped - an implementation that admitted it would render B4");
     fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 6, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "B6" }]));
     assert.equal(valueFor(root, "Door"), "B6", "session 6 applies against B's own floor, not A's");
   });
@@ -810,7 +961,7 @@ describe("statusPanel - the latch lifecycle", () => {
     assert.equal(motionSpanAfterRebuild.textContent, "-", "the latch cleared the post-rebuild cell by resolving its target at fire time");
   });
 
-  test("P9: a selection change cancels the armed latch so a later fire cannot touch the newly-selected device", (t) => {
+  test("P9: a latch runs across a selection change - it fires against its own device's state and never touches the newly-selected device's cell", (t) => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
@@ -826,18 +977,23 @@ describe("statusPanel - the latch lifecycle", () => {
     selectDevice(store, "AA");
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "motion", "Detected"));
 
-    // Switch to B, whose same row id shows a live value. A's latch must have been cancelled on the selection change.
+    // Switch to B, whose same row id shows a live value. The switch cancels nothing: how long A's momentary value stays true is A's business, not the viewer's.
     selectDevice(store, "BB");
     fake.observed.emitPush(STATUS_EVENT, snapshotEvent("BB", 1, [{ id: "motion", label: "Motion", latch: { seconds: 5, value: "Detected" }, sizer: "Detected",
       value: "Idle" }]));
     assert.equal(valueFor(root, "Motion"), "Idle", "B's motion shows its live value");
 
-    // Advance past A's deadline: a leaked A timer with a read-at-fire lookup would clear B's motion cell.
+    // Advance past A's deadline. The fire writes A's own entry and reaches the DOM only for the device on screen, so B's cell is untouched: an implementation keying
+    // its timers by row id alone across devices, or one skipping the viewed-device check at fire time, would clear B's motion here.
     t.mock.timers.tick(6000);
-    assert.equal(valueFor(root, "Motion"), "Idle", "B's cell is untouched - A's latch was cancelled on the selection change");
+    assert.equal(valueFor(root, "Motion"), "Idle", "B's cell is untouched by A's fire");
+
+    // Reselecting A proves the fire landed where it belonged: A's own value cleared on schedule, so A renders the honest dash rather than a frozen "Detected".
+    selectDevice(store, "AA");
+    assert.equal(valueFor(root, "Motion"), "-", "A shows the dash - its latch fired on its own clock while off screen");
   });
 
-  test("P9: a global clear cancels the armed latch", (t) => {
+  test("P9: a latch survives a clear to global scope, firing against its device's state so a later reselection is honest", (t) => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
@@ -853,14 +1009,14 @@ describe("statusPanel - the latch lifecycle", () => {
     selectDevice(store, "AA");
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "motion", "Detected"));
 
-    // Clear to global, then re-select A with a fresh live motion value. A leaked timer with read-at-fire would clear the re-selected cell at A's original deadline.
+    // Clear to global. Nothing is on screen and nothing is cancelled, so A's latch runs out its five seconds against A's entry with no panel to write into.
     selectGlobal(store);
-    selectDevice(store, "AA");
-    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 2, [{ id: "motion", label: "Motion", latch: { seconds: 5, value: "Detected" }, sizer: "Detected",
-      value: "Idle" }]));
-
     t.mock.timers.tick(6000);
-    assert.equal(valueFor(root, "Motion"), "Idle", "the re-selected cell is untouched - the global clear cancelled the prior latch");
+
+    // Re-selecting A renders whatever A's entry holds at this point. A cancelled timer would have frozen "Detected" there instead, and the momentary value would
+    // outlive its own validity for as long as the user stayed away.
+    selectDevice(store, "AA");
+    assert.equal(valueFor(root, "Motion"), "-", "the latch fired while nothing was on screen, so the reselection shows the dash");
   });
 
   test("P9: a signal abort cancels every armed latch so no later fire mutates the DOM", (t) => {
@@ -1465,6 +1621,38 @@ describe("statusPanel - the link-lost watchdog", () => {
     assert.equal(reloadAnchorIn(root), null, "the error render carries no reload action");
   });
 
+  test("P26: a delivered push after a trip returns the device's whole presentation - its status and its message together", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithDeferredView();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Establish a classified error as A's real state, then trip the watchdog over the top of it.
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 1, "unreachable"));
+
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "precondition: the link-lost state covers the error state");
+    assert.equal(messageText(root), LINK_LOST_MESSAGE, "precondition: and carries its own message");
+
+    // A row push - the least status-bearing kind there is - retires the link-lost state. Underneath, A's error state stands exactly as it was: the label and the
+    // message come back together, because both are read from A's own state rather than from whatever the DOM was last told.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 2, "door", "Open"));
+
+    assert.equal(valueFor(root, "Status"), "Unreachable", "the error label returns with the link-lost state retired");
+    assert.equal(messageText(root), "This device could not be reached.", "and its message returns alongside it");
+    assert.equal(reloadAnchorIn(root), null, "the reload action goes with the link-lost state");
+    assert.equal(valueFor(root, "Door"), "Open", "and the row push's own value applies");
+  });
+
   test("P27: teardown cancels the pending watchdog, and a post-abort settlement or a stale-handle feed is inert", async (t) => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -2001,6 +2189,41 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
     assert.equal(valueFor(root, "Status"), "Connecting...", "the Status cell returns to the connecting placeholder rather than staying stuck on the link-lost label");
 
     assert.deepEqual(seenByCallback, ["Connecting..."], "onServerHello fired exactly once, AFTER the local restore had completed");
+  });
+
+  test("B-HELLO: a fresh hello returns the viewed device's own state to Connecting..., so its pre-trip status does not come back unproven", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    // Give A a real connected state with a row value, then trip the watchdog over it.
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }]));
+
+    handle.watchRequest(hangingPromise());
+    t.mock.timers.tick(2001);
+    assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "precondition: the panel is tripped");
+
+    // The hello proves the relay, not the device. A push would bring A's connected label back because the device itself said so; a hello carries no such news, so A's
+    // state records the honest verdict and the panel waits for the re-elicited pushes to say more.
+    fake.observed.emitPush(STATUS_EVENT, helloEvent(3));
+
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the viewed device's status went back to the connecting placeholder");
+    assert.equal(messageText(root), null, "with no message left behind");
+    assert.equal(valueFor(root, "Door"), "Open", "the row values stand - the hello says nothing about them");
+
+    // The reset landed in A's own state rather than only on screen: leaving and coming back still shows Connecting..., never the pre-trip connected label.
+    selectGlobal(store);
+    selectDevice(store, "AA");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "the reset was written to A's state, so a reselection renders it too");
   });
 
   test("B-HELLO: a same-generation hello leaves a tripped presentation exactly as it was", (t) => {

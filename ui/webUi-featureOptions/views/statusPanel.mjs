@@ -76,6 +76,22 @@ import { selectedDevice } from "../selectors.mjs";
  *   skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
  */
 
+/**
+ * One device's remembered state: what that device last told the panel, kept whether or not it is the device on screen. The map of these entries is the panel's single
+ * source of truth - the push handler reduces every event into the addressed device's entry, and the DOM is a projection of the viewed device's entry - so selecting a
+ * device the panel already knows renders at once. Internal mount state rather than wire contract: nothing outside this module produces or consumes it, so unlike the
+ * typedefs above it mirrors nothing in `src/webui-status.ts`.
+ *
+ * @typedef {Object} DeviceStateEntry
+ * @property {Map<string, ReturnType<typeof setTimeout>>} latchTimers - The pending clear-back timer per row id. The clock belongs to the device rather than to the
+ *   view, so a momentary value expires on its own schedule whether or not anyone is watching it.
+ * @property {string | null} message - The classified message line, or null when the device has none to show.
+ * @property {StatusRowTemplate[]} rowSet - The row templates this device renders: the placeholder skeleton until a snapshot installs the authoritative set.
+ * @property {Map<string, string>} rowValues - The raw pushed value per row id, exactly as the wire carried it. The display transform lives at projection, so the
+ *   placeholder dash is something the panel renders rather than something the state can store and then transform a second time.
+ * @property {string} statusText - The Status cell's text.
+ */
+
 // The "Connected" Status-cell label, prefixed with the lock glyph for an encrypted session so the panel mirrors a plugin's encrypted-connection convention: the
 // U+1F512 lock plus U+FE0E, the text-presentation variation selector that forces a monochrome glyph rather than a color emoji.
 const connectedLabel = (encrypted) => encrypted ? "\u{1F512}\u{FE0E} Connected" : "Connected";
@@ -199,11 +215,14 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
 /**
  * Mount the live device-status panel into the device-stats region.
  *
- * All render state is closure-local to this mount, so it is fresh for every showDetails() cycle: the viewed device object (its serialNumber always read from that one
- * object), the per-serialNumber highest-token guard, the current row template set, the status text and panel message, the live node references, and one latch timer per
- * row id. The panel subscribes to selection changes, to the host's status push events, and - when the page supplied a resume detector - to page resumes; every listener
- * is `{ signal }`-scoped, and the one abort listener the mount registers clears every pending latch timer. Liveness detection is the shared watchdog primitive, whose
- * own abort contract retires its timer on the same signal. The returned handle exposes {@link resetStaleGuards} and the plugin-facing watchRequest.
+ * All state is closure-local to this mount, so it is fresh for every showDetails() cycle. At its center is a map of {@link DeviceStateEntry} keyed by serialNumber: the
+ * push handler reduces every pooled device's events into it whether or not that device is on screen, and the DOM is a projection of the viewed device's entry, so
+ * switching to a device the panel has already heard from renders that device's last-known state at once instead of a placeholder skeleton awaiting a round trip.
+ * Around the map sit the viewed device object (its serialNumber always read from that one object), the per-serialNumber highest-token guard, the link-lost overlay
+ * marker, and the live node references. The panel subscribes to selection changes, to the host's status push events, and - when the page supplied a resume detector -
+ * to page resumes; every listener is `{ signal }`-scoped, and the one abort listener the mount registers clears every pending latch timer. Liveness detection is the
+ * shared watchdog primitive, whose own abort contract retires its timer on the same signal. The returned handle exposes {@link resetStaleGuards} and the plugin-facing
+ * watchRequest.
  *
  * @param {Object} args
  * @param {StatusPanelConfig} args.config - The plugin's panel configuration (identity, placeholder rows, error-copy overrides, link-lost copy and deadline).
@@ -229,62 +248,88 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
   const onServerHello = config.onServerHello;
   const placeholderRows = config.placeholderRows ?? [];
 
-  // The viewed device and the render state the panel rebuilds from. `viewedDevice` is the single source of the on-screen serialNumber; `highestToken` guards pushes
-  // per device; `serverGeneration` is the last adapter generation the panel has adopted (null until the first hello), so an unseen one marks a fresh helper process;
-  // `currentRowSet` is the template set the panel renders (the placeholder skeleton until a snapshot replaces it); `statusText` and `panelMessage` are the Status-cell
-  // text and the classified message line; `linkLost` is the browser-detected link-lost marker, the one render-state flag the watchdog trip sets and every real render
-  // clears. The node references hold the live grid, the Status value span, and one value span per state row.
+  /* The state the panel renders from. `deviceState` holds one {@link DeviceStateEntry} per device the panel has heard from and is the single source of truth every
+   * render projects; `viewedDevice` is the single source of the on-screen serialNumber, naming which entry the DOM currently shows; `highestToken` guards pushes per
+   * device; `serverGeneration` is the last adapter generation the panel has adopted (null until the first hello), so an unseen one marks a fresh helper process;
+   * `linkLost` is the browser-detected link-lost marker, an overlay the watchdog trip sets over whatever the entries hold and every real render clears. The node
+   * references hold the live grid, the Status value span, and one value span per state row.
+   *
+   * The two device-keyed maps are deliberately separate rather than folded together, because their lifecycles have nothing to do with each other: `highestToken` is
+   * cleared wholesale by a fresh server hello and by the plugin-facing reset, while `deviceState` is never bulk-cleared and never evicted. It is bounded by the
+   * sidebar's device count, and its whole purpose is to outlive the view.
+   */
+  const deviceState = new Map();
   let viewedDevice = null;
   const highestToken = new Map();
   let serverGeneration = null;
-  let currentRowSet = placeholderRows;
-  let statusText = null;
-  let panelMessage = null;
   let linkLost = false;
   let panelEl = null;
   let statusValueEl = null;
   const rowValueEls = new Map();
 
-  // One clear-back timer per row id. A row's latch is independent of every other row's, so each holds its own timer here; arming a row clears only that row's own
-  // pending timer.
-  const latchTimers = new Map();
+  // The device's entry, created on first sight. A device earns one the moment it pushes something the panel understands, initialized to exactly what a device the
+  // panel has heard nothing from renders as - the placeholder skeleton under the connecting label - so a freshly created entry and an absent one project the same.
+  const entryFor = (serialNumber) => {
 
-  // Clear one row's pending latch timer, if any.
-  const clearLatch = (rowId) => {
+    let entry = deviceState.get(serialNumber);
 
-    const timer = latchTimers.get(rowId);
+    if(!entry) {
+
+      entry = { latchTimers: new Map(), message: null, rowSet: placeholderRows, rowValues: new Map(), statusText: CONNECTING_STATUS_TEXT };
+
+      deviceState.set(serialNumber, entry);
+    }
+
+    return entry;
+  };
+
+  // Clear one row's pending latch timer on its device's entry, if any. A row's latch is independent of every other row's - and of every other device's - so each
+  // holds its own timer, and arming a row clears only that row's own.
+  const clearLatch = (entry, rowId) => {
+
+    const timer = entry.latchTimers.get(rowId);
 
     if(timer !== undefined) {
 
       clearTimeout(timer);
-      latchTimers.delete(rowId);
+      entry.latchTimers.delete(rowId);
     }
   };
 
-  // Clear every pending latch timer. Called on selection change, on global clear, and on signal abort.
+  // Clear every pending latch timer across every device. Teardown is the only thing broad enough to want this: a view change retires no clock, because how long a
+  // momentary value stays true is the device's business rather than the viewer's.
   const clearAllLatches = () => {
 
-    for(const timer of latchTimers.values()) {
+    for(const entry of deviceState.values()) {
 
-      clearTimeout(timer);
+      for(const timer of entry.latchTimers.values()) {
+
+        clearTimeout(timer);
+      }
+
+      entry.latchTimers.clear();
     }
-
-    latchTimers.clear();
   };
 
-  // Look up a row's static template by id in the current set, so a live push can find the row's latch configuration.
-  const templateFor = (rowId) => currentRowSet.find((row) => row.id === rowId);
+  /* Arm (or re-arm) a row's latch on its own device's clock: clear that row's pending timer first so an overlapping arrival extends the latch rather than truncating
+   * it, then schedule the clear-back. The fire writes the entry - the state every projection reads - and reaches the DOM only when that device is the one on screen,
+   * so a clock running for an off-screen device can never clear the viewed device's cell. It writes that cell directly rather than through the render helpers below
+   * because an expiring clock is the panel's own bookkeeping and not evidence from the relay, so it must leave a link-lost overlay standing. The live span is resolved
+   * AT FIRE TIME by row id, never captured at arm time, so a rebuild between arm and fire clears the current cell rather than a detached one.
+   */
+  const armLatch = (serialNumber, entry, rowId, seconds) => {
 
-  // Arm (or re-arm) a row's latch: clear its own pending timer first so an overlapping arrival extends the latch rather than truncating it, then schedule the
-  // clear-back. The callback resolves its target AT FIRE TIME by row id against the current value-span map - never a span captured at arm time - so a rebuild between
-  // arm and fire clears the live cell rather than a detached one.
-  const armLatch = (rowId, seconds) => {
-
-    clearLatch(rowId);
+    clearLatch(entry, rowId);
 
     const timer = setTimeout(() => {
 
-      latchTimers.delete(rowId);
+      entry.latchTimers.delete(rowId);
+      entry.rowValues.set(rowId, "");
+
+      if(serialNumber !== viewedDevice?.serialNumber) {
+
+        return;
+      }
 
       const valueEl = rowValueEls.get(rowId);
 
@@ -294,15 +339,16 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
       }
     }, seconds * 1000);
 
-    latchTimers.set(rowId, timer);
+    entry.latchTimers.set(rowId, timer);
   };
 
-  // Drive a row's latch from a freshly rendered value. A row whose template declares a positive latch arms when its value equals the latch value and cancels its
-  // pending timer on any other value - without the cancel, a timer armed on the momentary value would later clear a legitimate newer value to the placeholder. A row
+  // Drive a row's latch from a freshly reduced value. A row whose template declares a positive latch arms when its value equals the latch value and cancels its
+  // pending timer on any other value - without the cancel, a timer armed on the momentary value would later clear a legitimate newer value to the placeholder. The
+  // template comes from the device's own row set, which starts as the placeholder skeleton, so a latch declared there governs from the device's very first push. A row
   // with no latch, or a non-positive one, does nothing.
-  const applyLatch = (rowId, value) => {
+  const applyLatch = (serialNumber, entry, rowId, value) => {
 
-    const latch = templateFor(rowId)?.latch;
+    const latch = entry.rowSet.find((row) => row.id === rowId)?.latch;
 
     if(!latch || !(latch.seconds > 0)) {
 
@@ -311,22 +357,29 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
     if(value === latch.value) {
 
-      armLatch(rowId, latch.seconds);
+      armLatch(serialNumber, entry, rowId, latch.seconds);
     } else {
 
-      clearLatch(rowId);
+      clearLatch(entry, rowId);
     }
   };
 
   /* Build the panel: ONE bordered grid whose cells wrap into two rows - the identity cells with the live "Status" cell closing the top row, then one cell per state
    * row - inside a single box. The `.fo-status-grid` theme variant owns the wrap, the row gap, and the per-cell flex; the row break is a full-width zero-height
    * spacer at the semantic boundary. A classified message, when present, renders as a full-width wrapping line inside the same box; in the link-lost state that message
-   * line takes a prominence modifier and a second full-width line below it carries the reload action. Values come from the caller's harvest map so a rebuild preserves
-   * live cell state; statusText, currentRowSet, linkLost, and panelMessage are read from mount state. statusValueEl and rowValueEls are rebuilt here, so a value-cell
-   * reference never outlives its own panel.
+   * line takes a prominence modifier and a second full-width line below it carries the reload action.
+   *
+   * Everything rendered is derived here from three things and nothing else: the device, its entry in the state map, and the link-lost marker. A device the panel has
+   * heard nothing from has no entry, and the defaults below are what a first selection deserves - the placeholder skeleton under the connecting label. The marker is
+   * an overlay rather than a state of its own: it stands in for the status text and the message while it is set, and retires leaving the entry's own presentation
+   * whole underneath it. statusValueEl and rowValueEls are rebuilt here, so a value-cell reference never outlives its own panel.
    */
-  const buildPanel = (device, values = new Map()) => {
+  const buildPanel = (device) => {
 
+    const entry = deviceState.get(device.serialNumber);
+    const message = linkLost ? linkLostCopy.message : (entry?.message ?? null);
+    const rowSet = entry?.rowSet ?? placeholderRows;
+    const statusText = linkLost ? linkLostCopy.label : (entry?.statusText ?? CONNECTING_STATUS_TEXT);
     const grid = document.createElement("div");
 
     grid.className = "device-stats-grid fo-status-grid";
@@ -344,7 +397,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
       grid.append(item);
     }
 
-    const { item: statusItem, valueSpan: statusValueSpan } = buildStatRow("Status", statusText ?? "", "stat-value", STATUS_SIZER);
+    const { item: statusItem, valueSpan: statusValueSpan } = buildStatRow("Status", statusText, "stat-value", STATUS_SIZER);
 
     statusValueEl = statusValueSpan;
 
@@ -356,15 +409,15 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
     rowValueEls.clear();
 
-    for(const row of currentRowSet) {
+    for(const row of rowSet) {
 
-      const { item, valueSpan } = buildStatRow(row.label, displayValue(values.get(row.id)), "stat-value", row.sizer);
+      const { item, valueSpan } = buildStatRow(row.label, displayValue(entry?.rowValues.get(row.id)), "stat-value", row.sizer);
 
       rowValueEls.set(row.id, valueSpan);
       grid.append(item);
     }
 
-    if(panelMessage) {
+    if(message) {
 
       const messageLine = document.createElement("div");
 
@@ -375,7 +428,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
       const messageSpan = document.createElement("span");
 
       messageSpan.className = "stat-value";
-      messageSpan.textContent = panelMessage;
+      messageSpan.textContent = message;
 
       messageLine.append(messageSpan);
       grid.append(messageLine);
@@ -403,56 +456,29 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     return grid;
   };
 
-  // Update the "Status" cell's single source of truth and, when the panel is mounted, its rendered value.
-  const setStatus = (text) => {
-
-    statusText = text;
-
-    if(statusValueEl) {
-
-      statusValueEl.textContent = text;
-    }
-  };
-
-  // Harvest the current state-row values from the mounted panel's cells, so a rebuild carries live values forward instead of resetting them to placeholders.
-  const harvestRowValues = () => {
-
-    const values = new Map();
-
-    for(const [ id, valueEl ] of rowValueEls) {
-
-      values.set(id, valueEl.textContent);
-    }
-
-    return values;
-  };
-
-  // Rebuild the panel from mount state and swap it in place of the mounted one.
-  const refreshPanel = (values) => {
+  // Rebuild the viewed device's panel from the state map and swap it in place of the mounted one.
+  const refreshPanel = () => {
 
     if(!viewedDevice || !panelEl || !panelEl.parentNode) {
 
       return;
     }
 
-    const rebuilt = buildPanel(viewedDevice, values);
+    const rebuilt = buildPanel(viewedDevice);
 
     panelEl.replaceWith(rebuilt);
     panelEl = rebuilt;
   };
 
-  // The watchdog fired: the deadline elapsed with no settlement and no push, so the host relay is unresponsive. Set the link-lost marker and render the honest state
-  // through the same idiom an error render uses: the link-lost label in the Status cell and the link-lost message with its reload action below it, rebuilt from the live
-  // row values. When no panel is mounted, setStatus's null-guarded write and refreshPanel's mount guard leave the trip inert until a device is viewed.
+  // The watchdog fired: the deadline elapsed with no settlement and no push, so the host relay is unresponsive. Set the overlay marker and rebuild, which renders the
+  // link-lost label in the Status cell and the link-lost message with its reload action below it. No entry is touched - what the devices told the panel is not wrong,
+  // merely unreachable, and it returns whole the moment the overlay retires. When no panel is mounted, refreshPanel's mount guard leaves the trip inert until a device
+  // is viewed.
   const tripLinkLost = () => {
 
     linkLost = true;
 
-    setStatus(linkLostCopy.label);
-
-    panelMessage = linkLostCopy.message;
-
-    refreshPanel(harvestRowValues());
+    refreshPanel();
   };
 
   // Liveness detection for this mount, on the shared primitive: one timer across every in-flight request, because the host relay is one socket with one liveness truth -
@@ -464,29 +490,60 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
   // shared deadline is moot, and the next watched request arms a fresh one. A no-op when nothing is pending.
   const cancelWatchdog = () => watchdog.cancel();
 
-  // Clear the link-lost marker as a real render's first act. When the marker WAS set, the arriving render proves the relay is live again, so the lingering link-lost
-  // message and its reload action are now dishonest: nulling the message and rebuilding drops them even for the kinds ("connecting", "availability", "row") that do not
-  // otherwise touch the message line. When the marker was already clear this is a no-op, so every per-kind render can call it unconditionally.
-  //
-  // It clears the message line alone and leaves the Status cell to its caller. Every call site but "row" sets that cell itself with the state the push carries; "row"
-  // leaves the correction to a later status-bearing push. The hello path has no such push behind it, so it uses the dedicated restore below rather than widening this.
-  const clearLinkLost = () => {
+  /* The three viewed-device renders. Each one runs after the handler has reduced the arriving event into the device's entry, so a render only projects state and never
+   * decides any. Each also retires the link-lost overlay: the delivered push proves the relay live again, so the overlay's label, message, and reload action are no
+   * longer honest. Retiring it changes the whole presentation at once, which is why a tripped panel rebuilds and the device's own status, message, and rows come back
+   * together. With no overlay showing, a status or row change moves exactly one span, and writing that span in place is what keeps a row push off the rebuild path and
+   * preserves the value cell's node identity.
+   */
 
-    if(!linkLost) {
+  // Rebuild the viewed panel as a real render, retiring the link-lost overlay with it.
+  const renderPanel = () => {
+
+    linkLost = false;
+
+    refreshPanel();
+  };
+
+  // Render the viewed device's Status cell from its entry.
+  const renderStatus = (entry) => {
+
+    if(linkLost) {
+
+      renderPanel();
 
       return;
     }
 
-    linkLost = false;
-    panelMessage = null;
+    if(statusValueEl) {
 
-    refreshPanel(harvestRowValues());
+      statusValueEl.textContent = entry.statusText;
+    }
+  };
+
+  // Render one of the viewed device's row values from its entry.
+  const renderRow = (entry, rowId) => {
+
+    if(linkLost) {
+
+      renderPanel();
+
+      return;
+    }
+
+    const valueEl = rowValueEls.get(rowId);
+
+    if(valueEl) {
+
+      valueEl.textContent = displayValue(entry.rowValues.get(rowId));
+    }
   };
 
   // Retire a lost-link presentation on the strength of a fresh server hello. A hello proves the relay and the adapter alive, so a message telling the user the
-  // connection is lost may not outlive it - and the Status cell must come back too, since the trip wrote the link-lost label there and no push is arriving behind this
-  // to correct it. The cell returns to the connecting placeholder rather than to a connected label because that is exactly what is true at this moment: the relay is
-  // proven, the device's own state is not, and the pushes the plugin's re-elicitation produces are what will say more. A no-op when nothing is tripped.
+  // connection is lost may not outlive it. Unlike a push, though, a hello carries no news about any one device: the trip proved the helper unresponsive, so the viewed
+  // device's own connection state is unknown, and its entry records that verdict as the connecting placeholder with no message. That is exactly what is true at this
+  // moment - the relay is proven, the device's state is not, and the pushes the plugin's re-elicitation produces are what will say more. With no device viewed, or
+  // none the panel has heard from, the projection's own defaults render the same thing honestly. A no-op when nothing is tripped.
   const restoreFromLinkLost = () => {
 
     if(!linkLost) {
@@ -495,10 +552,16 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     }
 
     linkLost = false;
-    panelMessage = null;
 
-    setStatus(viewedDevice ? CONNECTING_STATUS_TEXT : null);
-    refreshPanel(harvestRowValues());
+    const entry = viewedDevice ? deviceState.get(viewedDevice.serialNumber) : undefined;
+
+    if(entry) {
+
+      entry.message = null;
+      entry.statusText = CONNECTING_STATUS_TEXT;
+    }
+
+    refreshPanel();
   };
 
   /**
@@ -527,23 +590,23 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     request.catch((error) => console.error("The status view request failed.", error));
   };
 
-  /* Render for the currently-selected device. No device (global or controller scope) clears everything - render state, every latch timer, the pending watchdog, the
-   * tracked device - and empties the root. The same serialNumber rebuilds in place from harvested live values WITHOUT touching pending latch timers or the watchdog, so
-   * a same-device re-render (a devices:loaded / model:loaded re-fire) does not reset a running latch or a deadline mid-flight. A genuinely new serialNumber clears every
-   * latch, cancels any pending watchdog so the fresh view never inherits a stale remaining deadline, resets to the placeholder skeleton, mounts the panel, and fires the
-   * view request - which re-arms detection on a full fresh deadline; the feed answers over push events.
+  /* Render for the currently-selected device. Every branch here moves the VIEW and leaves the state map alone, which is what makes a selection instant: no device
+   * (global or controller scope) drops the tracked device, the node references, the overlay marker, and the pending watchdog, then empties the root, while every entry
+   * and every running latch survives for whenever that device is looked at again. The same serialNumber adopts the fresh device object and rebuilds in place WITHOUT
+   * touching the watchdog, so a same-device re-render (a devices:loaded / model:loaded re-fire) does not reset a deadline mid-flight.
+   *
+   * A genuinely new serialNumber cancels any pending watchdog so the fresh view never inherits a stale remaining deadline, builds the panel from whatever the map
+   * already knows about that device - its last-known status, message, and row values, or the placeholder skeleton when the device has never pushed - mounts it, and
+   * fires the view request, which re-arms detection on a full fresh deadline. The request fires either way: the entry is memory, and the authoritative answer arrives
+   * one round trip later over push events.
    */
   const showDetails = (device) => {
 
     if(!device) {
 
-      clearAllLatches();
       cancelWatchdog();
 
       viewedDevice = null;
-      currentRowSet = placeholderRows;
-      statusText = null;
-      panelMessage = null;
       linkLost = false;
       panelEl = null;
       statusValueEl = null;
@@ -557,18 +620,14 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     if(device.serialNumber === viewedDevice?.serialNumber) {
 
       viewedDevice = device;
-      refreshPanel(harvestRowValues());
+      refreshPanel();
 
       return;
     }
 
-    clearAllLatches();
     cancelWatchdog();
 
     viewedDevice = device;
-    currentRowSet = placeholderRows;
-    statusText = CONNECTING_STATUS_TEXT;
-    panelMessage = null;
     linkLost = false;
 
     panelEl = buildPanel(device);
@@ -585,12 +644,14 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
   /* The status push handler. It handles the server-scoped "hello" first, before any per-device work: a hello carries no serialNumber, and an unseen generation marks a
    * fresh helper process, so the panel clears its per-device floors and notifies the plugin to re-elicit its feed - which is how a surviving page recovers from a
    * helper restart it cannot otherwise observe. Every other event is device-scoped, so it applies the per-serialNumber stale-push guard next - dropping any payload
-   * whose session token trails the highest seen for that device and recording the token otherwise - then renders only the device on screen; pushes for other pooled
-   * devices advance the guard but drive no DOM. It renders by kind: "connecting" sets the Status text; "snapshot" installs the authoritative row set (a row absent from
-   * it disappears), sets the connected label with the encrypted lock variant, clears the message, rebuilds, and arms the latch for any installed row whose value equals
-   * its latch value; "row" updates one value in place and drives that row's latch; "availability" flips the Status cell; "error" sets the short Status label and the
-   * full-sentence message and rebuilds with harvested values. Every real render also clears the link-lost marker as its first act, so a live push retires the honest
-   * link-lost state.
+   * whose session token trails the highest seen for that device and recording the token otherwise.
+   *
+   * What follows is a reduction into the addressed device's entry, run for EVERY pooled device rather than only the one on screen - that is what makes an off-screen
+   * device's pushes worth handling, since they are exactly what makes selecting it instant later. By kind: "connecting" sets the connecting placeholder; "snapshot"
+   * installs the authoritative row set (a row absent from it disappears), replaces the row values wholesale, sets the connected label with the encrypted lock variant,
+   * and clears the message; "row" replaces one value; "availability" flips the status text; "error" resolves its copy into the label and the message. An unrecognized
+   * kind reduces nothing and leaves the device without an entry at all. Each reduced row value then drives its row's latch on the device's own clock. Rendering comes
+   * last and only for the device on screen, projecting the entry the reduction just wrote.
    */
   const handleStatusEvent = (event) => {
 
@@ -643,33 +704,41 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
     highestToken.set(serialNumber, payload.session);
 
-    if(serialNumber !== viewedDevice?.serialNumber) {
-
-      return;
-    }
+    const viewed = serialNumber === viewedDevice?.serialNumber;
 
     switch(payload.kind) {
 
-      case "connecting":
+      case "connecting": {
 
-        clearLinkLost();
-        setStatus(CONNECTING_STATUS_TEXT);
+        const entry = entryFor(serialNumber);
+
+        entry.statusText = CONNECTING_STATUS_TEXT;
+
+        if(viewed) {
+
+          renderStatus(entry);
+        }
 
         return;
+      }
 
       case "snapshot": {
 
-        clearLinkLost();
-        setStatus(connectedLabel(payload.encrypted));
+        const entry = entryFor(serialNumber);
 
-        currentRowSet = payload.rows.map((row) => ({ id: row.id, label: row.label, latch: row.latch, sizer: row.sizer }));
-        panelMessage = null;
+        entry.message = null;
+        entry.rowSet = payload.rows.map((row) => ({ id: row.id, label: row.label, latch: row.latch, sizer: row.sizer }));
+        entry.rowValues = new Map(payload.rows.map((row) => [ row.id, row.value ]));
+        entry.statusText = connectedLabel(payload.encrypted);
 
-        refreshPanel(new Map(payload.rows.map((row) => [ row.id, row.value ])));
+        if(viewed) {
+
+          renderPanel();
+        }
 
         for(const row of payload.rows) {
 
-          applyLatch(row.id, row.value);
+          applyLatch(serialNumber, entry, row.id, row.value);
         }
 
         return;
@@ -677,38 +746,46 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
       case "row": {
 
-        clearLinkLost();
+        const entry = entryFor(serialNumber);
 
-        const valueEl = rowValueEls.get(payload.row.id);
+        entry.rowValues.set(payload.row.id, payload.row.value);
 
-        if(valueEl) {
+        if(viewed) {
 
-          valueEl.textContent = displayValue(payload.row.value);
+          renderRow(entry, payload.row.id);
         }
 
-        applyLatch(payload.row.id, payload.row.value);
+        applyLatch(serialNumber, entry, payload.row.id, payload.row.value);
 
         return;
       }
 
-      case "availability":
+      case "availability": {
 
-        clearLinkLost();
-        setStatus(payload.online ? connectedLabel(payload.encrypted) : "Disconnected");
+        const entry = entryFor(serialNumber);
+
+        entry.statusText = payload.online ? connectedLabel(payload.encrypted) : "Disconnected";
+
+        if(viewed) {
+
+          renderStatus(entry);
+        }
 
         return;
+      }
 
       case "error": {
 
-        clearLinkLost();
-
+        const entry = entryFor(serialNumber);
         const copy = resolveErrorCopy(payload.reason, errorMessages);
 
-        setStatus(copy.label);
+        entry.message = copy.message;
+        entry.statusText = copy.label;
 
-        panelMessage = copy.message;
+        if(viewed) {
 
-        refreshPanel(harvestRowValues());
+          renderPanel();
+        }
 
         return;
       }

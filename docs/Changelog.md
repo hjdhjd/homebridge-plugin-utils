@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.3.2 (2026-08-16)
+  * Improvement: the live status panel keeps per-device state memory and renders a device's last-known state instantly on selection.
+  * Housekeeping.
+
 ## 2.3.1 (2026-08-15)
   * Fix: the shared ESLint preset flags undefined identifiers in plain-JavaScript files, which have no TypeScript compiler behind them to catch a mistyped name.
   * Housekeeping.

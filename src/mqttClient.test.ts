@@ -1,16 +1,17 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * mqttClient.test.ts: Unit tests for the AsyncDisposable MqttClient - composed connection lifetime, signal-driven publish / subscribe semantics, subscribeSet handler-
- * timeout, transport-error routing, and AsyncDisposable wiring. Tests run against a real in-process aedes broker on an ephemeral localhost port (the same architectural
- * pattern the rest of HBPU uses for tests of subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP for RtpDemuxer, real DOM for the webUI).
+ * mqttClient.test.ts: Unit tests for the AsyncDisposable MqttClient - composed connection lifetime, signal-driven publish / subscribe semantics, the guarded fire-and-
+ * forget publish, subscribeSet handler-timeout, transport-error routing, and AsyncDisposable wiring. Tests run against a real in-process aedes broker on an ephemeral
+ * localhost port (the same architectural pattern the rest of HBPU uses for tests of subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP
+ * for RtpDemuxer, real DOM for the webUI).
  * Transport-level errno paths (ECONNREFUSED, ECONNRESET, ENOTFOUND) exercise real network failures; the error-routing switch is covered by direct invocation of the
  * pure {@link routeMqttBrokerError} helper, mirroring how `parseFfmpegCodecs` is tested directly with fixture strings while the spawn-end-to-end path is covered by
  * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
  */
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
+import { assertNoUnhandledRejections, capturingLog, silentLog } from "./testing.helpers.ts";
 import { awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
-import { capturingLog, silentLog } from "./testing.helpers.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing.helpers.ts";
 import type { FeatureOptionEntry } from "./featureOptions.ts";
@@ -86,6 +87,18 @@ async function startResetServer(): Promise<{ url: string } & AsyncDisposable> {
     url: "mqtt://127.0.0.1:" + port.toString(),
     [Symbol.asyncDispose]: async (): Promise<void> => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
+}
+
+// An MqttClient whose `publish` always rejects, which reaches `publishGuarded`'s delivery-failure branch deterministically. A real broker cannot be talked into
+// failing a publish after the fact: HBPU publishes at QoS 0, where mqtt.js answers the publish callback on socket-write completion, so every broker-side rejection
+// lands after the callback has already reported success. Substituting the delegation target is the honest way to drive the branch, and everything `publishGuarded`
+// itself owns still runs for real - the topic expansion, the cancellation-versus-failure decision, and the log routing.
+class FailingPublishClient extends MqttClient {
+
+  public override async publish(): Promise<void> {
+
+    throw new Error("broker refused the message.");
+  }
 }
 
 describe("MqttClient - construction", () => {
@@ -239,6 +252,146 @@ describe("MqttClient - publish signal composition", () => {
 
     // Connection-level signal remains live - only this specific publish was cancelled.
     assert.equal(client.aborted, false);
+  });
+});
+
+describe("MqttClient - publishGuarded", () => {
+
+  test("a successful publish reaches the broker and says nothing at warn or error level", async () => {
+
+    // The quiet path. `publishGuarded` delegates to `publish`, so the payload arrives on the expanded topic exactly as a direct publish would, and a successful
+    // fire-and-forget publish is not an event worth a log line above debug.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      const publishes = recordClientPublishes(broker);
+
+      await awaitConnect(broker);
+
+      client.publishGuarded("device1/status", "on");
+
+      await publishes.awaitFirst;
+
+      assert.deepEqual(publishes.entries, [{ payload: "on", topic: "test/device1/status" }]);
+      assert.deepEqual(log.entries.filter((entry) => [ "error", "warn" ].includes(entry.level)), [], "a successful publish must be quiet above debug level");
+    });
+  });
+
+  test("a delivery failure is reported at error level, naming the expanded topic and the underlying reason", async () => {
+
+    // The reporting contract: the caller has no promise to observe, so the log line is the entire failure surface and it has to carry both facts a reader needs -
+    // which topic failed, in its broker-facing form, and why.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = new FailingPublishClient({ brokerUrl: broker.url, log, reconnectInterval: 0, topicPrefix: "test" });
+
+      client.publishGuarded("device1/status", "on");
+
+      await waitForLog(log, (entry) => entry.level === "error");
+
+      const failures = log.entries.filter((entry) => entry.level === "error").map((entry) => format(entry.message, ...entry.params));
+
+      assert.deepEqual(failures, ["Unable to publish to the MQTT topic test/device1/status: broker refused the message."]);
+    });
+  });
+
+  test("a per-publish abort is reported at debug level only and leaves the client usable", async () => {
+
+    // Cancellation is not a delivery fault. The publish is issued before the CONNACK round trip completes, so the packet is still queued inside mqtt.js when the
+    // per-publish signal fires - and the controller is aborted with no reason at all, which is the platform's own `AbortError` shape rather than HBPU's, proving the
+    // classification covers a consumer that wires a bare `AbortController` into a publish.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      const perPublish = new AbortController();
+
+      client.publishGuarded("device1/status", "on", { signal: perPublish.signal });
+      perPublish.abort();
+
+      await waitForLog(log, (entry) => (entry.level === "debug") && logContains("MQTT publish aborted: test/device1/status")(entry));
+
+      assert.deepEqual(log.entries.filter((entry) => entry.level === "error"), [], "an aborted publish must not be reported as a delivery failure");
+
+      // Only this publish was cancelled; the connection is untouched and still available to the next caller.
+      assert.equal(client.aborted, false);
+    });
+  });
+
+  test("a per-publish abort whose reason is a plain string is reported at debug level only", async () => {
+
+    // `AbortController.abort` accepts any value as a reason, and a bare string is a common choice. `publish` rejects with `signal.reason` verbatim, so the rejection
+    // here is the string itself rather than any error object - the shape no thrown-value check can recognize. Reading the per-publish signal is what keeps the
+    // cancellation quiet, and the client is left usable for the next caller.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      const perPublish = new AbortController();
+
+      client.publishGuarded("device1/status", "on", { signal: perPublish.signal });
+      perPublish.abort("device disposed");
+
+      await waitForLog(log, (entry) => (entry.level === "debug") && logContains("MQTT publish aborted: test/device1/status")(entry));
+
+      assert.deepEqual(log.entries.filter((entry) => entry.level === "error"), [], "a string abort reason must not be reported as a delivery failure");
+      assert.equal(client.aborted, false);
+    });
+  });
+
+  test("a per-publish abort whose reason is a custom error is reported at debug level only", async () => {
+
+    // The other end of the same freedom: a caller that aborts with its own `Error` produces a rejection that looks exactly like a delivery failure to any check that
+    // reads the thrown value, since neither HBPU's own abort type nor the platform's "AbortError" name is present. The signal read is what tells the two apart.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      const perPublish = new AbortController();
+
+      client.publishGuarded("device1/status", "on", { signal: perPublish.signal });
+      perPublish.abort(new Error("going away"));
+
+      await waitForLog(log, (entry) => (entry.level === "debug") && logContains("MQTT publish aborted: test/device1/status")(entry));
+
+      assert.deepEqual(log.entries.filter((entry) => entry.level === "error"), [], "a custom error abort reason must not be reported as a delivery failure");
+    });
+  });
+
+  test("a publish issued against a torn-down client is reported at debug level only", async () => {
+
+    // The teardown shape: `publish` short-circuits on the already-aborted connection signal and rejects with the client's own `HbpuAbortError`. A plugin shutting
+    // down publishes its last state as it goes, and those publishes losing the race with teardown is the ordinary way a shutdown ends - not something to report as a
+    // string of failures on the way out.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+      const client = makeClient({ brokerUrl: broker.url, log });
+
+      client.abort(new HbpuAbortError("shutdown"));
+      client.publishGuarded("device1/status", "on");
+
+      await waitForLog(log, (entry) => (entry.level === "debug") && logContains("MQTT publish aborted: test/device1/status")(entry));
+
+      assert.deepEqual(log.entries.filter((entry) => entry.level === "error"), [], "a publish cancelled by teardown must not be reported as a delivery failure");
+    });
   });
 });
 

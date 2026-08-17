@@ -22,7 +22,7 @@
  * @module
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
-import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
+import { HbpuAbortError, composeSignals, formatErrorMessage, isHbpuAbortError, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
@@ -390,6 +390,17 @@ export interface MqttPublishInit {
   signal?: AbortSignal;
 }
 
+// Tell a cancelled publish apart from a failed one by the shape of the thrown value, as the fallback behind the signal-state read in `publishGuarded`. The signals
+// are what actually say whether a publish was cancelled, so they answer first; this covers the rejection they leave ambiguous, where a genuine failure and a teardown
+// race and only the thrown value carries the answer. Both cancellation shapes a caller can produce are covered: HBPU's own lifecycles reject with an
+// `HbpuAbortError`, while a consumer that hands `publish` a raw `AbortController` signal gets the platform's `DOMException`, whose `name` is "AbortError". Neither is
+// a delivery fault. The check stays local to this module on purpose - it answers one question for one method, and the broader transport-failure taxonomy already has
+// its own home in `routeMqttBrokerError`.
+function isPublishCancellation(error: unknown): boolean {
+
+  return isHbpuAbortError(error) || ((error instanceof Error) && (error.name === "AbortError"));
+}
+
 /**
  * Signal-driven MQTT client with automatic topic-prefix management, composed connection lifetime, and per-operation signal support.
  *
@@ -519,6 +530,50 @@ export class MqttClient implements AsyncDisposable {
     });
 
     return waitWithSignal(ackPromise, composed);
+  }
+
+  /**
+   * Publish `payload` to `topic` without waiting for the outcome. The fire-and-forget counterpart to {@link publish}, for state fan-out where the caller has nothing
+   * to do with an acknowledgement and no way to answer a failure: it returns nothing, never throws, and never rejects, so a delivery failure lands in the client's
+   * log instead of floating as an unhandled rejection.
+   *
+   * A genuine failure is reported at error level, naming the expanded topic and the underlying reason. An abort is not a failure and does not appear there: a
+   * cancelled publish - the client tearing down, or a device-scoped signal firing as its accessory is disposed - is the lifecycle working as intended, so it drops
+   * to a debug line naming the same expanded topic, which is what keeps a cancelled attempt visible in the debug stream. Cancellation is read from the signals
+   * themselves, so an abort stays quiet whatever reason the caller aborted with. When both are true at once - a delivery error surfacing while the client or the
+   * per-publish signal has already aborted - the publish counts as cancelled and the line stays at debug, since a caller that has torn this publish down has nothing
+   * left to do with the failure.
+   *
+   * `init` passes through to {@link publish} unchanged, which is what lets a per-publish signal cancel this one publish quietly while the connection carries on.
+   *
+   * @param topic   - The relative topic (tail) to publish to.
+   * @param payload - The payload to publish. Buffers and strings are passed through unchanged.
+   * @param init    - Optional per-publish options. See {@link MqttPublishInit}.
+   */
+  public publishGuarded(topic: string, payload: Buffer | string, init: MqttPublishInit = {}): void {
+
+    // Expand the topic here solely so the log lines below can name it. The delegation stays a plain `publish` call on the caller's relative topic, which keeps one
+    // wire path: `publish` performs its own expansion and behaves identically whether or not anything else wanted the expanded form.
+    const full = this.#expandTopic(topic);
+
+    // `markHandled` guards the guard. The `.catch` already keeps a rejected publish from floating; marking the derived promise observed covers the remaining case
+    // where the handler itself throws - a logger that faults would otherwise turn a reported failure into an unhandled rejection.
+    void markHandled(this.publish(topic, payload, init).catch((error: unknown) => {
+
+      // Cancellation is a property of the signals rather than of the thrown value: `publish` rejects with `signal.reason`, and a caller may abort with any reason it
+      // likes - a bare string, a custom error, nothing at all. Reading the signals that govern this publish, the client's lifetime and the caller's own, classifies
+      // every abort correctly whatever vocabulary the caller aborts with, and the thrown-shape check sits behind them for the rejection that arrives with neither
+      // signal reading aborted. A genuine failure that loses a race with an abort lands on the quiet path, which is the intent: once teardown is under way, a string of
+      // delivery failures on the way out tells a reader nothing they can act on.
+      if(this.aborted || (init.signal?.aborted === true) || isPublishCancellation(error)) {
+
+        this.#log.debug("MQTT publish aborted: %s.", full);
+
+        return;
+      }
+
+      this.#log.error("Unable to publish to the MQTT topic %s: %s.", full, formatErrorMessage(error));
+    }));
   }
 
   /**

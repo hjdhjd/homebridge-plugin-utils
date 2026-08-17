@@ -2,12 +2,12 @@
  *
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, onAbort, waitWithSignal,
  * markHandled, sameEntries, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream, loopFaultReporter, guardedDispatch,
- * Watchdog, prefixedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage, defaultRetryBackoff,
- * runWithAbort, toStartCase, sanitizeName, validateName).
+ * Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage,
+ * defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
-import { HbpuAbortError, Watchdog, composeSignals, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds,
-  guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort, sameEntries,
-  sanitizeName, superviseLoop, superviseStream,
+import { HbpuAbortError, Watchdog, composeSignals, debugGatedLog, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent,
+  formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort,
+  sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing.helpers.ts";
@@ -1983,6 +1983,107 @@ describe("prefixedLog", () => {
       { level: "info", message: "X: i" },
       { level: "warn", message: "X: w" }
     ]);
+  });
+});
+
+describe("debugGatedLog", () => {
+
+  test("an open gate routes the debug message and its parameters to the base warn level, verbatim", () => {
+
+    // Homebridge prints warn unconditionally and suppresses its native debug channel behind its own switch, so an open gate emits the caller's debug line at warn -
+    // message and parameter list exactly as handed in, with no wrapping of either.
+    const base = capturingLog();
+    const wrapped = debugGatedLog(base, () => true);
+
+    wrapped.debug("Polling returned %d devices.", 3, { source: "cache" });
+
+    assert.equal(base.entries.length, 1, "an open gate must emit exactly one entry");
+
+    const entry = expectAt(base.entries, 0, "the gated debug entry");
+
+    assert.equal(entry.level, "warn");
+    assert.equal(entry.message, "Polling returned %d devices.");
+    assert.deepEqual(entry.params, [ 3, { source: "cache" } ]);
+  });
+
+  test("a closed gate drops the debug line on every base level", () => {
+
+    // Gate-off is silence, not a downgrade: the line does not reach warn, and it does not leak onto debug or any other level either. This is the deliberate design -
+    // the plugin's own setting decides, regardless of what Homebridge's global debug switch is doing.
+    const base = capturingLog();
+    const wrapped = debugGatedLog(base, () => false);
+
+    wrapped.debug("Polling returned %d devices.", 3);
+
+    assert.deepEqual(base.entries, [], "a closed gate must emit nothing at any level");
+  });
+
+  test("the predicate is evaluated on every call so a configuration change reaches the very next line", () => {
+
+    // The gate is a predicate rather than a captured boolean, so a user toggling the plugin's debug setting mid-session takes effect immediately. One wrapper, two
+    // calls, gate flipped in between: only the call made while the gate was open produces an entry.
+    const base = capturingLog();
+    let enabled = false;
+    const wrapped = debugGatedLog(base, () => enabled);
+
+    wrapped.debug("suppressed");
+    enabled = true;
+    wrapped.debug("emitted");
+
+    assert.deepEqual(base.entries.map((entry) => ({ level: entry.level, message: entry.message })), [{ level: "warn", message: "emitted" }]);
+  });
+
+  test("error, info, and warn pass through to the matching base level even while the gate is closed", () => {
+
+    // The gate reaches the debug channel and nothing else. Running this with the gate closed is what proves it: if the gate leaked onto the pass-through levels, all
+    // three of these would vanish.
+    const base = capturingLog();
+    const wrapped = debugGatedLog(base, () => false);
+
+    wrapped.error("e", 1);
+    wrapped.info("i", 2);
+    wrapped.warn("w", 3);
+
+    assert.deepEqual(base.entries, [
+
+      { level: "error", message: "e", params: [1] },
+      { level: "info", message: "i", params: [2] },
+      { level: "warn", message: "w", params: [3] }
+    ]);
+  });
+
+  test("the canonical gate-outermost composition skips prefix work on a suppressed line and applies it on an emitted one", () => {
+
+    // `debugGatedLog(prefixedLog(base, prefix), isEnabled)` is the documented composition order, and the prefix supplier is the observable that separates it from the
+    // reverse nesting: a suppressed debug line must never reach the inner wrapper at all, so the supplier stays uncalled. Flipping the gate then proves the same
+    // wrapper does compose the prefix once the line is actually emitted.
+    const base = capturingLog();
+    let prefixCalls = 0;
+    let enabled = false;
+
+    const prefix = (): string => {
+
+      prefixCalls++;
+
+      return "Front Door";
+    };
+
+    const wrapped = debugGatedLog(prefixedLog(base, prefix), () => enabled);
+
+    wrapped.debug("Suppressed line.");
+
+    assert.equal(prefixCalls, 0, "a suppressed debug line must not invoke the prefix supplier");
+    assert.equal(base.entries.length, 0, "a suppressed debug line must not reach the base logger");
+
+    enabled = true;
+    wrapped.debug("Emitted line.");
+
+    assert.equal(prefixCalls, 1, "an emitted debug line must invoke the prefix supplier exactly once");
+
+    const entry = expectAt(base.entries, 0, "the emitted entry");
+
+    assert.equal(entry.level, "warn");
+    assert.equal(entry.message, "Front Door: Emitted line.");
   });
 });
 

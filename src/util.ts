@@ -599,6 +599,60 @@ export function prefixedLog(base: Logger, prefix: () => string): HomebridgePlugi
   };
 }
 
+/**
+ * Derive a config-gated debug {@link HomebridgePluginLogging} from a base logger. The `debug` level emits through the base logger's `warn` channel when `isEnabled`
+ * answers `true`, and is dropped without touching its arguments when it answers `false`. The `error`, `info`, and `warn` levels pass straight through to the
+ * corresponding base level, exactly as {@link prefixedLog} does, so the gate reaches the debug channel and nothing else.
+ *
+ * Warn is the emission channel because Homebridge suppresses its native DEBUG channel unless Homebridge's own global debug switch is on. A plugin that offers users
+ * an opt-in debug setting of its own therefore has to emit at a level Homebridge always prints, and warn additionally marks the line as diagnostic rather than
+ * folding it into the ordinary informational stream. The consequence runs in the other direction too, deliberately: a gate that answers `false` drops the line no
+ * matter what Homebridge's switch is doing, so the plugin's own setting is the single answer to whether this user wants debug output.
+ *
+ * The predicate is evaluated on every call, which is what keeps it honest against live configuration: `() => config.debug === true` reflects a setting the user just
+ * changed on the very next line, while a boolean captured when the wrapper was built freezes the gate at whatever it was then. The same shape carries scope without
+ * any per-call plumbing - a plugin whose debug setting resolves per device passes a closure over its own option lookup, and the device that lookup resolves against
+ * lives in the closure rather than being threaded through each logging call.
+ *
+ * Compose with {@link prefixedLog} gate-outermost, as `debugGatedLog(prefixedLog(base, prefix), isEnabled)`, so a suppressed debug line pays for the predicate and
+ * nothing else. The reverse nesting builds the prefixed string before the gate ever runs, which is precisely the work the gate exists to skip.
+ *
+ * @param base      - The logger that receives the passed-through calls and the gated debug output.
+ * @param isEnabled - Predicate deciding whether a debug line is emitted, evaluated on every `debug` call.
+ *
+ * @returns A {@link HomebridgePluginLogging} whose `debug` level is gated and routed to `base.warn`, and whose other levels route to the matching level of `base`.
+ *
+ * @example
+ *
+ * ```ts
+ * const log = debugGatedLog(prefixedLog(platformLog, () => this.name), () => this.config.debug === true);
+ *
+ * log.debug("Polling returned %d devices.", devices.length);
+ * ```
+ *
+ * @category Utilities
+ */
+export function debugGatedLog(base: Logger, isEnabled: () => boolean): HomebridgePluginLogging {
+
+  return {
+
+    debug: (message: string, ...parameters: unknown[]): void => {
+
+      // Ask the gate before anything else. An early return on a closed gate is what makes the suppressed path cost one predicate call, leaving any composition the
+      // base logger performs - a prefix, a formatter, a sink - untouched.
+      if(!isEnabled()) {
+
+        return;
+      }
+
+      base.warn(message, ...parameters);
+    },
+    error: (message: string, ...parameters: unknown[]): void => base.error(message, ...parameters),
+    info: (message: string, ...parameters: unknown[]): void => base.info(message, ...parameters),
+    warn: (message: string, ...parameters: unknown[]): void => base.warn(message, ...parameters)
+  };
+}
+
 // Re-export the magnitude-and-percentage formatters from the browser-safe `formatters.ts` module. `featureOptions.ts` imports them directly from there (so it can
 // ship into `dist/ui/` without dragging in any of util.ts's Node-only imports); util.ts surfaces them here so server-side consumers see the same public API they
 // always did. The single SSOT is `formatters.ts`; this file is just a forwarding re-export.

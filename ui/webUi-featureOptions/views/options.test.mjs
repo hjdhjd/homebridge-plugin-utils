@@ -1248,3 +1248,90 @@ describe("mountOptionsView - legacy category-state key migration", () => {
     assert.equal(motion.open, false, "the second visit reads from the new \"global\" key (Motion: true -> collapsed), not the re-seeded legacy key");
   });
 });
+
+describe("mountOptionsView - deference to a standing connection error", () => {
+
+  const CONTROLLER_A = "ctrl-a";
+  const CONTROLLER_B = "ctrl-b";
+  const DEVICE_A = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
+
+  // Drive a controller click's full dispatch order - the optimistic scope, the fetch record, then the outcome - so the render passes land in the order production
+  // produces them. The outcome's shape is what decides whether this reads as a failure or as a healthy list.
+  const clickController = (store, { controllerId, devices = [], error = "" }) => {
+
+    store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ controllerId, type: "devices:requested" });
+    store.dispatch({ controllerId, devices, error, seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+  };
+
+  test("a controller click that fails leaves the config table empty rather than rendering the failed controller's options", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A, error: "Controller unreachable." });
+
+    assert.equal(store.state.status.kind, "connection-error", "precondition: the failed outcome raised the error");
+    assert.equal(configTable.children.length, 0, "the table renders nothing under the error frame");
+    assert.equal(configTable.querySelector("details[data-category]"), null, "no category shell survives, so no option row can be reached");
+  });
+
+  test("a clean outcome after the failure restores the table", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A, error: "Controller unreachable." });
+    clickController(store, { controllerId: CONTROLLER_B, devices: [DEVICE_A] });
+
+    assert.equal(store.state.status.kind, "ready", "precondition: the clean outcome recovered the status");
+    assert.notEqual(configTable.querySelectorAll("details[data-category]").length, 0, "the category shells are back");
+  });
+
+  test("the view left behind is cached and comes back through the recovery, rather than being rebuilt from scratch", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    // Land a device list and open a category so the global view holds materialized rows worth recognizing on return.
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    const motion = configTable.querySelector("details[data-category='Motion']");
+
+    motion.open = true;
+    motion.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    // Fail into the error presentation, then recover straight back to the same view.
+    clickController(store, { controllerId: CONTROLLER_A, error: "Controller unreachable." });
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+
+    assert.equal(configTable.children.length, 0, "precondition: the error presentation is still standing over the global view");
+
+    store.dispatch({ controllerId: null, type: "devices:requested" });
+    store.dispatch({ controllerId: null, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    const restoredMotion = configTable.querySelector("details[data-category='Motion']");
+
+    assert.ok(restoredMotion === motion, "the very element detached before the failure is the one that comes back - the cache served it, not a rebuild");
+  });
+
+  test("the busy and projection passes are safe against the childless table the error presentation leaves", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A, error: "Controller unreachable." });
+
+    // Both walks query the table for structure they will not find. They must read the absence as nothing to do rather than as something to fail on - a filter
+    // change and a fresh fetch record can each land while the error stands.
+    store.dispatch({ query: "motion", type: "filter:changed" });
+    store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
+
+    assert.equal(configTable.children.length, 0, "the table is still empty and neither pass threw");
+  });
+});

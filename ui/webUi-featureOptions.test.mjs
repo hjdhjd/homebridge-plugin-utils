@@ -3301,6 +3301,91 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
   });
 });
 
+describe("webUiFeatureOptions - a click failure and the healthy click that recovers it", () => {
+
+  // Build a two-controller page where the first controller answers (so the boot lands healthy) and the second's answer is a mutable closure variable, so one test can
+  // click into a failure and then click back out of it.
+  function makeRecoveryHarness() {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const healthy = { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub B", serialNumber: "CTRL-B" }], error: "" };
+    const state = { bResult: { devices: [], error: "Controller unreachable." } };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
+      getDevices: (controller) => (controller?.serialNumber === "CTRL-A") ?
+        { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub A", serialNumber: "CTRL-A" }], error: "" } : state.bResult,
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    return {
+
+      healthy,
+      orchestrator,
+      skeleton,
+      state,
+
+      [Symbol.dispose]() {
+
+        orchestrator.cleanup();
+        homebridgeGuard[Symbol.dispose]();
+      }
+    };
+  }
+
+  test("a failed controller click renders the error view and takes the option table down with it", async () => {
+
+    using _dom = createTestDom();
+    using harness = makeRecoveryHarness();
+
+    await harness.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.notEqual(harness.skeleton.configTable.children.length, 0, "precondition: the healthy boot rendered a table");
+
+    harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").click();
+    await flush();
+
+    assert.ok(harness.skeleton.headerInfo.querySelector("button.btn-warning"), "the retry affordance renders");
+    assert.equal(harness.skeleton.configTable.children.length, 0,
+      "the failed controller's options are not offered beneath the error - it never confirmed it could be reached");
+  });
+
+  test("a healthy click after the failure reclaims the header, restores the table, and brings the search bars back", async () => {
+
+    using _dom = createTestDom();
+    using harness = makeRecoveryHarness();
+
+    await harness.orchestrator.show(await openTestSession());
+    await flush();
+
+    harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").click();
+    await flush();
+
+    assert.ok(harness.skeleton.headerInfo.querySelector("button.btn-warning"), "precondition: the error view owns the header");
+
+    // The same controller now answers. Its clean outcome is the evidence that ends the error, so the header, the table, and the search panel all come back together.
+    harness.state.bResult = harness.healthy;
+    harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").click();
+    await flush();
+
+    assert.equal(harness.skeleton.headerInfo.querySelector("button.btn-warning"), null, "the retry affordance is gone");
+    assert.match(harness.skeleton.headerInfo.textContent, /Feature options are applied in prioritized order/,
+      "the header view reclaimed #headerInfo with the precedence chain");
+    assert.notEqual(harness.skeleton.configTable.children.length, 0, "the option table is back");
+    assert.equal([...harness.skeleton.search.children].some((child) => child.classList.contains("d-none")), false, "and the search panel's bars are shown again");
+  });
+});
+
 describe("webUiFeatureOptions - empty-success semantics", () => {
 
   test("empty-success on the initial show renders the normal empty UI and never shows connection-error", async () => {

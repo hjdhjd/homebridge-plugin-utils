@@ -5,8 +5,8 @@
 "use strict";
 
 import { createElement, setCategoryExpanded } from "../utils.mjs";
+import { projection, tablePresentation } from "../selectors.mjs";
 import { effect } from "../store.mjs";
-import { projection } from "../selectors.mjs";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -21,8 +21,10 @@ const SEARCH_DEBOUNCE_MS = 300;
  *   - **Status bar counters** (total / modified / grouped / visible) - read from the projection, updated on any state change that touches it.
  *   - **Reset button group** (Reset... -> Reset to Defaults / Revert to Saved) - dispatches `options:reset` or `model:reverted`.
  *
- * The panel re-builds on `model:loaded` (and only then). Subsequent dispatches update individual elements (counts, pill active-state, toggle-all label) without
- * rebuilding the DOM. The view's footprint is small because the heavy work - the projection walk - is shared with view-options through the memoized selector.
+ * The panel re-builds on `model:loaded` (and only then). Subsequent dispatches update individual elements (counts, pill active-state, toggle-all label, and whether
+ * the panel's two bars are shown at all) without rebuilding the DOM. The view's footprint is small because the heavy work - the projection walk - is shared with
+ * view-options through the memoized selector, and so is the question of whether the option table is what the surface is showing, which this panel follows rather
+ * than decides.
  *
  * @param {Object} args
  * @param {HTMLElement} args.configTable - The `#configTable` element. The toggle-all handler queries it directly to set the open-state on category disclosures.
@@ -32,9 +34,11 @@ const SEARCH_DEBOUNCE_MS = 300;
  */
 export const mountSearchView = ({ configTable, root, signal, store }) => {
 
-  // Element refs filled in by buildPanel(); update functions read these to mutate text or active-state.
+  // Element refs filled in by buildPanel(); update functions read these to mutate text or active-state. `controlBar` and `statusBar` are the panel's two top-level
+  // children, held so the presentation toggle below can hide the panel's content without the view touching its own region, which the orchestrator owns.
   const refs = {
 
+    controlBar: null,
     filterAll: null,
     filterModified: null,
     grouped: null,
@@ -43,6 +47,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
     resetRevert: null,
     resetToggle: null,
     search: null,
+    statusBar: null,
     toggleAll: null,
     total: null,
     visible: null
@@ -96,6 +101,17 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
 
       updateToggleAllLabel({ configTable, toggleAll: refs.toggleAll });
       updateFilterPillState({ filterAll: refs.filterAll, filterModified: refs.filterModified, mode: store.state.filter.mode });
+
+      // Everything this panel offers acts on the option table - a query that narrows its rows, pills that filter them, counts that describe them, a control that
+      // expands them - so the panel follows the table's presentation rather than deciding its own. Where the table is not what the surface shows, a search box over
+      // nothing and counts describing rows the user cannot see would each be an invitation to a gesture with no target.
+      //
+      // The bars are hidden rather than emptied, and the region itself is left alone: the orchestrator owns region visibility, and the panel's own DOM is built
+      // once at model:loaded, so hiding is what lets it come back intact on the very next pass that presents the table again.
+      const showPanel = tablePresentation(store.state).kind === "options";
+
+      refs.statusBar.classList.toggle("d-none", !showPanel);
+      refs.controlBar.classList.toggle("d-none", !showPanel);
     },
     signal,
     store
@@ -202,7 +218,7 @@ const buildPanel = ({ refs, root }) => {
     role: "group"
   }, [ refs.resetToggle, refs.resetDefaults, refs.resetRevert ]);
 
-  const statusBar = createElement("div", {
+  refs.statusBar = createElement("div", {
 
     classList: [ "d-flex", "justify-content-between", "align-items-center", "px-2", "py-1", "mb-1", "alert-info", "rounded" ],
     id: "featureStatusBar",
@@ -266,7 +282,7 @@ const buildPanel = ({ refs, root }) => {
     type: "button"
   });
 
-  const controlBar = createElement("div", { classList: ["search-toolbar"] }, [
+  refs.controlBar = createElement("div", { classList: ["search-toolbar"] }, [
 
     createElement("div", { classList: [ "d-flex", "flex-wrap", "gap-2", "align-items-center" ] }, [
 
@@ -276,8 +292,8 @@ const buildPanel = ({ refs, root }) => {
     ])
   ]);
 
-  root.appendChild(statusBar);
-  root.appendChild(controlBar);
+  root.appendChild(refs.statusBar);
+  root.appendChild(refs.controlBar);
 };
 
 // Update the toggle-all button's glyph, title, and data-action attribute based on the current expand/collapse ratio. When more than half the categories are

@@ -7,7 +7,7 @@
 import { applyCategoryStates, captureCategoryStates } from "../utils.mjs";
 import { applyRowState, categoryShell, optionRow, toggleSecretReveal, triStateTransition, valueCommitTransition } from "../rendering.mjs";
 import { buildConfigIndex, hasValueContent } from "../../featureOptions.js";
-import { projection, scopeCacheKey, scopingControllerId, selectedDeviceId } from "../selectors.mjs";
+import { projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { effect } from "../store.mjs";
 
@@ -93,6 +93,11 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
       // key so a navigation and a localStorage lookup observe the same notion of view.
       const newKey = scopeCacheKey(store.state.scope);
 
+      // What this surface presents is a shared derivation rather than a judgment this view makes for itself, so the table and the search panel that filters it
+      // cannot disagree about whether there is a table at all. The outgoing capture below is unconditional either way: whatever is leaving is captured on its own
+      // terms, and only what arrives depends on the presentation.
+      const presentation = tablePresentation(store.state);
+
       // Capture the OUTGOING view's category state before detaching its DOM. The capture reads details[data-category] open-state from the live DOM.
       if(mountedKey !== undefined) {
 
@@ -115,36 +120,65 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
         }
       }
 
-      // Attach the cached DOM for the new view, if any. Otherwise build the category shells fresh from the projection.
-      const cached = cache.get(newKey);
-
-      if(cached) {
-
-        for(const child of cached) {
-
-          configTable.appendChild(child);
-        }
-
-        cache.delete(newKey);
-      } else {
-
-        buildCategoryShells({ configTable, state: store.state });
-      }
-
+      // Every presentation claims the incoming view as the mounted one, whichever DOM it ends up putting there, so the next pass's outgoing capture keys off the
+      // right view either way. Set once here rather than repeated in each branch below.
       mountedKey = newKey;
 
-      // Restore the incoming view's persisted category state, transparently migrating any data still stored under the legacy key shape (see
-      // {@link legacyContextKey}) to the current {@link scopeCacheKey} shape on first read. After a view has been migrated once, its data lives entirely under
-      // the current shape and no further legacy lookup is needed.
-      const savedStates = restoreLegacyMigrated({ categoryState, newKey, scope: store.state.scope });
+      switch(presentation.kind) {
 
-      if(savedStates) {
+        case "error": {
 
-        applyCategoryStates(configTable, savedStates);
+          /* The connection-error view has taken the frame and owns the message, so the table stays empty beneath it - the outgoing detach above already emptied
+           * it, and this branch simply declines to put anything back. Rendering the just-selected controller's full table under an error would offer the options
+           * of a controller that never confirmed it could be reached, inviting writes against a scope the page has no settled device list for.
+           *
+           * Nothing is lost by declining. The outgoing pass cached the view being left, and the recovery transition a clean outcome triggers runs this effect
+           * again with an `options` presentation, which restores that cached DOM exactly as any other navigation would.
+           */
+          return;
+        }
+
+        case "options": {
+
+          // Attach the cached DOM for the new view, if any. Otherwise build the category shells fresh from the projection.
+          const cached = cache.get(newKey);
+
+          if(cached) {
+
+            for(const child of cached) {
+
+              configTable.appendChild(child);
+            }
+
+            cache.delete(newKey);
+          } else {
+
+            buildCategoryShells({ configTable, state: store.state });
+          }
+
+          // Restore the incoming view's persisted category state, transparently migrating any data still stored under the legacy key shape (see
+          // {@link legacyContextKey}) to the current {@link scopeCacheKey} shape on first read. After a view has been migrated once, its data lives entirely under
+          // the current shape and no further legacy lookup is needed.
+          const savedStates = restoreLegacyMigrated({ categoryState, newKey, scope: store.state.scope });
+
+          if(savedStates) {
+
+            applyCategoryStates(configTable, savedStates);
+          }
+
+          // Apply visibility and per-row state from the current projection.
+          applyProjectionToDom({ configTable, state: store.state });
+
+          return;
+        }
+
+        default: {
+
+          // Exhaustive switch over the TablePresentation DU - unreachable while the switch and the DU stay in sync. A future variant surfaces here as a runtime
+          // throw rather than as a silently blank config table nobody can explain.
+          throw new Error("mountOptionsView: unknown table presentation.");
+        }
       }
-
-      // Apply visibility and per-row state from the current projection.
-      applyProjectionToDom({ configTable, state: store.state });
     },
     signal,
     store

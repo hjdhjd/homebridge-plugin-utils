@@ -4,7 +4,8 @@
  */
 "use strict";
 
-import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId } from "./selectors.mjs";
+import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId,
+  tablePresentation } from "./selectors.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
@@ -780,5 +781,45 @@ describe("projection - empty / loading state", () => {
 
     assert.deepEqual(p.categories, []);
     assert.deepEqual(p.counts, { grouped: 0, modified: 0, total: 0, visible: 0 });
+  });
+});
+
+describe("tablePresentation", () => {
+
+  // Land a failed device outcome so the status carries a genuine connection error, the way a failed controller click produces one.
+  const failedState = (state) => {
+
+    const requested = reducer(state, { controllerId: "ctrl-a", type: "devices:requested" });
+
+    return reducer(requested, { controllerId: "ctrl-a", devices: [], error: "Controller unreachable.", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+  };
+
+  test("a standing connection error presents the error variant", () => {
+
+    assert.deepEqual(tablePresentation(failedState(loadedState())), { kind: "error" });
+  });
+
+  test("every other status presents the options variant", () => {
+
+    assert.deepEqual(tablePresentation(loadedState()), { kind: "options" }, "a ready page presents its options");
+    assert.deepEqual(tablePresentation(initialState()), { kind: "options" }, "and so does a page still loading - the table is simply not built yet");
+  });
+
+  test("the recovery transition moves the presentation back to options", () => {
+
+    const failed = failedState(loadedState());
+    const requested = reducer(failed, { controllerId: "ctrl-b", type: "devices:requested" });
+    const recovered = reducer(requested, { controllerId: "ctrl-b", devices: [], error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.deepEqual(tablePresentation(recovered), { kind: "options" });
+  });
+
+  test("memoizes on the status slice, so an unrelated dispatch returns the identical result reference", () => {
+
+    const base = loadedState();
+    const first = tablePresentation(base);
+
+    // A filter change moves no status, so the cached answer comes back by reference - the check every consumer's reference guard rests on.
+    assert.equal(tablePresentation(reducer(base, { query: "motion", type: "filter:changed" })), first, "an unrelated dispatch hits the cache");
   });
 });

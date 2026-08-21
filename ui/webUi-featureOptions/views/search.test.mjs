@@ -207,3 +207,52 @@ describe("mountSearchView - search input debounce", () => {
     assert.equal(store.state.filter.query, "motion");
   });
 });
+
+describe("mountSearchView - following the table's presentation", () => {
+
+  // The panel filters the option table, so it follows the table's presentation rather than deciding its own. These drive the store through the transitions that move
+  // that presentation and assert the two bars track it.
+  const barsHidden = (root) => [...root.children].every((child) => child.classList.contains("d-none"));
+
+  const clickController = (store, { controllerId = "ctrl-a", devices = [], error = "" } = {}) => {
+
+    store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ controllerId, type: "devices:requested" });
+    store.dispatch({ controllerId, devices, error, seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+  };
+
+  test("both panel bars are shown on a healthy page", () => {
+
+    using _dom = createTestDom();
+
+    const { root } = setup();
+
+    assert.equal(root.children.length, 2, "precondition: the panel has exactly its two top-level bars");
+    assert.equal(barsHidden(root), false, "neither bar is hidden while the option table is what the surface shows");
+  });
+
+  test("both panel bars hide while a connection error stands", () => {
+
+    using _dom = createTestDom();
+
+    const { root, store } = setup();
+
+    clickController(store, { error: "Controller unreachable." });
+
+    assert.equal(barsHidden(root), true, "a search box over no table, and counts describing rows nobody can see, are both withdrawn");
+  });
+
+  test("both panel bars return when a clean outcome recovers the page", () => {
+
+    using _dom = createTestDom();
+
+    const { root, store } = setup();
+    const before = [...root.children];
+
+    clickController(store, { error: "Controller unreachable." });
+    clickController(store, { controllerId: "ctrl-b", devices: [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "D", serialNumber: "dev-a" }] });
+
+    assert.equal(barsHidden(root), false, "the bars are shown again");
+    assert.deepEqual([...root.children], before, "and they are the same elements - hidden, never rebuilt, so the search box keeps its identity");
+  });
+});

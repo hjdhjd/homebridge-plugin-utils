@@ -330,6 +330,63 @@ describe("reducer - devices:loaded", () => {
     assert.equal(next.status.kind, "loading", "an empty error leaves the status untouched, copy fields or not");
     assert.equal(next.devices, DEVICES, "and the devices apply normally");
   });
+
+  test("a clean outcome returns a standing connection-error status to ready", () => {
+
+    // A device list that just arrived is the evidence that a controller can be reached, which is the one thing that ends the error the failed fetch raised. Without
+    // it the retry view would hold over a healthy page for the rest of the session - nothing short of a full page re-entry sets ready otherwise.
+    const failed = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+
+    assert.equal(failed.status.kind, "connection-error", "precondition: the failed fetch raised the error");
+
+    const recovered = requestThenLoad(failed, { controllerId: "ctrl-b", devices: DEVICES });
+
+    assert.equal(recovered.status.kind, "ready", "the clean outcome returns the status to ready");
+    assert.equal(recovered.devices, DEVICES, "and applies its device list as any clean outcome does");
+  });
+
+  test("a clean EMPTY outcome recovers too - reachability, not device count, is what the error was about", () => {
+
+    const failed = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+    const recovered = requestThenLoad(failed, { controllerId: "ctrl-b", devices: [] });
+
+    assert.equal(recovered.status.kind, "ready", "a controller that answered with no devices still answered");
+  });
+
+  test("recovery is confined to connection-error: the persist statuses and loading are untouched by a clean outcome", () => {
+
+    // The persist statuses belong to a different lifecycle - a write in flight, or a write that failed - and a device list says nothing about either. Loading is
+    // left alone from the other end: model:loaded is what declares the page ready.
+    const base = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+    const persisting = reducer(base, { snapshot: [], type: "persist:started" });
+    const persistError = reducer(base, { error: new Error("disk full"), type: "persist:failed" });
+
+    assert.equal(requestThenLoad(persisting, { devices: DEVICES }).status, persisting.status, "a persisting status survives a clean outcome by reference");
+    assert.equal(requestThenLoad(persistError, { devices: DEVICES }).status, persistError.status, "a persist-error status survives a clean outcome by reference");
+    assert.equal(requestThenLoad(initialState(), { devices: DEVICES }).status.kind, "loading", "a loading status is not promoted to ready by a device outcome");
+  });
+
+  test("a FAILED outcome arriving over a standing connection error re-raises rather than recovering", () => {
+
+    // The recovery rule keys off the outcome's cleanliness, not off the status it is replacing, so a second failure still renders as a failure - with its own
+    // message, since the second failure is the one the user is now looking at.
+    const failed = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "First failure." });
+    const again = requestThenLoad(failed, { controllerId: "ctrl-a", devices: [], error: "Second failure." });
+
+    assert.equal(again.status.kind, "connection-error", "the error stands");
+    assert.equal(again.status.message, "Second failure.", "carrying the newer failure's message");
+  });
+
+  test("a dropped stale outcome cannot recover a standing connection error", () => {
+
+    // Recovery lives past the sequence gate, so a superseded outcome returns the identical state and the error it would have cleared stands untouched.
+    const failed = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+    const pending = reducer(failed, { controllerId: "ctrl-b", type: "devices:requested" });
+    const dropped = reducer(pending, { controllerId: "ctrl-b", devices: DEVICES, error: "", seq: pending.devicesRequest.seq - 1, type: "devices:loaded" });
+
+    assert.equal(dropped, pending, "the stale outcome returns the identical state reference");
+    assert.equal(dropped.status.kind, "connection-error", "and the standing error is untouched by it");
+  });
 });
 
 describe("connectionFailureCopy", () => {

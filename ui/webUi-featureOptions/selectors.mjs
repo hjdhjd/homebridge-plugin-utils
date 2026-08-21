@@ -247,6 +247,33 @@ export const scopingControllerId = memoize({
 });
 
 /**
+ * TablePresentation - What the config-table surface shows. Discriminated by `kind` because the variants are mutually exclusive answers to one question and each
+ * carries exactly what rendering it needs.
+ *
+ * @typedef {{kind: "error"} | {kind: "options"}} TablePresentation
+ */
+
+/**
+ * Decide what the config-table surface presents. Memoized on the state fields the decision reads, so a dispatch that moves none of them returns the cached answer.
+ *
+ * This is the single answer to "what is on the config-table surface right now", and both consumers read it rather than each recovering it from raw state: the
+ * options view, which owns the table's DOM, and the search view, whose panel filters that table and therefore has nothing to offer when the table is not what is
+ * showing. Deriving it once is what keeps the two from drifting - a surface the options view suppressed while the search panel still advertised counts over it
+ * would be the page contradicting itself, and no amount of care at two call sites prevents that as reliably as having one answer.
+ *
+ * Precedence is the whole of the rule. A standing `connection-error` wins over everything: the connection-error view has taken the frame and owns the message,
+ * and the table beneath it would be offering the options of a controller that never confirmed it could be reached. Everything else is the ordinary table.
+ *
+ * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
+ * @returns {TablePresentation} What the config-table surface presents.
+ */
+export const tablePresentation = memoize({
+
+  compute: (state) => (state.status.kind === "connection-error") ? { kind: "error" } : { kind: "options" },
+  slices: [(s) => s.status]
+});
+
+/**
  * @typedef {Object} ProjectionEntry
  * @property {string} description - The option's display description.
  * @property {boolean} enabled - The resolved enabled state at the highest-precedence scope where the option was found (or the catalog default at scope "none").

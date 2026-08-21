@@ -32,7 +32,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
  *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error, taking the
  *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not. Two suppliers reach that
- *     copy: the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw.
+ *     copy: the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw. A clean
+ *     outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry.
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
@@ -113,7 +114,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *
  * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps each text slot
  * without hardcoding any prose. Each supplier (the reducer's fetch-failure transition on {@link devices:loaded} and the orchestrator's config-sync-failure
- * {@link connection:error} dispatch) carries copy appropriate to its failure.
+ * {@link connection:error} dispatch) carries copy appropriate to its failure. It stands until one of two things ends it: a clean device outcome applying, which
+ * is the evidence that a controller is reachable again, or the page re-entering through `show()`. Nothing else clears it, so a view rendering against it can
+ * treat it as the whole truth about the page's reachability for as long as it holds.
  *
  * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "persisting", snapshot: readonly string[]} | {kind: "persist-error", error: Error}
  *           | {kind: "connection-error", guidance: string, headline: string, message: string}} LifecycleStatus
@@ -409,9 +412,17 @@ export const reducer = (state, action) => {
         devicesRequest: null
       };
 
+      /* A clean outcome is also the one thing that can end a standing connection error, so it clears one. The error names a controller the page could not reach, and
+       * a device list that just arrived is the evidence that a controller can be reached now - leaving the error up would hold the retry view over a healthy page
+       * for the rest of the session, since nothing short of a full page re-entry sets `ready` otherwise.
+       *
+       * Only `connection-error` recovers. The persist statuses belong to a different lifecycle - a write in flight or a write that failed - and a device list says
+       * nothing about either, so a fetch landing mid-persist must leave that lifecycle to finish on its own terms. `loading` is left alone for the same reason from
+       * the other end: the page has not finished booting, and `model:loaded` is what declares it ready.
+       */
       if(!action.error.length) {
 
-        return applied;
+        return (state.status.kind === "connection-error") ? { ...applied, status: { kind: "ready" } } : applied;
       }
 
       // A non-empty error is the connection-failure signal: the outcome carried an empty device list and the per-fetch failure message alongside it, so the status

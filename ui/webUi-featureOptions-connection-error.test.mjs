@@ -329,7 +329,9 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     assert.equal(fake.observed.toasts.length, 0, "the failure surfaces inline in the retry view, not as a toast");
     assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the device list\./, "the devices site's own failure headline renders");
-    assert.match(skeleton.headerInfo.textContent, /getDevices must resolve to \{ devices, error \}\./, "the contract guard's own message reaches the user verbatim");
+    assert.match(skeleton.headerInfo.textContent,
+      /getDevices must resolve to \{ devices, error \} with optional string emptyMessage, guidance, and headline\./,
+      "the contract guard's own message reaches the user verbatim");
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the retry affordance renders with it");
 
     orchestrator.cleanup();

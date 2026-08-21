@@ -31,7 +31,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     eventually answers it can be told apart from a superseded one.
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
  *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error, taking the
- *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not.
+ *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not. Two suppliers reach that
+ *     copy: the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw.
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
@@ -416,8 +417,9 @@ export const reducer = (state, action) => {
       // A non-empty error is the connection-failure signal: the outcome carried an empty device list and the per-fetch failure message alongside it, so the status
       // moves to connection-error at this, the reducer's one fetch-failure transition, layering the message onto the failure copy. Scope is not touched here - a
       // dispatcher moves the selection separately. The optional guidance and headline let a dispatcher name the failure it actually saw, which is how a bounded
-      // await's deadline expiry renders as itself rather than as a controller that answered with an error; an outcome carrying neither keeps the shared
-      // controller-failure wording, which is every sidebar controller click's path.
+      // await's deadline expiry renders as itself rather than as a controller that answered with an error, and how a plugin that told a bad credential from an
+      // unreachable address sends the user after the right one; an outcome carrying neither keeps the shared controller-failure wording, which is what a sidebar
+      // controller click reads whenever the plugin says nothing more specific.
       return { ...applied, status: {
 
         ...CONTROLLER_FAILURE_STATUS,

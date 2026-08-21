@@ -89,11 +89,19 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 
 /**
  * The resolved shape of a `getDevices` hook: the single contract every device fetch crosses. It carries the device list and the connection outcome together, so a
- * failure travels back with the response it belongs to rather than through a separate side-channel a concurrent probe could rewrite.
+ * failure travels back with the response it belongs to rather than through a separate side-channel a concurrent probe could rewrite. The display copy rides the
+ * same way and for the same reason: the outcome is what knows which failure this was, so the words describing it belong to the outcome rather than to a static
+ * setting that has to speak for every failure at once.
  *
  * @typedef {Object} DeviceListResult
  * @property {Object[]} devices - The devices for the requested controller; empty when the probe failed or when the controller legitimately has none.
  * @property {string} error - The user-facing connection-failure message: empty when the fetch succeeded, the failure text when the fetch failed and `devices` is empty.
+ * @property {string} [guidance] - What the user should do about THIS failure, read only when `error` is non-empty. It overrides the guidance the page would
+ *   otherwise show - the plugin's own `ui.controllerFailureGuidance` where it supplied one, the framework's shared controller wording where it did not - so a
+ *   plugin that can tell a bad credential from an unreachable address sends the user after the right thing in each case.
+ * @property {string} [headline] - The failure's own headline, read only when `error` is non-empty, replacing the framework's connection-failure wording on the
+ *   rendered error view. A rejection thrown out of the hook carries no display copy at all and keeps the framework's, which is what makes a hook that reports its
+ *   failure and one that throws read identically until the plugin chooses otherwise.
  */
 
 /**
@@ -867,15 +875,21 @@ export class webUiFeatureOptions {
 
     const { devices, error } = outcome;
 
-    // The plugin's controller-failure guidance rides along unconditionally, the way the nav view's click carries it: this is the dispatch a hook that REPORTS a failure
-    // travels through - an empty device list beside a non-empty error - and the reducer reads the guidance only on the fold that error triggers, ignoring it entirely on
-    // a success. Carrying it here is what makes a boot that cannot reach its controller read exactly as a click that cannot, whichever way the hook reported it.
+    /* The display copy rides along unconditionally, the way the nav view's click carries it: this is the dispatch a hook that REPORTS a failure travels through - an
+     * empty device list beside a non-empty error - and the reducer reads the copy only on the fold that error triggers, ignoring it entirely on a success. Carrying
+     * it here is what makes a boot that cannot reach its controller read exactly as a click that cannot, whichever way the hook reported it.
+     *
+     * The outcome's own copy is preferred over the configured guidance because the two answer different questions. The configured guidance speaks for every
+     * controller failure this plugin can have, while the outcome speaks for the one that just happened, so the more specific voice wins wherever the hook supplied
+     * one and the configured line remains what every other failure reads.
+     */
     this.#store.dispatch({
 
       controllerId: initialController?.serialNumber ?? null,
       devices,
       error,
-      guidance: this.#config.controllerFailureGuidance,
+      guidance: outcome.guidance ?? this.#config.controllerFailureGuidance,
+      headline: outcome.headline,
       seq: devicesSeq,
       type: "devices:loaded"
     });
@@ -1404,17 +1418,24 @@ export class webUiFeatureOptions {
   // single boundary every device fetch crosses - the initial fetch in show() and the on-click fetch in the nav view both route through it - and the config is read
   // fresh from the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
   //
-  // The full rich contract is enforced here with a fail-fast guard: the hook must resolve an object carrying a `devices` array and a string `error`. The error half
-  // is what guarantees every downstream reader (the connection-error view's DOM construction, whose createElement child loop passes a non-string message straight to
-  // appendChild) receives a string. A resolved value that does not match trips a TypeError naming the contract, so a shape mistake surfaces loudly at that boundary
-  // rather than as a corrupted render deeper in.
+  /* The full rich contract is enforced here with a fail-fast guard: the hook must resolve an object carrying a `devices` array and a string `error`, and each
+   * optional field it may decorate the outcome with must be a string where it is present at all. The string requirement is what guarantees every downstream reader
+   * (the connection-error view's DOM construction and the notice block, whose createElement child loops pass a non-string straight to appendChild) receives text.
+   * A resolved value that does not match trips a TypeError naming the contract, so a shape mistake surfaces loudly at that boundary rather than as a corrupted
+   * render deeper in.
+   *
+   * One message states the whole contract rather than one per field. A plugin reading it wants to see the shape it should have resolved, and a per-field message
+   * would show a fragment of that shape and leave the rest to be discovered one failed fetch at a time.
+   */
   async #devicesFor(controller) {
 
     const result = await this.#config.getDevices(controller, { config: this.#session?.platform });
+    const optionalCopy = [ result?.emptyMessage, result?.guidance, result?.headline ];
 
-    if(!result || !Array.isArray(result.devices) || (typeof result.error !== "string")) {
+    if(!result || !Array.isArray(result.devices) || (typeof result.error !== "string") ||
+      optionalCopy.some((copy) => (copy !== undefined) && (typeof copy !== "string"))) {
 
-      throw new TypeError("getDevices must resolve to { devices, error }.");
+      throw new TypeError("getDevices must resolve to { devices, error } with optional string emptyMessage, guidance, and headline.");
     }
 
     return result;

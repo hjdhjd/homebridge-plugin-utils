@@ -33,8 +33,8 @@ const DEVICES = [
 
 // The deadline the view applies to a click's device fetch. The orchestrator owns the value in production; the suite supplies its own so a hang test can name a bound it
 // can advance a mock clock past without the other tests waiting on a production-sized one.
-const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], getDevices, globalGlyph, mode = "controller-based", onReenter,
-  refresh } = {}) => {
+const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], failureGuidance, getDevices, globalGlyph, mode = "controller-based",
+  onReenter, refresh } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const rootControllers = document.createElement("div");
@@ -55,6 +55,7 @@ const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent,
 
     deadlineSeconds,
     deviceContent,
+    failureGuidance,
     getDevices,
     globalGlyph,
     labelControllers: "Controllers",
@@ -302,6 +303,59 @@ describe("mountNavView - click dispatch", () => {
 
     assert.equal(store.state.status.kind, "connection-error");
     assert.equal(store.state.status.message, "Controller unreachable.");
+  });
+
+  test("a reported failure's own headline and guidance travel through to the status", async () => {
+
+    using _dom = createTestDom();
+
+    // The view carries the result's copy across untouched: which failure this was is the plugin's knowledge, and the result is what holds it.
+    const getDevices = async () => ({
+
+      devices: [],
+      error: "The controller rejected the supplied credentials.",
+      guidance: "Correct the controller's API token, then retry.",
+      headline: "The controller refused the connection."
+    });
+    const { rootControllers, store } = setup({ failureGuidance: "The configured guidance the result's own must displace.", getDevices });
+    const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
+
+    ctrlLink.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(store.state.status.headline, "The controller refused the connection.", "the result's headline reaches the status");
+    assert.equal(store.state.status.guidance, "Correct the controller's API token, then retry.", "the result's guidance displaces the view's configured fallback");
+  });
+
+  test("a reported failure naming no copy falls back to the configured guidance and the framework's headline", async () => {
+
+    using _dom = createTestDom();
+
+    const getDevices = async () => ({ devices: [], error: "Controller unreachable." });
+    const { rootControllers, store } = setup({ failureGuidance: "Open the controller editor on this page.", getDevices });
+    const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
+
+    ctrlLink.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(store.state.status.headline, "Unable to connect to the controller.", "the framework's shared headline stands");
+    assert.equal(store.state.status.guidance, "Open the controller editor on this page.", "the configured guidance stands beneath it");
+  });
+
+  test("a rejected fetch carries no result copy, so its outcome keeps the configured guidance", async () => {
+
+    using _dom = createTestDom();
+
+    // A rejection has no result to decorate, which is why the catch dispatch has no copy to thread - it falls back exactly as an undecorated reported failure does.
+    const getDevices = async () => { throw new Error("Controller unreachable."); };
+    const { rootControllers, store } = setup({ failureGuidance: "Open the controller editor on this page.", getDevices });
+    const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
+
+    ctrlLink.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(store.state.status.headline, "Unable to connect to the controller.", "a thrown failure keeps the framework's headline");
+    assert.equal(store.state.status.guidance, "Open the controller editor on this page.", "and the configured guidance");
   });
 
   test("clicking a controller whose getDevices throws a non-Error routes the stringified value to the connection-error message", async () => {

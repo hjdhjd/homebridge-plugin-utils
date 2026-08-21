@@ -38,6 +38,10 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * wraps its fetch in a try/catch so a rejected fetch becomes that same outcome rather than an unhandled rejection; the view layer never silently swallows a failure. The
  * fetch is deadline-bounded, so a click against a bridge that never answers reaches that same catch instead of leaving the sidebar waiting on a device list forever.
  *
+ * A reported failure may decorate itself with its own headline and guidance, which travel back on the same result and pass through to the outcome dispatch untouched.
+ * The view neither reads nor defaults them - which failure this was is the plugin's knowledge and how it renders is the reducer's, so the click's only job is to carry
+ * the copy across. A rejection has no result to carry copy on, so its outcome falls back to this view's configured guidance and the framework's headline.
+ *
  * @param {Object} args
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.
  * @param {((device: import("../../webUi-featureOptions.mjs").Device) => Node | string | null) | undefined} args.deviceContent - Plugin-provided hook composing a
@@ -434,8 +438,8 @@ const applyDevicesHighlight = (root, scope) => {
 };
 
 // Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally
-// fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback, carrying the plugin's controller-failure guidance on the outcome so a
-// click that cannot reach its controller reads exactly as a boot that cannot.
+// fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback, carrying the failure's display copy on the outcome - whatever the result
+// named, and the plugin's controller-failure guidance beneath it - so a click that cannot reach its controller reads exactly as a boot that cannot.
 const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevices, signal, store }) => {
 
   const navLink = event.target.closest(".nav-link[data-navigation]");
@@ -482,7 +486,7 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
 
         // Bound the fetch. The plugin's hook rides the same bridge every other host call does, so an unanswered click would otherwise leave the sidebar highlighted on
         // a controller whose devices never arrive - the deadline turns that into the rejection the catch below already knows how to render.
-        const { devices, error } = await withDeadline({ promise: getDevices(controller ?? null), seconds: deadlineSeconds, signal });
+        const { devices, error, guidance, headline } = await withDeadline({ promise: getDevices(controller ?? null), seconds: deadlineSeconds, signal });
 
         // Bail if the page tore down; a torn-down store must not be dispatched against. Staleness itself is the reducer's job - it drops an outcome whose sequence no
         // longer answers the pending request.
@@ -491,9 +495,10 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
           return;
         }
 
-        // The guidance rides along unconditionally: the reducer reads it only on the fold a non-empty error triggers and ignores it on a success, so one dispatch
-        // shape serves both outcomes.
-        store.dispatch({ controllerId: deviceSerial, devices, error, guidance: failureGuidance, seq, type: "devices:loaded" });
+        // The copy rides along unconditionally: the reducer reads it only on the fold a non-empty error triggers and ignores it on a success, so one dispatch shape
+        // serves both outcomes. What the result named wins over the configured guidance, which stands in for every failure this plugin can have rather than for the
+        // one that just happened; a result naming neither leaves both fallbacks in place.
+        store.dispatch({ controllerId: deviceSerial, devices, error, guidance: guidance ?? failureGuidance, headline, seq, type: "devices:loaded" });
 
         // Gate the follow-up on the reducer's own verdict: select the controller-as-device entry only when my outcome is the one that applied, carried no failure,
         // and returned at least one device. A superseded outcome, a connection failure (the reducer moved the store to connection-error), or an empty controller each

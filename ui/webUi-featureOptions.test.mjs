@@ -3108,7 +3108,7 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
 
       const codeElement = harness.skeleton.headerInfo.querySelector("code");
 
-      assert.equal(codeElement?.textContent, "getDevices must resolve to { devices, error }.",
+      assert.equal(codeElement?.textContent, "getDevices must resolve to { devices, error } with optional string emptyMessage, guidance, and headline.",
         "a resolved value without a devices array must trip the named contract TypeError, surfaced as the connection-error message");
     }
   });
@@ -3132,9 +3132,172 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
 
       const codeElement = harness.skeleton.headerInfo.querySelector("code");
 
-      assert.equal(codeElement?.textContent, "getDevices must resolve to { devices, error }.",
+      assert.equal(codeElement?.textContent, "getDevices must resolve to { devices, error } with optional string emptyMessage, guidance, and headline.",
         "a resolved value whose error is missing or non-string must trip the named contract TypeError, surfaced as the connection-error message");
     }
+  });
+
+  test("trips the named TypeError when any optional copy field is present but not a string", async () => {
+
+    using _dom = createTestDom();
+    using harness = makeGuardHarness();
+
+    await harness.orchestrator.show(await openTestSession());
+    await flush();
+
+    // Every optional field the rich contract admits, each spelled with a non-string value. A number here would reach the connection-error view's child loop or the
+    // notice block's, both of which hand a non-string straight to appendChild, so the guard is where each has to stop.
+    for(const invalid of [ { devices: [], emptyMessage: 7, error: "" }, { devices: [], error: "", guidance: {} }, { devices: [], error: "", headline: true } ]) {
+
+      harness.state.devicesResult = invalid;
+      harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-1']").click();
+
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+
+      const codeElement = harness.skeleton.headerInfo.querySelector("code");
+
+      assert.equal(codeElement?.textContent, "getDevices must resolve to { devices, error } with optional string emptyMessage, guidance, and headline.",
+        "a non-string optional field must trip the named contract TypeError, surfaced as the connection-error message");
+    }
+  });
+
+  test("admits a resolved value carrying every optional field as a string, and one carrying none of them", async () => {
+
+    using _dom = createTestDom();
+    using harness = makeGuardHarness();
+
+    await harness.orchestrator.show(await openTestSession());
+    await flush();
+
+    // The guard's permissive half: an outcome decorated with all three fields passes, and so does the bare two-field shape every plugin wrote before the copy
+    // existed. Absence and presence are both legal, which is what "optional" has to mean for the older shape to keep working.
+    for(const valid of [ { devices: [], emptyMessage: "Nothing to list.", error: "", guidance: "g", headline: "h" }, { devices: [], error: "" } ]) {
+
+      harness.state.devicesResult = valid;
+      harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-1']").click();
+
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+
+      assert.equal(harness.skeleton.headerInfo.querySelector("code"), null, "a well-formed rich outcome must not trip the contract guard");
+    }
+  });
+});
+
+describe("webUiFeatureOptions - per-failure display copy on the device outcome", () => {
+
+  // A plugin that can tell one controller failure from another says so on the outcome itself, and those words are what the error view renders. These tests drive both
+  // routes a reported failure takes - the boot's initial fetch and a sidebar click - since the whole point of carrying the copy on the outcome is that the two read
+  // identically.
+  const FAILURE = {
+
+    devices: [],
+    error: "The controller rejected the supplied credentials.",
+    guidance: "Correct the controller's API token in the plugin settings, then retry.",
+    headline: "The controller refused the connection."
+  };
+
+  test("a boot fetch that reports a failure with copy renders that headline, guidance, and message", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      getDevices: () => FAILURE,
+      ui: { controllerFailureGuidance: "The configured guidance that the outcome's own must displace." }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /The controller refused the connection\./, "the outcome's headline displaces the framework's");
+    assert.match(skeleton.headerInfo.textContent, /Correct the controller's API token in the plugin settings, then retry\./,
+      "the outcome's guidance displaces the plugin's configured guidance, which speaks for every failure rather than this one");
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, FAILURE.error, "the per-fetch message rides along as it always did");
+
+    orchestrator.cleanup();
+  });
+
+  test("a sidebar click that reports a failure with copy renders the same three slots", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Controller A answers so the boot lands on a healthy page; controller B reports the decorated failure, so the click path is what renders it.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
+      getDevices: (controller) => (controller?.serialNumber === "CTRL-A") ?
+        { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub A", serialNumber: "CTRL-A" }], error: "" } : FAILURE
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").click();
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /The controller refused the connection\./, "the click path renders the outcome's headline");
+    assert.match(skeleton.headerInfo.textContent, /Correct the controller's API token in the plugin settings, then retry\./, "and the outcome's guidance with it");
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, FAILURE.error, "and the per-fetch message");
+
+    orchestrator.cleanup();
+  });
+
+  test("a failure reporting no copy keeps the framework's headline and the plugin's configured guidance", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // The parity row: an undecorated failure is what every plugin resolved before the copy existed, and it must read exactly as it did then.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      getDevices: () => ({ devices: [], error: "Controller unreachable." }),
+      ui: { controllerFailureGuidance: "Open the controller editor on this page." }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /Unable to connect to the controller\./, "the framework's shared headline stands where the outcome named none");
+    assert.match(skeleton.headerInfo.textContent, /Open the controller editor on this page\./,
+      "and the plugin's configured guidance stands where the outcome named none");
+
+    orchestrator.cleanup();
   });
 });
 

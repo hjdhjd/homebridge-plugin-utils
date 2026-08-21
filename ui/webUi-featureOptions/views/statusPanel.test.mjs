@@ -2310,3 +2310,276 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
     assert.equal(valueFor(root, "Door"), "Open", "the live row value stands");
   });
 });
+
+/* The dock cadence these tests count against. Mounting a panel against a store that is already ready runs the effect's immediate pass, and with the scope still
+ * global that pass is a no-device render - so a configured content hook has been invoked once, with an undefined device, before a test selects anything. Every count
+ * below is stated against that mount-time invocation rather than pretending the selection is the first one.
+ */
+const DOCK_CALLS_AT_MOUNT = 1;
+
+// A capturing content hook: it records one bag per invocation and, the first time it sees the dock, renders a child of its own into it - the plugin-owned content the
+// dock exists to carry. That child is an input so a test can also focus it, which is how the no-move guarantee is observed from the user's side.
+const capturingDock = () => {
+
+  const calls = [];
+
+  const contentPanel = (bag) => {
+
+    calls.push(bag);
+
+    if(!bag.panel.childElementCount) {
+
+      const marker = document.createElement("input");
+
+      marker.className = "plugin-marker";
+      bag.panel.appendChild(marker);
+    }
+  };
+
+  return { calls, contentPanel };
+};
+
+describe("statusPanel - the plugin content dock", () => {
+
+  test("D1: with no content hook configured the rendered DOM is the grid alone on a selection and an empty root off device scope", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    assert.equal(root.children.length, 1, "an unconfigured panel renders the grid and nothing else - no dock element is ever created");
+
+    selectGlobal(store);
+
+    assert.equal(root.children.length, 0, "and the no-device render leaves the root empty");
+  });
+
+  test("D2: a configured hook is handed a dock sitting after the grid, with the selection, the dock element, and the mount signal in its bag", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { calls, contentPanel } = capturingDock();
+    const { controller, root } = mountPanel({ contentPanel, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    assert.equal(calls.length, DOCK_CALLS_AT_MOUNT, "precondition: the mount's own no-device pass invoked the hook once");
+
+    selectDevice(store, "AA");
+
+    assert.equal(calls.length, DOCK_CALLS_AT_MOUNT + 1, "the selection render invokes the hook exactly once more");
+
+    const bag = calls.at(-1);
+
+    assert.equal(root.children.length, 2, "the root carries the grid and the dock");
+    assert.equal(root.children[1], bag.panel, "the dock sits after the grid, never before it");
+    assert.equal(valueFor(root, "Status"), "Connecting...", "and the panel's own grid rendered normally alongside it");
+    assert.equal(bag.device, DEVICE_A, "the bag carries the selected device object itself");
+    assert.equal(bag.signal, controller.signal, "and the mount's own lifecycle signal");
+  });
+
+  test("D3: the dock is one element for the mount's life - a second selection re-invokes the hook with the same panel while the grid is built fresh", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([ DEVICE_A, DEVICE_B ]);
+    const { calls, contentPanel } = capturingDock();
+    const { root } = mountPanel({ contentPanel, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    const dock = calls.at(-1).panel;
+    const gridForA = root.children[0];
+
+    selectDevice(store, "BB");
+
+    assert.equal(calls.length, DOCK_CALLS_AT_MOUNT + 2, "the new selection re-invokes the hook");
+    assert.equal(calls.at(-1).panel, dock, "with the same dock element identity");
+    assert.equal(calls.at(-1).device, DEVICE_B, "and the newly-selected device");
+    assert.notEqual(root.children[0], gridForA, "the grid beneath it is a fresh build");
+    assert.equal(root.children.length, 2, "the root still carries exactly the grid and the dock");
+    assert.equal(root.children[1], dock, "and the dock is still the last child");
+  });
+
+  test("D4: the no-device render invokes the hook with device strictly undefined and leaves the same dock as the root's only child", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { calls, contentPanel } = capturingDock();
+    const { root } = mountPanel({ contentPanel, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    const dock = calls.at(-1).panel;
+
+    selectGlobal(store);
+
+    assert.equal(calls.length, DOCK_CALLS_AT_MOUNT + 2, "the no-device render invokes the hook like any other selection render");
+    assert.equal(calls.at(-1).device, undefined, "with no device in the bag - undefined rather than the null the view tracks internally");
+    assert.equal(calls.at(-1).panel, dock, "the dock survives the wholesale clear");
+    assert.equal(root.children.length, 1, "and is all the root holds off device scope");
+    assert.equal(root.children[0], dock);
+  });
+
+  test("D5: a push-driven rebuild swaps the grid beneath an untouched dock - the hook is not re-invoked and the plugin's own content stands", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { calls, contentPanel } = capturingDock();
+    const { root } = mountPanel({ contentPanel, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    const callsBeforePush = calls.length;
+    const dock = calls.at(-1).panel;
+    const marker = dock.querySelector(".plugin-marker");
+    const gridBeforePush = root.children[0];
+
+    assert.ok(marker, "precondition: the hook rendered content of its own into the dock");
+
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }], false));
+
+    assert.equal(valueFor(root, "Door"), "Open", "precondition: the snapshot rebuilt the grid");
+    assert.notEqual(root.children[0], gridBeforePush, "the rebuild mints a fresh grid element");
+    assert.equal(calls.length, callsBeforePush, "a push-driven rebuild does not re-invoke the hook - the dock has nothing to be told");
+    assert.equal(root.children.length, 2, "the root still carries exactly the grid and the dock");
+    assert.equal(root.children[1], dock, "the dock keeps its identity and its place after the grid");
+    assert.equal(dock.querySelector(".plugin-marker"), marker, "and the plugin's own content inside it is untouched");
+  });
+
+  test("D6: a same-device re-render re-invokes the hook without moving the dock, so a focused descendant inside it keeps focus", () => {
+
+    using dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { calls, contentPanel } = capturingDock();
+    const { root } = mountPanel({ contentPanel, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    const callsBeforeRefire = calls.length;
+    const dock = calls.at(-1).panel;
+    const marker = dock.querySelector(".plugin-marker");
+
+    marker.focus();
+    assert.equal(document.activeElement, marker, "precondition: a descendant of the dock holds focus");
+
+    /* Watch the root's own child list across the re-render. The observer comes from the test window's registry because the harness installs no such global, and
+     * takeRecords drains the queue synchronously, so the records are read without yielding. The same-device branch rebuilds the grid in place, which is itself a
+     * child-list mutation on the root, so records naming the grid swap are expected; what this pins is that none of them names the dock. A missing attachment guard
+     * would re-append the dock and show up here - and blur the focused input, which the assertion below reads from the other side.
+     */
+    const observer = new dom.window.MutationObserver(() => {});
+
+    observer.observe(root, { childList: true });
+
+    refireDevices(store, [DEVICE_A]);
+
+    const records = observer.takeRecords();
+
+    observer.disconnect();
+
+    const dockMoved = records.some((record) => [ ...record.addedNodes, ...record.removedNodes ].includes(dock));
+
+    assert.equal(calls.length, callsBeforeRefire + 1, "the same-device re-render re-invokes the hook");
+    assert.equal(calls.at(-1).panel, dock, "with the same dock element");
+    assert.equal(dockMoved, false, "and never detaches or re-appends it");
+    assert.equal(document.activeElement, marker, "so the focused descendant survives the re-render");
+    assert.equal(root.children[1], dock, "and the dock is still the last child");
+  });
+
+  test("D7: the hook runs as the render's closing act - at invocation time the grid is mounted, the dock is last, and the view request is already away", () => {
+
+    using _dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+
+    /* Capture what the region and the request log looked like AT INVOCATION TIME rather than after the dispatch settles. The region is read through the dock's own
+     * parent, which is the region itself once the dock is attached - the hook fires during the mount call too, before any handle the test could hold. A helper wired
+     * before the grid's replaceChildren would capture a region without the grid, and one wired before requestView would capture an empty request log; either way this
+     * snapshot fails, while an end-state assertion would pass against both.
+     */
+    const snapshots = [];
+    const contentPanel = (bag) => {
+
+      const region = bag.panel.parentNode;
+
+      snapshots.push({ children: region?.children.length ?? 0, dockIsLast: region?.lastElementChild === bag.panel, requests: viewRequests.length });
+    };
+
+    mountPanel({ contentPanel, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    assert.deepEqual(snapshots.at(-1), { children: 2, dockIsLast: true, requests: 1 },
+      "the hook saw the grid mounted, the dock attached behind it, and the view request already fired");
+  });
+
+  test("D8: a fresh mount into the same root sweeps the prior mount's dock and docks one of its own", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const first = capturingDock();
+    const { controller, root } = mountPanel({ contentPanel: first.contentPanel, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    const staleDock = first.calls.at(-1).panel;
+
+    controller.abort();
+
+    // The second mount is made by hand rather than through mountPanel because it has to land in the SAME root - the shape a page takes when it tears a panel down and
+    // mounts a fresh one over the region. Its controller joins the suite-wide drain like any other; with no resume detector threaded it arms no interval of its own.
+    const second = capturingDock();
+    const freshController = new AbortController();
+
+    mountControllers.push(freshController);
+    mountStatusPanelView({ config: { contentPanel: second.contentPanel, placeholderRows: PLACEHOLDER_ROWS }, root, signal: freshController.signal, store });
+
+    selectDevice(store, "AA");
+
+    const freshDock = second.calls.at(-1).panel;
+
+    assert.notEqual(freshDock, staleDock, "the fresh mount docks an element of its own");
+    assert.equal(root.children.length, 2, "and the root carries exactly that mount's grid and dock");
+    assert.equal(root.children[1], freshDock, "with the fresh dock last");
+    assert.equal(root.contains(staleDock), false, "the prior mount's dock was swept by the wholesale render");
+  });
+});

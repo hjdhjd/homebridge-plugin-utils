@@ -177,6 +177,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {Object} [statusPanel] - Live device-status panel for the device-stats region. Mutually exclusive with {@link FeatureOptionsConfig.infoPanel} (both own
  *   that region, so supplying both throws a TypeError at construction). The plugin supplies a server-side status adapter that speaks the `webui-status` protocol plus
  *   the parts below, and inherits the entire rendered panel.
+ * @property {Function} [statusPanel.contentPanel] - Renders plugin-owned content beneath the panel grid for the current selection, on the same
+ *   `{ device, panel, signal }` bag contract as {@link FeatureOptionsConfig.infoPanel}. The framework creates the element once per mount, positions it after its own
+ *   grid, and never writes into it, so plugin content persists across selections; `device` is undefined when no device is in scope. The hook runs on every selection
+ *   render, and the panel's push-driven rebuilds leave the element untouched.
  * @property {Object} [statusPanel.errorMessages] - Per-reason error-copy overrides, merged field-by-field over the component's credential-neutral defaults so a plugin
  *   may replace a label, a message, or both.
  * @property {Function} [statusPanel.identity] - Maps a device to its identity fields (`{ label, mono?, value }[]`). Defaults to firmware / serial number / model /

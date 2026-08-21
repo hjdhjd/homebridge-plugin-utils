@@ -57,6 +57,13 @@ import { selectedDevice } from "../selectors.mjs";
  * inherits the entire panel around them.
  *
  * @typedef {Object} StatusPanelConfig
+ * @property {(args: { device: (import("../state.mjs").Device | undefined), panel: HTMLElement, signal: AbortSignal }) => void} [contentPanel] - Renders
+ *   plugin-owned content beneath the panel grid for the current selection, on the same bag contract as the page's `infoPanel` hook, so one body of docked-rendering
+ *   code serves either surface. `device` is per-render data - the selection, or undefined when no device is in scope; `panel` is a plugin-owned element the component
+ *   creates once per mount, positions after its own grid, and never writes into, holding one identity for the mount's life so plugin content rides across selection
+ *   changes and the panel's own rebuilds alike; `signal` is the mount's lifecycle signal, likewise one identity for the mount's life, so a hook that registers
+ *   listeners keys its once-ness on it. The hook runs on every selection render - a selection change, a same-device re-render, and the no-device render alike - and
+ *   deliberately not on the push-driven grid rebuilds, which leave the element untouched and so have nothing to tell it.
  * @property {Partial<Record<StatusErrorReason, { label?: string, message?: string }>>} [errorMessages] - Per-reason overrides merged field-by-field over the
  *   component's credential-neutral default copy: a plugin may replace the label, the message, or both.
  * @property {(device: import("../state.mjs").Device) => { label: string, mono?: boolean, value: string }[]} [identity] - The identity fields for a device. Defaults
@@ -219,13 +226,15 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
  * push handler reduces every pooled device's events into it whether or not that device is on screen, and the DOM is a projection of the viewed device's entry, so
  * switching to a device the panel has already heard from renders that device's last-known state at once instead of a placeholder skeleton awaiting a round trip.
  * Around the map sit the viewed device object (its serialNumber always read from that one object), the per-serialNumber highest-token guard, the link-lost overlay
- * marker, and the live node references. The panel subscribes to selection changes, to the host's status push events, and - when the page supplied a resume detector -
+ * marker, the live node references, and - for a plugin that configured a content hook - the dock element the panel positions after its own grid and re-invokes that
+ * hook against on every selection render. The panel subscribes to selection changes, to the host's status push events, and - when the page supplied a resume detector -
  * to page resumes; every listener is `{ signal }`-scoped, and the one abort listener the mount registers clears every pending latch timer. Liveness detection is the
  * shared watchdog primitive, whose own abort contract retires its timer on the same signal. The returned handle exposes {@link resetStaleGuards} and the plugin-facing
  * watchRequest.
  *
  * @param {Object} args
- * @param {StatusPanelConfig} args.config - The plugin's panel configuration (identity, placeholder rows, error-copy overrides, link-lost copy and deadline).
+ * @param {StatusPanelConfig} args.config - The plugin's panel configuration (identity, placeholder rows, error-copy overrides, link-lost copy and deadline, the
+ *   content-dock hook).
  * @param {{ subscribe: Function }} [args.resumeDetector] - The page's resume detector. When supplied, the panel re-probes the viewed device after the browser wakes from
  *   a freeze; when absent, no resume subscription is registered and the panel behaves exactly as it does between resumes.
  * @param {HTMLElement} args.root - The `#deviceStatsContainer` element.
@@ -237,10 +246,12 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
 export const mountStatusPanelView = ({ config, resumeDetector, root, signal, store }) => {
 
   // Resolve the configured surface once at mount, defaulting each part the plugin did not supply. `identity` and `placeholderRows` fall back to the shared identity
-  // quartet and an empty skeleton; `errorMessages` stays possibly-undefined and is consulted only when an error renders; `onServerHello` likewise stays
-  // possibly-undefined and is invoked only when a fresh adapter process introduces itself; `linkLostCopy` merges the plugin's override over the default field-by-field
-  // (a label-only override keeps the default message); `linkLostTimeoutSeconds` takes the configured deadline only when it is a finite positive number and otherwise
-  // falls back to the module default. Reading them once here keeps the handler off `config` on every event.
+  // quartet and an empty skeleton; `contentPanel` stays possibly-undefined and is invoked only when the plugin docks content of its own beneath the grid;
+  // `errorMessages` stays possibly-undefined and is consulted only when an error renders; `onServerHello` likewise stays possibly-undefined and is invoked only when a
+  // fresh adapter process introduces itself; `linkLostCopy` merges the plugin's override over the default field-by-field (a label-only override keeps the default
+  // message); `linkLostTimeoutSeconds` takes the configured deadline only when it is a finite positive number and otherwise falls back to the module default. Reading
+  // them once here keeps the handler off `config` on every event.
+  const contentPanel = config.contentPanel;
   const errorMessages = config.errorMessages;
   const identity = config.identity ?? defaultIdentityFields;
   const linkLostCopy = { ...DEFAULT_LINK_LOST_COPY, ...config.linkLostMessage };
@@ -252,7 +263,9 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
    * render projects; `viewedDevice` is the single source of the on-screen serialNumber, naming which entry the DOM currently shows; `highestToken` guards pushes per
    * device; `serverGeneration` is the last adapter generation the panel has adopted (null until the first hello), so an unseen one marks a fresh helper process;
    * `linkLost` is the browser-detected link-lost marker, an overlay the watchdog trip sets over whatever the entries hold and every real render clears. The node
-   * references hold the live grid, the Status value span, and one value span per state row.
+   * references hold the live grid, the Status value span, and one value span per state row. `contentPanelEl` is the plugin's dock, minted on the first render that has
+   * a content hook to invoke and held at one identity for the mount's life, so whatever the plugin rendered into it survives every selection change and every rebuild;
+   * it stays null for the whole of a mount the plugin configured no hook on.
    *
    * The two device-keyed maps are deliberately separate rather than folded together, because their lifecycles have nothing to do with each other: `highestToken` is
    * cleared wholesale by a fresh server hello and by the plugin-facing reset, while `deviceState` is never bulk-cleared and never evicted. It is bounded by the
@@ -266,6 +279,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
   let panelEl = null;
   let statusValueEl = null;
   const rowValueEls = new Map();
+  let contentPanelEl = null;
 
   // The device's entry, created on first sight. A device earns one the moment it pushes something the panel understands, initialized to exactly what a device the
   // panel has heard nothing from renders as - the placeholder skeleton under the connecting label - so a freshly created entry and an absent one project the same.
@@ -590,6 +604,31 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     request.catch((error) => console.error("The status view request failed.", error));
   };
 
+  /* Hand the plugin's dock to its content hook - the last act of every selection render, so whatever the hook does happens against the panel's own finished work: the
+   * grid is mounted (or the root emptied, on the no-device render) and the view request, where the branch fires one, is already away. With no hook configured this
+   * returns at once and no element is ever created, which is what keeps an unconfigured panel's rendered DOM exactly what it is without a dock at all.
+   *
+   * The element is minted once and kept for the mount's life, so the plugin writes its content once and that content rides every later render. The parent check is
+   * what holds that across the wholesale renders, which sweep the dock out of the root along with the grid and want it back, while a same-selection re-render finds it
+   * still attached and leaves it where it is: re-inserting an attached node moves a live element, which blurs any focused descendant the plugin put inside it.
+   */
+  const renderContentPanel = () => {
+
+    if(!contentPanel) {
+
+      return;
+    }
+
+    contentPanelEl ??= document.createElement("div");
+
+    if(contentPanelEl.parentNode !== root) {
+
+      root.appendChild(contentPanelEl);
+    }
+
+    contentPanel({ device: viewedDevice ?? undefined, panel: contentPanelEl, signal });
+  };
+
   /* Render for the currently-selected device. Every branch here moves the VIEW and leaves the state map alone, which is what makes a selection instant: no device
    * (global or controller scope) drops the tracked device, the node references, the overlay marker, and the pending watchdog, then empties the root, while every entry
    * and every running latch survives for whenever that device is looked at again. The same serialNumber adopts the fresh device object and rebuilds in place WITHOUT
@@ -599,6 +638,9 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
    * already knows about that device - its last-known status, message, and row values, or the placeholder skeleton when the device has never pushed - mounts it, and
    * fires the view request, which re-arms detection on a full fresh deadline. The request fires either way: the entry is memory, and the authoritative answer arrives
    * one round trip later over push events.
+   *
+   * Whichever branch runs, re-offering the plugin's dock is that branch's closing act, so a configured content hook sees every selection - the render that emptied the
+   * root for a scope with no device included.
    */
   const showDetails = (device) => {
 
@@ -613,6 +655,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
       rowValueEls.clear();
       root.replaceChildren();
+      renderContentPanel();
 
       return;
     }
@@ -621,6 +664,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
       viewedDevice = device;
       refreshPanel();
+      renderContentPanel();
 
       return;
     }
@@ -635,6 +679,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     root.replaceChildren(panelEl);
 
     requestView(device.serialNumber);
+    renderContentPanel();
   };
 
   // The one floor-clearing chokepoint. Both a fresh-server hello and the plugin-facing resetStaleGuards handle drop the per-serialNumber floors through here, so the

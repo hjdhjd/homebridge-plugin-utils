@@ -1335,3 +1335,137 @@ describe("mountOptionsView - deference to a standing connection error", () => {
     assert.equal(configTable.children.length, 0, "the table is still empty and neither pass threw");
   });
 });
+
+describe("mountOptionsView - the nothing-to-list notice", () => {
+
+  const CONTROLLER_A = "ctrl-a";
+  const CONTROLLER_B = "ctrl-b";
+  const DEVICE_A = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
+  const NOTICE = "This controller has no cameras adopted.";
+
+  // A sidebar controller click's full dispatch order: the optimistic scope, the fetch record, then the outcome. An `emptyMessage` on a clean device-less outcome is
+  // what turns the resting controller view into a notice.
+  const clickController = (store, { controllerId, devices = [], emptyMessage, error = "" }) => {
+
+    store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ controllerId, type: "devices:requested" });
+    store.dispatch({ controllerId, devices, emptyMessage, error, seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+  };
+
+  const notice = (configTable) => configTable.querySelector(".fo-devices-notice");
+
+  test("renders the plugin's message in place of the option table", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A, emptyMessage: NOTICE });
+
+    assert.ok(notice(configTable), "the notice is mounted");
+    assert.equal(notice(configTable).textContent, NOTICE, "carrying the plugin's copy verbatim");
+    assert.equal(configTable.querySelector("details[data-category]"), null, "and no option row is offered beside it");
+  });
+
+  test("renders the message as text, never as markup", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A, emptyMessage: "<b>bold</b> & <script>x</script>" });
+
+    assert.equal(notice(configTable).children.length, 0, "the message produced no elements - it is a text node");
+    assert.equal(notice(configTable).textContent, "<b>bold</b> & <script>x</script>", "and reads back verbatim");
+  });
+
+  test("an empty outcome with no message keeps today's behavior - the full table at controller scope", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A });
+
+    assert.equal(notice(configTable), null, "no notice");
+    assert.notEqual(configTable.querySelectorAll("details[data-category]").length, 0, "the table renders as it always did");
+  });
+
+  test("the notice never enters the DOM cache, so leaving and returning rebuilds it rather than restoring it", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A, emptyMessage: NOTICE });
+
+    const first = notice(configTable);
+
+    // Leave for the global view and come back. A cached notice would return by identity; a rebuilt one is a different element carrying the same copy.
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+
+    const second = notice(configTable);
+
+    assert.ok(second, "a notice is mounted again");
+    assert.ok(second !== first, "and it is a fresh element - notice DOM is view-mortal, rebuilt from the outcome on every entry");
+  });
+
+  test("a cached table under the notice's own key survives the notice and returns when devices come back", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    // Visit the controller with devices so its table is built and expanded, then leave, so its DOM is cached under the controller key.
+    clickController(store, { controllerId: CONTROLLER_A, devices: [DEVICE_A] });
+
+    const motion = configTable.querySelector("details[data-category='Motion']");
+
+    motion.open = true;
+    motion.dispatchEvent(new Event("toggle", { bubbles: false }));
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+
+    // Return to the same controller, which now reports itself empty. The notice renders; the cached table must still be waiting behind it.
+    clickController(store, { controllerId: CONTROLLER_A, emptyMessage: NOTICE });
+
+    assert.ok(notice(configTable), "the notice took the surface");
+    assert.equal(configTable.querySelector("details[data-category]"), null, "the just-cached table was not restored under it");
+
+    // The controller reports devices again. The cached table is what comes back.
+    clickController(store, { controllerId: CONTROLLER_A, devices: [DEVICE_A] });
+
+    assert.equal(notice(configTable), null, "the notice is gone");
+    assert.ok(configTable.querySelector("details[data-category='Motion']") === motion, "the very element cached before the notice is the one that returns");
+  });
+
+  test("leaving a notice view caches nothing for its key, so a table built there later is the one that caches", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    // Enter a notice view whose key has never held a table, then leave it and come back with devices. What renders must be a freshly-built table, not notice DOM.
+    clickController(store, { controllerId: CONTROLLER_B, emptyMessage: NOTICE });
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    clickController(store, { controllerId: CONTROLLER_B, devices: [DEVICE_A] });
+
+    assert.equal(notice(configTable), null, "no notice DOM came back out of the cache");
+    assert.notEqual(configTable.querySelectorAll("details[data-category]").length, 0, "a real table is what the view holds");
+  });
+
+  test("the busy and projection passes are safe against the notice-only table", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    clickController(store, { controllerId: CONTROLLER_A, emptyMessage: NOTICE });
+
+    // Both walks query the table for category structure that is not there. A filter change and a fresh fetch record can each land while the notice is mounted.
+    store.dispatch({ query: "motion", type: "filter:changed" });
+    store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
+
+    assert.ok(notice(configTable), "the notice still stands and neither pass threw");
+  });
+});

@@ -814,12 +814,80 @@ describe("tablePresentation", () => {
     assert.deepEqual(tablePresentation(recovered), { kind: "options" });
   });
 
-  test("memoizes on the status slice, so an unrelated dispatch returns the identical result reference", () => {
+  test("memoizes on its input slices, so an unrelated dispatch returns the identical result reference", () => {
 
     const base = loadedState();
     const first = tablePresentation(base);
 
-    // A filter change moves no status, so the cached answer comes back by reference - the check every consumer's reference guard rests on.
+    // A filter change moves none of the slices, so the cached answer comes back by reference - the check every consumer's reference guard rests on.
     assert.equal(tablePresentation(reducer(base, { query: "motion", type: "filter:changed" })), first, "an unrelated dispatch hits the cache");
+  });
+});
+
+describe("tablePresentation - the nothing-to-list variant", () => {
+
+  const NOTICE = "This controller has no cameras adopted.";
+
+  // Land an empty device outcome for a controller and rest at that controller's own view, which is the state a boot or a sidebar click leaves behind when a
+  // reachable controller has nothing to list. The message is always passed explicitly, including the absent case a parameter default would otherwise fill in.
+  const emptyAt = ({ controllerId = "ctrl-a", emptyMessage, scopeControllerId = "ctrl-a" }) => {
+
+    const base = reducer(loadedState({ mode: "controller-based" }), { scope: { controllerId: scopeControllerId, kind: "controller" }, type: "scope:changed" });
+    const requested = reducer(base, { controllerId, type: "devices:requested" });
+
+    return reducer(requested, { controllerId, devices: [], emptyMessage, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+  };
+
+  test("presents the empty variant carrying the plugin's message", () => {
+
+    assert.deepEqual(tablePresentation(emptyAt({ emptyMessage: NOTICE })), { kind: "empty", message: NOTICE });
+  });
+
+  test("a standing connection error outranks it", () => {
+
+    const empty = emptyAt({ emptyMessage: NOTICE });
+    const requested = reducer(empty, { controllerId: "ctrl-a", type: "devices:requested" });
+    const failed = reducer(requested,
+      { controllerId: "ctrl-a", devices: [], error: "Controller unreachable.", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.deepEqual(tablePresentation(failed), { kind: "error" }, "the error view owns the frame, so the notice does not compete for it");
+  });
+
+  test("the controller match gates it: a scope naming a different controller than the loaded list presents the ordinary table", () => {
+
+    // The busy window a click away from a notice view opens: the optimistic scope has moved and the incoming list has not landed, so the recorded message no longer
+    // describes the selected controller and is inert until the outcome that answers arrives.
+    assert.deepEqual(tablePresentation(emptyAt({ controllerId: "ctrl-a", emptyMessage: NOTICE, scopeControllerId: "ctrl-a" })),
+      { kind: "empty", message: NOTICE }, "precondition");
+
+    const empty = emptyAt({ emptyMessage: NOTICE });
+    const movedAway = reducer(empty, { scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
+
+    assert.deepEqual(tablePresentation(movedAway), { kind: "options" }, "the message is inert against a controller it does not describe");
+  });
+
+  test("the scope-kind gate confines it to a controller's own view", () => {
+
+    const empty = emptyAt({ emptyMessage: NOTICE });
+
+    assert.deepEqual(tablePresentation(reducer(empty, { scope: { kind: "global" }, type: "scope:changed" })), { kind: "options" },
+      "the global view is always editable, so it never wears a controller's notice");
+    assert.deepEqual(tablePresentation(reducer(empty, { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" })),
+      { kind: "options" }, "and neither does a device view beneath that controller");
+  });
+
+  test("device-only and global-only pages cannot reach the variant, since their scope is never a controller kind", () => {
+
+    // Both modes present the global view. The scope-kind gate alone is what makes the variant unreachable there - no mode check is needed or wanted.
+    const deviceOnly = reducer(loadedState({ mode: "device-only" }), { controllerId: null, type: "devices:requested" });
+    const landed = reducer(deviceOnly, { controllerId: null, devices: [], emptyMessage: NOTICE, error: "", seq: deviceOnly.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.equal(landed.devicesEmptyMessage, NOTICE, "the reducer still records the message - the gate is at presentation time, not at write time");
+    assert.deepEqual(tablePresentation(landed), { kind: "options" }, "but the global scope never presents it");
+  });
+
+  test("an empty outcome that named no message keeps today's behavior - the full table at controller scope", () => {
+
+    assert.deepEqual(tablePresentation(emptyAt({ emptyMessage: undefined })), { kind: "options" });
   });
 });

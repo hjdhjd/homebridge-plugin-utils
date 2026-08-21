@@ -33,7 +33,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error, taking the
  *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not. Two suppliers reach that
  *     copy: the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw. A clean
- *     outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry.
+ *     outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry. A clean outcome
+ *     that carried no devices and an `emptyMessage` also records that message, which is how a plugin says its controller is reachable with nothing to list.
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
@@ -141,6 +142,11 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {string | null} devicesControllerId - Serial of the controller whose `devices` are loaded, or null (device-only / none yet). Preserves the
  *   device-to-controller association that `scope` drops once the selection goes global, so a loaded device's parent controller stays resolvable after the
  *   selection leaves controller scope.
+ * @property {string | null} devicesEmptyMessage - The plugin's nothing-to-list notice for the loaded controller, or null when the outcome was not that one. Single
+ *   writer: the `devices:loaded` chokepoint sets it and every other outcome nulls it, so it always describes the device list currently in state rather than
+ *   accumulating across fetches. It is not gated at write time by which controller is in scope, because scope moves optimistically ahead of a fetch and a write-time
+ *   gate would have to guess; instead the presentation matches it against `devicesControllerId`, which leaves a message that no longer describes the selected
+ *   controller inert rather than wrong.
  * @property {{controllerId: string | null, seq: number} | null} devicesRequest - The pending device-fetch record, or null when no fetch is outstanding. A
  *   `devices:requested` records the latest fetch here; the `devices:loaded` that carries the same sequence clears it, and any other outcome is dropped.
  * @property {number} devicesRequestSeq - The persistent monotonic fetch counter. Never reset within a store's life, so every fetch across the session gets a unique,
@@ -314,6 +320,7 @@ export const initialState = () => {
     devices: [],
     devicesAppliedSeq: 0,
     devicesControllerId: null,
+    devicesEmptyMessage: null,
     devicesRequest: null,
     devicesRequestSeq: 0,
     filter: { mode: "all", query: "" },
@@ -401,14 +408,21 @@ export const reducer = (state, action) => {
         return state;
       }
 
-      // The pending request is answered. Record the applied sequence as the reducer's own verdict fact (dispatchers read it back to gate their follow-ups), clear the
-      // pending slot, and adopt the device list with its owning controller (null in device-only mode) so the association survives a later move to global scope.
+      /* The pending request is answered. Record the applied sequence as the reducer's own verdict fact (dispatchers read it back to gate their follow-ups), clear the
+       * pending slot, and adopt the device list with its owning controller (null in device-only mode) so the association survives a later move to global scope.
+       *
+       * The nothing-to-list message is recorded here too, at the same chokepoint and under the one condition that makes it meaningful: a healthy fetch that returned
+       * no devices, from a plugin that named the situation. Every other outcome writes null, which is what keeps the field describing the list currently in state
+       * rather than lingering from an earlier fetch - a controller that gains a device on a refetch stops being empty at the same moment its list stops being empty.
+       * The failure fold below inherits that null through this spread, so a failure is never also an empty.
+       */
       const applied = {
 
         ...state,
         devices: action.devices,
         devicesAppliedSeq: action.seq,
         devicesControllerId: action.controllerId ?? null,
+        devicesEmptyMessage: (!action.error.length && !action.devices.length && action.emptyMessage) ? action.emptyMessage : null,
         devicesRequest: null
       };
 

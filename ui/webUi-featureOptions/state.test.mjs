@@ -160,11 +160,11 @@ describe("reducer - devices:loaded", () => {
 
   // Pair a request with its answering outcome: mint the sequence, then apply the outcome stamped with it. The reducer applies a loaded only when its sequence still
   // answers the pending request, so this pairing is how a fetch's outcome lands in state.
-  const requestThenLoad = (state, { controllerId = null, devices = [], error = "" } = {}) => {
+  const requestThenLoad = (state, { controllerId = null, devices = [], emptyMessage, error = "" } = {}) => {
 
     const requested = reducer(state, { controllerId, type: "devices:requested" });
 
-    return reducer(requested, { controllerId, devices, error, seq: requested.devicesRequest.seq, type: "devices:loaded" });
+    return reducer(requested, { controllerId, devices, emptyMessage, error, seq: requested.devicesRequest.seq, type: "devices:loaded" });
   };
 
   test("an outcome that answers the pending request applies the devices and clears the pending slot", () => {
@@ -386,6 +386,37 @@ describe("reducer - devices:loaded", () => {
 
     assert.equal(dropped, pending, "the stale outcome returns the identical state reference");
     assert.equal(dropped.status.kind, "connection-error", "and the standing error is untouched by it");
+  });
+
+  test("records the nothing-to-list message only for a clean, device-less outcome that named one", () => {
+
+    const NOTICE = "This controller has no cameras adopted.";
+
+    assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a", emptyMessage: NOTICE }).devicesEmptyMessage, NOTICE,
+      "clean + no devices + a message is the one shape that records");
+    assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: DEVICES, emptyMessage: NOTICE }).devicesEmptyMessage, null,
+      "an outcome that carried devices is not empty, whatever message rode along");
+    assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a", emptyMessage: NOTICE, error: "Controller unreachable." }).devicesEmptyMessage, null,
+      "a failure is never also an empty - the fold inherits the null through the applied spread");
+    assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a" }).devicesEmptyMessage, null,
+      "an empty list with no message keeps the legacy reading, which is what the absent field has to mean");
+    assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a", emptyMessage: "" }).devicesEmptyMessage, null,
+      "an empty-string message says nothing, so it records nothing rather than a blank notice");
+  });
+
+  test("a later outcome clears a recorded message, so it describes the list currently in state", () => {
+
+    // The single-writer rule's whole point: a controller that gains a device stops being empty at the same moment its list stops being empty.
+    const empty = requestThenLoad(initialState(), { controllerId: "ctrl-a", emptyMessage: "Nothing adopted yet." });
+
+    assert.equal(empty.devicesEmptyMessage, "Nothing adopted yet.", "precondition: the message is recorded");
+    assert.equal(requestThenLoad(empty, { controllerId: "ctrl-a", devices: DEVICES }).devicesEmptyMessage, null, "a refetch that returned devices clears it");
+    assert.equal(requestThenLoad(empty, { controllerId: "ctrl-b" }).devicesEmptyMessage, null, "and so does an undecorated empty outcome from another controller");
+  });
+
+  test("initialState carries no nothing-to-list message", () => {
+
+    assert.equal(initialState().devicesEmptyMessage, null);
   });
 });
 

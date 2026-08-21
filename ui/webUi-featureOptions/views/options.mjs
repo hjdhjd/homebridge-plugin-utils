@@ -4,12 +4,16 @@
  */
 "use strict";
 
-import { applyCategoryStates, captureCategoryStates } from "../utils.mjs";
+import { applyCategoryStates, captureCategoryStates, createElement } from "../utils.mjs";
 import { applyRowState, categoryShell, optionRow, toggleSecretReveal, triStateTransition, valueCommitTransition } from "../rendering.mjs";
 import { buildConfigIndex, hasValueContent } from "../../featureOptions.js";
 import { projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { effect } from "../store.mjs";
+
+// The marker class on the nothing-to-list notice. It is what the outgoing capture below recognizes to keep notice DOM out of the DOM cache, so the class is
+// structural rather than decorative and the two sites that depend on agreeing about it read one constant.
+const DEVICES_NOTICE_CLASS = "fo-devices-notice";
 
 /**
  * Mount the config-table view.
@@ -18,7 +22,8 @@ import { effect } from "../store.mjs";
  *
  *   1. **Initial build** on `model:loaded`: builds the empty config table (no categories yet - those come from the first scope-render).
  *   2. **Scope-aware render** on `scope:changed` (and `model:loaded` / `devices:loaded`, which route through the same pass): detaches the prior view's DOM into
- *      a per-device cache, restores or builds the new view's DOM, applies persisted category-expansion state from localStorage.
+ *      a per-device cache, then puts back whatever the shared {@link tablePresentation} derivation says this surface shows - the view's restored or freshly-built
+ *      option table with its persisted category-expansion state, a plugin's nothing-to-list notice, or nothing at all while a connection error owns the frame.
  *   3. **Lazy row materialization**: builds a category's row elements the first time that category needs them, which is either the user's own disclosure toggle or
  *      the first projection pass that finds the category open. A category nobody has opened carries no rows at all.
  *   4. **Per-row updates** on `option:set` / `option:cleared` / `options:reset` / `model:reverted` / `persist:failed`: walks the projection and re-derives each
@@ -106,10 +111,12 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
           categoryState.set(mountedKey, captureCategoryStates(configTable));
         }
 
-        // Detach the currently-mounted DOM into the cache.
+        // Detach the currently-mounted DOM into the cache. A notice is the one thing that never enters the cache: it is view-mortal, rebuilt from the outcome on
+        // every entry, and caching it would let it come back over a key whose real content is a table - the same-key pass that folds an empty outcome caches the
+        // optimistic bare-controller table under exactly that key, so the notice must not be allowed to displace it on the way out.
         const detached = [...configTable.children];
 
-        if(detached.length > 0) {
+        if((detached.length > 0) && !detached[0].matches?.("." + DEVICES_NOTICE_CLASS)) {
 
           cache.set(mountedKey, detached);
         }
@@ -125,6 +132,21 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
       mountedKey = newKey;
 
       switch(presentation.kind) {
+
+        case "empty": {
+
+          /* The controller is reachable and has nothing to list, so its notice takes the place of the option table. The notice is built fresh on every entry rather
+           * than cached, because the outcome that justifies it is exactly what a refetch can change: a controller that gains a device stops being empty, and a
+           * rebuilt-per-entry notice cannot outlive that. Table DOM cached under this key stays where it is for the same reason, waiting for the day a refetch
+           * returns devices.
+           *
+           * The message is appended as a string child, which the element helper turns into a text node - plugin copy is text the page displays, never markup it
+           * executes.
+           */
+          configTable.appendChild(createElement("div", { classList: [ DEVICES_NOTICE_CLASS, "text-center", "text-muted", "my-4" ] }, [presentation.message]));
+
+          return;
+        }
 
         case "error": {
 

@@ -95,6 +95,11 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * @typedef {Object} DeviceListResult
  * @property {Object[]} devices - The devices for the requested controller; empty when the probe failed or when the controller legitimately has none.
+ * @property {string} [emptyMessage] - The user-facing notice for a controller that is reachable and healthy and simply has nothing to list, read only when both
+ *   `devices` and `error` are empty. Supplying it IS the statement that this is that outcome, and the page presents the notice in place of the option table;
+ *   omitting it preserves the older reading of an empty list, where the page rests at controller scope with the full table rendered. Meaningful in
+ *   controller-based mode only - a device-only or global-only page presents the global view, which is always editable and has no controller to have nothing
+ *   beneath it.
  * @property {string} error - The user-facing connection-failure message: empty when the fetch succeeded, the failure text when the fetch failed and `devices` is empty.
  * @property {string} [guidance] - What the user should do about THIS failure, read only when `error` is non-empty. It overrides the guidance the page would
  *   otherwise show - the plugin's own `ui.controllerFailureGuidance` where it supplied one, the framework's shared controller wording where it did not - so a
@@ -120,7 +125,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   mount with a fresh panel and a fresh signal.
  * @property {(args: { config: Object }) => Promise<ControllerListResult>} [getControllers] - Handler resolving the plugin's {@link ControllerListResult}.
  * @property {(controller: (Controller|null), args: { config: Object }) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's
- *   {@link DeviceListResult}. Called with the selected controller and an options bag carrying the live platform config.
+ *   {@link DeviceListResult}. Called with the selected controller and an options bag carrying the live platform config. The result is where a plugin says which
+ *   of the three outcomes this fetch was: a device list, a failure it may name with its own `headline` and `guidance`, or a reachable controller with nothing to
+ *   list, which an `emptyMessage` both declares and supplies the notice copy for.
  * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is pinned to
  *   global for the page's life (the reducer refuses any other scope in this mode), and the {@link FeatureOptionsConfig.infoPanel} callback always receives an undefined
  *   device. Mutually exclusive with `getControllers`, an explicitly supplied `getDevices`, and `statusPanel` - each throws a TypeError at construction. The `sidebar`
@@ -212,7 +219,8 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * action without re-entering the whole show() cycle, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
  * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
  * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
- * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape.
+ * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract carries the fuller vocabulary of the
+ * two, since a controller can be unreachable, populated, or reachable with nothing to list, and only the plugin can tell the last two apart.
  *
  * The page contract is markup the consumer supplies. The framework's own content regions are addressed by id - `deviceStatsContainer`, `headerInfo`,
  * `optionsContainer`, `search`, and `sidebar` - and are hidden at teardown and revealed together at the end of a load. A plugin's own chrome joins that rhythm by
@@ -887,6 +895,7 @@ export class webUiFeatureOptions {
 
       controllerId: initialController?.serialNumber ?? null,
       devices,
+      emptyMessage: outcome.emptyMessage,
       error,
       guidance: outcome.guidance ?? this.#config.controllerFailureGuidance,
       headline: outcome.headline,
@@ -918,7 +927,9 @@ export class webUiFeatureOptions {
 
     // Complete the selection the pre-fire began. My outcome applied, so the local `devices` is the applied list, and a controller that returned devices continues to
     // its controller-as-device entry (devices[0]) exactly as a click on that controller does. Every other case already rests where a click would leave it: device-only
-    // and global-only on global, where the initial state points, and a controller whose list came back empty on the controller's own view.
+    // and global-only on global, where the initial state points, and a controller whose list came back empty on the controller's own view - which is where a notice,
+    // if the outcome supplied one, renders in place of that view's table. Nothing about the reveal below changes for it: the notice lives inside the config table's
+    // region, so it appears with the page rather than ahead of it, and the search panel's bars settled during the dispatch above.
     if((initialController !== null) && (devices.length > 0)) {
 
       this.#store.dispatch({

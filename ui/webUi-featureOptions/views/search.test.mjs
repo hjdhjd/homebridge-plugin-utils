@@ -255,4 +255,40 @@ describe("mountSearchView - following the table's presentation", () => {
     assert.equal(barsHidden(root), false, "the bars are shown again");
     assert.deepEqual([...root.children], before, "and they are the same elements - hidden, never rebuilt, so the search box keeps its identity");
   });
+
+  test("both panel bars hide over a nothing-to-list notice, and return when the controller reports devices", () => {
+
+    using _dom = createTestDom();
+
+    const { root, store } = setup();
+
+    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+    store.dispatch({
+
+      controllerId: "ctrl-a",
+      devices: [],
+      emptyMessage: "This controller has no cameras adopted.",
+      error: "",
+      seq: store.state.devicesRequest.seq,
+      type: "devices:loaded"
+    });
+
+    assert.equal(barsHidden(root), true, "there is no table to search, so the panel withdraws");
+
+    clickController(store, { devices: [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "D", serialNumber: "dev-a" }] });
+
+    assert.equal(barsHidden(root), false, "and returns with the table");
+  });
+
+  test("an empty outcome with no message leaves the panel alone - the table is still what the surface shows", () => {
+
+    using _dom = createTestDom();
+
+    const { root, store } = setup();
+
+    clickController(store);
+
+    assert.equal(barsHidden(root), false, "the legacy empty-list reading keeps its full table and its panel");
+  });
 });

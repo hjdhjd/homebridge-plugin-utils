@@ -3386,6 +3386,127 @@ describe("webUiFeatureOptions - a click failure and the healthy click that recov
   });
 });
 
+describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
+
+  const NOTICE = "This controller has no cameras adopted.";
+
+  const barsHidden = (search) => [...search.children].every((child) => child.classList.contains("d-none"));
+
+  test("a boot whose controller has nothing to list reveals the page with the notice in place of the table", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      getDevices: () => ({ devices: [], emptyMessage: NOTICE, error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // The reveal is what separates this from a failure: an empty outcome is a success, so the page appears rather than resting on the retry view.
+    assert.equal(skeleton.sidebar.style.display, "", "the page is revealed - an empty outcome is a success, not a connection error");
+    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "and never renders the connection-error view");
+    assert.equal(skeleton.configTable.querySelector(".fo-devices-notice")?.textContent, NOTICE, "the notice holds the config-table surface");
+    assert.equal(skeleton.configTable.querySelector("details[data-category]"), null, "no option row is offered beside it");
+    assert.equal(barsHidden(skeleton.search), true, "and the search panel's content is hidden - there is nothing to search");
+
+    orchestrator.cleanup();
+  });
+
+  test("a sidebar click onto a controller with nothing to list renders the notice, and clicking back restores the table", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Controller A has a device so the boot lands on a normal page; controller B is reachable with nothing to list.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
+      getDevices: (controller) => (controller?.serialNumber === "CTRL-A") ?
+        { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub A", serialNumber: "CTRL-A" }], error: "" } :
+        { devices: [], emptyMessage: NOTICE, error: "" }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.notEqual(skeleton.configTable.children.length, 0, "precondition: the boot rendered a table");
+
+    const ctrlB = skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']");
+
+    ctrlB.click();
+    await flush();
+
+    assert.equal(skeleton.configTable.querySelector(".fo-devices-notice")?.textContent, NOTICE, "the notice replaced the table");
+    assert.equal(ctrlB.classList.contains("active"), true, "the optimistic controller scope stands, which is the view the notice describes");
+    assert.equal(barsHidden(skeleton.search), true, "the search panel's content is hidden with it");
+
+    skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']").click();
+    await flush();
+
+    assert.equal(skeleton.configTable.querySelector(".fo-devices-notice"), null, "clicking back to a populated controller clears the notice");
+    assert.notEqual(skeleton.configTable.querySelectorAll("details[data-category]").length, 0, "and its table renders");
+    assert.equal(barsHidden(skeleton.search), false, "and the search panel returns");
+
+    orchestrator.cleanup();
+  });
+
+  test("an empty outcome with no message keeps today's behavior end to end - the full table at controller scope", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // The parity row for the whole feature: a plugin that says nothing about its empty list gets exactly the page it got before the notice existed.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      getDevices: () => ({ devices: [], error: "" })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.configTable.querySelector(".fo-devices-notice"), null, "no notice");
+    assert.notEqual(skeleton.configTable.querySelectorAll("details[data-category]").length, 0, "the full table renders at controller scope");
+    assert.equal(barsHidden(skeleton.search), false, "and the search panel stands");
+
+    orchestrator.cleanup();
+  });
+});
+
 describe("webUiFeatureOptions - empty-success semantics", () => {
 
   test("empty-success on the initial show renders the normal empty UI and never shows connection-error", async () => {

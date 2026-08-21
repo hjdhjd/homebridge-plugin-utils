@@ -486,7 +486,7 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
 
         // Bound the fetch. The plugin's hook rides the same bridge every other host call does, so an unanswered click would otherwise leave the sidebar highlighted on
         // a controller whose devices never arrive - the deadline turns that into the rejection the catch below already knows how to render.
-        const { devices, error, guidance, headline } = await withDeadline({ promise: getDevices(controller ?? null), seconds: deadlineSeconds, signal });
+        const { devices, emptyMessage, error, guidance, headline } = await withDeadline({ promise: getDevices(controller ?? null), seconds: deadlineSeconds, signal });
 
         // Bail if the page tore down; a torn-down store must not be dispatched against. Staleness itself is the reducer's job - it drops an outcome whose sequence no
         // longer answers the pending request.
@@ -498,11 +498,12 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
         // The copy rides along unconditionally: the reducer reads it only on the fold a non-empty error triggers and ignores it on a success, so one dispatch shape
         // serves both outcomes. What the result named wins over the configured guidance, which stands in for every failure this plugin can have rather than for the
         // one that just happened; a result naming neither leaves both fallbacks in place.
-        store.dispatch({ controllerId: deviceSerial, devices, error, guidance: guidance ?? failureGuidance, headline, seq, type: "devices:loaded" });
+        store.dispatch({ controllerId: deviceSerial, devices, emptyMessage, error, guidance: guidance ?? failureGuidance, headline, seq, type: "devices:loaded" });
 
         // Gate the follow-up on the reducer's own verdict: select the controller-as-device entry only when my outcome is the one that applied, carried no failure,
         // and returned at least one device. A superseded outcome, a connection failure (the reducer moved the store to connection-error), or an empty controller each
-        // leaves the optimistic controller scope standing with no device-scope dispatch.
+        // leaves the optimistic controller scope standing with no device-scope dispatch. That resting place is exactly what a nothing-to-list notice renders over,
+        // so the empty case needs nothing here beyond the decline it already makes.
         if((store.state.devicesAppliedSeq !== seq) || error.length || (devices.length === 0)) {
 
           return;

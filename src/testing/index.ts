@@ -1,19 +1,19 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * testing/index.ts: The library's test-support entry point - the cross-cutting helpers and every shipped test double, at one subpath.
+ * testing/index.ts: The library's test-support entry point - the cross-cutting helpers, the guard machinery, and every shipped test double, at one subpath.
  */
 
 /**
  * Every piece of shipped test-support surface the library offers, reachable at one entry point.
  *
  * The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
- * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below, and the test doubles that stand in for the
- * library's own dependency-inversion boundaries.
+ * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below, the runtime-floor guard machinery in
+ * `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
  *
  * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
  * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts` - because a double and its subject drift apart the moment they stop sharing a
- * directory. Only their export path lives here. The helpers below are the other case: they had no shipped home at all, so this module is where they are defined rather
- * than merely re-exported.
+ * directory. Only their export path lives here. The helpers and the guard machinery are the other case: they have no production subject to sit beside, so this
+ * directory is where they are defined rather than merely re-exported.
  *
  * Nothing in production may import from this module, and that is what the dedicated subpath buys over a category tag on the main barrel. The production/test category
  * boundary becomes structural: a production module reaching for a double names a specifier that a reader and a grep can both see is wrong, rather than one everybody
@@ -26,13 +26,15 @@ import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { noOpLog } from "../util.ts";
 
-/* The shipped doubles, aggregated from their physical homes. Each family is re-exported wholesale rather than symbol-by-symbol, because the module on the other side
- * already curates what it publishes and a second enumeration here would be a list to keep in sync for nothing.
+/* The shipped doubles, aggregated from their physical homes, and the guard machinery that lives in this directory alongside the helpers. Each module is re-exported
+ * wholesale rather than symbol-by-symbol, because the module on the other side already curates what it publishes and a second enumeration here would be a list to keep
+ * in sync for nothing.
  */
 export * from "../clock-double.ts";
 export * from "../ffmpeg/fmp4-builders.ts";
 export * from "../ffmpeg/recording-process-double.ts";
 export * from "../logclient/socket-double.ts";
+export * from "./runtime-floor.ts";
 
 /**
  * Return `items[index]`, asserting the element exists. Narrows the result to `T` so test bodies can use the value without non-null assertions and without a separate

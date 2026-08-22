@@ -98,6 +98,25 @@ export interface MqttFeatureOptionsConfig {
 }
 
 /**
+ * The MQTT feature-option group {@link mqttFeatureOptions} returns: the category and the entries belonging to it, shaped to drop straight into a plugin's own catalog.
+ *
+ * @property category - The MQTT category entry, whose `name` is typed as the literal `"Mqtt"` rather than as `string`. See {@link mqttFeatureOptions} for what that
+ *                      buys a composing plugin.
+ * @property options  - The option entries belonging to the category.
+ *
+ * @typeParam TMeta - The concrete type of the opaque meta annotation the composing plugin's catalog carries, mirroring {@link FeatureOptionEntry} and
+ *                    {@link FeatureCategoryEntry} so both halves of the group speak the same channel. Defaults to `unknown`, which is what an un-parameterized call
+ *                    resolves to.
+ *
+ * @category Feature Options
+ */
+export interface MqttFeatureOptionsGroup<TMeta = unknown> {
+
+  category: FeatureCategoryEntry<TMeta> & { name: "Mqtt" };
+  options: FeatureOptionEntry<TMeta>[];
+}
+
+/**
  * Build the canonical MQTT feature-option group - a category and its two entries - for a plugin to compose into its own feature-option catalog. The library that
  * ships the MQTT mechanism ships its configuration surface alongside it, so every plugin exposing an MQTT broker offers the same two options under the same names,
  * with the same descriptions, resolved by the same engine.
@@ -109,7 +128,15 @@ export interface MqttFeatureOptionsConfig {
  *
  * @param config - The per-plugin facts the group needs. See {@link MqttFeatureOptionsConfig}.
  *
- * @returns A category entry and the two option entries belonging to it. Every object is freshly allocated per call, so composing plugins never share catalog state.
+ * @returns A category entry and the two option entries belonging to it. See {@link MqttFeatureOptionsGroup}. Every object is freshly allocated per call, so composing
+ *          plugins never share catalog state. The category's `name` is typed as the literal `"Mqtt"` rather than as `string`, which is what lets a plugin whose catalog
+ *          record is keyed on its literal category names (`Record<"Device" | "Mqtt", FeatureOptionEntry[]>`) write `[mqtt.category.name]` as a computed key without
+ *          widening the record's key type.
+ *
+ * @typeParam TMeta - The concrete type of the opaque meta annotation the composing plugin's catalog carries, threaded onto both halves of the group so the result
+ *                    assigns straight into a `FeatureOptionEntry<TMeta>[]` catalog rather than needing a bridge on the plugin side. Defaults to `unknown`, which is
+ *                    what an un-parameterized call resolves to; the group sets no `meta` of its own, so the parameter is a compile-time thread with nothing behind it
+ *                    at runtime.
  *
  * @example
  *
@@ -129,7 +156,7 @@ export interface MqttFeatureOptionsConfig {
  *
  * @category Feature Options
  */
-export function mqttFeatureOptions({ defaultTopic, scopes = ["global"] }: MqttFeatureOptionsConfig): { category: FeatureCategoryEntry; options: FeatureOptionEntry[] } {
+export function mqttFeatureOptions<TMeta = unknown>({ defaultTopic, scopes = ["global"] }: MqttFeatureOptionsConfig): MqttFeatureOptionsGroup<TMeta> {
 
   /* Everything below is allocated on this call - the category, the options array, each entry, and each entry's scope tuple - and the caller's `scopes` array is
    * copied rather than embedded. A composing plugin owns its catalog outright: neither a second plugin composing the group nor the caller mutating the array it

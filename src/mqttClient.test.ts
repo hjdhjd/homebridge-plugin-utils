@@ -8,13 +8,13 @@
  * pure {@link routeMqttBrokerError} helper, mirroring how `parseFfmpegCodecs` is tested directly with fixture strings while the spawn-end-to-end path is covered by
  * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
  */
+import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
 import { assertNoUnhandledRejections, capturingLog, silentLog } from "./testing.helpers.ts";
 import { awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing.helpers.ts";
-import type { FeatureOptionEntry } from "./featureOptions.ts";
 import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
@@ -1413,6 +1413,44 @@ describe("MqttClient - connect / close edge flag", () => {
     assert.ok(!fullMessage.includes("secretpass"), "the raw password must never appear in any log line");
   });
 });
+
+// A plugin-side meta shape, standing in for the typed annotation channel a composing plugin threads through its own catalog.
+interface PluginMeta {
+
+  icon: string;
+}
+
+/* Compile-time assignability proof for the group's meta channel and its category name. These never run - the function is voided at module scope rather than called -
+ * so they add nothing to the runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a return type that drops the generic or widens the
+ * category name to `string` fails the build here rather than silently at a consuming plugin.
+ */
+const mqttGroupShapeExercises = (): void => {
+
+  const typed = mqttFeatureOptions<PluginMeta>({ defaultTopic: "hydrawise" });
+
+  // A plugin whose catalog is typed over its own meta channel names that type at the call and assigns both halves of the group straight in. A return typed over the
+  // `unknown` forms is not assignable to either of these, which is the bridge the generic removes from the plugin side.
+  const category: FeatureCategoryEntry<PluginMeta> = typed.category;
+  const options: FeatureOptionEntry<PluginMeta>[] = typed.options;
+
+  /* The category name is the literal `"Mqtt"`, so a catalog record keyed on literal category names takes it as a computed key and stays keyed on those literals. A
+   * `name: string` would contribute a string index signature instead, leaving the record's `Mqtt` key unsatisfied.
+   */
+  const catalog: Record<"Device" | "Mqtt", FeatureOptionEntry<PluginMeta>[]> = {
+
+    Device: [],
+    [typed.category.name]: typed.options
+  };
+
+  // An un-parameterized call resolves to the `unknown` forms and assigns into an untyped catalog, so every existing consumer compiles unchanged.
+  const bare = mqttFeatureOptions({ defaultTopic: "ratgdo" });
+  const bareCategory: FeatureCategoryEntry = bare.category;
+  const bareOptions: FeatureOptionEntry[] = bare.options;
+
+  void [ category, options, catalog, bareCategory, bareOptions ];
+};
+
+void mqttGroupShapeExercises;
 
 describe("mqttFeatureOptions - canonical MQTT feature-option group", () => {
 

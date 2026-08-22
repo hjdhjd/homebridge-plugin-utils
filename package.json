@@ -46,24 +46,39 @@
   },
   "main": "dist/index.js",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./eslint": { "types": "./dist/eslint-plugin/index.d.mts", "import": "./build/eslint-plugin/index.mjs" },
-    "./logclient": { "types": "./dist/logclient/index.d.ts", "import": "./dist/logclient/index.js" },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./eslint": {
+      "types": "./dist/eslint-plugin/index.d.mts",
+      "import": "./build/eslint-plugin/index.mjs"
+    },
+    "./logclient": {
+      "types": "./dist/logclient/index.d.ts",
+      "import": "./dist/logclient/index.js"
+    },
     "./package.json": "./package.json",
-    "./polyfills": { "types": "./dist/polyfills.d.ts", "import": "./dist/polyfills.js" },
-    "./testing": { "types": "./dist/testing/index.d.ts", "import": "./dist/testing/index.js" }
+    "./polyfills": {
+      "types": "./dist/polyfills.d.ts",
+      "import": "./dist/polyfills.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
   },
   "bin": {
     "homebridge-plugin-utils": "dist/cli/index.js",
     "hblog": "dist/logclient/cli.js"
   },
   "devDependencies": {
-    "@homebridge/hap-nodejs": "2.2.2",
+    "@homebridge/hap-nodejs": "2.2.3",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "26.2.0",
     "aedes": "1.0.2",
     "eslint": "9.39.2",
-    "happy-dom": "20.11.2",
+    "happy-dom": "20.11.6",
     "homebridge": "2.4.0",
     "typedoc": "0.28.20",
     "typedoc-plugin-markdown": "4.12.0",
@@ -71,6 +86,7 @@
     "typescript-eslint": "8.67.0"
   },
   "dependencies": {
-    "mqtt": "5.15.2"
+    "mqtt": "5.15.2",
+    "undici": "8.10.0"
   }
 }

@@ -9,8 +9,9 @@ import { describe, test } from "node:test";
 import { parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } from "./docChrome.ts";
 import assert from "node:assert/strict";
 
-// The canonical worked-example manifest. Two masthead badges, one dashboard badge, and two nav sections that between them cover both entry kinds: a README anchor
-// and a plain doc, plus a second doc whose blurb carries "&" and "<...>" so the markdown-verbatim and HTML-escaped surfaces can be told apart.
+// The canonical worked-example manifest. Two masthead badges, one dashboard badge, and two nav sections that between them cover every entry kind: a README anchor, a
+// plain doc, and an entry pointing outside the repository, plus a second doc whose blurb carries "&" and "<...>" so the markdown-verbatim and HTML-escaped surfaces
+// can be told apart.
 const MANIFEST: DocChromeManifest = {
 
   devBadges: [
@@ -33,7 +34,8 @@ const MANIFEST: DocChromeManifest = {
     { entries: [
 
       { anchor: "installation", blurb: "installing this plugin.", kind: "readme-anchor", title: "Installation" },
-      { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", title: "Best Practices" }
+      { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", title: "Best Practices" },
+      { blurb: "the companion plugin's own documentation.", kind: "external", title: "Companion Plugin", url: "https://github.com/acme/companion-plugin#readme" }
     ], title: "Getting Started" },
     { entries: [
 
@@ -61,27 +63,30 @@ const MASTHEAD_OUTPUT = [
   "</SPAN>"
 ].join("\n");
 
-// The README documentation index: in-page anchors for anchor entries, absolute blob URLs for docs, blurbs verbatim (markdown surface).
+// The README documentation index: in-page anchors for anchor entries, absolute blob URLs for docs, the external entry's own URL verbatim, blurbs verbatim (markdown
+// surface).
 const README_NAV_OUTPUT = [
 
   "* Getting Started",
   "  * [Installation](#installation): installing this plugin.",
   "  * [Best Practices](https://github.com/acme/example-plugin/blob/main/docs/BestPractices.md): best practices.",
+  "  * [Companion Plugin](https://github.com/acme/companion-plugin#readme): the companion plugin's own documentation.",
   "",
   "* Additional Topics",
   "  * [Audio Options](https://github.com/acme/example-plugin/blob/main/docs/AudioOptions.md): audio & <video> options."
 ].join("\n");
 
-// The footer index rendered into docs/AudioOptions.md: the anchor entry now resolves to the README's absolute URL, and the self-entry (Audio Options) is dropped, which
-// empties and therefore removes the "Additional Topics" section.
+// The footer index rendered into docs/AudioOptions.md: the anchor entry now resolves to the README's absolute URL, the external entry carries the same URL it did on
+// the README, and the self-entry (Audio Options) is dropped, which empties and therefore removes the "Additional Topics" section.
 const DOC_FOOTER_OUTPUT = [
 
   "* Getting Started",
   "  * [Installation](https://github.com/acme/example-plugin/blob/main/README.md#installation): installing this plugin.",
-  "  * [Best Practices](https://github.com/acme/example-plugin/blob/main/docs/BestPractices.md): best practices."
+  "  * [Best Practices](https://github.com/acme/example-plugin/blob/main/docs/BestPractices.md): best practices.",
+  "  * [Companion Plugin](https://github.com/acme/companion-plugin#readme): the companion plugin's own documentation."
 ].join("\n");
 
-// The webUI documentation index: HTML, absolute URLs everywhere, and the "&"/"<>" blurb HTML-escaped.
+// The webUI documentation index: HTML, absolute URLs everywhere, the external entry's URL still verbatim, and the "&"/"<>" blurb HTML-escaped.
 const WEBUI_NAV_OUTPUT = [
 
   "<h5>Getting Started</h5>",
@@ -89,6 +94,7 @@ const WEBUI_NAV_OUTPUT = [
   "<ul dir=\"auto\">",
   "  <li><a target=\"_blank\" href=\"https://github.com/acme/example-plugin/blob/main/README.md#installation\">Installation</a>: installing this plugin.</li>",
   "  <li><a target=\"_blank\" href=\"https://github.com/acme/example-plugin/blob/main/docs/BestPractices.md\">Best Practices</a>: best practices.</li>",
+  "  <li><a target=\"_blank\" href=\"https://github.com/acme/companion-plugin#readme\">Companion Plugin</a>: the companion plugin's own documentation.</li>",
   "</ul>",
   "</div>",
   "",
@@ -307,11 +313,35 @@ describe("parseDocChromeManifest", () => {
       /nav\[0\]\.entries\[0\]` must be an object/);
   });
 
-  test("rejects a nav entry with an unknown kind", () => {
+  test("rejects a nav entry with an unknown kind, naming every kind the union admits", () => {
 
     const nav = [{ entries: [{ blurb: "b", kind: "mystery", title: "t" }], title: "Getting Started" }];
 
-    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, nav }, "manifest.js"), /nav\[0\]\.entries\[0\]\.kind` must be "doc" or "readme-anchor"/);
+    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, nav }, "manifest.js"),
+      /nav\[0\]\.entries\[0\]\.kind` must be "doc", "external", or "readme-anchor"/);
+  });
+
+  test("accepts an external entry carrying a url", () => {
+
+    const nav = [{ entries: [{ blurb: "b", kind: "external", title: "t", url: "https://example.test/elsewhere" }], title: "Getting Started" }];
+
+    assert.doesNotThrow(() => parseDocChromeManifest({ ...MANIFEST, nav }, "manifest.js"));
+  });
+
+  test("rejects an external entry missing its url", () => {
+
+    const nav = [{ entries: [{ blurb: "b", kind: "external", title: "t" }], title: "Getting Started" }];
+
+    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, nav }, "manifest.js"), /nav\[0\]\.entries\[0\]\.url` must be a non-empty string/);
+  });
+
+  test("rejects an external entry whose url is not a string", () => {
+
+    // A JSON-authored manifest can smuggle any shape past the type system, so the validator's url check is a genuine runtime guard rather than a restatement of the
+    // union. An entry that reached the renderer with a non-string url would emit it into an href attribute as "[object Object]".
+    const nav = [{ entries: [{ blurb: "b", kind: "external", title: "t", url: { href: "https://example.test" } }], title: "Getting Started" }];
+
+    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, nav }, "manifest.js"), /nav\[0\]\.entries\[0\]\.url` must be a non-empty string/);
   });
 
   test("rejects a doc entry with a non-boolean masthead flag", () => {

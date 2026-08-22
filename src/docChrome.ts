@@ -63,15 +63,18 @@ export interface Masthead {
 /**
  * One documentation-index entry. A discriminated union on `kind`: a `"doc"` entry points at a file under the plugin's `docs/` tree (and may opt out of the masthead via
  * `masthead: false`, or of the documentation-footer region via `footer: false` - with both opted out, a linked file such as the changelog stays entirely free of stamped
- * chrome while remaining listed in every documentation index), while a `"readme-anchor"` entry points at a section anchor within the README itself. The renderer derives
- * the correct href per surface from this one canonical shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere
- * else.
+ * chrome while remaining listed in every documentation index), a `"readme-anchor"` entry points at a section anchor within the README itself, and an `"external"` entry
+ * points at a destination outside the repository - a sibling project's documentation, say. The renderer derives the correct href per surface from this one canonical
+ * shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere else. An external entry is the one kind with nothing
+ * to derive: it names a complete destination, so its `url` renders verbatim on every surface, and the chrome stamper passes over it because there is no file of the
+ * plugin's own to stamp.
  *
  * @category Doc Chrome
  */
 export type DocEntry =
   { readonly anchor: string; readonly blurb: string; readonly kind: "readme-anchor"; readonly title: string } |
-  { readonly blurb: string; readonly file: string; readonly footer?: boolean; readonly kind: "doc"; readonly masthead?: boolean; readonly title: string };
+  { readonly blurb: string; readonly file: string; readonly footer?: boolean; readonly kind: "doc"; readonly masthead?: boolean; readonly title: string } |
+  { readonly blurb: string; readonly kind: "external"; readonly title: string; readonly url: string };
 
 /**
  * A named, ordered group of documentation entries (for example "Getting Started" or "Additional Topics"). Sections render in array order, and entries within a section
@@ -216,17 +219,33 @@ function renderBadge(badge: Badge): string {
   return "[![" + badge.alt + "](" + badge.image + ")](" + badge.link + ")";
 }
 
-// Derive the href for a documentation entry on a given surface. On the README itself a `readme-anchor` entry is an in-page anchor; viewed from anywhere else it must
-// resolve to the README's absolute blob URL. A `doc` entry is always an absolute blob URL to its file, identical on every surface - which is what collapses the
-// per-surface href drift the hand-maintained lists suffer from.
+/* Derive the href for a documentation entry on a given surface. On the README itself a `readme-anchor` entry is an in-page anchor; viewed from anywhere else it must
+ * resolve to the README's absolute blob URL. A `doc` entry is always an absolute blob URL to its file, identical on every surface - which is what collapses the
+ * per-surface href drift the hand-maintained lists suffer from. An `external` entry already names a complete destination, so its URL is surface-independent and passes
+ * through untouched.
+ *
+ * The switch carries no default arm on purpose: with every kind answered, a fourth kind added to the union fails to compile here until it is given its own derivation,
+ * which is the guarantee a fallback arm would trade away.
+ */
 function docEntryHref(entry: DocEntry, repo: RepoCoordinates, local: boolean): string {
 
-  if(entry.kind === "readme-anchor") {
+  switch(entry.kind) {
 
-    return local ? ("#" + entry.anchor) : (blobBaseUrl(repo) + "/README.md#" + entry.anchor);
+    case "doc": {
+
+      return blobBaseUrl(repo) + "/" + entry.file;
+    }
+
+    case "external": {
+
+      return entry.url;
+    }
+
+    case "readme-anchor": {
+
+      return local ? ("#" + entry.anchor) : (blobBaseUrl(repo) + "/README.md#" + entry.anchor);
+    }
   }
-
-  return blobBaseUrl(repo) + "/" + entry.file;
 }
 
 /**
@@ -284,8 +303,8 @@ export function renderDevBadges(manifest: DocChromeManifest): string {
  * entry; on `"webui"` it is one `<h5>` heading per section followed by a `<div class="px-4">` wrapping the section's `<ul>`, which is the indented body under a
  * flush heading that matches the rhythm of the hand-authored sections a webUI support tab surrounds it with. The indent belongs to the wrapper rather than to the
  * list because a list's indentation is its own padding, which a padding utility on the list element replaces rather than composes with. Href derivation follows the
- * surface: in-README anchors on `"readme"`, absolute blob URLs elsewhere. A `"doc-footer"` render omits the current document (via `currentFile`) and drops any
- * section left empty by that omission, so a doc's own footer never links back to itself.
+ * surface: in-README anchors on `"readme"`, absolute blob URLs elsewhere, and an external entry's own URL wherever it is listed. A `"doc-footer"` render omits the
+ * current document (via `currentFile`) and drops any section left empty by that omission, so a doc's own footer never links back to itself.
  *
  * @param input
  * @param input.currentFile - The doc file being rendered into, relative to the plugin root. Only consulted for the `"doc-footer"` surface, to omit the self-link.
@@ -426,7 +445,7 @@ function assertDocEntry(value: unknown, path: string, source: string): void {
     fail(source, "field `" + path + "` must be an object");
   }
 
-  const entry = value as { anchor?: unknown; blurb?: unknown; file?: unknown; footer?: unknown; kind?: unknown; masthead?: unknown; title?: unknown };
+  const entry = value as { anchor?: unknown; blurb?: unknown; file?: unknown; footer?: unknown; kind?: unknown; masthead?: unknown; title?: unknown; url?: unknown };
 
   assertString(entry.title, path + ".title", source);
   assertString(entry.blurb, path + ".blurb", source);
@@ -450,6 +469,13 @@ function assertDocEntry(value: unknown, path: string, source: string): void {
       return;
     }
 
+    case "external": {
+
+      assertString(entry.url, path + ".url", source);
+
+      return;
+    }
+
     case "readme-anchor": {
 
       assertString(entry.anchor, path + ".anchor", source);
@@ -459,7 +485,7 @@ function assertDocEntry(value: unknown, path: string, source: string): void {
 
     default: {
 
-      fail(source, "field `" + path + ".kind` must be \"doc\" or \"readme-anchor\"");
+      fail(source, "field `" + path + ".kind` must be \"doc\", \"external\", or \"readme-anchor\"");
     }
   }
 }

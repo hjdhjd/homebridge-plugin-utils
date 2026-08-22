@@ -1077,6 +1077,49 @@ describe("prepareChrome", () => {
     assert.match(footer, /\[Changelog\]/, "a sibling doc's footer still lists the changelog");
   });
 
+  test("an entry pointing outside the repository is listed on every surface and stamped nowhere", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const entries = [
+
+      { anchor: "installation", blurb: "installing this plugin.", kind: "readme-anchor", title: "Installation" },
+      { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", title: "Best Practices" },
+      { blurb: "release history.", file: "docs/Changelog.md", kind: "doc", masthead: false, title: "Changelog" },
+      { blurb: "the companion plugin's documentation.", kind: "external", title: "Companion Plugin", url: "https://github.com/acme/companion-plugin#readme" }
+    ];
+
+    const manifest = { ...BASE_MANIFEST, nav: [{ entries, title: "Getting Started" }] };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    /* An external entry names a destination in someone else's repository, so the stamper has no file of the plugin's own to write to. A walk that took it for a doc
+     * would resolve its URL against the plugin root and then abort the entire run on the unreadable target, because the stamp is all-or-nothing - so a run that
+     * completes is itself the proof that the walk passed over it.
+     */
+    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    const externalLink = /\[Companion Plugin\]\(https:\/\/github\.com\/acme\/companion-plugin#readme\)/;
+    const readme = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    assert.match(readme, externalLink, "the README index lists the external entry at its own URL");
+
+    const bestPractices = await readFile(join(scratch.path, "docs", "BestPractices.md"), "utf8");
+    const footer = bestPractices.slice(bestPractices.indexOf(docChrome.DOCUMENTATION_BEGIN));
+
+    assert.match(footer, externalLink, "a doc footer lists it at the same URL, an external destination having no per-surface form");
+
+    const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
+
+    assert.match(html, /href="https:\/\/github\.com\/acme\/companion-plugin#readme"/, "the webUI index links it at the same URL");
+
+    // The entry contributes list rows and nothing else: no path anywhere under the plugin root is derived from its URL.
+    const tree = await readdir(scratch.path, { recursive: true });
+
+    assert.equal(tree.some((entryPath) => entryPath.includes("companion-plugin")), false, "no target file is derived from an external entry's URL");
+  });
+
   test("loads a manifest authored as static JSON, not just a module", async () => {
 
     await using scratch = await makeScratchRoot();

@@ -938,6 +938,127 @@ describe("mountOptionsView - per-device cache", () => {
   });
 });
 
+describe("mountOptionsView - controller-scope cache invalidation", () => {
+
+  /* The single-identity controller shape: the controllers list and the controller's own device row carry the same serial. That is what a plugin whose device
+   * list is already stamped with hardware serials presents, and it is the condition the prefix sweep turns on - a controller-page mutation names a serial the
+   * controllers list recognizes, so the sweep can find every device view that inherits from it by the first segment of its cache key.
+   */
+  const CTRL_A = "AABBCCDDEE01";
+  const CTRL_B = "AABBCCDDEE02";
+  const CHILD_A = "AABBCCDDEE11";
+  const CHILD_B = "AABBCCDDEE21";
+
+  const CACHE_CATEGORIES = [{ description: "Camera Options", name: "Camera" }];
+
+  /* The catalog reaches every scope, because so do the views this test caches. Hksv is the controller-scoped option the mutation lands on, while Enabled carries
+   * no scopes declaration and so is valid everywhere - without it the category would be inactive at global scope and the global view would have no table to cache.
+   */
+  const CACHE_OPTIONS = {
+
+    Camera: [
+
+      { default: true, description: "Enable the camera.", name: "Enabled" },
+      { default: false, description: "Enable HKSV recording.", name: "Hksv", scopes: [ "controller", "device" ] }
+    ]
+  };
+
+  const CACHE_CATALOG = {
+
+    ...buildCatalogIndex(CACHE_CATEGORIES, CACHE_OPTIONS),
+
+    validators: { isController: (device) => device?.modelKey === "nvr", validOption: () => true, validOptionCategory: () => true }
+  };
+
+  const CACHE_CONTROLLERS = [
+
+    { address: "192.0.2.1", name: "NVR A", serialNumber: CTRL_A },
+    { address: "192.0.2.2", name: "NVR B", serialNumber: CTRL_B }
+  ];
+
+  // A controller's device list: its own row, which isController answers to, alongside the camera beneath it.
+  const devicesUnder = (controllerSerial, childSerial) => [
+
+    { firmwareRevision: "4.0", manufacturer: "Ubiquiti", model: "NVR", modelKey: "nvr", name: "NVR", serialNumber: controllerSerial },
+    { firmwareRevision: "4.0", manufacturer: "Ubiquiti", model: "G4", modelKey: "camera", name: "Camera", serialNumber: childSerial }
+  ];
+
+  // Land a controller's device list the way a completed fetch does, so the scoping identity derives from a device list that actually names this controller.
+  const loadDevices = (store, controllerSerial, childSerial) => {
+
+    store.dispatch({ controllerId: controllerSerial, type: "devices:requested" });
+    store.dispatch({ controllerId: controllerSerial, devices: devicesUnder(controllerSerial, childSerial), error: "",
+      seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+  };
+
+  // Navigate to a scope and expand its category, which is what materializes the view's rows. Hands back the category element, whose identity on a later visit is
+  // how a cache restore is told from a fresh build.
+  const visit = (configTable, store, scope) => {
+
+    store.dispatch({ scope, type: "scope:changed" });
+
+    const details = configTable.querySelector("details[data-category='Camera']");
+
+    details.open = true;
+    details.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    return details;
+  };
+
+  test("a controller-scope mutation sweeps that controller's cached device views and leaves every unrelated entry standing", () => {
+
+    using _dom = createTestDom();
+
+    const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+    const configTable = document.createElement("div");
+    const controller = new AbortController();
+
+    configTable.id = "configTable";
+    document.body.appendChild(configTable);
+
+    store.dispatch({ catalog: CACHE_CATALOG, configuredOptions: [], controllers: CACHE_CONTROLLERS, mode: "controller-based", type: "model:loaded" });
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+
+    mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
+
+    // Populate the cache with the views that will still be in it when the mutation lands: the global view, a device under controller B, and a device under
+    // controller A. Each is cached by the navigation that leaves it.
+    const globalDetails = visit(configTable, store, { kind: "global" });
+
+    loadDevices(store, CTRL_B, CHILD_B);
+
+    const childBDetails = visit(configTable, store, { controllerId: CTRL_B, deviceId: CHILD_B, kind: "device" });
+
+    loadDevices(store, CTRL_A, CHILD_A);
+
+    const childADetails = visit(configTable, store, { controllerId: CTRL_A, deviceId: CHILD_A, kind: "device" });
+
+    // Move onto controller A's own page and toggle its option there. The write names controller A's serial, which is the scope marker the sweep matches against
+    // the controllers list.
+    const controllerPage = visit(configTable, store, { controllerId: CTRL_A, deviceId: CTRL_A, kind: "device" });
+
+    controllerPage.querySelector("[id='row-Camera.Hksv'] input[type='checkbox']").click();
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Camera.Hksv." + CTRL_A], "precondition: the mutation was written at controller A's own scope");
+
+    // Controller A's cached device view inherited from the scope that just moved, so it must have been dropped: the return trip builds a new category element.
+    const childAAfter = visit(configTable, store, { controllerId: CTRL_A, deviceId: CHILD_A, kind: "device" });
+
+    assert.ok(childAAfter !== childADetails, "the device under the mutated controller was swept from the cache, so its view is rebuilt rather than restored");
+
+    // Nothing else inherits from controller A, so the unrelated entries come back by identity - the very elements that were detached.
+    const globalAfter = visit(configTable, store, { kind: "global" });
+
+    assert.ok(globalAfter === globalDetails, "the global view was never touched by the sweep and is restored from cache");
+
+    loadDevices(store, CTRL_B, CHILD_B);
+
+    const childBAfter = visit(configTable, store, { controllerId: CTRL_B, deviceId: CHILD_B, kind: "device" });
+
+    assert.ok(childBAfter === childBDetails, "the other controller's device view survives a sweep aimed at controller A");
+  });
+});
+
 describe("mountOptionsView - in-flight device fetch", () => {
 
   const CONTROLLER_A = "ctrl-a";

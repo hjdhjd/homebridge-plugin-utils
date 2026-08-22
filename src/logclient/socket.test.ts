@@ -9,9 +9,9 @@ import type { LogSocketInit } from "./socket.ts";
 import type { TestWebSocket } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
-import { capturingLog } from "../testing.helpers.ts";
+import { capturingLog } from "../testing/index.ts";
 import { setImmediate as flushImmediate } from "node:timers/promises";
-import { silentLog } from "../testing.helpers.ts";
+import { silentLog } from "../testing/index.ts";
 
 // The Engine.IO open handshake frame advertising a ping cadence. The socket reads `pingInterval`/`pingTimeout` to size its liveness watchdog.
 const OPEN_FRAME = "0{\"sid\":\"s1\",\"pingInterval\":25000,\"pingTimeout\":20000}";

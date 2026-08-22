@@ -9,10 +9,11 @@
  * This is a curated barrel, not an `export *` of every module: the subsystem has a deliberate public/internal split. The consumer-facing engine (the client, its options
  * and stream type, the domain vocabulary, the line parser/splitter, the filter), the dependency-inversion seams power users need to substitute their own transport (the
  * socket and WebSocket factories plus their production defaults), the lower-level transports that power users may compose directly (`acquireToken`, `downloadLog`,
- * `LogSocket`), and the reusable test doubles are surfaced here. The purely-internal machinery - the Engine.IO/Socket.IO frame codec, the history-plus-live stitch, the
+ * `LogSocket`) are surfaced here. The purely-internal machinery - the Engine.IO/Socket.IO frame codec, the history-plus-live stitch, the
  * URL builders, the scalar settings, the time-range internals (`parseTimeExpression`, `timeWindow`, `normalizeClock`), and the CLI layer (`config.ts`, `cli-run.ts`,
- * `cli.ts`) - is intentionally NOT re-exported, so those internals can be refactored without a breaking change to the published surface. Every symbol below carries an
- * `@category Log Client` tag (or `@category Testing` for the doubles).
+ * `cli.ts`) - is intentionally NOT re-exported, so those internals can be refactored without a breaking change to the published surface. The subsystem's test doubles
+ * (`socket-double.ts`) are shipped surface as well, but they reach consumers through the `homebridge-plugin-utils/testing` entry point that carries every test-support
+ * export in the library, rather than through this barrel. Every symbol below carries an `@category Log Client` tag.
  *
  * The CLI bin (`cli.ts`) does not ride this barrel: a bin must reach its engine through a realpath-canonicalized dynamic import rather than a package specifier, so it is
  * deliberately absent here. See `cli.ts` for that rationale.
@@ -25,11 +26,9 @@ export type { LogSocketFactory, LogSocketInit, LogSocketLike, TokenProvider, Web
 export type { AcquireTokenOptions, LogAuthErrorKind, LogAuthErrorOptions } from "./auth.ts";
 export type { DownloadLogOptions } from "./rest.ts";
 export type { LogFilterCriteria } from "./filter.ts";
-export type { TestLogSocketInit } from "./socket-double.ts";
 export { LogSocket, WEBSOCKET_OPEN, logSocketFactory, reconnectBackoff, webSocketFactory } from "./socket.ts";
 export { LogAuthError, acquireToken, isPermanentAuthError } from "./auth.ts";
 export { LogLineSplitter, parseLogLine, parseLogTimestamp } from "./parser.ts";
-export { TestLogSocket, TestLogSocketFactory, TestWebSocket, TestWebSocketFactory } from "./socket-double.ts";
 export { HomebridgeLogClient } from "./client.ts";
 export { createLogFilter } from "./filter.ts";
 export { downloadLog } from "./rest.ts";

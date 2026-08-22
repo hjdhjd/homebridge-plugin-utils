@@ -8,11 +8,11 @@ import { FfmpegLivestreamProcess, FfmpegRecordingProcess } from "./record.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
-import type { CapturingLog } from "../testing.helpers.ts";
+import type { CapturingLog } from "../testing/index.ts";
 import type { FfmpegOptions } from "./options.ts";
 import type { Readable } from "node:stream";
 import assert from "node:assert/strict";
-import { capturingLog } from "../testing.helpers.ts";
+import { capturingLog } from "../testing/index.ts";
 import { makeBox } from "./fmp4-builders.ts";
 import { makeCodecs } from "./codecs.helpers.ts";
 

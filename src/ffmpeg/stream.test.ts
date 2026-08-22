@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";
-import { silentLog } from "../testing.helpers.ts";
+import { silentLog } from "../testing/index.ts";
 
 function makeOptions(logger: HomebridgePluginLogging = silentLog()): FfmpegOptions {
 

@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * testing.helpers.test.ts: Unit tests for the cross-cutting test helpers in testing.helpers.ts - expectAt, silentLog, capturingLog, assertNoUnhandledRejections.
+ * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, silentLog, capturingLog, assertNoUnhandledRejections.
  * Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every error path, every async outcome - because
  * a bug in a shared helper cascades into every test that consumes it.
  */
-import { assertNoUnhandledRejections, capturingLog, expectAt, silentLog } from "./testing.helpers.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, silentLog } from "./index.ts";
 import { describe, test } from "node:test";
-import type { CapturingLog } from "./testing.helpers.ts";
+import type { CapturingLog } from "./index.ts";
 import assert from "node:assert/strict";
 
 describe("expectAt", () => {

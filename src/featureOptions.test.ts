@@ -13,7 +13,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, 
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
-import { capturingLog } from "./testing.helpers.ts";
+import { capturingLog } from "./testing/index.ts";
 import { readFile } from "node:fs/promises";
 
 // Reusable category / option fixtures. Organized for reuse across tests - most tests need the same "Motion / Audio / Network" shape and only vary configuredOptions.

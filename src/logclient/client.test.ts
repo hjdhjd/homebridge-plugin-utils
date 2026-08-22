@@ -4,7 +4,7 @@
  */
 import { HbpuAbortError, onAbort } from "../util.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
-import { assertNoUnhandledRejections, silentLog } from "../testing.helpers.ts";
+import { assertNoUnhandledRejections, silentLog } from "../testing/index.ts";
 import { setTimeout as delay, setImmediate as flushImmediate } from "node:timers/promises";
 import { describe, test } from "node:test";
 import { HomebridgeLogClient } from "./client.ts";

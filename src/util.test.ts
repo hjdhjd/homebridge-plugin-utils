@@ -10,7 +10,7 @@ import { HbpuAbortError, Watchdog, composeSignals, debugGatedLog, defaultRetryBa
   sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
-import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing.helpers.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing/index.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import util from "node:util";

@@ -65,7 +65,7 @@ function abortError(): Error {
  * @example
  *
  * ```ts
- * import { TestClock } from "homebridge-plugin-utils";
+ * import { TestClock } from "homebridge-plugin-utils/testing";
  *
  * const clock = new TestClock();
  *

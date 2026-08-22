@@ -8,7 +8,7 @@ import { HbpuAbortError } from "../util.ts";
 import type { LogSocketInit } from "./socket.ts";
 import assert from "node:assert/strict";
 import { isHbpuAbortReason } from "../util.ts";
-import { silentLog } from "../testing.helpers.ts";
+import { silentLog } from "../testing/index.ts";
 
 // A minimal LogSocketInit for the factory tests; the double ignores everything but records it.
 const INIT: LogSocketInit = { host: "localhost", log: silentLog(), refreshable: true, tokenProvider: async () => "raw.jwt" };

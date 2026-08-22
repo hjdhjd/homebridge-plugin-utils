@@ -1,28 +1,38 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * testing.helpers.ts: Cross-cutting test helpers shared across the HBPU test suite.
+ * testing/index.ts: The library's test-support entry point - the cross-cutting helpers and every shipped test double, at one subpath.
  */
 
 /**
- * Cross-cutting test helpers shared across every test file in the HBPU suite.
+ * Every piece of shipped test-support surface the library offers, reachable at one entry point.
  *
- * Domain-specific helpers live next to the modules they exercise (e.g., `ffmpeg/fmp4-builders.ts` for ISO BMFF construction, `mqtt.helpers.ts` for the MQTT transport
- * stub). This module holds the primitives that are useful regardless of subject:
+ * The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
+ * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below, and the test doubles that stand in for the
+ * library's own dependency-inversion boundaries.
  *
- * - {@link expectAt} - narrow-or-fail indexed access helper that papers over `noUncheckedIndexedAccess` without introducing non-null assertions in test bodies.
- * - {@link silentLog} - no-op {@link HomebridgePluginLogging} factory for tests that treat logging as implementation detail.
- * - {@link capturingLog} - entries-capturing {@link HomebridgePluginLogging} factory for tests that assert against log output. Pairs with {@link TestLogEntry}.
- * - {@link assertNoUnhandledRejections} - `unhandledRejection` monitor that turns Node's warn-and-continue default into a hard test assertion.
+ * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
+ * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts` - because a double and its subject drift apart the moment they stop sharing a
+ * directory. Only their export path lives here. The helpers below are the other case: they had no shipped home at all, so this module is where they are defined rather
+ * than merely re-exported.
  *
- * Files matching `*.helpers.ts` are excluded from both the compiled `dist/` build emit (see `tsconfig.build.json`) and the TypeDoc API docs output (see `typedoc.json`)
- * so nothing from this module ships in the published npm package or the published documentation.
+ * Nothing in production may import from this module, and that is what the dedicated subpath buys over a category tag on the main barrel. The production/test category
+ * boundary becomes structural: a production module reaching for a double names a specifier that a reader and a grep can both see is wrong, rather than one everybody
+ * has to remember not to write.
  *
  * @module
  */
-import type { HomebridgePluginLogging } from "./util.ts";
+import type { HomebridgePluginLogging } from "../util.ts";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
-import { noOpLog } from "./util.ts";
+import { noOpLog } from "../util.ts";
+
+/* The shipped doubles, aggregated from their physical homes. Each family is re-exported wholesale rather than symbol-by-symbol, because the module on the other side
+ * already curates what it publishes and a second enumeration here would be a list to keep in sync for nothing.
+ */
+export * from "../clock-double.ts";
+export * from "../ffmpeg/fmp4-builders.ts";
+export * from "../ffmpeg/recording-process-double.ts";
+export * from "../logclient/socket-double.ts";
 
 /**
  * Return `items[index]`, asserting the element exists. Narrows the result to `T` so test bodies can use the value without non-null assertions and without a separate
@@ -48,6 +58,8 @@ import { noOpLog } from "./util.ts";
  *
  * assert.deepEqual(expectAt(boxes, 0, "first box").bytes, expected);
  * ```
+ *
+ * @category Testing
  */
 export function expectAt<T>(items: readonly T[], index: number, description = "an item"): T {
 
@@ -71,10 +83,12 @@ export function expectAt<T>(items: readonly T[], index: number, description = "a
  * @example
  *
  * ```ts
- * import { silentLog } from "./testing.helpers.ts";
+ * import { silentLog } from "homebridge-plugin-utils/testing";
  *
  * const client = new MqttClient({ brokerUrl: "mqtt://localhost", log: silentLog(), topicPrefix: "test" });
  * ```
+ *
+ * @category Testing
  */
 export function silentLog(): HomebridgePluginLogging {
 
@@ -84,6 +98,8 @@ export function silentLog(): HomebridgePluginLogging {
 /**
  * A single captured log emission from {@link capturingLog}. The tuple `(level, message, params)` mirrors what `HomebridgePluginLogging`'s methods receive; the shape is
  * narrow enough that tests can assert against it with `deepEqual` while carrying through the originating level so callers can filter by severity.
+ *
+ * @category Testing
  */
 export interface TestLogEntry {
 
@@ -107,6 +123,8 @@ export interface TestLogEntry {
  * {@link capturingLog}'s return shape: a live {@link HomebridgePluginLogging} plus a `readonly` view of the entries captured so far. The read-only typing lets tests
  * assert against `entries` without being able to mutate them - the only code that pushes into the array is the logger methods themselves, which the factory closes
  * over in the live mutable reference.
+ *
+ * @category Testing
  */
 export type CapturingLog = HomebridgePluginLogging & { readonly entries: readonly TestLogEntry[] };
 
@@ -114,16 +132,16 @@ export type CapturingLog = HomebridgePluginLogging & { readonly entries: readonl
  * Return a capturing {@link HomebridgePluginLogging} implementation. Every method pushes a {@link TestLogEntry} into the logger's `entries` array; tests then assert
  * against that array to verify the class under test emitted the expected log lines at the expected severities.
  *
- * Hoisted into the shared testing-helpers module for the same reason as {@link silentLog}: the shape is identical across every test file that asserts on log output,
- * and repeating the logger's arrow-function bodies per test file is pure duplication. The `entries` view is `readonly` so tests cannot accidentally corrupt captured
- * state mid-run; the factory itself closes over the underlying mutable array so the logger methods can still push.
+ * Lives here for the same reason as {@link silentLog}: the shape is identical across every test file that asserts on log output, and repeating the logger's
+ * arrow-function bodies per test file is pure duplication. The `entries` view is `readonly` so tests cannot accidentally corrupt captured state mid-run; the factory
+ * itself closes over the underlying mutable array so the logger methods can still push.
  *
  * @returns A logger that records every emission for later assertion.
  *
  * @example
  *
  * ```ts
- * import { capturingLog } from "./testing.helpers.ts";
+ * import { capturingLog } from "homebridge-plugin-utils/testing";
  *
  * const log = capturingLog();
  *
@@ -131,6 +149,8 @@ export type CapturingLog = HomebridgePluginLogging & { readonly entries: readonl
  *
  * assert.equal(log.entries.at(-1)?.level, "info");
  * ```
+ *
+ * @category Testing
  */
 export function capturingLog(): CapturingLog {
 
@@ -183,6 +203,8 @@ export function capturingLog(): CapturingLog {
  *   resolvers.reject(new Error("late"));
  * });
  * ```
+ *
+ * @category Testing
  */
 export async function assertNoUnhandledRejections<T>(body: () => Promise<T>): Promise<T> {
 

@@ -50,7 +50,8 @@
     "./eslint": { "types": "./dist/eslint-plugin/index.d.mts", "import": "./build/eslint-plugin/index.mjs" },
     "./logclient": { "types": "./dist/logclient/index.d.ts", "import": "./dist/logclient/index.js" },
     "./package.json": "./package.json",
-    "./polyfills": { "types": "./dist/polyfills.d.ts", "import": "./dist/polyfills.js" }
+    "./polyfills": { "types": "./dist/polyfills.d.ts", "import": "./dist/polyfills.js" },
+    "./testing": { "types": "./dist/testing/index.d.ts", "import": "./dist/testing/index.js" }
   },
   "bin": {
     "homebridge-plugin-utils": "dist/cli/index.js",

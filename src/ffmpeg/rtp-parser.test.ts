@@ -5,7 +5,7 @@
 import { describe, test } from "node:test";
 import { RtpPacketParser } from "./rtp-parser.ts";
 import assert from "node:assert/strict";
-import { expectAt } from "../testing.helpers.ts";
+import { expectAt } from "../testing/index.ts";
 
 // Synthesize a minimal RTP/RTCP datagram stub. The first two bytes carry the version/payload-type fields the parser cares about; everything after is opaque padding so
 // the datagram clears the parser's "at least two bytes" length guard. Using a helper keeps tests focused on the payload-type boundary they are verifying.

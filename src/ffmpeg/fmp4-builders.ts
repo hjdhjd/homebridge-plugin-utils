@@ -7,8 +7,8 @@
  * Shared ISO BMFF (fMP4) byte-level construction builders.
  *
  * The parser-aligned construction surface every consumer's tests build fragments and initialization segments on - the library's own parser, assembler, and predicate
- * suites and downstream plugins alike. Ships on the package's main export alongside the other test doubles (`TestClock`, `TestRecordingProcessFactory`) so a consumer
- * composes real fMP4 bytes without hand-rolling box headers or re-deriving the wire layouts the predicates read.
+ * suites and downstream plugins alike. Ships on the `homebridge-plugin-utils/testing` entry point alongside the other test doubles (`TestClock`,
+ * `TestRecordingProcessFactory`) so a consumer composes real fMP4 bytes without hand-rolling box headers or re-deriving the wire layouts the predicates read.
  *
  * Construction layers, from primitive to fullbox builders:
  *
@@ -32,6 +32,8 @@ import assert from "node:assert/strict";
  * Handler-type code for video tracks in ISO BMFF `hdlr` boxes: ASCII `"vide"` encoded as a 32-bit big-endian integer. Defined here rather than in `fmp4.ts` because
  * production never inspects it - `hasAudioTrack` compares each track's handler_type against `HDLR_TYPE_SOUN` and any non-match (including `"vide"`) is treated
  * uniformly as "not audio." Tests need a concrete non-audio value to exercise the negative path of that predicate, so the constant lives with the test builders.
+ *
+ * @category Testing
  */
 export const HDLR_TYPE_VIDE = 0x76696465;
 
@@ -44,6 +46,8 @@ export const HDLR_TYPE_VIDE = 0x76696465;
  * @param payload  - Optional opaque payload bytes. Defaults to an empty buffer.
  *
  * @returns A complete box (header + payload) suitable for feeding to the parser or writing to an in-memory Readable fixture.
+ *
+ * @category Testing
  */
 export function makeBox(type: string, payload: Buffer = Buffer.alloc(0)): Buffer {
 
@@ -77,6 +81,8 @@ export function makeBox(type: string, payload: Buffer = Buffer.alloc(0)): Buffer
  * const trak = makeContainer("trak", [mdia]);
  * const moov = makeContainer("moov", [trak]);
  * ```
+ *
+ * @category Testing
  */
 export function makeContainer(type: string, children: Buffer[]): Buffer {
 
@@ -94,6 +100,8 @@ export function makeContainer(type: string, children: Buffer[]): Buffer {
  *                      by the "undersized hdlr" negative test; defaults to `false`.
  *
  * @returns A complete `hdlr` box.
+ *
+ * @category Testing
  */
 export function makeHdlrBox(handlerType: number, truncate = false): Buffer {
 
@@ -129,6 +137,8 @@ export function makeHdlrBox(handlerType: number, truncate = false): Buffer {
  *                                    guard inside `isKeyframe` without changing the declared box size.
  *
  * @returns A complete `trun` box.
+ *
+ * @category Testing
  */
 export function makeTrunBox(options: {
   includeDuration?: boolean;

@@ -3,14 +3,14 @@
  * ffmpeg/process.test.ts: Unit tests for the FfmpegProcess base class - spawn-on-construction, composed signal lifecycle, ready/exited promises, reason-based teardown,
  * derived getters, startup timeout, and AsyncDisposable semantics.
  */
-import type { CapturingLog, TestLogEntry } from "../testing.helpers.ts";
+import type { CapturingLog, TestLogEntry } from "../testing/index.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessExitInfo } from "./process.ts";
 import assert from "node:assert/strict";
-import { capturingLog } from "../testing.helpers.ts";
+import { capturingLog } from "../testing/index.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";

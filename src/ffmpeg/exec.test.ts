@@ -11,7 +11,7 @@ import type { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
-import { silentLog } from "../testing.helpers.ts";
+import { silentLog } from "../testing/index.ts";
 
 // Construct a real `FfmpegOptions`. `ffmpegExec` resolves to the running Node binary so every test spawns Node with an inline `-e` script; the script determines
 // per-test behavior. Hardware flags stay false because FfmpegExec doesn't read them and software-only configs exercise the spawn plumbing this suite covers.

@@ -22,7 +22,7 @@ import { execFile } from "node:child_process";
 import { ffmpegIntegrationEnabled } from "./integration.helpers.ts";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { promisify } from "node:util";
-import { silentLog } from "../testing.helpers.ts";
+import { silentLog } from "../testing/index.ts";
 
 const execFileAsync = promisify(execFile);
 

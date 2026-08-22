@@ -25,7 +25,7 @@
  * @module
  */
 import type { AddressInfo, Server } from "node:net";
-import type { CapturingLog, TestLogEntry } from "./testing.helpers.ts";
+import type { CapturingLog, TestLogEntry } from "./testing/index.ts";
 import { Aedes } from "aedes";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";

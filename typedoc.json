@@ -4,7 +4,7 @@
   "categoryOrder": ["Constructor", "Utilities" , "Accessory", "FFmpeg", "Log Client", "Testing"],
   "cleanOutputDir": false,
   "disableSources": true,
-  "entryPoints": ["src/*.ts", "src/ffmpeg/*.ts", "src/logclient/*.ts"],
+  "entryPoints": ["src/*.ts", "src/ffmpeg/*.ts", "src/logclient/*.ts", "src/testing/*.ts"],
   "enumMembersFormat": "table",
   "exclude": [ "src/**/*.fixtures.ts", "src/**/*.helpers.ts", "src/**/*.test.ts", "src/ffmpeg/index.ts", "src/index.ts", "src/logclient/index.ts", "src/logclient/settings.ts", "src/settings.ts" ],
   "excludeExternals": true,

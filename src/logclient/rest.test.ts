@@ -5,7 +5,7 @@
 import { describe, test } from "node:test";
 import type { DownloadLogOptions } from "./rest.ts";
 import assert from "node:assert/strict";
-import { assertNoUnhandledRejections } from "../testing.helpers.ts";
+import { assertNoUnhandledRejections } from "../testing/index.ts";
 import { downloadLog } from "./rest.ts";
 
 // The connection target plus token every test reuses. The download flow builds `http://localhost:8581/api/platform-tools/hb-service/log/download?colour=yes`.

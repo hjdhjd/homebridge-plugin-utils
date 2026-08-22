@@ -11,10 +11,10 @@
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
-import { assertNoUnhandledRejections, capturingLog, silentLog } from "./testing.helpers.ts";
+import { assertNoUnhandledRejections, capturingLog, silentLog } from "./testing/index.ts";
 import { awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
-import type { CapturingLog } from "./testing.helpers.ts";
+import type { CapturingLog } from "./testing/index.ts";
 import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";

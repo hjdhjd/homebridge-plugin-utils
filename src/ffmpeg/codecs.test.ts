@@ -8,7 +8,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { ffmpegIntegrationEnabled } from "./integration.helpers.ts";
 import { makeCodecs } from "./codecs.helpers.ts";
-import { silentLog } from "../testing.helpers.ts";
+import { silentLog } from "../testing/index.ts";
 
 // Fixture strings built from real FFmpeg command output. EOL handling uses `\n` because `node:os.EOL` is `\n` on the test machine (macOS / Linux); the parsers split
 // on the host's EOL, and the test file is host-local too, so there is no cross-platform ambiguity to resolve here.

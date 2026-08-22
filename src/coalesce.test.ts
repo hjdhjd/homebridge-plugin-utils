@@ -6,7 +6,7 @@
  * The count is the whole subject here, which is why every scenario drives SEVERAL triggers rather than one. A naive implementation that simply ran the callback on every
  * schedule passes a single-trigger test and fails every one of these; so does one that queued each trigger and drained them in turn.
  */
-import { assertNoUnhandledRejections, capturingLog, expectAt, silentLog } from "./testing.helpers.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, silentLog } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import { CoalescingTask } from "./coalesce.ts";
 import assert from "node:assert/strict";

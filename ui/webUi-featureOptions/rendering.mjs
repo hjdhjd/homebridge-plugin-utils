@@ -13,7 +13,8 @@ import { hasValueContent, isValueOption, optionExists } from "../featureOptions.
  * Every export here is a pure function from data to DOM:
  *
  *   - {@link categoryShell} - builds the `<details>` shell for one category (header + empty rows container). Lazy materialization: the rows container is intentionally
- *     empty; the view fills it on first expand to keep initial render bounded by category count, not option count.
+ *     empty; the view fills it the first time that category needs its rows - the user's own disclosure toggle, or the first projection pass that finds the category
+ *     open - to keep initial render bounded by category count, not option count.
  *   - {@link optionRow} - builds one option row's bare structure (checkbox, label, optional value-input) and applies its initial state via {@link applyRowState}.
  *   - {@link applyRowState} - the single writer for every state-dependent attribute of a row (tri-state, value-input state, label color, visibility, dependency
  *     badge), derived from the projection entry. The construction path and the per-mutation update walk both call it, so a freshly-built row and a re-derived row run
@@ -40,7 +41,8 @@ import { hasValueContent, isValueOption, optionExists } from "../featureOptions.
 
 /**
  * Build the `<details>` shell for a category. Returns the disclosure element with its header (`<summary>`) and an empty `<div class="fo-category-rows">` rows
- * container. The rows container is intentionally empty; the view materializes its option rows lazily on first expand via {@link optionRow}.
+ * container. The rows container is intentionally empty; the view materializes its option rows lazily via {@link optionRow}, the first time the category needs them -
+ * which is either the user's own disclosure toggle or the first projection pass that finds the category open.
  *
  * The category header carries a scope-suffix label - `(Global)` / `(Controller-specific)` / `(Device-specific)` - so the user always knows which scope they are
  * editing at. Each variant maps directly from the view's PRESENTED scope, which {@link projection} derives: the scope tag's own kind for an ordinary view, folded

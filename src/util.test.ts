@@ -11,8 +11,10 @@ import { HbpuAbortError, Watchdog, composeSignals, debugGatedLog, defaultRetryBa
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing/index.ts";
+import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { setImmediate as tick } from "node:timers/promises";
 import util from "node:util";
 
 // Block until `signal` aborts, then throw its reason. Models a signal-aware operation - `fetch(url, { signal })`, `events.once(emitter, event, { signal })`, etc. -
@@ -24,6 +26,28 @@ async function waitForAbort(signal: AbortSignal): Promise<never> {
   await once(signal, "abort");
 
   throw signal.reason;
+}
+
+// Yield to the macrotask queue, which drains the entire microtask cascade first. A retry gap is built from promise continuations - the attempt's own rejection, the
+// budget and predicate checks, and the clock registration that follows - so one macrotask boundary is enough to bring the whole cascade to rest.
+async function settle(): Promise<void> {
+
+  await tick();
+}
+
+// Walk virtual time across a backoff schedule, letting the queue come to rest before each step. An attempt registers its backoff wait only after the attempt before it
+// has settled, so a single large advance would move past deadlines that had not been registered yet and strand every attempt after the first; stepping releases one
+// wait at a time. The trailing settle lets the attempt the last step released run to completion.
+async function advanceThroughSchedule(clock: TestClock, waits: readonly number[]): Promise<void> {
+
+  for(const wait of waits) {
+
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+    clock.advance(wait);
+  }
+
+  await settle();
 }
 
 describe("HbpuAbortError", () => {
@@ -987,6 +1011,100 @@ describe("retry", () => {
     queueMicrotask(() => { controller.abort(reason); });
 
     await assert.rejects(attempt, (error: unknown) => error === reason);
+  });
+
+  test("runs a whole backoff schedule on an injected clock, consulting the policy once per gap", async () => {
+
+    const clock = new TestClock();
+    const consulted: number[] = [];
+    let calls = 0;
+    const attempt = retry(async () => {
+
+      calls++;
+
+      throw new Error("attempt-" + calls.toString());
+    }, { attempts: 4, backoff: (attemptNumber) => {
+
+      consulted.push(attemptNumber);
+
+      return attemptNumber * 10000;
+    }, clock });
+
+    // Attach the rejection handler before driving the clock. The retry rejects partway through the schedule below, and a promise left unobserved across a macrotask
+    // boundary would surface as an unhandled rejection rather than as this row's assertion.
+    const rejection = assert.rejects(attempt, /attempt-4/);
+
+    await advanceThroughSchedule(clock, [ 20000, 30000, 40000 ]);
+    await rejection;
+
+    assert.equal(calls, 4, "every attempt in the budget ran");
+    assert.deepEqual(consulted, [ 2, 3, 4 ], "the policy is consulted once per gap, with the 1-indexed attempt about to run");
+    assert.equal(clock.now(), 90000, "the gaps summed to exactly the scheduled backoff total on virtual time");
+    assert.equal(clock.pending, 0, "no backoff wait was left registered on the clock");
+  });
+
+  test("holds a backoff wait until virtual time reaches the deadline exactly", async () => {
+
+    const clock = new TestClock();
+    let calls = 0;
+    const attempt = retry(async () => {
+
+      calls++;
+
+      if(calls < 2) {
+
+        throw new Error("transient");
+      }
+
+      return "done";
+    }, { attempts: 2, backoff: () => 5000, clock });
+
+    await settle();
+
+    assert.equal(clock.pending, 1, "the first failure parked retry on a backoff wait the injected clock holds");
+    assert.equal(calls, 1, "the second attempt has not run yet");
+
+    // One tick short of the deadline. A wait that released early - or a backoff that ignored the injected clock and reached for a real timer - would have run the
+    // second attempt by now, so this is where the boundary is proven rather than assumed.
+    clock.advance(4999);
+    await settle();
+
+    assert.equal(calls, 1, "a wait one millisecond short of the deadline still holds the next attempt");
+    assert.equal(clock.pending, 1, "and the delay is still registered");
+
+    clock.advance(1);
+
+    assert.equal(await attempt, "done", "the final millisecond releases the wait and the next attempt succeeds");
+    assert.equal(clock.now(), 5000, "the wait ran exactly the policy-dictated backoff, not a millisecond more");
+    assert.equal(clock.pending, 0, "the released wait left nothing registered behind it");
+  });
+
+  test("an abort interrupts a backoff wait the injected clock is holding, and still rejects with signal.reason", async () => {
+
+    const controller = new AbortController();
+    const reason = new HbpuAbortError("replaced");
+    const clock = new TestClock();
+    let calls = 0;
+    const attempt = retry(async () => {
+
+      calls++;
+
+      throw new Error("transient");
+    }, { attempts: 5, backoff: () => 200000, clock, signal: controller.signal });
+    const rejection = assert.rejects(attempt, (error: unknown) => error === reason);
+
+    await settle();
+
+    assert.equal(clock.pending, 1, "the first failure is parked on a backoff wait the clock holds");
+
+    // Abort without advancing virtual time at all. The clock's own rejection is an AbortError that does NOT carry the caller's reason, so this row proves the outer
+    // normalizer restores signal.reason for an injected clock's rejection exactly as it does for the platform timer's.
+    controller.abort(reason);
+
+    await rejection;
+
+    assert.equal(calls, 1, "the abort preempted the second attempt");
+    assert.equal(clock.pending, 0, "the aborted wait was removed from the clock rather than left registered");
   });
 });
 

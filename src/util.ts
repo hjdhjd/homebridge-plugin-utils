@@ -8,8 +8,9 @@
  *
  * @module
  */
+import type { Clock } from "./clock.ts";
 import type { Logging } from "homebridge";
-import { setTimeout as delay } from "node:timers/promises";
+import { systemClock } from "./clock.ts";
 
 // Validates a name against HomeKit's naming conventions. Compiled once at module scope since this sits on the fast path of sanitizeName().
 const VALID_HOMEKIT_NAME = /^(?!.*\p{Extended_Pictographic})(?!.* {2})(?=^[\p{L}\p{N}].*[\p{L}\p{N}.]$)[\p{L}\p{N}\-"'.,#& ]+$/u;
@@ -719,6 +720,13 @@ export interface RetryOptions {
   backoff?: (attempt: number) => number;
 
   /**
+   * Optional time source for the between-attempt backoff waits. Defaults to {@link systemClock}, whose `delay` IS the platform `node:timers/promises` `setTimeout`, so
+   * the default path is that same platform call with one indirection in front of it and no behavior change. Supplying a controllable clock (`TestClock`) puts the
+   * backoff schedule on virtual time, so a test asserts what the policy actually waited instead of waiting it out in real seconds.
+   */
+  clock?: Clock;
+
+  /**
    * Optional predicate consulted after an attempt throws and attempts remain. Receives the rejected error and the 1-indexed number of the attempt that just failed;
    * return `false` to stop immediately and rethrow that error (no backoff wait, no further attempts), or `true` to retry per the backoff policy. When omitted, every
    * error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the mechanism that lets a caller retry some failures and fail fast on
@@ -737,8 +745,9 @@ export interface RetryOptions {
  * Retry an async operation with configurable attempts and backoff, with first-class abort signal support.
  *
  * The operation receives the caller's {@link AbortSignal} directly (or a permanent never-aborted sentinel when no caller signal was provided). Well-behaved operations
- * forward this signal to any cancellation-aware API they call (`fetch`, `events.once`, etc.) so the in-flight attempt actually cancels. Between-attempt waits use
- * `node:timers/promises` `setTimeout` with the signal, so abort also interrupts the backoff.
+ * forward this signal to any cancellation-aware API they call (`fetch`, `events.once`, etc.) so the in-flight attempt actually cancels. Between-attempt waits run through
+ * the injected {@link Clock} with the signal - {@link systemClock} unless the caller supplies one - so abort also interrupts the backoff, and a test that supplies a
+ * controllable clock drives the whole backoff schedule on virtual time.
  *
  * @typeParam T           - The successful resolution type of `operation`.
  * @param operation       - The async work to perform. Receives the composed abort signal; must resolve with a value on success, or throw/reject on failure.
@@ -766,7 +775,7 @@ export interface RetryOptions {
  */
 export async function retry<T>(operation: (signal: AbortSignal) => Promise<T>, options: RetryOptions = {}): Promise<T> {
 
-  const { attempts = 3, backoff = defaultRetryBackoff, shouldRetry, signal } = options;
+  const { attempts = 3, backoff = defaultRetryBackoff, clock = systemClock, shouldRetry, signal } = options;
 
   // Reject nonsensical attempt counts at the library boundary so the "attempts >= 1" guarantee the loop relies on is enforced rather than latent.
   if(attempts < 1) {
@@ -803,10 +812,11 @@ export async function retry<T>(operation: (signal: AbortSignal) => Promise<T>, o
           throw error;
         }
 
-        // Wait the policy-dictated delay before the next attempt. If the caller aborts mid-wait, `node:timers/promises` `setTimeout` rejects with a platform
-        // `AbortError` that does NOT carry `signal.reason`; the outer catch consults the signal itself and restores the caller's reason for us.
+        // Wait the policy-dictated delay before the next attempt. If the caller aborts mid-wait, the clock rejects with whatever cancellation shape it produces, and
+        // no clock's rejection carries `signal.reason`; the outer catch consults the signal itself and restores the caller's reason for us, so the normalization is
+        // the same whichever clock is wired.
         // eslint-disable-next-line no-await-in-loop
-        await delay(backoff(attempt + 1), undefined, { signal });
+        await clock.delay(backoff(attempt + 1), { signal });
       }
     }
 

@@ -380,6 +380,39 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     assert.deepEqual(store.state.configuredOptions, [], "nothing was ever persisted");
   });
 
+  test("focus landing on a control the armed row does not contain abandons the arming", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const audio = configTable.querySelector("details[data-category='Audio']");
+
+    audio.open = true;
+    audio.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const armedRow = audio.querySelector("[id='row-Audio.Volume']");
+    const checkbox = armedRow.querySelector("input[type='checkbox']");
+    const input = armedRow.querySelector("input.fo-option-value");
+    const neighbor = audio.querySelector("[id='row-Audio.Password'] input[type='checkbox']");
+
+    input.value = "";
+    checkbox.click();
+
+    assert.equal(store.state.armedOption, "Audio.Volume", "precondition: the row is armed and awaiting its first value");
+    assert.ok(neighbor, "precondition: the neighbouring option's control rendered alongside the armed row");
+    assert.ok(!armedRow.contains(neighbor), "precondition: that control genuinely sits outside the armed row");
+
+    // A departure carrying a relatedTarget the armed row does not contain - the user tabbing on to the next option's control. This is the other side of the
+    // containment guard from the reveal-toggle case: the guard spares only a departure that stays inside the row, so a populated target elsewhere on the page
+    // reaches the same stand-down a relatedTarget-less departure takes.
+    input.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true, relatedTarget: neighbor }));
+
+    assert.equal(store.state.armedOption, null, "the departure to a control outside the row disarms it");
+    assert.equal(checkbox.checked, false, "the row reads unchecked again");
+    assert.equal(input.disabled, true, "the input relocks");
+    assert.deepEqual(store.state.configuredOptions, [], "nothing was ever persisted");
+  });
+
   test("a window-focus departure leaves an armed row armed and its input live", (t) => {
 
     using _dom = createTestDom();

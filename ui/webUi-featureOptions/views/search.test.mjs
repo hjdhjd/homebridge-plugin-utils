@@ -252,8 +252,11 @@ describe("mountSearchView - following the table's presentation", () => {
     clickController(store, { error: "Controller unreachable." });
     clickController(store, { controllerId: "ctrl-b", devices: [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "D", serialNumber: "dev-a" }] });
 
+    const after = [...root.children];
+
     assert.equal(barsHidden(root), false, "the bars are shown again");
-    assert.deepEqual([...root.children], before, "and they are the same elements - hidden, never rebuilt, so the search box keeps its identity");
+    assert.equal(after.length, before.length, "the same number of bars comes back");
+    assert.ok(after.every((child, index) => child === before[index]), "and they are the same elements - hidden, never rebuilt, so the search box keeps its identity");
   });
 
   test("both panel bars hide over a nothing-to-list notice, and return when the controller reports devices", () => {

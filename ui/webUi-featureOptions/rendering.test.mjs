@@ -122,8 +122,8 @@ describe("optionRow - basic structure", () => {
     const content = row.querySelector(".fo-option-content");
 
     assert.ok(content?.contains(label), "the boolean label lives in the uniform content cell");
-    assert.equal(row.children[0], checkbox, "checkbox is the first grid child");
-    assert.equal(row.children[1], content, "the content cell is the second grid child");
+    assert.ok(row.children[0] === checkbox, "checkbox is the first grid child");
+    assert.ok(row.children[1] === content, "the content cell is the second grid child");
   });
 
   test("adds the grouped-option class to grouped options", () => {
@@ -171,7 +171,7 @@ describe("optionRow - basic structure", () => {
     for(const row of [ withSize, withoutSize ]) {
 
       assert.equal(row.classList.contains("fo-option-row-inline"), false, "no inline row variant survives the unification");
-      assert.equal(row.querySelector(".fo-option-label-cell"), null, "no flex label-cell survives the unification");
+      assert.ok(row.querySelector(".fo-option-label-cell") === null, "no flex label-cell survives the unification");
 
       const cell = row.querySelector(".fo-option-content");
 
@@ -347,7 +347,7 @@ describe("optionRow - secret options", () => {
 
     assert.ok(wrapper?.contains(input), "the masked field lives in the wrapper");
     assert.ok(wrapper?.contains(toggle), "and so does its toggle");
-    assert.equal(row.querySelector(".fo-option-content").children[1], wrapper, "the wrapper takes the field's place in the content cell");
+    assert.ok(row.querySelector(".fo-option-content").children[1] === wrapper, "the wrapper takes the field's place in the content cell");
   });
 
   test("an option that declares no secret renders an unmasked field with no toggle and no wrapper", () => {
@@ -362,10 +362,10 @@ describe("optionRow - secret options", () => {
     assert.equal(input?.type, "text", "an unflagged option's field is a plain text input");
     assert.equal(input?.getAttribute("autocomplete"), null, "an unflagged field declares no autocomplete at all");
     assert.equal(input?.hasAttribute("autocomplete"), false, "not even an empty one");
-    assert.equal(row.querySelector(".fo-secret-toggle"), null, "no toggle");
-    assert.equal(row.querySelector(".fo-secret-field"), null, "no wrapper");
+    assert.ok(row.querySelector(".fo-secret-toggle") === null, "no toggle");
+    assert.ok(row.querySelector(".fo-secret-field") === null, "no wrapper");
     assert.equal(cell.children.length, 2, "the content cell holds the label and the field, and nothing else");
-    assert.equal(cell.children[1], input, "the field sits directly in the cell");
+    assert.ok(cell.children[1] === input, "the field sits directly in the cell");
   });
 
   test("the reveal flips the field and the toggle's labelling together, and flips both back", () => {
@@ -1187,7 +1187,7 @@ describe("applyRowState - re-derivation on the update path", () => {
 
     // Simulate an in-progress edit: focus the input and type without committing.
     input.focus();
-    assert.equal(document.activeElement, input, "precondition: the input holds focus");
+    assert.ok(document.activeElement === input, "precondition: the input holds focus");
     input.value = "30";
 
     // A background re-projection (e.g. a sibling mutation) must NOT overwrite the focused, uncommitted edit.

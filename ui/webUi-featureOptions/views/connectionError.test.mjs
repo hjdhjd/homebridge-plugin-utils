@@ -100,7 +100,7 @@ describe("mountConnectionErrorView - error rendering", () => {
     await waitFor(() => root.querySelector("button")?.disabled === false, { message: "retry button to enable", timeout: 500 });
 
     assert.equal(root.querySelector("button").disabled, false);
-    assert.equal(root.querySelector(".progress"), null, "progress bar removed once retry is armed");
+    assert.ok(root.querySelector(".progress") === null, "progress bar removed once retry is armed");
   });
 
   test("clicking the armed retry button invokes the onRetry callback", async () => {

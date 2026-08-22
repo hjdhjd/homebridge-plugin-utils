@@ -302,7 +302,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
     assert.equal(store.state.armedOption, "Audio.Volume", "the row is armed in the store");
     assert.equal(checkbox.checked, true, "an armed row reads checked");
     assert.equal(input.disabled, false, "an armed row's input is live");
-    assert.equal(document.activeElement, input, "focus moves to the value input as the affordance for what comes next");
+    assert.ok(document.activeElement === input, "focus moves to the value input as the affordance for what comes next");
   });
 
   test("committing a value on an armed row enables the option and disarms it", () => {
@@ -1274,7 +1274,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
 
     assert.equal(store.state.status.kind, "connection-error", "precondition: the failed outcome raised the error");
     assert.equal(configTable.children.length, 0, "the table renders nothing under the error frame");
-    assert.equal(configTable.querySelector("details[data-category]"), null, "no category shell survives, so no option row can be reached");
+    assert.ok(configTable.querySelector("details[data-category]") === null, "no category shell survives, so no option row can be reached");
   });
 
   test("a clean outcome after the failure restores the table", () => {
@@ -1364,7 +1364,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
     assert.ok(notice(configTable), "the notice is mounted");
     assert.equal(notice(configTable).textContent, NOTICE, "carrying the plugin's copy verbatim");
-    assert.equal(configTable.querySelector("details[data-category]"), null, "and no option row is offered beside it");
+    assert.ok(configTable.querySelector("details[data-category]") === null, "and no option row is offered beside it");
   });
 
   test("renders the message as text, never as markup", () => {
@@ -1430,7 +1430,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
     clickController(store, { controllerId: CONTROLLER_A, emptyMessage: NOTICE });
 
     assert.ok(notice(configTable), "the notice took the surface");
-    assert.equal(configTable.querySelector("details[data-category]"), null, "the just-cached table was not restored under it");
+    assert.ok(configTable.querySelector("details[data-category]") === null, "the just-cached table was not restored under it");
 
     // The controller reports devices again. The cached table is what comes back.
     clickController(store, { controllerId: CONTROLLER_A, devices: [DEVICE_A] });

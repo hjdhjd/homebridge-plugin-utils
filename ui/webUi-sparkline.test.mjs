@@ -257,11 +257,11 @@ describe("createSparkline - updating in place", () => {
 
     const after = marksOf(sparkline.element);
 
-    assert.equal(after.area, before.area, "the area path is the same element across updates");
-    assert.equal(after.dot, before.dot, "the dot is the same element across updates");
-    assert.equal(after.group, before.group, "the sliding group is the same element across updates");
-    assert.equal(after.hairline, before.hairline, "the hairline is the same element across updates");
-    assert.equal(after.line, before.line, "the line path is the same element across updates");
+    assert.ok(after.area === before.area, "the area path is the same element across updates");
+    assert.ok(after.dot === before.dot, "the dot is the same element across updates");
+    assert.ok(after.group === before.group, "the sliding group is the same element across updates");
+    assert.ok(after.hairline === before.hairline, "the hairline is the same element across updates");
+    assert.ok(after.line === before.line, "the line path is the same element across updates");
   });
 
   test("a plain update genuinely recomputes the geometry", () => {

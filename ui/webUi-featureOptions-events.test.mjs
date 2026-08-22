@@ -316,7 +316,7 @@ describe("webUiFeatureOptions event delegation - keydown handler", () => {
 
     const searchInput = document.getElementById("searchInput");
 
-    assert.equal(document.activeElement, searchInput, "Ctrl+F must focus the search input");
+    assert.ok(document.activeElement === searchInput, "Ctrl+F must focus the search input");
   });
 
   test("Meta+F (macOS) also focuses the search input", async () => {
@@ -326,7 +326,7 @@ describe("webUiFeatureOptions event delegation - keydown handler", () => {
 
     harness.skeleton.configTable.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "f", metaKey: true }));
 
-    assert.equal(document.activeElement, document.getElementById("searchInput"), "Cmd+F must focus the search input");
+    assert.ok(document.activeElement === document.getElementById("searchInput"), "Cmd+F must focus the search input");
   });
 
   test("Ctrl+F is a no-op when the search panel is hidden", async () => {
@@ -347,8 +347,8 @@ describe("webUiFeatureOptions event delegation - keydown handler", () => {
 
     harness.skeleton.configTable.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "f" }));
 
-    assert.notEqual(document.activeElement, searchInput, "Ctrl+F must not focus the search input when the search panel is hidden");
-    assert.equal(document.activeElement, sentinel, "focus must remain on whatever element held it before the shortcut");
+    assert.ok(document.activeElement !== searchInput, "Ctrl+F must not focus the search input when the search panel is hidden");
+    assert.ok(document.activeElement === sentinel, "focus must remain on whatever element held it before the shortcut");
   });
 });
 

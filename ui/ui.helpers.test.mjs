@@ -25,7 +25,7 @@ describe("createTestDom", () => {
     assert.equal(typeof globalThis.Event, "function", "Event must be installed");
     assert.equal(typeof globalThis.CSSStyleSheet, "function", "CSSStyleSheet must be installed (Constructable Stylesheet API)");
     assert.equal(typeof globalThis.getComputedStyle, "function", "getComputedStyle must be installed");
-    assert.equal(globalThis.window, dom.window, "the installed window global must be the underlying Happy-DOM window the handle exposes");
+    assert.ok(globalThis.window === dom.window, "the installed window global must be the underlying Happy-DOM window the handle exposes");
   });
 
   test("Symbol.dispose restores the previous global state and closes the window", () => {
@@ -39,11 +39,11 @@ describe("createTestDom", () => {
       using _dom = createTestDom();
 
       void _dom;
-      assert.notEqual(globalThis.document, before.document, "during the dom scope, document must be the Happy-DOM document (not the previous value)");
+      assert.ok(globalThis.document !== before.document, "during the dom scope, document must be the Happy-DOM document (not the previous value)");
     }
 
-    assert.equal(globalThis.document, before.document, "after dispose, document must be restored to the pre-install value");
-    assert.equal(globalThis.window, before.window, "after dispose, window must be restored to the pre-install value");
+    assert.ok(globalThis.document === before.document, "after dispose, document must be restored to the pre-install value");
+    assert.ok(globalThis.window === before.window, "after dispose, window must be restored to the pre-install value");
   });
 
   test("nested createTestDom calls unwind in reverse order (LIFO disposal)", () => {
@@ -56,12 +56,12 @@ describe("createTestDom", () => {
       using _inner = createTestDom();
 
       void _inner;
-      assert.notEqual(globalThis.window, outerWindow, "inner scope must install a different window than the outer one");
+      assert.ok(globalThis.window !== outerWindow, "inner scope must install a different window than the outer one");
     }
 
     // After the inner disposes, the outer window must be back at the top of the stack.
-    assert.equal(globalThis.window, outerWindow, "after inner dispose, the outer dom's window must be restored");
-    assert.equal(globalThis.window, outer.window, "and that window must be the outer handle's window reference");
+    assert.ok(globalThis.window === outerWindow, "after inner dispose, the outer dom's window must be restored");
+    assert.ok(globalThis.window === outer.window, "and that window must be the outer handle's window reference");
   });
 });
 
@@ -102,11 +102,11 @@ describe("createSkeletonFeatureOptionsDom", () => {
     // display is set. Pinning the sibling relationship here is what lets one fixture serve every mode.
     assert.equal(skeleton.sidebar.contains(skeleton.deviceStatsContainer), false, "#deviceStatsContainer must sit outside #sidebar");
     assert.equal(skeleton.headerInfo.contains(skeleton.deviceStatsContainer), false, "#deviceStatsContainer must sit outside #headerInfo");
-    assert.equal(skeleton.deviceStatsContainer.parentElement, skeleton.search.parentElement, "#deviceStatsContainer and #search share the content column");
-    assert.equal(skeleton.sidebar.parentElement, skeleton.deviceStatsContainer.parentElement.parentElement, "#sidebar and the content column are the row's children");
+    assert.ok(skeleton.deviceStatsContainer.parentElement === skeleton.search.parentElement, "#deviceStatsContainer and #search share the content column");
+    assert.ok(skeleton.sidebar.parentElement === skeleton.deviceStatsContainer.parentElement.parentElement, "#sidebar and the content column are the row's children");
 
     // The search view builds its own #statusInfo at mount, so the skeleton carries none: a second element with that id would shadow the real one.
-    assert.equal(document.getElementById("statusInfo"), null, "the skeleton must not seed a competing #statusInfo");
+    assert.ok(document.getElementById("statusInfo") === null, "the skeleton must not seed a competing #statusInfo");
   });
 
   test("misnestDeviceStats reproduces the misconfigured shell the reveal diagnostic exists for", () => {

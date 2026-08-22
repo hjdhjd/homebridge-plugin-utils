@@ -170,7 +170,7 @@ describe("mountNavView - devices container", () => {
 
     assert.equal(links[0].querySelector(".adorned")?.textContent, "custom Device A", "the hook's node renders as the link's content");
     assert.equal(links[0].getAttribute("data-device-serial"), "dev-a", "the framework still owns the link's identity attributes");
-    assert.equal(links[1].querySelector(".adorned"), null, "a declined device carries no adornment");
+    assert.ok(links[1].querySelector(".adorned") === null, "a declined device carries no adornment");
     assert.equal(links[1].textContent, "Device B", "a null return falls through to the default name rendering");
   });
 
@@ -627,7 +627,7 @@ describe("mountNavView - the heading refresh action", () => {
     assert.equal(heading.classList.contains("d-flex"), true, "the docked heading lays its label and action out as a row");
     assert.equal(heading.classList.contains("align-items-center"), true, "with the two centered against each other");
     assert.equal(heading.firstElementChild.tagName, "SPAN", "the label leads");
-    assert.equal(heading.lastElementChild, actionIn(rootControllers), "and the action trails it");
+    assert.ok(heading.lastElementChild === actionIn(rootControllers), "and the action trails it");
   });
 
   test("an unconfigured sidebar leaves the heading exactly as it was", () => {
@@ -637,7 +637,7 @@ describe("mountNavView - the heading refresh action", () => {
     const { rootControllers } = setup({ devices: DEVICES });
     const heading = rootControllers.querySelector("h6.nav-header");
 
-    assert.equal(heading.querySelector("button"), null, "no action renders");
+    assert.ok(heading.querySelector("button") === null, "no action renders");
     assert.equal(heading.innerHTML, "Controllers", "and the heading carries its label as bare text, with no wrapper introduced for an action that is not there");
   });
 
@@ -790,7 +790,7 @@ describe("mountNavView - the Global Options row", () => {
 
     assert.equal(calls, 1, "the hook ran for the first build");
     assert.ok(globalIn(rootControllers).querySelector("i.plugin-glyph"), "and its node is what the row leads with");
-    assert.equal(globalIn(rootControllers).querySelector("svg"), null, "the framework's globe gives way to it entirely");
+    assert.ok(globalIn(rootControllers).querySelector("svg") === null, "the framework's globe gives way to it entirely");
 
     // A controllers refresh rebuilds the container, which is the rebuild a stored node would not survive.
     store.dispatch({ controllers: CONTROLLERS, type: "controllers:loaded" });

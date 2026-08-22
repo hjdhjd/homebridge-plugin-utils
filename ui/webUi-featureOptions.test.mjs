@@ -467,7 +467,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     await waitFor(() => skeleton.configTable.querySelector("details[data-category]"),
       { message: "the recovered show() to render the config table" });
 
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "the connection-error view must clear once the retry recovers");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "the connection-error view must clear once the retry recovers");
 
     orchestrator.cleanup();
   });
@@ -572,7 +572,7 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
 
     // show()'s stale outcome never landed: DEV-A did not render, DEV-B still owns the sidebar and the selection, and the reveal bailed (the sidebar stays hidden
     // because show() returned before revealRegions - the click owns presentation, not the superseded initial flow).
-    assert.equal(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-A']"), null, "show()'s superseded outcome must not render its device (DEV-A)");
+    assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-A']") === null, "show()'s superseded outcome must not render its device (DEV-A)");
     assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-B']"), "the click's device must remain after the stale outcome dropped");
     assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "DEV-B",
       "show()'s initial scope dispatch must not overwrite the click's selection");
@@ -1316,7 +1316,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     assert.ok(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']"),
       "a successful result must render its controller in the sidebar");
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "a successful result must leave no connection-error view behind");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "a successful result must leave no connection-error view behind");
 
     orchestrator.cleanup();
   });
@@ -1438,9 +1438,9 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     await flush();
 
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the sidebar the refresh could not improve on must stand untouched");
-    assert.equal(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), null,
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']") === null,
       "the list that rode back with the failure must never reach the sidebar");
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "a refresh failure must never raise the connection-error view over a working page");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "a refresh failure must never raise the connection-error view over a working page");
 
     orchestrator.cleanup();
   });
@@ -1514,7 +1514,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     await flush();
 
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the rejected refresh leaves the rendered sidebar as it was");
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "a plugin-side contract bug must never raise the retry view over a working page");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "a plugin-side contract bug must never raise the retry view over a working page");
 
     orchestrator.cleanup();
   });
@@ -1983,7 +1983,7 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
 
     assert.equal(entry.classList.contains("active"), true, "the controller is the resting selection, which is where its own click leaves the page");
     assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), false, "so Global is not the selection");
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active"), null, "and no device is selected, since the controller returned none");
+    assert.ok(skeleton.devicesContainer.querySelector(".nav-link.active") === null, "and no device is selected, since the controller returned none");
 
     orchestrator.cleanup();
   });
@@ -2012,7 +2012,7 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
 
     assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
       "global stays the selection through a device-only boot");
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active"), null, "and the boot selects no device either");
+    assert.ok(skeleton.devicesContainer.querySelector(".nav-link.active") === null, "and the boot selects no device either");
 
     orchestrator.cleanup();
   });
@@ -3180,7 +3180,7 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
       // eslint-disable-next-line no-await-in-loop
       await flush();
 
-      assert.equal(harness.skeleton.headerInfo.querySelector("code"), null, "a well-formed rich outcome must not trip the contract guard");
+      assert.ok(harness.skeleton.headerInfo.querySelector("code") === null, "a well-formed rich outcome must not trip the contract guard");
     }
   });
 });
@@ -3378,7 +3378,7 @@ describe("webUiFeatureOptions - a click failure and the healthy click that recov
     harness.skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").click();
     await flush();
 
-    assert.equal(harness.skeleton.headerInfo.querySelector("button.btn-warning"), null, "the retry affordance is gone");
+    assert.ok(harness.skeleton.headerInfo.querySelector("button.btn-warning") === null, "the retry affordance is gone");
     assert.match(harness.skeleton.headerInfo.textContent, /Feature options are applied in prioritized order/,
       "the header view reclaimed #headerInfo with the precedence chain");
     assert.notEqual(harness.skeleton.configTable.children.length, 0, "the option table is back");
@@ -3418,9 +3418,9 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
 
     // The reveal is what separates this from a failure: an empty outcome is a success, so the page appears rather than resting on the retry view.
     assert.equal(skeleton.sidebar.style.display, "", "the page is revealed - an empty outcome is a success, not a connection error");
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "and never renders the connection-error view");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "and never renders the connection-error view");
     assert.equal(skeleton.configTable.querySelector(".fo-devices-notice")?.textContent, NOTICE, "the notice holds the config-table surface");
-    assert.equal(skeleton.configTable.querySelector("details[data-category]"), null, "no option row is offered beside it");
+    assert.ok(skeleton.configTable.querySelector("details[data-category]") === null, "no option row is offered beside it");
     assert.equal(barsHidden(skeleton.search), true, "and the search panel's content is hidden - there is nothing to search");
 
     orchestrator.cleanup();
@@ -3467,7 +3467,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
     skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']").click();
     await flush();
 
-    assert.equal(skeleton.configTable.querySelector(".fo-devices-notice"), null, "clicking back to a populated controller clears the notice");
+    assert.ok(skeleton.configTable.querySelector(".fo-devices-notice") === null, "clicking back to a populated controller clears the notice");
     assert.notEqual(skeleton.configTable.querySelectorAll("details[data-category]").length, 0, "and its table renders");
     assert.equal(barsHidden(skeleton.search), false, "and the search panel returns");
 
@@ -3499,7 +3499,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.equal(skeleton.configTable.querySelector(".fo-devices-notice"), null, "no notice");
+    assert.ok(skeleton.configTable.querySelector(".fo-devices-notice") === null, "no notice");
     assert.notEqual(skeleton.configTable.querySelectorAll("details[data-category]").length, 0, "the full table renders at controller scope");
     assert.equal(barsHidden(skeleton.search), false, "and the search panel stands");
 
@@ -3535,7 +3535,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "an empty-success result must never render the connection-error view");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "an empty-success result must never render the connection-error view");
     assert.equal(skeleton.sidebar.style.display, "", "the success path must reveal the regions rather than returning early on the connection-error branch");
 
     orchestrator.cleanup();
@@ -3575,7 +3575,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
     await flush();
 
     assert.equal(ctrlBLink.classList.contains("active"), true, "the optimistic controller scope must stand over an empty-success result");
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "an empty-success result must never render the connection-error view");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "an empty-success result must never render the connection-error view");
 
     orchestrator.cleanup();
   });
@@ -4063,7 +4063,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     assert.equal(seenPlatforms.length, seenBefore, "a re-sync failure short-circuits before getControllers is invoked");
 
     // The working view was left intact: no connection-error frame (the deliberate divergence from show()), and the sidebar still carries the controller.
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null,
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null,
       "a refresh re-sync failure must not tear the view down into the connection-error frame");
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the sidebar controller must survive a failed refresh sync");
 
@@ -4335,7 +4335,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
     assert.deepEqual(extraArgs, [], "the hook receives exactly one argument - the bag is the whole contract, with nothing trailing it");
     assert.deepEqual(Object.keys(bag).toSorted(), [ "device", "panel", "signal" ], "the bag carries exactly device, panel, and signal");
     assert.equal(bag.device, undefined, "the infoPanel receives an undefined device in global-only mode");
-    assert.equal(bag.panel, skeleton.deviceStatsContainer, "the infoPanel receives the device-stats root");
+    assert.ok(bag.panel === skeleton.deviceStatsContainer, "the infoPanel receives the device-stats root");
     assert.ok(bag.signal instanceof AbortSignal, "the infoPanel receives the mount's lifecycle signal");
     assert.equal(bag.signal.aborted, false, "which is live while the mount is");
 
@@ -4393,7 +4393,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
     await waitFor(() => !skeleton.headerInfo.querySelector("button.btn-warning"), { message: "the retry to clear the stale error block", timeout: 1000 });
     await flush();
 
-    assert.equal(skeleton.headerInfo.querySelector("button.btn-warning"), null, "no dead retry button survives the recovery");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "no dead retry button survives the recovery");
     assert.equal(skeleton.headerInfo.children.length, 0, "#headerInfo is emptied by the orchestrator's reclaim after recovery");
     assert.equal(skeleton.headerInfo.style.display, "none", "#headerInfo is hidden again after the successful global-only retry");
     assert.ok(skeleton.configTable.querySelector("details[data-category]"), "the recovered global-only page rendered the options table");
@@ -5026,7 +5026,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     assert.equal(await refresh, false, "a superseded refresh reports that it changed nothing");
     await flush();
 
-    assert.equal(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-STALE']"), null,
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-STALE']") === null,
       "the superseded refresh's late list must never reach the store the newer cycle owns");
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the newer cycle's own sidebar stands");
 
@@ -5228,7 +5228,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     await flush();
 
-    assert.equal(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-STALE']"), null,
+    assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-STALE']") === null,
       "the superseded refresh's list must never reach the sidebar the newer cycle rendered");
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the newer cycle's own sidebar stands untouched");
 

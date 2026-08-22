@@ -391,7 +391,7 @@ describe("statusPanel - push handling by kind", () => {
 
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 2, "door", "Closed"));
 
-    assert.equal(valueSpanFor(root, "Door"), doorSpanBefore, "the same value-span node carries the new text - a full-panel rebuild would fail this");
+    assert.ok(valueSpanFor(root, "Door") === doorSpanBefore, "the same value-span node carries the new text - a full-panel rebuild would fail this");
     assert.equal(doorSpanBefore.textContent, "Closed");
   });
 
@@ -1236,8 +1236,8 @@ describe("statusPanel - the server-hello recovery", () => {
     // The hello clears floors and notifies, but does no DOM work and touches no pending latch.
     fake.observed.emitPush(STATUS_EVENT, helloEvent(99));
 
-    assert.equal(root.querySelector(".device-stats-grid"), panelBefore, "the panel element is the same node across a hello");
-    assert.equal(valueSpanFor(root, "Motion"), motionSpanBefore, "the motion value span is the same node across a hello");
+    assert.ok(root.querySelector(".device-stats-grid") === panelBefore, "the panel element is the same node across a hello");
+    assert.ok(valueSpanFor(root, "Motion") === motionSpanBefore, "the motion value span is the same node across a hello");
     assert.equal(motionSpanBefore.textContent, "Detected", "the latched value is unchanged by the hello");
 
     // The latch armed before the hello still clears its row at its own deadline.
@@ -1263,7 +1263,7 @@ describe("statusPanel - the server-hello recovery", () => {
 
     // A hello with no configured callback: the optional call is a no-op, and nothing rebuilds the panel.
     assert.doesNotThrow(() => fake.observed.emitPush(STATUS_EVENT, helloEvent(42)));
-    assert.equal(root.querySelector(".device-stats-grid"), panelBefore, "the hello did not rebuild the panel");
+    assert.ok(root.querySelector(".device-stats-grid") === panelBefore, "the hello did not rebuild the panel");
 
     // The floor still cleared even without a callback: a subsequent token-1 push renders.
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "Fresh"));
@@ -1734,8 +1734,8 @@ describe("statusPanel - the link-lost watchdog", () => {
     assert.equal(button.textContent, "↻ " + LINK_LOST_RELOAD_TEXT, "the button carries the glyph-prefixed recovery label");
 
     // The action line is its own full-width line below the message, not a control trailing inside the message line.
-    assert.equal(button.parentElement, reloadLine, "the button is the reload line's own element");
-    assert.equal(root.querySelector(".fo-status-message button"), null, "the reload button is not inside the message line");
+    assert.ok(button.parentElement === reloadLine, "the button is the reload line's own element");
+    assert.ok(root.querySelector(".fo-status-message button") === null, "the reload button is not inside the message line");
 
     // Clicking the reload action does not throw. The reload targets the top frame; happy-dom's standalone window has window.top === window, so top-versus-self is
     // not structurally distinguishable in the harness.
@@ -2306,7 +2306,7 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
     fake.observed.emitPush(STATUS_EVENT, helloEvent(9));
 
     assert.equal(valueFor(root, "Status"), LOCKED_CONNECTED, "a hello against an untripped panel leaves the Status cell alone");
-    assert.equal(root.firstChild, panelBefore, "and rebuilds nothing - the restore is a no-op when nothing is tripped");
+    assert.ok(root.firstChild === panelBefore, "and rebuilds nothing - the restore is a no-op when nothing is tripped");
     assert.equal(valueFor(root, "Door"), "Open", "the live row value stands");
   });
 });
@@ -2382,7 +2382,7 @@ describe("statusPanel - the plugin content dock", () => {
     const bag = calls.at(-1);
 
     assert.equal(root.children.length, 2, "the root carries the grid and the dock");
-    assert.equal(root.children[1], bag.panel, "the dock sits after the grid, never before it");
+    assert.ok(root.children[1] === bag.panel, "the dock sits after the grid, never before it");
     assert.equal(valueFor(root, "Status"), "Connecting...", "and the panel's own grid rendered normally alongside it");
     assert.equal(bag.device, DEVICE_A, "the bag carries the selected device object itself");
     assert.equal(bag.signal, controller.signal, "and the mount's own lifecycle signal");
@@ -2408,11 +2408,11 @@ describe("statusPanel - the plugin content dock", () => {
     selectDevice(store, "BB");
 
     assert.equal(calls.length, DOCK_CALLS_AT_MOUNT + 2, "the new selection re-invokes the hook");
-    assert.equal(calls.at(-1).panel, dock, "with the same dock element identity");
+    assert.ok(calls.at(-1).panel === dock, "with the same dock element identity");
     assert.equal(calls.at(-1).device, DEVICE_B, "and the newly-selected device");
-    assert.notEqual(root.children[0], gridForA, "the grid beneath it is a fresh build");
+    assert.ok(root.children[0] !== gridForA, "the grid beneath it is a fresh build");
     assert.equal(root.children.length, 2, "the root still carries exactly the grid and the dock");
-    assert.equal(root.children[1], dock, "and the dock is still the last child");
+    assert.ok(root.children[1] === dock, "and the dock is still the last child");
   });
 
   test("D4: the no-device render invokes the hook with device strictly undefined and leaves the same dock as the root's only child", () => {
@@ -2435,9 +2435,9 @@ describe("statusPanel - the plugin content dock", () => {
 
     assert.equal(calls.length, DOCK_CALLS_AT_MOUNT + 2, "the no-device render invokes the hook like any other selection render");
     assert.equal(calls.at(-1).device, undefined, "with no device in the bag - undefined rather than the null the view tracks internally");
-    assert.equal(calls.at(-1).panel, dock, "the dock survives the wholesale clear");
+    assert.ok(calls.at(-1).panel === dock, "the dock survives the wholesale clear");
     assert.equal(root.children.length, 1, "and is all the root holds off device scope");
-    assert.equal(root.children[0], dock);
+    assert.ok(root.children[0] === dock, "and that one child is the dock itself");
   });
 
   test("D5: a push-driven rebuild swaps the grid beneath an untouched dock - the hook is not re-invoked and the plugin's own content stands", () => {
@@ -2464,11 +2464,11 @@ describe("statusPanel - the plugin content dock", () => {
     fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }], false));
 
     assert.equal(valueFor(root, "Door"), "Open", "precondition: the snapshot rebuilt the grid");
-    assert.notEqual(root.children[0], gridBeforePush, "the rebuild mints a fresh grid element");
+    assert.ok(root.children[0] !== gridBeforePush, "the rebuild mints a fresh grid element");
     assert.equal(calls.length, callsBeforePush, "a push-driven rebuild does not re-invoke the hook - the dock has nothing to be told");
     assert.equal(root.children.length, 2, "the root still carries exactly the grid and the dock");
-    assert.equal(root.children[1], dock, "the dock keeps its identity and its place after the grid");
-    assert.equal(dock.querySelector(".plugin-marker"), marker, "and the plugin's own content inside it is untouched");
+    assert.ok(root.children[1] === dock, "the dock keeps its identity and its place after the grid");
+    assert.ok(dock.querySelector(".plugin-marker") === marker, "and the plugin's own content inside it is untouched");
   });
 
   test("D6: a same-device re-render re-invokes the hook without moving the dock, so a focused descendant inside it keeps focus", () => {
@@ -2495,7 +2495,7 @@ describe("statusPanel - the plugin content dock", () => {
     assert.ok(root.contains(dock), "precondition: the dock is attached to the root");
 
     marker.focus();
-    assert.equal(document.activeElement, marker, "precondition: a descendant of the dock holds focus");
+    assert.ok(document.activeElement === marker, "precondition: a descendant of the dock holds focus");
 
     /* Watch the root's own child list across the re-render. The observer comes from the test window's registry because the harness installs no such global, and
      * takeRecords drains the queue synchronously, so the records are read without yielding. The same-device branch rebuilds the grid in place, which is itself a
@@ -2515,10 +2515,10 @@ describe("statusPanel - the plugin content dock", () => {
     const dockMoved = records.some((record) => [ ...record.addedNodes, ...record.removedNodes ].includes(dock));
 
     assert.equal(calls.length, callsBeforeRefire + 1, "the same-device re-render re-invokes the hook");
-    assert.equal(calls.at(-1).panel, dock, "with the same dock element");
+    assert.ok(calls.at(-1).panel === dock, "with the same dock element");
     assert.equal(dockMoved, false, "and never detaches or re-appends it");
-    assert.equal(document.activeElement, marker, "so the focused descendant survives the re-render");
-    assert.equal(root.children[1], dock, "and the dock is still the last child");
+    assert.ok(document.activeElement === marker, "so the focused descendant survives the re-render");
+    assert.ok(root.children[1] === dock, "and the dock is still the last child");
   });
 
   test("D7: the hook runs as the render's closing act - at invocation time the grid is mounted, the dock is last, and the view request is already away", () => {
@@ -2582,9 +2582,9 @@ describe("statusPanel - the plugin content dock", () => {
 
     const freshDock = second.calls.at(-1).panel;
 
-    assert.notEqual(freshDock, staleDock, "the fresh mount docks an element of its own");
+    assert.ok(freshDock !== staleDock, "the fresh mount docks an element of its own");
     assert.equal(root.children.length, 2, "and the root carries exactly that mount's grid and dock");
-    assert.equal(root.children[1], freshDock, "with the fresh dock last");
+    assert.ok(root.children[1] === freshDock, "with the fresh dock last");
     assert.equal(root.contains(staleDock), false, "the prior mount's dock was swept by the wholesale render");
   });
 });

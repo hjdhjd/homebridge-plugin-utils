@@ -8,20 +8,12 @@
  */
 "use strict";
 
-import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession } from "./ui.helpers.mjs";
+import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession,
+  seedBootstrapProbeShim } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
-
-// Seed Bootstrap's `.d-none { display: none }` shim so the theme component's #waitForBootstrap probe completes immediately.
-function seedBootstrapProbeShim() {
-
-  const sheet = new CSSStyleSheet();
-
-  sheet.replaceSync(".d-none { display: none; } .btn-primary { background-color: rgb(33, 37, 41); color: rgb(255, 255, 255); }");
-  document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
-}
 
 // Yield enough event-loop turns for the orchestrator's async show() chain (homebridge.getPluginConfig + /getOptions request + theme probe) to settle. The event-
 // delegation tests in this file mostly assert on synchronous DOM state after a synthesized event, so a single 10ms tick after show() is plenty of headroom.

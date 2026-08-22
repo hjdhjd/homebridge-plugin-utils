@@ -8,22 +8,15 @@
  */
 "use strict";
 
-import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession } from "./ui.helpers.mjs";
+import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, seedBootstrapProbeShim } from "./ui.helpers.mjs";
 import { describe, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 
-// Seed a CSS stylesheet matching Bootstrap's `.d-none { display: none }` so the theme component's #waitForBootstrap probe completes immediately rather than
-// timing out after 2 seconds. The `.btn-warning` rule gives the connection-error view's retry button realistic Bootstrap coloring instead of the browser's
-// unstyled default. Every show()-invoking test must call this after createTestDom so the theme's init() finishes promptly.
-function seedBootstrapProbeShim() {
-
-  const sheet = new CSSStyleSheet();
-
-  sheet.replaceSync(".d-none { display: none; } .btn-warning { background-color: rgb(255, 193, 7); color: rgb(33, 37, 41); }");
-  document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
-}
+// The extra styling this suite needs on top of the shared probe shim: it gives the connection-error view's retry button realistic Bootstrap coloring instead of
+// the browser's unstyled default, so an assertion about how that button reads is asking about the same chrome a real page would show.
+const RETRY_BUTTON_CSS = " .btn-warning { background-color: rgb(255, 193, 7); color: rgb(33, 37, 41); }";
 
 // Yield enough event-loop turns for the orchestrator's async show() chain (homebridge.getPluginConfig + /getOptions request + theme probe) to settle. The
 // connection-error tests in this file assert on synchronous DOM state after show() resolves, so a single 10ms tick is plenty of headroom.
@@ -57,7 +50,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     using _homebridge = installHomebridge(fake);
 
-    seedBootstrapProbeShim();
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
     // Build an orchestrator with getControllers returning one controller and getDevices resolving a carried connection-failure error for that controller. This is the
     // exact precondition for the connection-error path: a controller is configured but the probe reported it unreachable, so the failure travels back on the result.
@@ -106,7 +99,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     using _homebridge = installHomebridge(fake);
 
-    seedBootstrapProbeShim();
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
     // We open the session before enabling fake timers because the session's open() awaits the fake getPluginConfig microtask, which must not be intercepted by mock
     // timers. With the session in hand, we can safely switch the clock to virtual time for the rest of the test.
@@ -173,7 +166,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     using _homebridge = installHomebridge(fake);
 
-    seedBootstrapProbeShim();
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
     // We open the session before enabling fake timers because the session's open() awaits the fake getPluginConfig microtask, which must not be intercepted by mock
     // timers. With the session in hand, we can safely switch the clock to virtual time for the rest of the test.
@@ -254,7 +247,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     using _homebridge = installHomebridge(fake);
 
-    seedBootstrapProbeShim();
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
     const session = await openTestSession();
 
@@ -315,7 +308,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     using _homebridge = installHomebridge(fake);
 
-    seedBootstrapProbeShim();
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
     const orchestrator = new webUiFeatureOptions({
 

@@ -495,3 +495,28 @@ export function clickCategoryHeader(details) {
 
   details.querySelector("summary").click();
 }
+
+/**
+ * The accent color {@link seedBootstrapProbeShim} puts on `.btn-primary`. Exported so a suite asserting on what the theme's accent probe read names the same
+ * source the shim writes from, rather than repeating the literal on both sides of the assertion.
+ */
+export const BOOTSTRAP_PROBE_ACCENT = "rgb(33, 37, 41)";
+
+/**
+ * Seed the Bootstrap-shaped stylesheet the theme component's readiness probe waits on. The probe keys on `.d-none { display: none }`, so without this the theme's
+ * `init()` runs its full wait out before resolving and every `show()`-invoking test pays that timeout. Call it after `createTestDom`, whose fresh window brings an
+ * empty `adoptedStyleSheets` list.
+ *
+ * The sheet also carries a `.btn-primary` accent rule, which is what the background accent probe reads to write the `--fo-accent-*` tokens onto `:root`. Seeding it
+ * unconditionally means readiness and the accent arrive together as one fixture rather than as a per-file choice, so a test that later starts asserting on the accent
+ * finds a value already there.
+ *
+ * @param {string} [additionalCss] - Extra rules appended to the sheet, for a suite that needs realistic coloring on some other Bootstrap class.
+ */
+export function seedBootstrapProbeShim(additionalCss = "") {
+
+  const sheet = new CSSStyleSheet();
+
+  sheet.replaceSync(".d-none { display: none; } .btn-primary { background-color: " + BOOTSTRAP_PROBE_ACCENT + "; color: rgb(255, 255, 255); }" + additionalCss);
+  document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
+}

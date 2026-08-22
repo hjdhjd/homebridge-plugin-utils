@@ -4,9 +4,9 @@
  */
 "use strict";
 
+import { BOOTSTRAP_PROBE_ACCENT, createTestDom, seedBootstrapProbeShim } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { createTestDom } from "./ui.helpers.mjs";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { registerThemeEffect } from "./webUi-theming.mjs";
 
@@ -32,18 +32,6 @@ const flippableHost = (mode) => {
 
   return host;
 };
-
-// Seed Bootstrap's `.d-none` readiness shim plus a `.btn-primary` the accent probe can read, so a probe that runs writes an observable value onto `:root`.
-const seedBootstrapProbeShim = () => {
-
-  const sheet = new CSSStyleSheet();
-
-  sheet.replaceSync(".d-none { display: none; } .btn-primary { background-color: rgb(33, 37, 41); color: rgb(255, 255, 255); }");
-  document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
-};
-
-// The probed accent the shim above puts on `.btn-primary`, so a re-probe is observable as this exact value landing back on the token.
-const PROBED_ACCENT = "rgb(33, 37, 41)";
 
 // Drain queued async work. The follow path is a bridge read plus its continuation, so a handful of macrotask cycles covers it without waiting on wall-clock time.
 const flush = async () => {
@@ -202,7 +190,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
     assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the announcement re-keyed the dark class");
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "dark", "and re-applied the color-scheme");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent off the host's current chrome");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), BOOTSTRAP_PROBE_ACCENT, "and re-probed the accent off the host's current chrome");
   });
 
   test("a mutation of the frame body's theme classes does the same", async () => {
@@ -226,7 +214,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
     assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the body-class retint re-keyed the dark class");
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "dark", "and re-applied the color-scheme");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), BOOTSTRAP_PROBE_ACCENT, "and re-probed the accent");
   });
 
   test("the message route carries the page back out of dark mode as readily as into it", async () => {
@@ -253,7 +241,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
     // The removal is the half a route that only ever adds would still pass without: a user who switches Homebridge back to light has to get a light page.
     assert.equal(document.documentElement.classList.contains("fo-dark"), false, "the announcement took the dark class off :root");
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "light", "and re-applied the color-scheme in this direction too");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent off the host's current chrome");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), BOOTSTRAP_PROBE_ACCENT, "and re-probed the accent off the host's current chrome");
   });
 
   test("the body-class route carries the page back out of dark mode as readily as into it", async () => {
@@ -282,7 +270,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
     assert.equal(document.documentElement.classList.contains("fo-dark"), false, "the body-class retint took the dark class off :root");
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "light", "and re-applied the color-scheme in this direction too");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and re-probed the accent");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), BOOTSTRAP_PROBE_ACCENT, "and re-probed the accent");
   });
 
   test("both routes re-read the mode through the bridge rather than trusting the announcement", async () => {

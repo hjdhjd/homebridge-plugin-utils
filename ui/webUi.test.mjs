@@ -12,8 +12,9 @@
  */
 "use strict";
 
+import { BOOTSTRAP_PROBE_ACCENT, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installPageEpoch, installWebUiBoot,
+  seedBootstrapProbeShim, waitFor } from "./ui.helpers.mjs";
 import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "./webui-status.js";
-import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installPageEpoch, installWebUiBoot, waitFor } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushPending } from "node:timers/promises";
@@ -43,10 +44,7 @@ function makeWebUiHarness({ name = "TestPlatform", config = [], firstRun, lighti
   // promptly rather than timing out.
   if(unstubbed) {
 
-    const sheet = new CSSStyleSheet();
-
-    sheet.replaceSync(".d-none { display: none; }");
-    document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
+    seedBootstrapProbeShim();
   } else {
 
     ui.featureOptions.show = async () => { featureOptionsCalls.push("show"); };
@@ -860,16 +858,6 @@ describe("webUi - real menu-path re-entry (the full pipeline through webUi's own
     }
   };
 
-  // Seed a Bootstrap-shaped stylesheet so the theme probe resolves promptly rather than running out its own window.
-  const seedBootstrapProbeShim = () => {
-
-    const sheet = new CSSStyleSheet();
-
-    sheet.replaceSync(".d-none { display: none; }");
-
-    document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
-  };
-
   // True once the options page has rendered whole - one category disclosure per configured category.
   const isFullyRendered = (skeleton) => skeleton.configTable.querySelectorAll("details[data-category]").length === RE_ENTRY_FEATURES.categories.length;
 
@@ -957,11 +945,7 @@ describe("webUi - the launch-time session open is deadline-bounded", () => {
       unstubbed: true
     });
 
-    const sheet = new CSSStyleSheet();
-
-    sheet.replaceSync(".d-none { display: none; }");
-
-    document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
+    seedBootstrapProbeShim();
 
     const healthyRead = harness.fake.getPluginConfig;
 
@@ -1692,9 +1676,6 @@ describe("webUi.epochBounded - the public epoch-composition surface", () => {
 
 describe("webUi.registerTheming - the page-lifetime theming surface", () => {
 
-  // The probed accent the shim below puts on `.btn-primary`, so a re-probe is observable as this exact value landing back on the token.
-  const PROBED_ACCENT = "rgb(33, 37, 41)";
-
   // Drain queued async work. A registration is a bridge read plus its continuation, so a handful of macrotask cycles covers it with no wall-clock wait.
   const flush = async () => {
 
@@ -1717,10 +1698,8 @@ describe("webUi.registerTheming - the page-lifetime theming surface", () => {
     const fake = createFakeHomebridge({ lightingMode });
     const homebridgeGuard = installHomebridge(fake);
     const epochGuard = installPageEpoch();
-    const shim = new CSSStyleSheet();
 
-    shim.replaceSync(".d-none { display: none; } .btn-primary { background-color: " + PROBED_ACCENT + "; color: rgb(255, 255, 255); }");
-    document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, shim ];
+    seedBootstrapProbeShim();
 
     return {
 
@@ -1877,7 +1856,7 @@ describe("webUi.registerTheming - the page-lifetime theming surface", () => {
     await flush();
 
     assert.equal(document.documentElement.classList.contains("fo-dark"), true, "the host's retint of our own body applied the mode");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), PROBED_ACCENT, "and drove the accent probe with it");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), BOOTSTRAP_PROBE_ACCENT, "and drove the accent probe with it");
   });
 
   test("a voided registration whose read rejects raises no unhandled rejection, while an awaited one still observes it", async () => {

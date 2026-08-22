@@ -6,7 +6,8 @@
  */
 "use strict";
 
-import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, waitFor } from "./ui.helpers.mjs";
+import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, seedBootstrapProbeShim,
+  waitFor } from "./ui.helpers.mjs";
 import { describe, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
@@ -62,16 +63,6 @@ const FEATURES = {
 function makePluginConfig({ options = [], platform = "TestPlugin" } = {}) {
 
   return [{ name: "TestPlugin", options, platform }];
-}
-
-// Seed a CSS stylesheet matching Bootstrap's `.d-none { display: none }` so the theme component's #waitForBootstrap probe completes immediately rather than
-// timing out after 2 seconds. Every show()-invoking test must call this after createTestDom so the theme's init() finishes promptly.
-function seedBootstrapProbeShim() {
-
-  const sheet = new CSSStyleSheet();
-
-  sheet.replaceSync(".d-none { display: none; }");
-  document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, sheet ];
 }
 
 // Drain pending async work without an arbitrary wall-clock wait. `setImmediate` from `node:timers/promises` queues a macrotask that runs after I/O callbacks and

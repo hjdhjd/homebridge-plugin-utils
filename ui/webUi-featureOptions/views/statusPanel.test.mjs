@@ -2489,6 +2489,11 @@ describe("statusPanel - the plugin content dock", () => {
     const dock = calls.at(-1).panel;
     const marker = dock.querySelector(".plugin-marker");
 
+    // Pin the dock's attachment before focusing anything inside it. Focusing a descendant of a detached dock and then arming the observer below sends Happy-DOM
+    // into a microtask spin that starves the per-test timeout, so a regression that leaves the dock unattached has to land here as a bounded assertion failure
+    // rather than downstream as a suite that hangs until something outside the runner kills it.
+    assert.ok(root.contains(dock), "precondition: the dock is attached to the root");
+
     marker.focus();
     assert.equal(document.activeElement, marker, "precondition: a descendant of the dock holds focus");
 

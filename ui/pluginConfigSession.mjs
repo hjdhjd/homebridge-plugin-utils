@@ -8,15 +8,16 @@
  * PluginConfigSession - the single session-scoped accessor to the persisted plugin configuration, holding a coherent replica of the host config.
  *
  * The webUI needs to read its plugin configuration at several lifecycle points (routing, the first-run flow, the feature-options page) and to write it at two
- * (first-run credential capture, feature-option saves). Left to themselves, each of those sites would call `homebridge.getPluginConfig` independently and at least
- * two would call `homebridge.updatePluginConfig` independently - several conduits to the same host config, each free to read it at a different moment and to drift
- * from the others. This owner collapses that to one: every read and every write of the host config goes through this single accessor, so the held array is the one
- * copy the session reasons about.
+ * (first-run credential capture, feature-option saves). Left to themselves, each of those sites would call `homebridge.getPluginConfig` independently, at least two
+ * would call `homebridge.updatePluginConfig` independently, and each writer would pair its own bare `homebridge.savePluginConfig` with it - several conduits to the
+ * same host config, each free to read it at a different moment and to drift from the others. This owner collapses that to one: every read, every stage, and every
+ * save of the host config goes through this single accessor, so the held array is the one copy the session reasons about.
  *
  * The host config is the ultimate source of truth; this class is not a second source but the one correct accessor to the first, holding a replica that is coherent
  * as of its last reference-advancing operation. The held replica advances only through {@link sync} (the read-direction advance, re-reading the host config) and
- * {@link commit} (the write-direction advance, persisting an edit). Routing, the first-run hooks, and the feature-options page all receive their config from here, and
- * nothing else calls the host config endpoints.
+ * {@link commit} (the write-direction advance, staging an edit into the host's in-memory model). {@link persist} is the save direction, writing out what is staged,
+ * and it advances nothing at all: it changes what the host has on disk, not what the session holds. Routing, the first-run hooks, and the feature-options page all
+ * receive their config from here, and nothing else calls the host config endpoints - the read, the stage, and the save alike.
  *
  * Because the host config can change underneath the session while the page is hidden (the Settings tab edits the same in-memory model), the replica is not assumed
  * frozen. The feature-options page re-syncs on every entry ({@link sync} at its `show()` chokepoint), so the replica is re-read against any external Settings-tab
@@ -30,6 +31,7 @@
  * if(!session.platform.controllers?.length) {
  *
  *   await session.commit({ controllers: [ { address, password, username } ] });
+ *   await session.persist();
  * }
  */
 export class PluginConfigSession {
@@ -42,7 +44,8 @@ export class PluginConfigSession {
   // still resolve after a fresher read or a user's save has already landed - this is what keeps that late arrival from putting the replica back to what it read.
   #generation;
 
-  // The Homebridge UI host (or a test stub matching the {getPluginConfig, updatePluginConfig} surface). The session is the only place that calls its config endpoints.
+  // The Homebridge UI host (or a test stub matching the {getPluginConfig, savePluginConfig, updatePluginConfig} surface). The session is the only place that calls
+  // its config endpoints.
   #host;
 
   // The platform name used to seed the minimum config shape when the host has none. Preserved on the primary entry across commits.
@@ -54,7 +57,8 @@ export class PluginConfigSession {
    * read establishes the replica rather than freezing it.
    *
    * @param {Object} args
-   * @param {{getPluginConfig: () => Promise<Object[]>, updatePluginConfig: (config: readonly Object[]) => Promise<unknown>}} args.host - The Homebridge bridge.
+   * @param {{getPluginConfig: () => Promise<Object[]>, savePluginConfig: () => Promise<unknown>,
+   *   updatePluginConfig: (config: readonly Object[]) => Promise<unknown>}} args.host - The Homebridge bridge.
    * @param {string} [args.name] - The platform name used to seed an empty configuration.
    * @returns {Promise<PluginConfigSession>} The opened session.
    */
@@ -101,7 +105,7 @@ export class PluginConfigSession {
   }
 
   /**
-   * Merge a patch into the primary platform entry and persist the whole array (sibling entries preserved), advancing the held reference only after the host write
+   * Merge a patch into the primary platform entry and stage the whole array (sibling entries preserved), advancing the held reference only after the host write
    * resolves. Every configuration write funnels through this method; it is the write-direction counterpart of {@link sync}.
    *
    * Transactional by construction: the next array is built and written before it replaces the held reference, so a rejected write throws without moving the session
@@ -123,12 +127,32 @@ export class PluginConfigSession {
   }
 
   /**
+   * Save the host's staged configuration to disk. Every configuration save funnels through this method, completing the set of acts the session owns: {@link sync}
+   * reads the host config, {@link commit} stages an edit into it, and this writes what is staged out to disk.
+   *
+   * Saving is its own method rather than an option on {@link commit} because staging and saving are separate acts that callers decide between: every consumer runs a
+   * liveness check after staging and skips the save when its deadline has passed, leaving the edit staged for the user's own save to pick up. A commit that also
+   * saved would leave nowhere for that decision to happen.
+   *
+   * A thin conduit by construction: it advances neither the replica nor the write generation, because saving persists what is already staged host-side and changes
+   * nothing the session holds. Nor does it check that anything was staged - the host saves whatever its in-memory config currently holds, and the session cannot know
+   * what else has staged into it (the Settings tab edits the same model), so a guard here would be guessing. A rejected save propagates to the caller, exactly as
+   * {@link commit} propagates its own host failure.
+   *
+   * @returns {Promise<void>}
+   */
+  async persist() {
+
+    await this.#host.savePluginConfig();
+  }
+
+  /**
    * Re-read the host config into the replica and seed the minimum shape. Every configuration read funnels through this method, pairing with {@link commit} as the
    * read-direction half.
    *
    * Called on every page entry so the replica re-reads against any external Settings-tab edit before the page renders against it. An empty host result yields a
-   * single bare entry; in both cases we ensure the primary entry carries the platform name so a later commit persists a well-formed block. The seed is held only -
-   * never eagerly written - so a fresh install that is opened and abandoned never leaves a bare platform entry staged on the host; the first real commit persists the
+   * single bare entry; in both cases we ensure the primary entry carries the platform name so a later commit stages a well-formed block. The seed is held only -
+   * never eagerly written - so a fresh install that is opened and abandoned never leaves a bare platform entry staged on the host; the first real commit stages the
    * name alongside actual data.
    *
    * Built like {@link commit} for symmetry and clarity: the read happens into a local, the local is seeded, and a single trailing assignment advances the held

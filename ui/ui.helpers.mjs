@@ -213,7 +213,8 @@ export function createSkeletonFeatureOptionsDom({ misnestDeviceStats = false } =
  * Inspection surface - nested under `observed` on the returned bridge, reachable from tests as `fake.observed.*`:
  *
  *   - `observed.calls` - an ordered log of the host calls whose relative order matters for the reconciliation tests (`getPluginConfig`, `updatePluginConfig`,
- *     `showSchemaForm`), each appending its tag as it runs. Read this to assert sync-before-show and flush-before-schemaform orderings.
+ *     `savePluginConfig`, `showSchemaForm`), each appending its tag as it runs. Read this to assert sync-before-show, stage-before-save, and flush-before-schemaform
+ *     orderings.
  *   - `observed.emitPush(name, data)` - dispatch a host push event of `name` carrying `data` on `event.data`, the shape the real host delivers, so a component's
  *     `{ signal }`-scoped push listener receives it exactly as it would in production.
  *   - `observed.updatedConfigs` - every `updatePluginConfig` call's payload.
@@ -239,8 +240,9 @@ export function createFakeHomebridge(init = {}) {
   const state = { saveButtonEnabled: true, schemaFormVisible: true, spinnerCount: 0 };
 
   // An ordered log of the host calls whose RELATIVE order matters for the reconciliation tests: each config read (getPluginConfig), each config write
-  // (updatePluginConfig), and each schema-form reveal (showSchemaForm) appends its tag. Tests read `observed.calls` to assert orderings like "the page re-read the
-  // config before rendering" (sync-before-show) and "the pending edit was written before the Settings form rendered" (flush-before-schemaform).
+  // (updatePluginConfig), each config save (savePluginConfig), and each schema-form reveal (showSchemaForm) appends its tag. Tests read `observed.calls` to assert
+  // orderings like "the page re-read the config before rendering" (sync-before-show) and "the pending edit was written before the Settings form rendered"
+  // (flush-before-schemaform).
   const calls = [];
 
   const makeToast = (variant) => (message, title) => {
@@ -301,6 +303,12 @@ export function createFakeHomebridge(init = {}) {
     // The config-ui request router. Tests seed specific responses via the Map; unknown paths resolve with null so a missing entry is a quiet miss rather than a
     // throw.
     request: async (path) => requestResponses.has(path) ? requestResponses.get(path) : null,
+
+    // Plugin configuration saves. The call carries no payload, so the ordered call log is the whole record of it - enough to assert that a stage preceded its save.
+    savePluginConfig: async () => {
+
+      calls.push("savePluginConfig");
+    },
 
     showSchemaForm: () => {
 

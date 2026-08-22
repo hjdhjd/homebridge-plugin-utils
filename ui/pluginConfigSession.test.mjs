@@ -8,13 +8,16 @@ import { describe, test } from "node:test";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
 import assert from "node:assert/strict";
 
-// Minimal host stub matching the {getPluginConfig, updatePluginConfig} surface the session uses. getPluginConfig returns the host's CURRENT `config` backing - exposed
-// as a settable field on the returned host so a test can reassign it to a new array between open() and sync() to simulate an external Settings-tab edit; in-place
-// mutation of the same array would be vacuous, since session.platform aliases that reference. updatePluginConfig records every payload and can be made to reject so
-// the transactional-commit contract is exercisable. `rejectReads` lets a test fail the sync() read path independently of the write path.
-const makeHost = ({ config = [], reject = false, rejectReads = false } = {}) => {
+// Minimal host stub matching the {getPluginConfig, savePluginConfig, updatePluginConfig} surface the session uses. getPluginConfig returns the host's CURRENT `config`
+// backing - exposed as a settable field on the returned host so a test can reassign it to a new array between open() and sync() to simulate an external Settings-tab
+// edit; in-place mutation of the same array would be vacuous, since session.platform aliases that reference. updatePluginConfig records every payload and can be made
+// to reject so the transactional-commit contract is exercisable. savePluginConfig carries no payload, so it records a call count on `saves` instead, incremented
+// before any rejection so a test can assert the save reached the host even when it fails. `rejectReads` and `rejectSaves` fail the read and save paths independently
+// of the write path and of each other.
+const makeHost = ({ config = [], reject = false, rejectReads = false, rejectSaves = false } = {}) => {
 
   const writes = [];
+  let saveCount = 0;
 
   return {
 
@@ -29,6 +32,19 @@ const makeHost = ({ config = [], reject = false, rejectReads = false } = {}) => 
       return this.config;
     },
     rejectReads,
+    savePluginConfig: async () => {
+
+      saveCount += 1;
+
+      if(rejectSaves) {
+
+        throw new Error("save failed");
+      }
+    },
+    get saves() {
+
+      return saveCount;
+    },
     updatePluginConfig: async (next) => {
 
       if(reject) {
@@ -115,6 +131,59 @@ describe("PluginConfigSession.commit", () => {
   });
 });
 
+describe("PluginConfigSession.persist", () => {
+
+  test("calls through to the host's savePluginConfig once per call and stages nothing of its own", async () => {
+
+    const host = makeHost({ config: [{ name: "P", platform: "MyPlugin" }] });
+    const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
+
+    assert.equal(host.saves, 0, "precondition: opening a session must not save");
+
+    await session.persist();
+
+    assert.equal(host.saves, 1, "persist must call savePluginConfig exactly once");
+    assert.equal(host.writes.length, 0, "persist must save what is already staged rather than staging anything itself");
+
+    await session.persist();
+
+    assert.equal(host.saves, 2, "a second persist must call through again - the conduit holds no state that could swallow a repeat save");
+  });
+
+  test("leaves the replica reference and its contents identical", async () => {
+
+    const host = makeHost({ config: [{ name: "P", options: ["Original"], platform: "MyPlugin" }] });
+    const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
+    const entriesBefore = session.entries;
+    const platformBefore = session.platform;
+
+    await session.persist();
+
+    assert.equal(session.entries, entriesBefore, "persist must not advance the held reference");
+    assert.equal(session.platform, platformBefore, "persist must not rebuild the primary entry");
+    assert.deepEqual(session.platform, { name: "P", options: ["Original"], platform: "MyPlugin" }, "persist must leave the replica's contents exactly as they were");
+  });
+
+  test("a rejected save propagates and leaves the session usable, so a subsequent commit still works", async () => {
+
+    const host = makeHost({ config: [{ name: "P", options: ["Original"], platform: "MyPlugin" }], rejectSaves: true });
+    const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
+    const entriesBefore = session.entries;
+
+    await assert.rejects(session.persist(), /save failed/, "a failed save must propagate to the caller");
+
+    assert.equal(host.saves, 1, "the failed save must still have reached the host");
+    assert.equal(session.entries, entriesBefore, "a failed save must not move the held reference");
+    assert.deepEqual(session.platform.options, ["Original"], "a failed save must not disturb the replica's contents");
+
+    // The session holds nothing a failed save could have left half-applied, so the next stage lands exactly as it would have before the failure.
+    await session.commit({ options: ["New"] });
+
+    assert.deepEqual(host.writes, [[{ name: "P", options: ["New"], platform: "MyPlugin" }]], "a commit after a failed save must stage the whole array as usual");
+    assert.deepEqual(session.platform.options, ["New"], "the commit after a failed save must advance the replica exactly as it always does");
+  });
+});
+
 describe("PluginConfigSession.sync", () => {
 
   test("re-reads the host config so an external edit made between open() and sync() is reflected", async () => {
@@ -167,11 +236,13 @@ describe("PluginConfigSession.sync", () => {
 describe("PluginConfigSession - the config-write generation", () => {
 
   // A host whose reads are held open by the test. Each getPluginConfig call parks a deferred keyed by the value it will eventually resolve, so a test can start two
-  // reads and settle them in whatever order the race it is pinning requires - the shape a slow page cycle's read resolving after a newer one takes in the field.
+  // reads and settle them in whatever order the race it is pinning requires - the shape a slow page cycle's read resolving after a newer one takes in the field. Its
+  // writes and saves settle immediately; each records what a generation test needs to see, the payloads on `writes` and the call count on `saves`.
   const makeGatedHost = () => {
 
     const gates = [];
     const writes = [];
+    let saveCount = 0;
 
     return {
 
@@ -183,6 +254,14 @@ describe("PluginConfigSession - the config-write generation", () => {
         gates.push(gate);
 
         return gate.promise;
+      },
+      savePluginConfig: async () => {
+
+        saveCount += 1;
+      },
+      get saves() {
+
+        return saveCount;
       },
       updatePluginConfig: async (next) => {
 
@@ -238,6 +317,32 @@ describe("PluginConfigSession - the config-write generation", () => {
 
     assert.deepEqual(session.platform.options, ["Saved.By.The.User"], "the read that began before the save must not roll the replica back over it");
     assert.equal(host.writes.length, 1, "the guard changes nothing about what was written");
+  });
+
+  test("a persist while a read is in flight leaves that read free to apply - only a write moves the generation", async () => {
+
+    const host = makeGatedHost();
+    const session = new PluginConfigSession(host, "MyPlugin");
+
+    // Establish the replica, then start a read that will answer while a save is in the way.
+    const open = session.sync();
+
+    host.gates[0].resolve([{ name: "P", options: ["Original"], platform: "MyPlugin" }]);
+    await open;
+
+    const inFlight = session.sync();
+
+    // Saving the host's staged config changes what the host has on disk, not what the session holds, so it has no newer truth to defend and must leave the read's
+    // generation where it was. That is the contrast with a commit, which holds newer truth and legitimately overtakes an in-flight read.
+    await session.persist();
+
+    assert.equal(host.saves, 1, "precondition: the save reached the host");
+
+    host.gates[1].resolve([{ name: "P", options: ["Fresh"], platform: "MyPlugin" }]);
+    await inFlight;
+
+    assert.deepEqual(session.platform.options, ["Fresh"], "a read that only a save overlapped must still apply - persist must not advance the write generation");
+    assert.equal(host.writes.length, 0, "persist must stage nothing");
   });
 
   test("a sole sync still applies - the guard drops only reads a later write overtook", async () => {

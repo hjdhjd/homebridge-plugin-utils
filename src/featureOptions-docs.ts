@@ -21,13 +21,18 @@
  *   - {@link spliceMarkedRegion} - the in-place splice that replaces the region between {@link FEATURE_OPTIONS_DOC_BEGIN} / {@link FEATURE_OPTIONS_DOC_END} in an
  *     existing doc with freshly rendered content, leaving each plugin's hand-written header and intro untouched.
  *
+ * It also ships two builders for those scope hooks, because writing them by hand is what every plugin was doing and the results converged on two shapes. Neither builder
+ * is required - a plugin with prose of its own still writes the hooks directly - but between them they cover what the family actually says.
+ * {@link buildFixedScopeDescribers} produces the fixed pair of sentences a plugin with a flat global-or-per-device hierarchy wants;
+ * {@link buildComposedScopeDescribers} composes a sentence from a plugin's own vocabulary for the levels it names, for a hierarchy the fixed sentences cannot describe.
+ *
  * Both functions are pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading the doc and writing it back - is two lines of
  * `node:fs/promises` in each plugin's build-script shim, which is inherently a tooling concern. This module is therefore browser-safe and trivially testable, but it
  * is a tooling concern and is deliberately NOT mirrored into `dist/ui/` by the build pipeline.
  *
  * @module
  */
-import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
+import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionScope } from "./featureOptions.ts";
 import { buildCatalogIndex, expandOption, isValueOption } from "./featureOptions.ts";
 
 /**
@@ -212,6 +217,168 @@ export function renderFeatureOptionsReference<TOptionMeta = unknown, TCategoryMe
   }
 
   return lines.join("\n");
+}
+
+// The fixed scope sentences, keyed by the canonical form of the scope set that earns each one. The two entries are the two shapes a flat global-or-per-device hierarchy
+// can declare; a set matching neither key looks up to `undefined`, which is exactly the "say nothing" answer the render hook wants, so the absent case needs no branch
+// of its own. The leading "<BR>" is part of the sentence because the renderer concatenates a hook's return straight onto the description cell and passes hook-owned
+// markup through verbatim, so the separator is the hook's to supply.
+const FIXED_SCOPE_SENTENCES: Readonly<Record<string, string>> = {
+
+  "device,global": "<BR>This option may be applied globally or on individual devices.",
+  "global": "<BR>This option may only be applied globally."
+};
+
+// Reduce a scope declaration to a canonical key: deduplicated and sorted, so a set is compared as a set. A catalog is free to declare `[ "global", "device" ]` or
+// `[ "device", "global" ]` for the same meaning, and neither reading should change the sentence.
+function scopeSetKey(scopes: readonly FeatureOptionScope[]): string {
+
+  return [...new Set(scopes)].sort().join(",");
+}
+
+/**
+ * The pair of scope hooks {@link renderFeatureOptionsReference} accepts, as one value. A builder returns both together so a plugin's catalog module can destructure
+ * them into the two exports it publishes, rather than assembling the pair itself.
+ *
+ * @typeParam TOptionMeta   - The concrete type of an option entry's opaque `meta` annotation.
+ * @typeParam TCategoryMeta - The concrete type of a category entry's opaque `meta` annotation.
+ *
+ * @category Feature Options
+ */
+export interface ScopeDescribers<TOptionMeta = unknown, TCategoryMeta = unknown> {
+
+  /**
+   * The category-scope hook. Both builders return the honest no-op here: {@link FeatureCategoryEntry} declares no scopes at all, so there is nothing at the category
+   * level to describe, and inventing an aggregation over a category's options would either restate the per-option suffixes or contradict a category whose options sit
+   * at differing levels.
+   */
+  readonly describeCategoryScope: (category: FeatureCategoryEntry<TCategoryMeta>) => string | undefined;
+
+  /**
+   * The option-scope hook: the suffix appended to an option's description cell, or `undefined` to append nothing.
+   */
+  readonly describeOptionScope: (option: FeatureOptionEntry<TOptionMeta>, category: FeatureCategoryEntry<TCategoryMeta>) => string | undefined;
+}
+
+/**
+ * What {@link buildComposedScopeDescribers} composes a sentence from.
+ *
+ * @category Feature Options
+ */
+export interface ComposedScopeOptions {
+
+  /**
+   * The word the sentence opens with, placed verbatim ahead of the list. Defaults to `"Configurable"`. Supply the capitalization you want: the frame positions this
+   * word but does not transform it, so an override reading `"Set"` renders as `"Set"`.
+   */
+  readonly leadingWord?: string;
+
+  /**
+   * How the levels are joined when an option names more than one. `"disjunction"` renders "or" and is the default, matching what the fixed sentence's own "globally or
+   * on individual devices" says: the levels an option MAY be configured at are alternatives, not a set that must all be used. `"conjunction"` renders "and" for a
+   * hierarchy where naming them together reads better.
+   */
+  readonly listType?: "conjunction" | "disjunction";
+
+  /**
+   * The plugin's own name for each scope level, as a COMPLETE phrase carrying its own preposition - `"on each zone"`, `"at the controller level"`, `"globally"`. The
+   * frame contributes the sentence mechanics around the list and nothing inside it, so a phrase reads correctly in any list position rather than only after whatever
+   * preposition a shared frame happened to pick. Every level needs an entry: the record is total over {@link FeatureOptionScope}, so adding a level to the vocabulary
+   * is a compiler error until every plugin names it.
+   */
+  readonly vocabulary: Readonly<Record<FeatureOptionScope, string>>;
+}
+
+/**
+ * Build the scope hooks for a catalog whose options are configurable globally, or globally and per-device.
+ *
+ * These are the exact two sentences the family's flat-hierarchy plugins hand-wrote, and they are all this builder will say. An option declaring any other combination
+ * of levels gets `undefined` rather than invented prose, because a sentence this builder does not have grounded copy for would be a sentence nobody wrote. A catalog
+ * that lands there wants {@link buildComposedScopeDescribers} instead.
+ *
+ * @typeParam TOptionMeta   - The concrete type of an option entry's opaque `meta` annotation.
+ * @typeParam TCategoryMeta - The concrete type of a category entry's opaque `meta` annotation.
+ *
+ * @returns The hook pair, ready to hand to {@link renderFeatureOptionsReference} or to re-export from a catalog module.
+ *
+ * @example
+ *
+ * ```ts
+ * export const { describeCategoryScope, describeOptionScope } = buildFixedScopeDescribers<MyOptionMeta>();
+ * ```
+ *
+ * @category Feature Options
+ */
+export function buildFixedScopeDescribers<TOptionMeta = unknown, TCategoryMeta = unknown>(): ScopeDescribers<TOptionMeta, TCategoryMeta> {
+
+  return {
+
+    describeCategoryScope: (): undefined => undefined,
+    describeOptionScope: (option: FeatureOptionEntry<TOptionMeta>): string | undefined => {
+
+      const scopes = option.scopes;
+
+      // An unmatched set looks up to `undefined` from the sentence record, which is the same answer an absent declaration gets, so both cases land on "say nothing"
+      // without a branch apiece.
+      return scopes ? FIXED_SCOPE_SENTENCES[scopeSetKey(scopes)] : undefined;
+    }
+  };
+}
+
+/**
+ * Build the scope hooks for a catalog whose hierarchy has more to say than "globally, or per device" - a controller tier, a domain name for the device tier, anything
+ * the two fixed sentences cannot describe.
+ *
+ * The division of labor is what makes this shareable. The plugin owns the vocabulary: what each level is CALLED in the hierarchy its users see, as a self-contained
+ * phrase. This owns the sentence around it: the opening word, the list grammar, the closing period, and the italic markup the family renders scope prose in. A plugin
+ * therefore supplies the part only it can know and inherits the part that is the same everywhere.
+ *
+ * The list is rendered by `Intl.ListFormat` rather than by hand-joining, so two levels read "a or b" and three read "a, b, or c" without the caller owning that
+ * grammar. The formatter is built once per builder call and reused across every option the render pass describes.
+ *
+ * @typeParam TOptionMeta   - The concrete type of an option entry's opaque `meta` annotation.
+ * @typeParam TCategoryMeta - The concrete type of a category entry's opaque `meta` annotation.
+ * @param options           - See {@link ComposedScopeOptions}.
+ *
+ * @returns The hook pair, ready to hand to {@link renderFeatureOptionsReference} or to re-export from a catalog module.
+ *
+ * @example
+ *
+ * ```ts
+ * export const { describeCategoryScope, describeOptionScope } = buildComposedScopeDescribers<MyOptionMeta>({
+ *
+ *   vocabulary: { controller: "at the controller level", device: "on each zone", global: "globally" }
+ * });
+ *
+ * // An option declaring [ "device", "global" ] renders: " <BR>*Configurable on each zone or globally.*"
+ * ```
+ *
+ * @category Feature Options
+ */
+export function buildComposedScopeDescribers<TOptionMeta = unknown, TCategoryMeta = unknown>(
+  options: ComposedScopeOptions): ScopeDescribers<TOptionMeta, TCategoryMeta> {
+
+  const { leadingWord = "Configurable", listType = "disjunction", vocabulary } = options;
+
+  // The locale is fixed rather than a parameter because the sentence this list sits inside is English: the leading word, the vocabulary phrases, and the punctuation
+  // are all authored copy, and a list joined in another language's grammar would not match any of them.
+  const listFormatter = new Intl.ListFormat("en", { style: "long", type: listType });
+
+  return {
+
+    describeCategoryScope: (): undefined => undefined,
+    describeOptionScope: (option: FeatureOptionEntry<TOptionMeta>): string | undefined => {
+
+      const scopes = option.scopes;
+
+      if(!scopes) {
+
+        return undefined;
+      }
+
+      return " <BR>*" + leadingWord + " " + listFormatter.format(scopes.map((scope) => vocabulary[scope])) + ".*";
+    }
+  };
 }
 
 /**

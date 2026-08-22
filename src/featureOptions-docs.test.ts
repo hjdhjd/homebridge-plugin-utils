@@ -8,8 +8,9 @@
  * hooks (string inserted, `undefined` omitted cleanly), the category-level bare-key option, and the splice's happy path, repeatability, prose preservation, and
  * malformed-marker throws. The canonical worked example is reproduced verbatim as the contract test.
  */
-import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference, spliceMarkedRegion } from "./featureOptions-docs.ts";
-import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
+import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, buildComposedScopeDescribers, buildFixedScopeDescribers, renderFeatureOptionsReference,
+  spliceMarkedRegion } from "./featureOptions-docs.ts";
+import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionScope } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -426,6 +427,153 @@ describe("renderFeatureOptionsReference - meta channel", () => {
 
     assert.ok(output.includes("Models: G4, G5."));
     assert.ok(output.includes("Supported by all cameras."));
+  });
+});
+
+// A category and a bare toggle for driving the scope hooks directly. The hooks read `scopes` and nothing else, so every row below varies that one field and spreads
+// the rest.
+const SCOPE_CATEGORY: FeatureCategoryEntry = { description: "Audio", name: "Audio" };
+const SCOPE_OPTION: FeatureOptionEntry = { default: true, description: "Audio support.", name: "Support" };
+
+describe("buildFixedScopeDescribers", () => {
+
+  const { describeCategoryScope, describeOptionScope } = buildFixedScopeDescribers();
+
+  test("renders the global-only sentence verbatim", () => {
+
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: ["global"] }, SCOPE_CATEGORY), "<BR>This option may only be applied globally.");
+  });
+
+  test("renders the global-or-device sentence verbatim", () => {
+
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "device", "global" ] }, SCOPE_CATEGORY),
+      "<BR>This option may be applied globally or on individual devices.");
+  });
+
+  test("compares the declaration as a SET, so declaration order does not change the sentence", () => {
+
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "global", "device" ] }, SCOPE_CATEGORY),
+      "<BR>This option may be applied globally or on individual devices.", "the reversed declaration earns the same sentence");
+  });
+
+  test("says nothing at all for an option that declares no scopes", () => {
+
+    assert.equal(describeOptionScope(SCOPE_OPTION, SCOPE_CATEGORY), undefined, "an absent declaration omits the suffix rather than rendering empty prose");
+  });
+
+  test("says nothing for a scope set it has no grounded sentence for, rather than inventing one", () => {
+
+    // A hierarchy with a controller tier, or one that is device-only, is not something this builder has copy for. Returning undefined sends that catalog to the
+    // composed builder instead of silently describing it with a sentence that would be wrong.
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: ["controller"] }, SCOPE_CATEGORY), undefined, "a controller-only declaration");
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: ["device"] }, SCOPE_CATEGORY), undefined, "a device-only declaration");
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "controller", "global" ] }, SCOPE_CATEGORY), undefined, "a controller-and-global declaration");
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "controller", "device", "global" ] }, SCOPE_CATEGORY), undefined, "all three levels");
+  });
+
+  test("the category hook is the honest no-op", () => {
+
+    assert.equal(describeCategoryScope(SCOPE_CATEGORY), undefined, "a category declares no scopes, so there is nothing at that level to describe");
+  });
+
+  test("agrees with the live consumer hooks on every scope shape their real catalogs declare", () => {
+
+    /* The acceptance bar for retiring the hand-written copies is output equivalence over the real inputs, not equivalence of the decision procedure. The live hooks
+     * branch on a membership test where this builder matches the exact set, so the two agree only where it matters: over the shapes those catalogs actually carry.
+     * Those are exactly two - [ "device", "global" ] on 27 ratgdo entries plus [ "global" ] on one, and [ "global" ] on all four comed entries - and this row runs
+     * both decisions side by side over both of them.
+     */
+    const liveMembershipHook = (scopes: readonly FeatureOptionScope[]): string => {
+
+      return scopes.includes("device") ? "<BR>This option may be applied globally or on individual devices." : "<BR>This option may only be applied globally.";
+    };
+
+    for(const scopes of [ [ "device", "global" ], ["global"] ] as const) {
+
+      assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes }, SCOPE_CATEGORY), liveMembershipHook(scopes),
+        "the builder must render what the live hook renders for " + JSON.stringify(scopes));
+    }
+  });
+});
+
+describe("buildComposedScopeDescribers", () => {
+
+  // A three-level vocabulary in the shape the builder asks for: every phrase is self-contained and carries its own preposition, so it reads correctly wherever the
+  // list grammar places it.
+  const vocabulary = { controller: "at the controller level", device: "on each zone", global: "globally" };
+
+  test("renders a single level with the frame's mechanics - markup, leading word, closing period", () => {
+
+    const { describeOptionScope } = buildComposedScopeDescribers({ vocabulary });
+
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: ["global"] }, SCOPE_CATEGORY), " <BR>*Configurable globally.*");
+  });
+
+  test("joins MULTIPLE levels with \"or\" by default", () => {
+
+    /* The default list type is asserted on a multi-entry rendering because a single entry renders identically under either grammar and would prove nothing about
+     * which one is in force. A builder that silently defaulted to conjunction fails this row on the word "and".
+     */
+    const { describeOptionScope } = buildComposedScopeDescribers({ vocabulary });
+
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "device", "global" ] }, SCOPE_CATEGORY), " <BR>*Configurable on each zone or globally.*");
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "controller", "device", "global" ] }, SCOPE_CATEGORY),
+      " <BR>*Configurable at the controller level, on each zone, or globally.*", "three levels take the serial comma before the \"or\"");
+  });
+
+  test("joins with \"and\" when the caller asks for a conjunction", () => {
+
+    const { describeOptionScope } = buildComposedScopeDescribers({ listType: "conjunction", vocabulary });
+
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "device", "global" ] }, SCOPE_CATEGORY), " <BR>*Configurable on each zone and globally.*");
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "controller", "device", "global" ] }, SCOPE_CATEGORY),
+      " <BR>*Configurable at the controller level, on each zone, and globally.*");
+  });
+
+  test("renders the caller's vocabulary phrase verbatim, in the order the option declares", () => {
+
+    const { describeOptionScope } = buildComposedScopeDescribers({
+
+      vocabulary: { controller: "for the whole site", device: "per sprinkler valve", global: "across every account" }
+    });
+
+    assert.equal(describeOptionScope({ ...SCOPE_OPTION, scopes: [ "global", "device" ] }, SCOPE_CATEGORY),
+      " <BR>*Configurable across every account or per sprinkler valve.*", "the phrases are the caller's and the order is the declaration's");
+  });
+
+  test("opens with \"Configurable\" by default, and with the caller's word when overridden", () => {
+
+    // Both halves are pinned: a hardcoded leading word passes the default row and must fail the override row.
+    assert.equal(buildComposedScopeDescribers({ vocabulary }).describeOptionScope({ ...SCOPE_OPTION, scopes: ["global"] }, SCOPE_CATEGORY),
+      " <BR>*Configurable globally.*", "the grounded default");
+    assert.equal(buildComposedScopeDescribers({ leadingWord: "Settable", vocabulary }).describeOptionScope({ ...SCOPE_OPTION, scopes: ["global"] }, SCOPE_CATEGORY),
+      " <BR>*Settable globally.*", "the override, placed verbatim");
+  });
+
+  test("says nothing at all for an option that declares no scopes", () => {
+
+    assert.equal(buildComposedScopeDescribers({ vocabulary }).describeOptionScope(SCOPE_OPTION, SCOPE_CATEGORY), undefined);
+  });
+
+  test("the category hook is the honest no-op", () => {
+
+    assert.equal(buildComposedScopeDescribers({ vocabulary }).describeCategoryScope(SCOPE_CATEGORY), undefined);
+  });
+
+  test("the composed suffix lands in the rendered table exactly as the hook produced it", () => {
+
+    // The end-to-end pin: the renderer passes hook-owned markup through verbatim, so the italics and the leading break survive into the description cell.
+    const { describeCategoryScope, describeOptionScope } = buildComposedScopeDescribers({ vocabulary });
+    const output = renderFeatureOptionsReference({
+
+      categories: [SCOPE_CATEGORY],
+      describeCategoryScope,
+      describeOptionScope,
+      options: { Audio: [{ ...SCOPE_OPTION, scopes: [ "device", "global" ] }] }
+    });
+
+    assert.ok(output.includes("Audio support. **(default: enabled)**. <BR>*Configurable on each zone or globally.*"),
+      "the suffix is concatenated onto the bolded default with its markup intact");
   });
 });
 

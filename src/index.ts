@@ -5,6 +5,7 @@
 export * from "./backpressure.ts";
 export * from "./clock-double.ts";
 export * from "./clock.ts";
+export * from "./coalesce.ts";
 export * from "./docChrome.ts";
 export * from "./featureOptions.ts";
 export * from "./featureOptions-docs.ts";

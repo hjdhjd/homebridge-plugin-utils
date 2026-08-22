@@ -31,6 +31,7 @@ const BYTES_PER_TB = 1024 * BYTES_PER_GB;
 const MS_PER_SECOND = 1000;
 const MS_PER_MINUTE = 60 * MS_PER_SECOND;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
 
 // Shared magnitude-rendering helper used by every magnitude-based formatter, applying the module's precision policy (see the module doc): whole numbers render with
 // no trailing decimal place, fractional numbers to one decimal place.
@@ -122,8 +123,8 @@ export function formatBytes(value: number): string {
 }
 
 /**
- * Format a millisecond duration into a human-readable form as ms, s, min, or hr. Tiered thresholds match how operators naturally read elapsed time: sub-second
- * values stay in milliseconds for precision, longer durations promote to seconds, minutes, and hours.
+ * Format a millisecond duration into a human-readable form as ms, s, min, hr, or day. Tiered thresholds match how operators naturally read elapsed time: sub-second
+ * values stay in milliseconds for precision, longer durations promote to seconds, minutes, hours, and days.
  *
  * @param value           - The duration to convert, in milliseconds.
  *
@@ -132,11 +133,12 @@ export function formatBytes(value: number): string {
  * @example
  *
  * ```ts
- * formatMs(250);        // "250 ms".
- * formatMs(1500);       // "1.5 s".
- * formatMs(15000);      // "15 s".
- * formatMs(90000);      // "1.5 min".
- * formatMs(5400000);    // "1.5 hr".
+ * formatMs(250);          // "250 ms".
+ * formatMs(1500);         // "1.5 s".
+ * formatMs(15000);        // "15 s".
+ * formatMs(90000);        // "1.5 min".
+ * formatMs(5400000);      // "1.5 hr".
+ * formatMs(129600000);    // "1.5 day".
  * ```
  *
  * @category Utilities
@@ -158,7 +160,12 @@ export function formatMs(value: number): string {
     return formatMagnitude(value / MS_PER_MINUTE) + " min";
   }
 
-  return formatMagnitude(value / MS_PER_HOUR) + " hr";
+  if(value < MS_PER_DAY) {
+
+    return formatMagnitude(value / MS_PER_HOUR) + " hr";
+  }
+
+  return formatMagnitude(value / MS_PER_DAY) + " day";
 }
 
 /**
@@ -186,8 +193,8 @@ export function formatPercent(value: number): string {
 }
 
 /**
- * Format a second-resolution duration into a human-readable form as s, min, or hr. Same tier semantics as {@link formatMs}, scaled for inputs that arrive already
- * in seconds rather than milliseconds.
+ * Format a second-resolution duration into a human-readable form as s, min, hr, or day. Same tier semantics as {@link formatMs}, scaled for inputs that arrive
+ * already in seconds rather than milliseconds.
  *
  * @param value           - The duration to convert, in seconds.
  *
@@ -196,10 +203,11 @@ export function formatPercent(value: number): string {
  * @example
  *
  * ```ts
- * formatSeconds(45);          // "45 s".
- * formatSeconds(90);          // "1.5 min".
- * formatSeconds(1800);        // "30 min".
- * formatSeconds(5400);        // "1.5 hr".
+ * formatSeconds(45);        // "45 s".
+ * formatSeconds(90);        // "1.5 min".
+ * formatSeconds(1800);      // "30 min".
+ * formatSeconds(5400);      // "1.5 hr".
+ * formatSeconds(129600);    // "1.5 day".
  * ```
  *
  * @category Utilities
@@ -216,5 +224,10 @@ export function formatSeconds(value: number): string {
     return formatMagnitude(value / 60) + " min";
   }
 
-  return formatMagnitude(value / 3600) + " hr";
+  if(value < 86400) {
+
+    return formatMagnitude(value / 3600) + " hr";
+  }
+
+  return formatMagnitude(value / 86400) + " day";
 }

@@ -97,14 +97,14 @@ const BUILT_IN_FORMATTERS: Readonly<Record<FeatureOptionFormatter, (value: strin
   // difference between bps and kbps is the storage convention the plugin chose, never the displayed form.
   kbps: (value: string): string => formatBps(Number.parseFloat(value) * 1000),
 
-  // Duration stored as milliseconds. formatMs promotes through ms / s / min / hr based on magnitude.
+  // Duration stored as milliseconds. formatMs promotes through ms / s / min / hr / day based on magnitude.
   ms: (value: string): string => formatMs(Number.parseFloat(value)),
 
   // Percentage rendered through the shared formatPercent helper so the precision policy stays uniform across every formatter in the registry - whole numbers carry
   // no decimal, fractional values get one decimal place.
   percent: (value: string): string => formatPercent(Number.parseFloat(value)),
 
-  // Duration stored as seconds. formatSeconds promotes through s / min / hr based on magnitude.
+  // Duration stored as seconds. formatSeconds promotes through s / min / hr / day based on magnitude.
   seconds: (value: string): string => formatSeconds(Number.parseFloat(value))
 };
 

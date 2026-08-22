@@ -2253,6 +2253,19 @@ describe("formatMs", () => {
 
     assert.equal(formatMs(3600000), "1 hr");
     assert.equal(formatMs(5400000), "1.5 hr");
+
+    // The top of the hour band pins the day threshold from below. The last millisecond before the boundary is not a whole number of hours, so the precision policy
+    // renders it with one decimal place - "24.0 hr" is the correct rendering here, not a rounding artifact.
+    assert.equal(formatMs(82800000), "23 hr");
+    assert.equal(formatMs(86399999), "24.0 hr");
+  });
+
+  test("returns days once values reach the day boundary", () => {
+
+    // The unit label stays singular at every count, matching the ladder's register for the rungs below it ("2 hr", not "2 hrs").
+    assert.equal(formatMs(86400000), "1 day");
+    assert.equal(formatMs(129600000), "1.5 day");
+    assert.equal(formatMs(604800000), "7 day");
   });
 });
 
@@ -2296,6 +2309,15 @@ describe("formatSeconds", () => {
 
     assert.equal(formatSeconds(3600), "1 hr");
     assert.equal(formatSeconds(5400), "1.5 hr");
+    assert.equal(formatSeconds(82800), "23 hr");
+    assert.equal(formatSeconds(86399), "24.0 hr");
+  });
+
+  test("returns days once values reach the day boundary", () => {
+
+    assert.equal(formatSeconds(86400), "1 day");
+    assert.equal(formatSeconds(129600), "1.5 day");
+    assert.equal(formatSeconds(604800), "7 day");
   });
 });
 

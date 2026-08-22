@@ -102,6 +102,8 @@ function namespacePrefix(namespace: string): string {
  */
 export function encodeFrame(event: OutboundEvent): string {
 
+  // Every kind below returns and the switch deliberately carries no default arm: with the union fully answered the compiler proves the switch total, so a new
+  // outbound kind fails to compile here until it is given its own frame shape rather than slipping onto the wire as an empty string.
   switch(event.kind) {
 
     case "connect": {
@@ -120,13 +122,6 @@ export function encodeFrame(event: OutboundEvent): string {
 
       // A pong is a bare Engine.IO packet with no Socket.IO layer.
       return ENGINE_PONG;
-    }
-
-    default: {
-
-      // Every OutboundEvent arm above returns, so this `default` is an unreachable fallback that yields an empty string; it provides no compile-time exhaustiveness
-      // guard, so a future arm added without its own case would silently fall through to this empty frame rather than failing to compile.
-      return "";
     }
   }
 }

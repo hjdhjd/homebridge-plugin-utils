@@ -224,7 +224,7 @@ function renderBadge(badge: Badge): string {
  * per-surface href drift the hand-maintained lists suffer from. An `external` entry already names a complete destination, so its URL is surface-independent and passes
  * through untouched.
  *
- * The switch carries no default arm on purpose: with every kind answered, a fourth kind added to the union fails to compile here until it is given its own derivation,
+ * The switch carries no default arm on purpose: with every kind answered, a new kind added to the union fails to compile here until it is given its own derivation,
  * which is the guarantee a fallback arm would trade away.
  */
 function docEntryHref(entry: DocEntry, repo: RepoCoordinates, local: boolean): string {

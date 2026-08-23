@@ -12,6 +12,7 @@ import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, buildComposedScopeD
   spliceMarkedRegion } from "./featureOptions-docs.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionScope } from "./featureOptions.ts";
 import { describe, test } from "node:test";
+import { ALL_CHOICES } from "./featureOptions.ts";
 import assert from "node:assert/strict";
 
 // Reusable category / option fixtures. The "Audio / Nvr" shape is the canonical worked example; the "Cfg" shape isolates the empty-default and category-level
@@ -194,6 +195,35 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
 
     assert.ok(output.includes("Offset. **(default: 0)**."));
     assert.ok(!output.includes("(default: none)"));
+  });
+
+  test("words a multi-select's all-choices default as \"all\" without mutating the entry", () => {
+
+    // The all-choices default stands for every member of a domain the catalog cannot enumerate, so printing the character itself would leave a reader with
+    // nothing to look it up against. Like the empty-default substitution, this is render-only.
+    const categories: FeatureCategoryEntry[] = [{ description: "Detection", name: "Motion" }];
+    const entry: FeatureOptionEntry = { choices: "smartDetectTypes", default: true, defaultValue: ALL_CHOICES, description: "Detected object types.",
+      multiple: true, name: "Types" };
+    const options: Record<string, FeatureOptionEntry[]> = { Motion: [entry] };
+    const output = renderFeatureOptionsReference({ categories, options });
+
+    assert.ok(output.includes("Detected object types. **(default: all)**."));
+    assert.equal(entry.defaultValue, ALL_CHOICES, "the renderer must not mutate the input entry's defaultValue");
+  });
+
+  test("renders a multi-select's plain list default verbatim, as the user would type it", () => {
+
+    // Only the reserved spelling is worded. An ordinary list default is a value a user would type into their configuration and prints exactly as declared.
+    const categories: FeatureCategoryEntry[] = [{ description: "Detection", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ choices: [ { label: "Person", value: "person" }, { label: "Vehicle", value: "vehicle" } ], default: true, defaultValue: "person,vehicle",
+        description: "Detected object types.", multiple: true, name: "Types" }]
+    };
+    const output = renderFeatureOptionsReference({ categories, options });
+
+    assert.ok(output.includes("Detected object types. **(default: person,vehicle)**."));
+    assert.ok(!output.includes("(default: all)"), "the wording is reserved for the all-choices spelling alone");
   });
 });
 

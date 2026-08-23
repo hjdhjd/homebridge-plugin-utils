@@ -32,8 +32,8 @@
  *
  * @module
  */
+import { ALL_CHOICES, buildCatalogIndex, expandOption, isValueOption } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionScope } from "./featureOptions.ts";
-import { buildCatalogIndex, expandOption, isValueOption } from "./featureOptions.ts";
 
 /**
  * The opening marker of the auto-generated region in a plugin's `docs/FeatureOptions.md`. {@link spliceMarkedRegion} replaces everything strictly between this marker
@@ -63,6 +63,23 @@ const OPTION_COLUMN_PADDING = 1;
 // The substitution shown in the default cell for a value option whose declared default is the empty string. We render "none" rather than an empty cell so the table
 // communicates "this option defaults to no value" explicitly. The substitution happens at render time only; the catalog entry is never mutated.
 const EMPTY_DEFAULT_LABEL = "none";
+
+// The substitution shown in the default cell for a multi-select whose declared default is the all-choices spelling. That default stands for every member of a
+// domain the catalog cannot enumerate, so the table reads it out as the word it means rather than printing a character a reader would have to go look up.
+const ALL_CHOICES_LABEL = "all";
+
+// Render a value option's declared default as the table shows it. Two catalog spellings stand for something other than themselves and are read out as words: the
+// empty default, which says the option starts with no value, and a multi-select's all-choices default, which says every member of its domain is selected. Every
+// other default prints as the text a user would type into their configuration. The substitution happens at render time only; the catalog entry is never mutated.
+function renderDefaultValue(option: FeatureOptionEntry): string {
+
+  if(option.multiple && (option.defaultValue === ALL_CHOICES)) {
+
+    return ALL_CHOICES_LABEL;
+  }
+
+  return ((option.defaultValue ?? "") === "") ? EMPTY_DEFAULT_LABEL : escapeCellText(String(option.defaultValue));
+}
 
 // Escape catalog-derived plain text for safe embedding in a markdown table cell, heading, or index line. We neutralize the column separator "|" (which would inject
 // a phantom table column) and the HTML-significant "&", "<", ">" (which would otherwise be parsed as markup and swallowed). "&" is replaced first so the entities we
@@ -181,11 +198,9 @@ export function renderFeatureOptionsReference<TOptionMeta = unknown, TCategoryMe
       // lexically by appending the universal "=<value>" placeholder inside the same span - no mixed HTML, faithful to the template the user fills in.
       const keyCell = "<A NAME=\"" + key + "\"></A>`" + key + (isValueOption(catalog, key) ? "=<value>" : "") + "`";
 
-      // The default cell. A value option shows its raw declared default in the form the user would type - never formatted, since a formatted value (e.g. "30s") is an
-      // invalid config value. The empty-string default substitutes to "none" at render time, without mutating the entry. A toggle shows enabled / disabled.
-      const defaultCell = isValueOption(catalog, key) ?
-        (((option.defaultValue ?? "") === "") ? EMPTY_DEFAULT_LABEL : escapeCellText(String(option.defaultValue))) :
-        (option.default ? "enabled" : "disabled");
+      // The default cell. A value option shows its declared default in the form the user would type - never formatted, since a formatted value (e.g. "30s") is an
+      // invalid config value - through the one renderer that also words the two spellings standing for something else. A toggle shows enabled / disabled.
+      const defaultCell = isValueOption(catalog, key) ? renderDefaultValue(option) : (option.default ? "enabled" : "disabled");
 
       // The optional plugin-private scope suffix, appended to the description cell. Omitted cleanly when the hook returns `undefined`.
       const scopeSuffix = describeOptionScope?.(option, category) ?? "";

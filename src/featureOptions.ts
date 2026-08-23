@@ -45,9 +45,14 @@
  * option name plus a single dot-free id, and a scoped payload must carry content - at least one character that is not the delimiter itself (see
  * {@link hasValueContent}, which also explains why the value domain draws that line). An entry that fails either test reads under the legacy dot grammar
  * instead, with the "=" as ordinary value text: `Enable.Security.Key.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=` ends in a bare delimiter that carries
- * nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that a value-centric option enabled at a device or controller
- * scope always carries a value - the grammar has no scoped spelling for "enabled here, nothing given" - so {@link FeatureOptions.setOption | setOption} reduces
- * that request to clearing the scope.
+ * nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that a value-centric option storing a single value and enabled
+ * at a device or controller scope always carries a value - the grammar has no scoped spelling for "enabled here, nothing given" - so
+ * {@link FeatureOptions.setOption | setOption} reduces that request to clearing the scope.
+ *
+ * An option declaring {@link FeatureOptionEntry.multiple} is the exception, because for a list "on, with nothing selected" is a selection like any other and has
+ * to be tellable from the bare enable that resolves the registered default. Its zero-length payload therefore reads canonically at either scope, so
+ * `Enable.Motion.SmartDetect=` and `Enable.Motion.SmartDetect.ABC123=` each store the empty selection. The exception reaches the empty payload alone: an all-"="
+ * payload is base64-padding-shaped and stays with the legacy reading for every option.
  *
  * The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
  * {@link normalizeConfiguredOptions} rewrites entries into the canonical form as configurations are saved.
@@ -126,8 +131,49 @@ function resolveBuiltInFormatter(name: string): ((value: string) => string) | un
 export type FeatureOptionScope = "controller" | "device" | "global";
 
 /**
+ * One selectable choice a value-centric option offers: what the editor shows, and what the configuration stores when the user picks it. A catalog declares its
+ * choices inline on {@link FeatureOptionEntry.choices}, or names a source the plugin's webUI registers and that derives the list from the device in view.
+ *
+ * {@link isValidChoice} is what makes a choice legal, and it is the one rule both sides answer to: {@link buildCatalogIndex} applies it to every inline choice at
+ * catalog-build time, and the webUI's projection applies it to whatever a source returns at resolve time.
+ *
+ * @property label - The text the editor shows for this choice.
+ * @property value - The text the configuration stores when this choice is picked.
+ *
+ * @category Feature Options
+ */
+export interface FeatureOptionChoice {
+
+  label: string;
+  value: string;
+}
+
+/**
+ * The one reserved spelling of a default meaning "every member of this option's domain", declared on a `multiple` option that also declares
+ * {@link FeatureOptionEntry.choices}. A domain a source derives from a device record cannot be enumerated in the catalog, so a multi-select over one has no other
+ * way to say that everything is selected to begin with, and an empty default faked into that role would leave the editor's boxes describing a selection the
+ * resolution does not have.
+ *
+ * It is catalog data and nothing else. The editor never writes it into the configuration - a user's edit stores the explicit list, and a selection covering the
+ * whole domain clears the entry so the option resumes tracking that domain - while a Node-side read expands it against a domain through {@link selectValues}. It
+ * has no meaning on an option that is not `multiple` or declares no choices, and {@link buildCatalogIndex} rejects both declarations.
+ *
+ * @category Feature Options
+ */
+export const ALL_CHOICES = "*";
+
+/**
  * Entry describing a feature option.
  *
+ * @property choices         - Optional. The list of values this option offers, which makes its editor a picker rather than a free-text field. A string names a
+ *                             source the plugin's webUI registers in its `ui.choices` bag; an array is a fixed list declared inline. Either way the editor offers
+ *                             the list and the configuration stores the chosen value, or values for a `multiple` option. Editor-only, exactly as `secret` is:
+ *                             parsing, storage, scope resolution, and {@link FeatureOptions.value} never consult it. A source resolver receives the controller,
+ *                             the device (undefined at global and controller scope), and the option, and returns the list for that context; it must be a pure,
+ *                             cheap function of those three, since it runs on every projection recompute - the same cadence as the webUI's `validOption`. A
+ *                             string naming a source no resolver answers to fails the webUI at catalog load. An inline list is validated here at catalog build,
+ *                             members and default alike; a source-backed default cannot be, because the domain it draws on exists only on the page that holds the
+ *                             device record.
  * @property default         - Default enabled/disabled state for this feature option.
  * @property defaultValue    - Optional. Default value for value-based feature options.
  * @property description     - Description of the feature option for display or documentation.
@@ -137,6 +183,12 @@ export type FeatureOptionScope = "controller" | "device" | "global";
  *                             the value is carried verbatim through the catalog and forwarded to the documentation renderer's closures (the only surface that knows its
  *                             concrete shape). This mirrors the OpenAPI `x-*` extension discipline, made type-safe: a plugin parameterizes the entry with its own
  *                             annotation type, the core treats it as `unknown`, and the round-trip stays structurally unchanged rather than a naming convention.
+ * @property multiple        - Optional. True declares the option's value a LIST rather than a single value, stored in the shared list grammar as one comma-joined
+ *                             string ({@link parseValueList} and {@link formatValueList} are the pair that reads and writes it). With `choices` the editor is a
+ *                             checkbox group over the offered list; without them it is a free-form list the user builds entry by entry. With `choices` the default
+ *                             may be {@link ALL_CHOICES}, standing for every member of the option's domain. The engine sees one string throughout, which
+ *                             {@link FeatureOptions.valueList} is the read that splits, and the declaration reaches the grammar in one place: a list can be
+ *                             explicitly empty, so a zero-length payload stores that selection at either scope rather than reading as no value at all.
  * @property name            - Name of the feature option (used in option strings).
  * @property render          - Optional. Maps the raw stored value of a value-centric option to a display string. Either a {@link FeatureOptionFormatter} string naming
  *                             a built-in formatter (preferred when the format already exists in the registry, since this keeps the enclosing catalog JSON-serializable
@@ -180,12 +232,14 @@ export type FeatureOptionScope = "controller" | "device" | "global";
  */
 export interface FeatureOptionEntry<TMeta = unknown> {
 
+  choices?: string | readonly FeatureOptionChoice[];
   default: boolean;
   defaultValue?: number | string;
   description: string;
   group?: string;
   inputSize?: number;
   meta?: TMeta;
+  multiple?: boolean;
   name: string;
   render?: FeatureOptionFormatter | ((value: string) => string);
   scopes?: readonly [FeatureOptionScope, ...FeatureOptionScope[]];
@@ -268,6 +322,10 @@ export interface ConfiguredOptionEntry {
  * @property groupParents           - Reverse index from a child option's expanded name to its parent group's expanded name. Catalog case preserved on the keys.
  * @property groups                 - Forward index from a parent group's expanded name to its child options' expanded names.
  * @property options                - The raw options map, preserved alongside categories for the same reason.
+ * @property optionsByName          - Lowercased-key map from canonical option name to the raw catalog entry, the general per-option lookup for any consumer that
+ *                                    needs the entry itself rather than one of the derivations beside it. Keyed exactly as `valueOptions` is, so one key
+ *                                    discipline serves every registry on the index. It is named for what it holds because `entries` already means a category's
+ *                                    projected rows in the webUI's vocabulary.
  * @property renderers              - Lowercased-key map from canonical option name to its resolved value renderer (built-in or inline function). Built-in names
  *                                    that fail to resolve throw at index-build time rather than degrading silently at log time.
  * @property scopes                 - Lowercased-key map from canonical option name to the scope levels its catalog entry declares. An option that declares nothing
@@ -285,6 +343,7 @@ export interface CatalogIndex {
   readonly groupParents: Readonly<Record<string, string>>;
   readonly groups: Readonly<Record<string, readonly string[]>>;
   readonly options: Readonly<Record<string, readonly FeatureOptionEntry[]>>;
+  readonly optionsByName: Readonly<Record<string, FeatureOptionEntry>>;
   readonly renderers: Readonly<Record<string, (value: string) => string>>;
   readonly scopes: Readonly<Record<string, readonly FeatureOptionScope[]>>;
   readonly sortedValueOptionNames: readonly string[];
@@ -312,7 +371,9 @@ export type ConfigIndex = ReadonlyMap<string, Readonly<{ enabled: boolean; value
  * @property value   - Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope:
  *                     the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the
  *                     trim (see {@link hasValueContent}). At a device or controller scope an enable without value content reduces to clearing the scope, because
- *                     a scoped entry always carries a value.
+ *                     a scoped entry storing a single value always carries one. Supplying the empty string for a {@link FeatureOptionEntry.multiple} option is
+ *                     the one value without content that persists: it is the explicit empty selection, and it composes at either scope. Omitting `value`
+ *                     entirely says nothing about the selection and keeps the plain enable, for every option alike.
  */
 export interface SetOptionArgs {
 
@@ -332,6 +393,25 @@ export interface SetOptionArgs {
 export interface ClearOptionArgs {
 
   id?: string;
+  option: string;
+}
+
+/**
+ * Arguments for {@link FeatureOptions.valueList}. Carries the addressing intent - the option and the scope to resolve it at - plus the domain the caller wants the
+ * stored value read against.
+ *
+ * @property controller - Optional controller scope identifier.
+ * @property device     - Optional device scope identifier.
+ * @property domain     - Optional. The values the option offers in this context, which a plugin derives from whatever the device reported. Supplying it is what
+ *                        lets the read drop a stored value the device no longer offers and expand an {@link ALL_CHOICES} default. Omit it for an option whose
+ *                        catalog entry declares its choices inline, since the entry already holds them, and for a raw read of what the user stored.
+ * @property option     - Feature option to read (case-insensitive).
+ */
+export interface ValueListArgs {
+
+  controller?: string;
+  device?: string;
+  domain?: readonly string[];
   option: string;
 }
 
@@ -385,10 +465,13 @@ function targetKey(option: string, id: string | undefined): string {
 /**
  * Return whether a string survives as a canonical payload once trimmed: at least one character other than the payload delimiter itself must remain. This is the
  * single definition of "carries a value", shared by the entry writer and the entry parser, and it is exported so a UI composing mutations can predict whether a
- * given input will persist - a prediction that has to agree with {@link applySetOption} exactly.
+ * given input will persist - a prediction that has to agree with {@link applySetOption} exactly for every option storing a single value. An option declaring
+ * {@link FeatureOptionEntry.multiple} persists one payload this refuses, the empty selection, so a UI predicting for a list asks after the declaration too.
  *
  * The characters this excludes are not arbitrary. A payload that is empty or all "=" is exactly the shape a base64 value's terminal padding takes when a legacy
- * dot-form entry is scanned for the delimiter, so ruling that shape out of the canonical value domain is what lets those entries keep their legacy reading.
+ * dot-form entry is scanned for the delimiter, so ruling that shape out of the canonical value domain is what lets those entries keep their legacy reading. The
+ * empty selection is spelled with the zero-length payload alone and never with the all-"=" one, which keeps that collision guard whole: a list option's stored
+ * empty is a shape no legacy entry can produce, since a legacy tail scanned for the delimiter always leaves the padding behind it.
  *
  * @param value - The candidate value text.
  *
@@ -401,12 +484,166 @@ export function hasValueContent(value: string): boolean {
   return /[^=]/.test(value.trim());
 }
 
+// Whether a catalog entry declares its value a list. The one spelling of that question inside this module: the writer, the parser, and both reads ask here rather
+// than reaching for the flag themselves, so the arms that treat a list differently from a single value cannot come to cover different options. An entry the
+// catalog does not carry answers false, which is what lets a caller ask with whatever a name lookup handed back.
+function isMultipleOption(entry: FeatureOptionEntry | undefined): boolean {
+
+  return entry?.multiple === true;
+}
+
+// The single character separating one entry from the next inside a list-valued option's stored string. The grammar pair below is what reads and writes it, and
+// {@link isValidChoice} is its only other consumer - a choice whose value carried the delimiter could not be told apart from two choices once a list stored it.
+const VALUE_LIST_DELIMITER = ",";
+
+/**
+ * Split a list-valued option's stored string into the entries it names: split on the delimiter, trim each entry, and drop the empties. Paired with
+ * {@link formatValueList}, which composes the canonical form, so a parse followed by a format is stable for every string this accepts - hand-authored spacing and
+ * stray delimiters normalize the first time the value is written and never move again.
+ *
+ * Duplicates pass through as written. Whether a repeated entry means anything is the consumer's question, and {@link selectValues} is where a selection over a
+ * domain de-duplicates.
+ *
+ * @param value - The raw stored text.
+ *
+ * @returns The entries the text names, in the order it names them.
+ *
+ * @category Feature Options
+ */
+export function parseValueList(value: string): readonly string[] {
+
+  return value.split(VALUE_LIST_DELIMITER).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+}
+
+/**
+ * Compose the canonical stored form of a list-valued option from its entries: join them with the bare delimiter. The inverse of {@link parseValueList} over every
+ * list that function produces, and the one writer of the stored form, so a UI composing a list and a plugin reading it back cannot disagree about the spelling.
+ *
+ * @param values - The entries to store.
+ *
+ * @returns The canonical delimiter-joined text.
+ *
+ * @category Feature Options
+ */
+export function formatValueList(values: readonly string[]): string {
+
+  return values.join(VALUE_LIST_DELIMITER);
+}
+
+/**
+ * Return whether a candidate is a legal {@link FeatureOptionChoice}: an object carrying a non-empty `label` and a non-empty `value` that neither contains the list
+ * delimiter nor spells {@link ALL_CHOICES}. This is the single definition of what a legal choice is - {@link buildCatalogIndex} applies it to every inline choice a
+ * catalog declares, and the webUI's projection applies it to every choice a registered source returns.
+ *
+ * The two exclusions on the value are what keep a choice addressable once a list stores it. A value carrying the delimiter would come back from
+ * {@link parseValueList} as two entries, neither of which names a choice; a value spelling the all-choices default would be indistinguishable from the wildcard
+ * the read side expands against the whole domain.
+ *
+ * @param choice - The candidate.
+ *
+ * @returns True when the candidate is a legal choice, false otherwise.
+ *
+ * @category Feature Options
+ */
+export function isValidChoice(choice: unknown): choice is FeatureOptionChoice {
+
+  if((typeof choice !== "object") || (choice === null)) {
+
+    return false;
+  }
+
+  const { label, value } = choice as Record<string, unknown>;
+
+  return (typeof label === "string") && (label.length > 0) && (typeof value === "string") && (value.length > 0) &&
+    !value.includes(VALUE_LIST_DELIMITER) && (value !== ALL_CHOICES);
+}
+
+/**
+ * Arguments for {@link selectValues}. Carries the reading intent: the domain to read against, whether the option stores a list, and the stored text itself.
+ *
+ * @property domain   - The values available in this context.
+ * @property multiple - Whether the option stores a list rather than a single value.
+ * @property value    - The stored text, or undefined when nothing is stored.
+ *
+ * @category Feature Options
+ */
+export interface SelectValuesArgs {
+
+  domain: readonly string[];
+  multiple: boolean;
+  value: string | undefined;
+}
+
+/**
+ * What a stored value selects out of a domain, as {@link selectValues} reads it.
+ *
+ * @property selected - The members of the domain the stored value selects, in domain order and de-duplicated.
+ * @property unknown  - The entries the stored value names that the domain does not carry, in the order it named them and de-duplicated. Preserved rather than
+ *                      discarded so a choice the device stopped offering stays visible to both the editor and the plugin.
+ *
+ * @category Feature Options
+ */
+export interface ValueSelection {
+
+  readonly selected: readonly string[];
+  readonly unknown: readonly string[];
+}
+
+/**
+ * Read which members of a domain a stored value selects, and which entries it names that the domain does not carry. The single definition of what a stored value
+ * SELECTS, shared by the Node-side read ({@link FeatureOptions.valueList}) and the webUI's projection, so a plugin acting on a selection and the editor showing
+ * it can never disagree - including about the {@link ALL_CHOICES} wildcard, which is expanded here and nowhere else.
+ *
+ * An entry the domain lacks is reported rather than discarded. A device that stops offering a value the user chose earlier - a detection type a firmware update
+ * withdrew, a relay output a smaller unit does not have - would otherwise have that choice silently dropped from the configuration the next time anything wrote
+ * it, so the editor keeps showing it and the plugin can say what it is looking at.
+ *
+ * @param args
+ * @param args.domain   - The values available in this context, in the order they should read. A domain that repeats a value contributes it once.
+ * @param args.multiple - Whether the option stores a list. A single-valued option's stored text is one candidate; a list's is parsed by {@link parseValueList}.
+ * @param args.value    - The stored text, or undefined when nothing is stored. Undefined and empty alike name no entries.
+ *
+ * @returns The selected members, in domain order, and the named-but-absent entries, in the order the stored value named them. Both are de-duplicated.
+ *
+ * @category Feature Options
+ */
+export function selectValues({ domain, multiple, value }: SelectValuesArgs): ValueSelection {
+
+  // A single-valued option selects at most one member. An empty value selects nothing and reports nothing unknown - the option simply carries no value here -
+  // while a value the domain does not offer is the one unknown entry.
+  if(!multiple) {
+
+    if(!value?.length) {
+
+      return { selected: [], unknown: [] };
+    }
+
+    return domain.includes(value) ? { selected: [value], unknown: [] } : { selected: [], unknown: [value] };
+  }
+
+  const entries = parseValueList(value ?? "");
+
+  // The all-choices default stands for the whole domain, expanded here so that every reader downstream sees a concrete list. The wildcard lives in the catalog
+  // and in this one branch...nothing else in the system has to know the spelling exists.
+  if((entries.length === 1) && (entries[0] === ALL_CHOICES)) {
+
+    return { selected: [...new Set(domain)], unknown: [] };
+  }
+
+  const stored = new Set(entries);
+
+  // Selected members read in DOMAIN order - the order the editor lists them in and the order the plugin declared them in - while unknown entries read in the order
+  // the stored value named them, since the domain has nothing to say about where a value it does not carry belongs.
+  return { selected: [...new Set(domain)].filter((member) => stored.has(member)), unknown: [...stored].filter((entry) => !domain.includes(entry)) };
+}
+
 // Compose a configured-options entry from its parts, and the single place in this module that knows how to write one. Everything up to the payload delimiter is
 // the address - the canonical action, the option name, and an optional scope id, joined by dots - and everything after it is the value. An absent value composes
 // the bare address; a present value composes behind the delimiter, trimmed first, so the canonical value domain excludes edge whitespace and the tolerant parse
-// of a hand-spaced entry lands on exactly this form. A present-but-empty value composes the bare delimiter, which only the global form produces - the scoped
-// callers all guard on hasValueContent first, because a scoped entry without value content is not part of the grammar. Pairing this with parseEntry as the
-// single decoder keeps the reader and the writer of the storage format from drifting apart.
+// of a hand-spaced entry lands on exactly this form. A present-but-empty value composes the bare delimiter, which the global form produces for any option and the
+// scoped form only for a list option storing its empty selection - every other scoped caller guards on hasValueContent first, because a scoped entry without
+// value content is a shape the parser hands to the legacy grammar. Pairing this with parseEntry as the single decoder keeps the reader and the writer of the
+// storage format from drifting apart.
 function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: string; option: string; value?: string }): string {
 
   const address = (enabled ? "Enable" : "Disable") + "." + option + (id?.length ? ("." + id) : "");
@@ -423,8 +660,9 @@ function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: s
 //
 // Two value forms decode here. The canonical one is `Enable.Option[.id]=value`, where the first "=" ends the address and everything behind it is the value: dots
 // address and "=" carries the payload, each delimiter with a single job. The delimiter claims an entry only when that reading holds together end to end - the
-// address must be the option name alone or the option name plus one dot-free id segment, and a scoped payload must carry content per hasValueContent, which
-// documents why the value domain draws that line. Anything else containing "=" reads under the legacy dot grammar with the delimiter as ordinary value text,
+// address must be the option name alone or the option name plus one dot-free id segment, and a scoped payload must carry content per hasValueContent - or be the
+// empty payload on an option declaring a list, which is how the empty selection is spelled at a scope. Anything else containing "=" reads under the legacy dot
+// grammar with the delimiter as ordinary value text,
 // keeping such an entry on the reading it was authored under. The legacy form, accepted for configurations hand-authored before the payload delimiter existed,
 // reads a single trailing segment as a global value and a multi-segment tail as an id followed by a value.
 //
@@ -505,12 +743,19 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
 
       const idLower = address.startsWith(".") ? address.slice(1) : "";
 
-      // Scoped form: exactly one dot-free, non-empty segment sits between the option name and the delimiter, and the payload carries content. The content
-      // requirement is what disambiguates against a legacy value ending in "=": such a tail puts the delimiter at the very end, where this reading would
-      // otherwise see an id followed by an empty payload, so a contentless payload sends the entry to the legacy grammar below instead. The
-      // lookup key lowercases the id while the re-composition keeps the casing the entry carried, matching what the composer writes - the two have to agree,
-      // or normalizing a composed entry would rewrite it.
-      if(idLower.length && !idLower.includes(".") && hasValueContent(value)) {
+      /* Scoped form: exactly one dot-free, non-empty segment sits between the option name and the delimiter, and the payload carries content or is a list
+       * option's empty selection. The content requirement is what tells this apart from a legacy value ending in "=": such a tail puts the delimiter at the
+       * very end, where this reading would otherwise see an id followed by an empty payload, so a contentless payload sends the entry to the legacy grammar
+       * below instead. The lookup key lowercases the id while the re-composition keeps the casing the entry carried, matching what the composer writes - the
+       * two have to agree, or normalizing a composed entry would rewrite it.
+       *
+       * A list option carves out the ZERO-LENGTH payload from that guard, because its empty selection has to be storable at a scope and this is the spelling
+       * the composer writes for it. The carve-out reaches no further: an all-"=" payload keeps the legacy reading for every option, so the base64 collision
+       * the guard exists for is untouched. What the carve-out does cost is one conversion constraint, stated where the reading lives - a plugin that turns an
+       * existing value option into a list accepts the canonical reading on that option's scoped empty payloads, and a configuration saved under it that is
+       * then read by an older library resolves those entries under the legacy grammar again.
+       */
+      if(idLower.length && !idLower.includes(".") && (hasValueContent(value) || (isMultipleOption(catalog.optionsByName[optName]) && !value.length))) {
 
         parsed.canonicalEntry = composeEntry({ enabled, id: remainderOriginal.slice(1, address.length), option: optionOriginal, value });
         parsed.valueKey = optName + "." + idLower;
@@ -519,9 +764,9 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
         break;
       }
 
-      // Every other "="-bearing shape - an address the composer never writes, or a contentless payload - reads under the legacy dot grammar below. The guard
-      // beneath this block also preserves the greedy-prefix discipline: when the remainder opens with anything but a dot, this option name was merely a prefix
-      // of a longer unrelated token and shorter candidates still get their turn.
+      // Every other "="-bearing shape - an address the composer never writes, or a contentless payload the carve-out above does not claim - reads under the
+      // legacy dot grammar below. The guard beneath this block also preserves the greedy-prefix discipline: when the remainder opens with anything but a dot,
+      // this option name was merely a prefix of a longer unrelated token and shorter candidates still get their turn.
     }
 
     // The next character must be a dot separator. Otherwise this option name is merely a prefix of a longer unrelated token, and we should continue trying shorter
@@ -557,8 +802,8 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
       const idLower = extra.slice(0, separatorIndex);
       const valueOriginal = extraOriginal.slice(separatorIndex + 1);
 
-      // The id-and-value reading always registers on the index; it re-composes canonically only when the value carries content, because the canonical grammar
-      // has no scoped spelling for a contentless payload and a rewrite has to re-read as exactly what it replaced.
+      // The id-and-value reading always registers on the index; it re-composes canonically only when the value carries content, because a rewrite has to
+      // re-read as exactly what it replaced and the canonical scoped spelling for a contentless payload holds only where the option declares a list.
       if(hasValueContent(valueOriginal)) {
 
         parsed.canonicalEntry = composeEntry({ enabled, id: extraOriginal.slice(0, separatorIndex), option: optionOriginal, value: valueOriginal });
@@ -596,10 +841,102 @@ function entryAddressesScope({ catalog, rawEntry, target }: { catalog: CatalogIn
   return (parsed.primaryKey === target) || (parsed.valueKey === target);
 }
 
+// Compose the one error shape this module raises when a catalog entry declares something the engine cannot honor. Every such throw names its own detail and the
+// entry it was declared on and restates neither the module frame nor the punctuation, so the messages read as one family and a new check contributes a phrase
+// rather than a sentence.
+function catalogError(detail: string, entry: string): Error {
+
+  return new Error("FeatureOptions: " + detail + " declared on option \"" + entry + "\".");
+}
+
+// Validate a catalog entry's picker declarations, throwing on any combination the engine cannot honor. `choices` is editor vocabulary the engine reads straight
+// past, and `multiple` reaches the engine at one point only - the empty selection the grammar spells and value() answers - so what the two declarations mostly
+// need is catalog integrity, which has one home: they are checked here beside the renderer declaration, and a plugin learns about a malformed catalog when it
+// builds one rather than when a user opens the settings page.
+//
+// A source-backed list is the one declaration this cannot fully check. The domain a source derives exists only on the page holding the device record, so neither
+// its members nor whether the default names one of them is knowable here; the webUI checks what it can see in turn, rejecting a source name no resolver answers to.
+function validateChoiceDeclaration(option: FeatureOptionEntry, entry: string): void {
+
+  const choices = option.choices;
+  const isMultiple = isMultipleOption(option);
+
+  // The all-choices default has one meaning and one home. Rejecting the spelling everywhere else is what lets the read side expand it without first asking
+  // whether this particular option meant the character literally.
+  if((option.defaultValue === ALL_CHOICES) && (!isMultiple || (choices === undefined))) {
+
+    throw catalogError("an all-choices default outside a multiple choice", entry);
+  }
+
+  if((choices === undefined) && !isMultiple) {
+
+    return;
+  }
+
+  // A picker edits a value, so the option has to be value-centric - the presence of a default is what makes it so - and the default is also what a row resolving
+  // to nothing previews. A number cannot serve, since the grammar the list and the choice values live in is textual throughout.
+  if(option.defaultValue === undefined) {
+
+    throw catalogError("a choice or list without a default value", entry);
+  }
+
+  if(typeof option.defaultValue !== "string") {
+
+    throw catalogError("a non-string default on a choice or list", entry);
+  }
+
+  if(choices === undefined) {
+
+    return;
+  }
+
+  // Masking and picking are contradictory affordances: a list the editor spells out on screen cannot also be a value kept off it.
+  if(option.secret) {
+
+    throw catalogError("a secret choice", entry);
+  }
+
+  // One test covers both spellings of "nothing declared" - an empty array and an empty source name - because a picker with nothing to offer is the same mistake
+  // whichever way it was written.
+  if(choices.length === 0) {
+
+    throw catalogError("an empty choices declaration", entry);
+  }
+
+  if(typeof choices === "string") {
+
+    return;
+  }
+
+  for(const choice of choices) {
+
+    if(!isValidChoice(choice)) {
+
+      throw catalogError("an invalid choice", entry);
+    }
+  }
+
+  if(option.defaultValue === ALL_CHOICES) {
+
+    return;
+  }
+
+  // Every value the default names has to be one the list offers. A list option reads its default through the same grammar that will parse it at runtime, and a
+  // single choice reads as the one value it is...an empty default names nothing either way, which is how a picker declares that it starts with no value at all.
+  const offered = choices.map((choice) => choice.value);
+  const declared = isMultiple ? parseValueList(option.defaultValue) : (option.defaultValue.length ? [option.defaultValue] : []);
+
+  if(declared.some((value) => !offered.includes(value))) {
+
+    throw catalogError("a default outside the declared choices", entry);
+  }
+}
+
 /**
  * Build the catalog-derived index from raw categories + options. The result carries the raw inputs alongside every derivation needed for O(1) catalog queries -
- * defaults, value-options registry, groups (both directions), renderers, and the longest-first cache the entry parser consumes. Throws when a built-in formatter
- * name on a `render` declaration does not resolve, surfacing the misconfiguration at load time rather than silently degrading the log-emission path.
+ * defaults, value-options registry, groups (both directions), renderers, the raw-entry lookup, and the longest-first cache the entry parser consumes. Throws when a
+ * built-in formatter name on a `render` declaration does not resolve, and on any picker declaration the engine cannot honor (see {@link FeatureOptionEntry.choices}
+ * and {@link FeatureOptionEntry.multiple}), surfacing the misconfiguration at load time rather than degrading a display path in silence.
  *
  * The index is the catalog-side input to every other pure helper in this module. Build it once per catalog; reuse it across every configured-options mutation
  * because the catalog is unchanged across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
@@ -615,6 +952,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
   const defaults: Record<string, boolean> = {};
   const groupParents: Record<string, string> = {};
   const groups: Record<string, string[]> = {};
+  const optionsByName: Record<string, FeatureOptionEntry> = {};
   const renderers: Record<string, (value: string) => string> = {};
   const scopes: Record<string, readonly FeatureOptionScope[]> = {};
   const valueOptions: Record<string, number | string | undefined> = {};
@@ -634,11 +972,17 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
 
       defaults[entry.toLowerCase()] = option.default;
 
+      // The general raw-entry lookup, keyed exactly as every other registry here is. A consumer that needs the entry itself - the picker read, a plugin walking
+      // one option - reads it in O(1) rather than re-walking the categories and options maps to find what the builder already had in hand.
+      optionsByName[entry.toLowerCase()] = option;
+
       // Track value-centric options separately so the lookup index built later knows which entries can carry a value.
       if("defaultValue" in option) {
 
         valueOptions[entry.toLowerCase()] = option.defaultValue;
       }
+
+      validateChoiceDeclaration(option, entry);
 
       // Register the catalog-declared renderer when present so logFeature can consult it in O(1) without walking the options map at log time. Boolean options may
       // declare a renderer too - it just goes unused by the logging path - so we register unconditionally rather than gating on isValue here. A string-typed
@@ -652,7 +996,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
 
           if(formatter === undefined) {
 
-            throw new Error("FeatureOptions: unknown built-in formatter \"" + option.render + "\" declared on option \"" + entry + "\".");
+            throw catalogError("unknown built-in formatter \"" + option.render + "\"", entry);
           }
 
           renderers[entry.toLowerCase()] = formatter;
@@ -686,7 +1030,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
   // this method to keep the two views consistent.
   const sortedValueOptionNames = Object.keys(valueOptions).sort((a, b) => b.length - a.length);
 
-  return { categories, defaults, groupParents, groups, options, renderers, scopes, sortedValueOptionNames, valueOptions };
+  return { categories, defaults, groupParents, groups, options, optionsByName, renderers, scopes, sortedValueOptionNames, valueOptions };
 }
 
 /**
@@ -902,9 +1246,14 @@ export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOpti
  * A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
  * need no escaping. Surrounding whitespace is trimmed first, and a value persists only when content survives the trim - see {@link hasValueContent}. At the
  * global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope there is
- * no such spelling - a scoped entry always carries a value - so an enable without content reduces to clearing the scope: any entry addressing it is dropped and
- * resolution falls back to inheritance. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes anything still
- * in the legacy form.
+ * no such spelling for an option storing a single value - a scoped entry carries one - so an enable without content reduces to clearing the scope: any entry
+ * addressing it is dropped and resolution falls back to inheritance. The surviving entries are normalized on the way through, so the save the caller asked for
+ * also modernizes anything still in the legacy form.
+ *
+ * An option declaring {@link FeatureOptionEntry.multiple} reads a SUPPLIED empty value as content-bearing rather than as nothing given: the empty selection is a
+ * state the list can be in, told apart from the bare enable that resolves the registered default, so it composes the bare-delimiter entry at either scope. This
+ * turns on the caller supplying the value, not on what the value says: omit `value` and a list behaves like every other option, composing the bare entry
+ * globally and reducing to a clear at a scope.
  *
  * @param options
  * @param options.args              - The mutation intent: option key, optional scope id, enabled state, optional value. See {@link SetOptionArgs}.
@@ -912,7 +1261,7 @@ export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOpti
  * @param options.configuredOptions - The current configured-options array.
  *
  * @returns The new configured-options array - a fresh allocation whenever an entry was written or removed, or the input array reference itself when a scoped
- *          enable without value content found nothing to drop, mirroring {@link applyClearOption}'s reference-stable no-op.
+ *          enable that reduced to a clear found nothing to drop, mirroring {@link applyClearOption}'s reference-stable no-op.
  */
 export function applySetOption(
   { args, catalog, configuredOptions }: { args: SetOptionArgs; catalog: CatalogIndex; configuredOptions: readonly string[] }
@@ -921,11 +1270,17 @@ export function applySetOption(
   // A value is meaningful only on an Enable of a value-centric option, and only when it carries content; everything else composes the bare address.
   const valued = args.enabled && isValueOption(catalog, args.option);
   const trimmed = (valued && (args.value !== undefined)) ? args.value.toString().trim() : "";
-  const value = (valued && hasValueContent(trimmed)) ? trimmed : undefined;
 
-  // A value-centric option enabled at a scope persists only with a value. The grammar has no scoped spelling for "enabled here, nothing given" - the bare form
-  // would put the id where the legacy grammar reads a global value - so the request reduces to its observable meaning: any entry addressing the scope is dropped
-  // and resolution falls back to inheritance. Delegating states that reduction literally, and carries applyClearOption's reference-stable no-op with it.
+  // The one value without content that persists: an empty selection the caller supplied for a list option. "On, with nothing selected" is a state that list can
+  // be in and has to be tellable from the bare enable, so it composes the bare-delimiter entry the parser reads back as exactly that. The caller's supplying the
+  // value is what makes it a selection - an omitted value says nothing about the list and keeps the plain enable.
+  const emptySelection = valued && (args.value !== undefined) && !trimmed.length && isMultipleOption(catalog.optionsByName[args.option.toLowerCase()]);
+  const value = (valued && (hasValueContent(trimmed) || emptySelection)) ? trimmed : undefined;
+
+  // A value-centric option enabled at a scope persists only with a value, the empty selection above included. The grammar has no scoped spelling for "enabled
+  // here, nothing given" - the bare form would put the id where the legacy grammar reads a global value - so the request reduces to its observable meaning: any
+  // entry addressing the scope is dropped and resolution falls back to inheritance. Delegating states that reduction literally, and carries applyClearOption's
+  // reference-stable no-op with it.
   if(valued && (value === undefined) && args.id?.length) {
 
     return applyClearOption({ args: { id: args.id, option: args.option }, catalog, configuredOptions });
@@ -1386,6 +1741,10 @@ export class FeatureOptions {
    * `<label> enabled.` line above rather than the `enabled at <value>` form, since there is nothing meaningful to render after "at" (see the defensive fallback in
    * the implementation below).
    *
+   * An option declaring {@link FeatureOptionEntry.multiple} that resolves to the empty selection keeps the same axis split and states the emptiness in words:
+   * `<label> enabled with an empty selection.` where the boolean axis deviated, `<label> set to an empty selection.` where only the value axis did. Saying it
+   * outright is what keeps the line a sentence, since interpolating the empty string into either shape above would emit "enabled at ." instead.
+   *
    * Value rendering consults the catalog-declared {@link FeatureOptionEntry.render} when present; otherwise the raw string returned by {@link FeatureOptions.value}
    * is used. The renderer may be either a {@link FeatureOptionFormatter} string naming a built-in formatter from the shared registry (preferred when the format exists
    * there, since this keeps the catalog JSON-serializable and lets every plugin share one implementation) or an inline function for bespoke cases. Declaring the
@@ -1467,6 +1826,16 @@ export class FeatureOptions {
       return;
     }
 
+    // A list resolving to the empty selection is stated in words rather than rendered, because there is nothing to put after "at" or "to" and a catalog-declared
+    // renderer is written for the values the option offers, not for their absence. This resolves ahead of the renderer so no plugin's formatter is handed the
+    // empty string; every option storing a single value keeps the reading below, empty answers included.
+    if(!effectiveValue.length && isMultipleOption(this.#catalog.optionsByName[option.toLowerCase()])) {
+
+      log.info(booleanDeviates ? "%s enabled with an empty selection." : "%s set to an empty selection.", label);
+
+      return;
+    }
+
     const renderedValue = this.#catalog.renderers[option.toLowerCase()]?.(effectiveValue) ?? effectiveValue;
 
     // Message shape splits on which axis deviated: "enabled at" when the user turned the feature on (boolean axis crossed), "set to" when only the value moved away
@@ -1525,7 +1894,8 @@ export class FeatureOptions {
    * disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules. A value is free-form at either scope - it is
    * written behind a payload delimiter and trimmed of surrounding whitespace - and persists only when content survives the trim (see {@link hasValueContent}).
    * At the global scope an enable without content composes the bare entry; at a device or controller scope it reduces to clearing the scope, because a scoped
-   * entry always carries a value.
+   * entry storing a single value always carries one. An option declaring {@link FeatureOptionEntry.multiple} persists a SUPPLIED empty value at either scope
+   * instead, as the explicit empty selection; omitting the value keeps the behavior every other option gets.
    *
    * Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See
    * {@link normalizeConfiguredOptions} for what that does and does not touch.
@@ -1546,8 +1916,8 @@ export class FeatureOptions {
 
     const next = applySetOption({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
 
-    // Reference-stable no-op: a scoped enable without value content that found nothing to drop leaves the array and the index already coherent. Skip the rebuild
-    // and preserve the array reference so callers holding a snapshot see a stable identity for unchanged state.
+    // Reference-stable no-op: a scoped enable that reduced to a clear and found nothing to drop leaves the array and the index already coherent. Skip the
+    // rebuild and preserve the array reference so callers holding a snapshot see a stable identity for unchanged state.
     if(next === this.#configuredOptions) {
 
       return;
@@ -1596,7 +1966,9 @@ export class FeatureOptions {
    * @param controller    - Optional controller scope identifier.
    *
    * @returns Returns the current value associated with `option` if the feature option is enabled, `null` if disabled (or not a value-centric feature option), or
-   *          `undefined` if it's not specified.
+   *          `undefined` if it's not specified. An option declaring {@link FeatureOptionEntry.multiple} answers the empty string where its stored selection is
+   *          explicitly empty, which is a configured state rather than an unspecified one; for every option storing a single value an empty stored value reads
+   *          as unspecified and resolves onward.
    */
   public value(option: string, device?: string, controller?: string): Nullable<string | undefined> {
 
@@ -1615,9 +1987,17 @@ export class FeatureOptions {
       return null;
     }
 
-    // If we found a non-empty explicit value in the index, return it. An empty string is deliberately treated as unspecified - from the user's perspective an empty value
-    // is the same as not setting one - so it falls through to the default or "enabled, no value" resolution below rather than being returned verbatim.
+    // If we found a non-empty explicit value in the index, return it. An empty string is deliberately treated as unspecified for an option storing a single value -
+    // from the user's perspective an empty value is the same as not setting one - so it falls through to the default or "enabled, no value" resolution below rather
+    // than being returned verbatim.
     if(resolved.optionValue) {
+
+      return resolved.optionValue;
+    }
+
+    // A list reads its stored empty the other way: the user unchecked everything, which is a selection they made and not a value they omitted, so it comes back
+    // verbatim. Only the stored empty reaches here - a non-empty value returned above - so the catalog lookup runs on the one state that needs it.
+    if((resolved.optionValue === "") && isMultipleOption(this.#catalog.optionsByName[option.toLowerCase()])) {
 
       return resolved.optionValue;
     }
@@ -1630,6 +2010,69 @@ export class FeatureOptions {
 
     // The option is enabled at an explicit scope but no value was provided...return undefined to indicate "enabled, no value."
     return undefined;
+  }
+
+  /**
+   * Return what a picker option's stored value selects, resolved through the scope hierarchy. The list read that pairs with {@link FeatureOptions.value | value},
+   * which stays the single resolution: this method asks it what the option resolves to and then reads that text against a domain, rather than walking the
+   * hierarchy a second time.
+   *
+   * The domain decides how much reading happens. Supply one - the values the device actually reports - and the result is the members of that domain the stored
+   * value selects, in domain order, with an {@link ALL_CHOICES} default expanded and any value the device no longer offers dropped. Supply none and an option
+   * whose catalog entry declares its choices inline reads against those, since the catalog already holds them. Supply none for a source-backed option and the
+   * stored text answers for itself: a `multiple` option's entries as the user's order named them, a single-valued option's value as the one member.
+   *
+   * An option that resolves to nothing reads as the empty list - disabled at some scope, enabled with no value, emptied on purpose, unknown to the catalog, or
+   * not value-centric at all. There is no separate "nothing here" answer to check for, so a caller iterates the result and is done.
+   *
+   * @param args
+   * @param args.controller - Optional controller scope identifier.
+   * @param args.device     - Optional device scope identifier.
+   * @param args.domain     - Optional values available in this context.
+   * @param args.option     - Feature option to read.
+   *
+   * @returns The selected values, or an empty list when the option resolves to none.
+   *
+   * @example
+   *
+   * ```ts
+   * // A domain the device reported: unknown members drop and an all-choices default expands to everything the camera offers.
+   * const types = featureOpts.valueList({ device: camera.mac, domain: camera.featureFlags.smartDetectTypes, option: "Motion.SmartDetect" });
+   *
+   * // No domain: an inline catalog list answers for itself, and a free-form list reads back exactly as the user entered it.
+   * const plates = featureOpts.valueList({ device: camera.mac, option: "Motion.Plates" });
+   * ```
+   */
+  public valueList({ controller, device, domain, option }: ValueListArgs): readonly string[] {
+
+    const entry = this.#catalog.optionsByName[option.toLowerCase()];
+
+    if(!entry || !this.isValue(option)) {
+
+      return [];
+    }
+
+    const value = this.value(option, device, controller);
+
+    if((value === null) || (value === undefined)) {
+
+      return [];
+    }
+
+    // The caller's domain wins, then the inline list the catalog already holds - restating a static list at the call site would give the same option two
+    // declarations of what it offers. A source-backed option has neither, since the domain it draws on lives on the page.
+    //
+    // The inline list is recognized by what it is not, because `Array.isArray` widens a readonly array to `any[]` and would take the choices out of the type
+    // system at exactly the point they are being read. A declaration is one of three things - absent, a source name, or the list itself - and only the list is an
+    // object.
+    const resolvedDomain = domain ?? ((typeof entry.choices === "object") ? entry.choices.map((choice) => choice.value) : undefined);
+
+    if(resolvedDomain) {
+
+      return selectValues({ domain: resolvedDomain, multiple: isMultipleOption(entry), value }).selected;
+    }
+
+    return isMultipleOption(entry) ? parseValueList(value) : [value];
   }
 
   /**

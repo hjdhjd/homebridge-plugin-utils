@@ -7,9 +7,10 @@
  * first-write-wins rule for duplicate entries in configuredOptions, the scope hierarchy's "device overrides controller overrides global overrides default" contract,
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
+import { ALL_CHOICES, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, enumerateConfiguredEntries, expandOption, formatValueList,
+  getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList, resolveScope,
+  selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
-import { applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, enumerateConfiguredEntries, expandOption, getDefaultValue, hasValueContent,
-  isDependencyMet, isValueOption, normalizeConfiguredOptions, optionExists, resolveScope } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
@@ -733,6 +734,49 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     assert.deepEqual(logCtrl.entries, [{ level: "info", message: "%s set to %s.", params: [ "MTU", "1500" ] }]);
     assert.deepEqual(logBare.entries, [], "without the controller id the option resolves to the global default value and stays silent");
   });
+
+  test("states an emptied list in words on the boolean-axis line rather than rendering nothing after \"at\"", () => {
+
+    // A default-off list the user turned on and emptied deviates on both axes, so the line takes the "enabled" shape - and the shape has to say what the empty
+    // selection is, since interpolating the value would emit "Smart detections enabled at ." instead.
+    const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: false, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+    };
+    const fo = new FeatureOptions(categories, options, ["Enable.Motion.SmartDetect="]);
+    const log = capturingLog();
+
+    fo.logFeature("Motion.SmartDetect", "Smart detections", log);
+
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled with an empty selection.", params: ["Smart detections"] }]);
+  });
+
+  test("states an emptied list in words on the value-axis line, without consulting the catalog renderer", () => {
+
+    // The other message shape: a default-on list left on, with only the selection moved away from the declared default. The renderer is declared for the values
+    // the option offers rather than for their absence, so the empty selection resolves ahead of it - asserted through the same counter idiom the disabled path
+    // uses.
+    let renderCalls = 0;
+    const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: true, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect",
+        render: (value: string): string => {
+
+          renderCalls++;
+
+          return value + " detected";
+        } }]
+    };
+    const fo = new FeatureOptions(categories, options, ["Enable.Motion.SmartDetect="]);
+    const log = capturingLog();
+
+    fo.logFeature("Motion.SmartDetect", "Smart detections", log);
+
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s set to an empty selection.", params: ["Smart detections"] }]);
+    assert.equal(renderCalls, 0, "a plugin's renderer is never handed the empty string");
+  });
 });
 
 describe("FeatureOptions - exists / isScopeGlobal / isScopeDevice", () => {
@@ -862,6 +906,26 @@ describe("FeatureOptions - value resolution", () => {
     const fo = new FeatureOptions(categories, options, ["Enable.Audio.Profile.CinemaSurround"]);
 
     assert.equal(fo.value("Audio.Profile"), "CinemaSurround");
+  });
+
+  test("returns a list's stored empty selection verbatim, where an option storing a single value reads the same payload as unspecified", () => {
+
+    // One stored shape, two readings. A list resolving to an empty payload was emptied on purpose, so the read answers it; on an option storing a single value
+    // the same payload means nothing was given, and resolution carries on exactly as it always has.
+    const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: true, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+    };
+    const list = new FeatureOptions(categories, options, [ "Enable.Motion.SmartDetect=", "Enable.Motion.SmartDetect.devA=" ]);
+
+    assert.equal(list.value("Motion.SmartDetect"), "", "the global empty selection reads back as itself");
+    assert.equal(list.value("Motion.SmartDetect", "devA"), "", "and so does the scoped one");
+    assert.deepEqual(list.valueList({ device: "devA", option: "Motion.SmartDetect" }), [], "an empty selection names no members");
+
+    const single = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume="]);
+
+    assert.equal(single.value("Audio.Volume"), undefined, "an empty payload on a single-valued option is still enabled with no value to report");
   });
 });
 
@@ -1153,6 +1217,67 @@ describe("FeatureOptions.setOption - encoded entry composition", () => {
     fo.setOption({ enabled: true, id: "", option: "Motion.Detect" });
 
     assert.deepEqual(fo.configuredOptions, ["Enable.Motion.Detect"]);
+  });
+
+  test("stores a list's supplied empty selection at either scope and reads it back as the selection it is", () => {
+
+    // The round trip the empty selection has to survive: composed by the writer, decoded by the parser, and answered by the read - at the global scope and at a
+    // device scope alike. Both entries are the bare-delimiter form, which is the spelling the grammar already had for "a value that is present and empty".
+    const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: true, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+    };
+    const fo = new FeatureOptions(categories, options, []);
+
+    fo.setOption({ enabled: true, option: "Motion.SmartDetect", value: "" });
+
+    assert.deepEqual(fo.configuredOptions, ["Enable.Motion.SmartDetect="], "the global empty selection composes the bare-delimiter entry");
+    assert.equal(fo.value("Motion.SmartDetect"), "", "and reads back as the empty selection rather than the registered default");
+
+    fo.setOption({ enabled: true, id: "ABC123", option: "Motion.SmartDetect", value: "" });
+
+    assert.deepEqual(fo.configuredOptions, [ "Enable.Motion.SmartDetect=", "Enable.Motion.SmartDetect.ABC123=" ],
+      "the scoped empty selection composes the same way, alongside the global one");
+    assert.equal(fo.value("Motion.SmartDetect", "ABC123"), "", "the scope carries its own empty selection");
+    assert.deepEqual(fo.valueList({ device: "ABC123", option: "Motion.SmartDetect" }), [], "which selects no members");
+  });
+
+  test("a list asked to enable with no value at all composes exactly as every other option does", () => {
+
+    // An omitted value says nothing about the selection, so the list gets the grammar's ordinary answers: the registered default where nothing is configured,
+    // the bare entry globally, and a reduction to a clear at a scope.
+    const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: true, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+    };
+    const fo = new FeatureOptions(categories, options, []);
+
+    assert.equal(fo.value("Motion.SmartDetect"), "face,person", "an unconfigured list resolves the registered default");
+
+    fo.setOption({ enabled: true, option: "Motion.SmartDetect" });
+
+    assert.deepEqual(fo.configuredOptions, ["Enable.Motion.SmartDetect"], "the bare enable composes without a payload");
+    assert.equal(fo.value("Motion.SmartDetect"), undefined, "which is enabled at an explicit scope with nothing given");
+
+    const scoped = new FeatureOptions(categories, options, ["Enable.Motion.SmartDetect.ABC123=face"]);
+
+    scoped.setOption({ enabled: true, id: "ABC123", option: "Motion.SmartDetect" });
+
+    assert.deepEqual(scoped.configuredOptions, [], "and a scoped enable with no value still reduces to clearing the scope");
+  });
+
+  test("a supplied empty value on an option storing a single value persists nothing, at either scope", () => {
+
+    // The parity boundary of the empty selection: only a list reads a supplied empty as something the user chose. Every other option answers the way it always
+    // has - the bare entry globally, and a clear at a scope.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+
+    assert.deepEqual(applySetOption({ args: { enabled: true, option: "Audio.Volume", value: "" }, catalog, configuredOptions: [] }),
+      ["Enable.Audio.Volume"], "the global write composes the bare form");
+    assert.deepEqual(applySetOption({ args: { enabled: true, id: "ABC123", option: "Audio.Volume", value: "" }, catalog,
+      configuredOptions: ["Enable.Audio.Volume.ABC123=50"] }), [], "the scoped write reduces to clearing the scope");
   });
 });
 
@@ -1542,6 +1667,31 @@ describe("FeatureOptions - the value payload delimiter", () => {
 
     assert.deepEqual(after, [ "Enable.Motion.Detect", "Enable.Audio.Volume.Kitchen=Zone 1.2" ], "the legacy entry at that scope is replaced, not accumulated");
   });
+
+  test("a scoped all-delimiter payload keeps its legacy reading on a list option too", () => {
+
+    // The empty selection is spelled with the zero-length payload alone. An all-"=" payload is the shape base64 padding takes at the end of a legacy entry, so
+    // the collision guard holds for every option: the whole tail reads as this option's global value and no scope is claimed.
+    const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: false, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+    };
+    const fo = new FeatureOptions(categories, options, ["Enable.Motion.SmartDetect.ABC123=="]);
+
+    assert.equal(fo.value("Motion.SmartDetect"), "ABC123==", "the tail reads as a legacy global value, padding intact");
+    assert.equal(fo.scope("Motion.SmartDetect", "ABC123"), "global", "the id segment is value text here, so no device scope is claimed");
+  });
+
+  test("a zero-length scoped payload on an option storing a single value still reads under the legacy grammar", () => {
+
+    // The carve-out's other boundary, and the constraint a plugin converting an option to a list accepts: without the list declaration this entry is exactly the
+    // base64-padding shape, so the tail stays a legacy global value.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.Kitchen="]);
+
+    assert.equal(fo.value("Audio.Volume"), "Kitchen=", "the tail reads as a legacy global value, delimiter intact");
+    assert.equal(fo.scope("Audio.Volume", "Kitchen"), "global", "and no scoped entry is claimed");
+  });
 });
 
 // Saving a configuration also modernizes it. The mutation transforms run their results through the normalizer, so entries still in the legacy form are rewritten
@@ -1635,6 +1785,23 @@ describe("FeatureOptions - normalization on save", () => {
 
     assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Audio.Volume.St. Andrews"]), ["Enable.Audio.Volume.St=Andrews"]);
   });
+
+  test("a list's stored empty selection is already canonical at either scope and survives a save untouched", () => {
+
+    // Normalization rewrites an entry only into something that re-reads as exactly what it replaced, so the spelling the writer composes for an empty selection
+    // has to be the spelling the parser answers - at both scopes. A save moves neither entry, and a second pass finds nothing to do.
+    const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: true, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+    };
+    const catalog = buildCatalogIndex(categories, options);
+    const stored = [ "Enable.Motion.SmartDetect=", "Enable.Motion.SmartDetect.ABC123=" ];
+    const once = normalizeConfiguredOptions(catalog, stored);
+
+    assert.deepEqual(once, [ "Enable.Motion.SmartDetect=", "Enable.Motion.SmartDetect.ABC123=" ], "both empty-selection entries are already canonical");
+    assert.equal(normalizeConfiguredOptions(catalog, once), once, "a second pass finds nothing to change and returns the same reference");
+  });
 });
 
 describe("FeatureOptions - browser-safe runtime-import boundary", () => {
@@ -1711,6 +1878,114 @@ describe("FeatureOptions - pure functional core", () => {
       };
 
       assert.throws(() => buildCatalogIndex(CATEGORIES, bad), /unknown built-in formatter "bogus"/);
+    });
+
+    test("keys the raw-entry lookup by the lowercased expanded name, as every other registry here is keyed", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const [volume] = OPTIONS["Audio"] ?? [];
+
+      assert.ok(volume, "fixture sanity check");
+      assert.equal(catalog.optionsByName["audio.volume"], volume, "the raw entry, by identity, under the lowercased name");
+      assert.equal(catalog.optionsByName["motion.detect"]?.name, "Detect", "a boolean option is registered exactly as a value option is");
+      assert.equal(Object.keys(catalog.optionsByName).length, Object.keys(catalog.defaults).length, "every option the defaults map carries has an entry here");
+      assert.equal(catalog.optionsByName["unknown.option"], undefined, "an option the catalog does not declare has no entry");
+    });
+
+    // The picker declarations are catalog data the engine itself never reads, so the one thing that can go wrong with them is a plugin declaring a combination
+    // nothing downstream can honor. Each case gets its own single-fault fixture, and each assertion matches the case's own detail phrase plus the entry name, so a
+    // check that starts firing for the wrong reason fails here rather than in whatever consumer the wrong entry reached.
+    describe("picker declaration validation", () => {
+
+      const withOption = (option: FeatureOptionEntry): Record<string, FeatureOptionEntry[]> => ({ Motion: [option] });
+
+      const CHOICE_LIST = [ { label: "High", value: "high" }, { label: "Low", value: "low" } ];
+
+      test("rejects a choice or list declared without a default value", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption({ choices: CHOICE_LIST, default: false, description: "No default.", name: "Tier" })),
+          /a choice or list without a default value declared on option "Motion\.Tier"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption({ default: false, description: "No default.", multiple: true, name: "Plates" })),
+          /a choice or list without a default value declared on option "Motion\.Plates"/);
+      });
+
+      test("rejects a secret choice", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: CHOICE_LIST, default: false, defaultValue: "high", description: "Masked picker.", name: "Tier", secret: true })),
+        /a secret choice declared on option "Motion\.Tier"/);
+      });
+
+      test("rejects an empty choices declaration in either spelling", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption({ choices: [], default: false, defaultValue: "", description: "Empty list.", name: "Tier" })),
+          /an empty choices declaration declared on option "Motion\.Tier"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption({ choices: "", default: false, defaultValue: "", description: "Empty source.", name: "Tier" })),
+          /an empty choices declaration declared on option "Motion\.Tier"/);
+      });
+
+      test("rejects an inline choice that fails the shared validity rule", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: [{ label: "", value: "high" }], default: false, defaultValue: "high", description: "Unlabelled.", name: "Tier" })),
+        /an invalid choice declared on option "Motion\.Tier"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: [{ label: "Both", value: "a,b" }], default: false, defaultValue: "a,b", description: "Delimited value.", name: "Tier" })),
+        /an invalid choice declared on option "Motion\.Tier"/);
+      });
+
+      test("rejects a non-string default on a choice or list", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: CHOICE_LIST, default: false, defaultValue: 5, description: "Numeric default.", name: "Tier" })),
+        /a non-string default on a choice or list declared on option "Motion\.Tier"/);
+      });
+
+      test("rejects an all-choices default outside a multiple choice", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: CHOICE_LIST, default: false, defaultValue: ALL_CHOICES, description: "Single picker.", name: "Tier" })),
+        /an all-choices default outside a multiple choice declared on option "Motion\.Tier"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { default: false, defaultValue: ALL_CHOICES, description: "No list to expand.", multiple: true, name: "Plates" })),
+        /an all-choices default outside a multiple choice declared on option "Motion\.Plates"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { default: false, defaultValue: ALL_CHOICES, description: "An ordinary value option.", name: "Mtu" })),
+        /an all-choices default outside a multiple choice declared on option "Motion\.Mtu"/);
+      });
+
+      test("rejects a default naming a value the inline list does not offer", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: CHOICE_LIST, default: false, defaultValue: "medium", description: "Absent default.", name: "Tier" })),
+        /a default outside the declared choices declared on option "Motion\.Tier"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: CHOICE_LIST, default: false, defaultValue: "high,medium", description: "One absent entry.", multiple: true, name: "Tier" })),
+        /a default outside the declared choices declared on option "Motion\.Tier"/);
+      });
+
+      test("accepts every legal declaration, including the ones the checks above come closest to catching", () => {
+
+        const legal: Record<string, FeatureOptionEntry[]> = {
+
+          Motion: [
+
+            { choices: CHOICE_LIST, default: false, defaultValue: "high", description: "A single picker.", name: "Tier" },
+            { choices: CHOICE_LIST, default: false, defaultValue: "", description: "A picker starting with no value.", name: "TierUnset" },
+            { choices: CHOICE_LIST, default: false, defaultValue: ALL_CHOICES, description: "Everything by default.", multiple: true, name: "Tiers" },
+            { choices: CHOICE_LIST, default: false, defaultValue: "high,low", description: "An explicit list default.", multiple: true, name: "TierList" },
+            { choices: "smartDetectTypes", default: false, defaultValue: "person", description: "A source-backed picker.", multiple: true, name: "Detected" },
+            { default: false, defaultValue: "", description: "A free-form list.", multiple: true, name: "Plates" },
+            { default: false, defaultValue: 50, description: "An ordinary value option, untouched by any of this.", name: "Volume" },
+            { default: true, description: "An ordinary boolean, untouched by any of this.", name: "Detect" }
+          ]
+        };
+
+        const catalog = buildCatalogIndex(CATEGORIES, legal);
+
+        assert.equal(catalog.optionsByName["motion.detected"]?.choices, "smartDetectTypes", "a source name passes through as declared");
+        assert.equal(catalog.valueOptions["motion.tiers"], ALL_CHOICES, "an all-choices default is registered like any other value default");
+      });
     });
   });
 
@@ -1797,6 +2072,110 @@ describe("FeatureOptions - pure functional core", () => {
       assert.equal(hasValueContent("   "), false, "whitespace alone carries nothing");
       assert.equal(hasValueContent("="), false, "a lone delimiter carries nothing");
       assert.equal(hasValueContent(" == "), false, "delimiters and edge whitespace together still carry nothing");
+    });
+  });
+
+  // The grammar is a contract two sides read: the browser editor composing a list and a plugin splitting it back apart. Each row is therefore checked in both
+  // directions - what the text parses to, and what formatting that parse composes - so the normalization a stored value settles into is pinned, not just the split.
+  describe("the greedy-prefix discipline", () => {
+
+    test("an option name that is merely a PREFIX of a longer token does not claim that token's value", () => {
+
+      // "Audio.Volume" is a prefix of "Audio.Volumes", which no option declares. The parser has to recognize that the candidate ran out mid-token and keep trying
+      // shorter names rather than reading the tail as this option carrying a value - a leak that would have an entry for one option silently configure another.
+      // The rule is documented as the greedy-prefix discipline and is pinned here rather than left to whichever fixture happens to exercise it.
+      const options = new FeatureOptions(CATEGORIES, structuredClone(OPTIONS), ["Enable.Audio.Volumes=5"]);
+
+      assert.equal(options.scope("Audio.Volume"), "none", "nothing was configured for this option at any scope");
+      assert.equal(options.test("Audio.Volume"), false, "so it keeps its default-off state rather than being enabled by the entry beside it");
+      assert.equal(options.value("Audio.Volume"), null, "and carries no value - reading 5 here would be the longer token's value leaking into it");
+    });
+  });
+
+  describe("the list grammar", () => {
+
+    const LIST_ROWS: readonly { input: string; parsed: readonly string[]; formatted: string }[] = [
+
+      { formatted: "", input: "", parsed: [] },
+      { formatted: "", input: "   ", parsed: [] },
+      { formatted: "a", input: "a", parsed: ["a"] },
+      { formatted: "a,b", input: "a,b", parsed: [ "a", "b" ] },
+      { formatted: "a,b", input: " a , b ", parsed: [ "a", "b" ] },
+      { formatted: "a,b", input: "a,,b", parsed: [ "a", "b" ] },
+      { formatted: "a", input: ",a,", parsed: ["a"] },
+      { formatted: "a,b,c", input: "a, b,,c ", parsed: [ "a", "b", "c" ] },
+      { formatted: "ABC123,XYZ789", input: "ABC123,XYZ789", parsed: [ "ABC123", "XYZ789" ] },
+      { formatted: "a,a", input: "a,a", parsed: [ "a", "a" ] },
+      { formatted: "*", input: "*", parsed: ["*"] }
+    ];
+
+    test("parses every row to its entries and formats that parse back to the canonical text", () => {
+
+      for(const { formatted, input, parsed } of LIST_ROWS) {
+
+        assert.deepEqual(parseValueList(input), parsed, "parse of " + JSON.stringify(input));
+        assert.equal(formatValueList(parseValueList(input)), formatted, "format of the parse of " + JSON.stringify(input));
+      }
+    });
+
+    test("a parse followed by a format is stable under a second pass", () => {
+
+      // Stability is what lets a value be re-written on every save without drifting: the canonical text has to parse to the same entries the raw text did.
+      for(const { input } of LIST_ROWS) {
+
+        const canonical = formatValueList(parseValueList(input));
+
+        assert.equal(formatValueList(parseValueList(canonical)), canonical, "second pass over " + JSON.stringify(input));
+      }
+    });
+
+    test("the grammar preserves duplicates, leaving de-duplication to the selection derivation", () => {
+
+      assert.deepEqual(parseValueList("a,a"), [ "a", "a" ], "the grammar reports what the text says");
+      assert.deepEqual(selectValues({ domain: [ "a", "b" ], multiple: true, value: "a,a" }).selected, ["a"], "the selection is where a repeat collapses");
+    });
+  });
+
+  describe("isValidChoice", () => {
+
+    test("accepts a labelled, addressable value and rejects every shape that is not one", () => {
+
+      assert.equal(isValidChoice({ label: "High", value: "high" }), true, "a label and an addressable value");
+      assert.equal(isValidChoice({ label: "", value: "high" }), false, "an empty label shows the user nothing");
+      assert.equal(isValidChoice({ label: "High", value: "" }), false, "an empty value stores nothing");
+      assert.equal(isValidChoice({ label: "High", value: "a,b" }), false, "a value carrying the delimiter would come back as two entries");
+      assert.equal(isValidChoice({ label: "Everything", value: "*" }), false, "a value spelling the all-choices default would be read as the wildcard");
+      assert.equal(isValidChoice({ value: "high" }), false, "no label at all");
+      assert.equal(isValidChoice({ label: "High" }), false, "no value at all");
+      assert.equal(isValidChoice({ label: "High", value: 5 }), false, "a value that is not text cannot be stored");
+      assert.equal(isValidChoice("high"), false, "a bare string is not a choice");
+      assert.equal(isValidChoice(null), false, "null is an object by typeof and is excluded explicitly");
+    });
+  });
+
+  describe("selectValues", () => {
+
+    const DOMAIN = [ "a", "b", "c" ];
+
+    test("reads a list value against the domain, expanding the wildcard and preserving what the domain lacks", () => {
+
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: true, value: undefined }), { selected: [], unknown: [] }, "nothing stored");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: true, value: "" }), { selected: [], unknown: [] }, "an empty value names no entries");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: true, value: "b,a" }), { selected: [ "a", "b" ], unknown: [] }, "selected read in domain order");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: true, value: "b,zzz" }), { selected: ["b"], unknown: ["zzz"] }, "an absent entry is reported");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: true, value: ALL_CHOICES }), { selected: DOMAIN, unknown: [] }, "the wildcard is the whole domain");
+      assert.deepEqual(selectValues({ domain: [ "a", "a", "b" ], multiple: true, value: ALL_CHOICES }), { selected: [ "a", "b" ], unknown: [] },
+        "a repeated domain member is selected once");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: true, value: "a,a,zzz,zzz" }), { selected: ["a"], unknown: ["zzz"] }, "both sides de-duplicate");
+    });
+
+    test("reads a single-valued option as one candidate, with no wildcard reading", () => {
+
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: false, value: "b" }), { selected: ["b"], unknown: [] }, "a member of the domain");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: false, value: "zzz" }), { selected: [], unknown: ["zzz"] }, "a value the domain lacks");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: false, value: "" }), { selected: [], unknown: [] }, "an empty value is not an unknown one");
+      assert.deepEqual(selectValues({ domain: DOMAIN, multiple: false, value: ALL_CHOICES }), { selected: [], unknown: [ALL_CHOICES] },
+        "the wildcard has no meaning off a multiple option and reads as an ordinary unknown value");
     });
   });
 
@@ -1909,6 +2288,142 @@ describe("FeatureOptions - pure functional core", () => {
       assert.equal(isDependencyMet({ catalog, configIndex: enabledParent, option: "Motion.Sensitivity" }), true, "grouped option with enabled parent");
       assert.equal(isDependencyMet({ catalog, configIndex: disabledParent, option: "Motion.Sensitivity" }), false, "grouped option with disabled parent");
     });
+  });
+});
+
+/* The picker declarations are editor data. Nothing in the engine - the entry grammar, storage, scope resolution, value() - is allowed to read them, which is the
+ * property that lets a plugin add a picker to an existing option without changing what any existing configuration resolves to.
+ *
+ * The guard proves it by building the same catalog twice, once with the declarations and once without, and comparing every DERIVED map. The three members that
+ * are not derived are excluded by construction rather than by exception: `categories` and `options` are the raw inputs preserved verbatim, and `optionsByName`
+ * holds those same raw entries, so all three necessarily carry whatever the plugin declared.
+ */
+describe("FeatureOptions - the picker declarations are inert to the engine", () => {
+
+  const PLAIN: Record<string, FeatureOptionEntry[]> = {
+
+    Motion: [
+
+      { default: true, description: "Enable motion detection.", name: "Detect" },
+      { default: false, defaultValue: "high", description: "Detection tier.", group: "Detect", name: "Tier" }
+    ]
+  };
+
+  const PICKERS: Record<string, FeatureOptionEntry[]> = {
+
+    Motion: [
+
+      { default: true, description: "Enable motion detection.", name: "Detect" },
+      { choices: [ { label: "High", value: "high" }, { label: "Low", value: "low" } ], default: false, defaultValue: "high", description: "Detection tier.",
+        group: "Detect", multiple: true, name: "Tier" }
+    ]
+  };
+
+  const MOTION_CATEGORY: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+
+  test("every derived map of the catalog index reads identically with and without the declarations", () => {
+
+    const plain = buildCatalogIndex(MOTION_CATEGORY, PLAIN);
+    const pickers = buildCatalogIndex(MOTION_CATEGORY, PICKERS);
+
+    assert.deepEqual(pickers.defaults, plain.defaults, "defaults");
+    assert.deepEqual(pickers.groupParents, plain.groupParents, "groupParents");
+    assert.deepEqual(pickers.groups, plain.groups, "groups");
+    assert.deepEqual(pickers.renderers, plain.renderers, "renderers");
+    assert.deepEqual(pickers.scopes, plain.scopes, "scopes");
+    assert.deepEqual(pickers.sortedValueOptionNames, plain.sortedValueOptionNames, "sortedValueOptionNames");
+    assert.deepEqual(pickers.valueOptions, plain.valueOptions, "valueOptions");
+  });
+
+  test("resolution, storage, and value() answer identically with and without the declarations", () => {
+
+    const configured = [ "Enable.Motion.Tier.dev1=low", "Disable.Motion.Detect" ];
+    const plain = new FeatureOptions(MOTION_CATEGORY, structuredClone(PLAIN), [...configured]);
+    const pickers = new FeatureOptions(MOTION_CATEGORY, structuredClone(PICKERS), [...configured]);
+
+    assert.equal(pickers.value("Motion.Tier", "dev1"), plain.value("Motion.Tier", "dev1"), "a scoped value resolves the same");
+    assert.equal(pickers.value("Motion.Tier"), plain.value("Motion.Tier"), "the global fallback resolves the same");
+    assert.equal(pickers.scope("Motion.Tier", "dev1"), plain.scope("Motion.Tier", "dev1"), "the resolved scope is the same");
+    assert.equal(pickers.test("Motion.Detect"), plain.test("Motion.Detect"), "a boolean beside it resolves the same");
+
+    // The storage path is the other half: the entry a write composes reads the grammar alone, so a list value is one string to it like any other.
+    pickers.setOption({ enabled: true, id: "dev2", option: "Motion.Tier", value: "high,low" });
+    plain.setOption({ enabled: true, id: "dev2", option: "Motion.Tier", value: "high,low" });
+
+    assert.deepEqual(pickers.configuredOptions, plain.configuredOptions, "the composed entries are identical");
+  });
+});
+
+/* The list read is the Node-side counterpart of the browser's checkbox group: one call answers "what did the user pick here", with the wildcard expanded and the
+ * device's own vocabulary applied. The rows below walk the three ways a domain can be settled - supplied by the caller, taken from an inline catalog list, or
+ * absent entirely - because each one answers a different question about the same stored text.
+ */
+describe("FeatureOptions - valueList", () => {
+
+  const LIST_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Picker Options", name: "Pick" }];
+
+  const INLINE_CHOICES = [ { label: "A", value: "a" }, { label: "B", value: "b" }, { label: "C", value: "c" } ];
+
+  const LIST_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+    Pick: [
+
+      { choices: "sourced", default: true, defaultValue: "", description: "A source-backed multi-select.", multiple: true, name: "Sourced" },
+      { choices: "sourced", default: true, defaultValue: "", description: "A source-backed single choice.", name: "SourcedSingle" },
+      { choices: INLINE_CHOICES, default: true, defaultValue: "", description: "An inline multi-select.", multiple: true, name: "Inline" },
+      { choices: INLINE_CHOICES, default: true, defaultValue: "", description: "An inline single choice.", name: "Single" },
+      { choices: INLINE_CHOICES, default: true, defaultValue: ALL_CHOICES, description: "Everything by default.", multiple: true, name: "Everything" },
+      { default: false, description: "An ordinary boolean.", name: "Toggle" }
+    ]
+  };
+
+  const DOMAIN = [ "a", "b", "c" ];
+
+  const featureOptionsWith = (configured: string[]): FeatureOptions => new FeatureOptions(LIST_CATEGORIES, structuredClone(LIST_OPTIONS), configured);
+
+  test("reads the empty list for an option that resolves to no value at all", () => {
+
+    const disabled = featureOptionsWith(["Disable.Pick.Sourced"]);
+
+    assert.deepEqual(disabled.valueList({ domain: DOMAIN, option: "Pick.Sourced" }), [], "a disabled option has no value to read");
+
+    const bare = featureOptionsWith(["Enable.Pick.Sourced.dev1"]);
+
+    assert.deepEqual(bare.valueList({ device: "dev1", domain: DOMAIN, option: "Pick.Sourced" }), [], "enabled at a scope with no value carries nothing");
+    assert.deepEqual(bare.valueList({ domain: DOMAIN, option: "Pick.Nonexistent" }), [], "an option name the catalog does not carry");
+    assert.deepEqual(bare.valueList({ domain: DOMAIN, option: "Pick.Toggle" }), [], "a boolean option is not value-centric");
+  });
+
+  test("reads a supplied domain in domain order, dropping what the device no longer offers", () => {
+
+    const options = featureOptionsWith([ "Enable.Pick.Sourced.dev1=b,a", "Enable.Pick.Sourced.dev2=b,zzz" ]);
+
+    assert.deepEqual(options.valueList({ device: "dev1", domain: DOMAIN, option: "Pick.Sourced" }), [ "a", "b" ], "domain order, not stored order");
+    assert.deepEqual(options.valueList({ device: "dev2", domain: DOMAIN, option: "Pick.Sourced" }), ["b"], "a value outside the domain does not read as selected");
+  });
+
+  test("expands the all-choices default against the supplied domain when nothing is configured", () => {
+
+    const options = featureOptionsWith([]);
+
+    assert.deepEqual(options.valueList({ domain: DOMAIN, option: "Pick.Everything" }), DOMAIN, "the catalog default stands for the whole domain");
+  });
+
+  test("takes an inline catalog list as the domain when the caller supplies none", () => {
+
+    const options = featureOptionsWith([ "Enable.Pick.Inline.dev1=b,a", "Enable.Pick.Single.dev1=b", "Enable.Pick.Single.dev2=zzz" ]);
+
+    assert.deepEqual(options.valueList({ device: "dev1", option: "Pick.Inline" }), [ "a", "b" ], "the inline list answers as the domain");
+    assert.deepEqual(options.valueList({ device: "dev1", option: "Pick.Single" }), ["b"], "a single choice reads as the one member it names");
+    assert.deepEqual(options.valueList({ device: "dev2", option: "Pick.Single" }), [], "a single choice outside the list selects nothing");
+  });
+
+  test("reads a source-backed value as typed when no domain is available to read it against", () => {
+
+    const options = featureOptionsWith([ "Enable.Pick.Sourced.dev1=b,a", "Enable.Pick.SourcedSingle.dev1=b" ]);
+
+    assert.deepEqual(options.valueList({ device: "dev1", option: "Pick.Sourced" }), [ "b", "a" ], "stored order, since nothing here can reorder it");
+    assert.deepEqual(options.valueList({ device: "dev1", option: "Pick.SourcedSingle" }), ["b"], "a single choice is the one value it stores");
   });
 });
 

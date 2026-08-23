@@ -328,6 +328,35 @@ describe("memoize", () => {
     assert.equal(computeCount, 1, "with no slices to invalidate against, the cache holds forever after the first call");
   });
 
+  test("a throwing compute leaves the cache untouched, so the next call with the same slices recomputes", () => {
+
+    // A derivation reaching into plugin-supplied code can throw, and the cache must not remember the keys of a call that produced no result. If it did, the very
+    // next call would find those keys matching and hand back the stale result - or undefined - for as long as the slices held still, which on a page whose
+    // catalog and scope rarely move is the rest of its life.
+    let computeCount = 0;
+    const slices = { list: [ 1, 2, 3 ] };
+    const selector = memoize({ compute: () => {
+
+      computeCount++;
+
+      if(computeCount === 1) {
+
+        throw new TypeError("the plugin's own hook refused.");
+      }
+
+      return "computed";
+    }, slices: [(s) => s.list] });
+
+    assert.throws(() => selector(slices), TypeError, "the first call surfaces the throw rather than swallowing it");
+    assert.equal(computeCount, 1, "the throwing pass ran once");
+
+    assert.equal(selector(slices), "computed", "the next call over the very same slices recomputes rather than serving a poisoned cache");
+    assert.equal(computeCount, 2, "and it ran the derivation a second time");
+
+    assert.equal(selector(slices), "computed", "a third call over the same slices is an ordinary cache hit");
+    assert.equal(computeCount, 2, "with no further derivation");
+  });
+
   test("memoize is a per-selector closure - two memoized selectors over the same shape do not share a cache", () => {
 
     let aCount = 0;

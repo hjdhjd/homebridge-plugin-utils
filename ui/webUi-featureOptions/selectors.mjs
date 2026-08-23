@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { buildConfigIndex, expandOption, isDependencyMet, isValueOption, resolveScope } from "../featureOptions.js";
+import { buildConfigIndex, expandOption, isDependencyMet, isValidChoice, isValueOption, resolveScope, selectValues } from "../featureOptions.js";
 import { EMPTY_CATALOG } from "./state.mjs";
 import { memoize } from "./store.mjs";
 
@@ -296,12 +296,25 @@ export const tablePresentation = memoize({
 });
 
 /**
+ * @typedef {Object} ProjectionChoice
+ * @property {string} label - The text the editor shows for this choice. An unknown member has no label of its own and shows its stored value.
+ * @property {boolean} selected - Whether the row's shown value selects this member.
+ * @property {boolean} unknown - Whether this member is a stored value the option's current list does not offer, kept so a choice a device stopped reporting stays
+ *           visible and editable rather than disappearing on the next write.
+ * @property {string} value - The text the configuration stores for this choice.
+ */
+
+/**
  * @typedef {Object} ProjectionEntry
+ * @property {readonly ProjectionChoice[] | undefined} choices - The option's resolved list with the row's selection marked, or undefined for an option that
+ *           declares none - the same absence spelling `value` uses. An inline catalog list resolves to itself; a named source is called for the current controller
+ *           and device. The offered members come first in declaration order, then any stored value the list does not carry.
  * @property {string} description - The option's display description.
  * @property {boolean} enabled - The resolved enabled state at the highest-precedence scope where the option was found (or the catalog default at scope "none").
  * @property {string} expandedName - The canonical `category.option` identifier.
  * @property {boolean} isGrouped - The option declares a `group` in the catalog (subordinate to a parent option).
  * @property {boolean} isModified - The option has a configured entry at any scope (not just the default).
+ * @property {boolean} multiple - The option stores a list rather than a single value.
  * @property {string} name - The option's catalog name (without the category prefix).
  * @property {import("../featureOptions.js").FeatureOptionEntry} option - The raw catalog entry for the option.
  * @property {boolean} requiresParentBadge - The "requires parent" badge applies: option is visible, grouped, and its parent is currently disabled.
@@ -340,8 +353,9 @@ export const tablePresentation = memoize({
 
 /**
  * The view projection. One pass over the active option set produces every downstream display decision: status-bar counts, per-category visibility, per-row
- * visibility, per-row dependency-badge state, and per-row resolved value for value-centric options. Memoized on `(catalog, configuredOptions, scope, filter,
- * devices)` so any dispatch that does not touch those slices returns the cached projection.
+ * visibility, per-row dependency-badge state, per-row resolved value for value-centric options, and the resolved list a picker offers with its selection already
+ * marked. Memoized on `(catalog, configuredOptions, scope, filter, devices, controllers)` so any dispatch that does not touch those slices returns the cached
+ * projection. `controllers` is among them because a choice source is handed the selected controller, which a controllers-only refresh replaces.
  *
  * The active option set is what the gates admit, in order: an option's declared scopes must admit the current view kind, and then the plugin's `validOption` must
  * accept it for the selected device. Everything downstream - the counts, the rows, the DOM - reads from this one set, so an option the current view has no
@@ -368,7 +382,7 @@ export const tablePresentation = memoize({
 export const projection = memoize({
 
   compute: (state) => computeProjection(state),
-  slices: [ (s) => s.catalog, (s) => s.configuredOptions, (s) => s.scope, (s) => s.filter, (s) => s.devices ]
+  slices: [ (s) => s.catalog, (s) => s.configuredOptions, (s) => s.scope, (s) => s.filter, (s) => s.devices, (s) => s.controllers ]
 });
 
 // Decide whether an option's declared scopes admit it on the current view. The framework gates on the one thing it natively knows - which view the page is showing -
@@ -404,12 +418,61 @@ const viewAdmitsOption = (scopes, viewKind) => {
   }
 };
 
+/* Resolve the list an option offers in the current context, and read its selection against the row's shown value.
+ *
+ * An inline catalog list is its own answer and is used verbatim; a named source is the plugin's own function, called with the controller, the device, and the raw
+ * entry. What comes back is never mutated - the resolved members are copied into fresh records here - so a plugin may hand back a cached array as readily as a
+ * fresh one.
+ *
+ * A resolver answering in the wrong shape is a plugin bug and surfaces as a throw, which is the stance the validators already take: a picker rendering an empty or
+ * malformed list would leave the user looking at a control that cannot express anything, with nothing on screen saying why.
+ *
+ * The offered members come first, each marked with whether the shown value selects it, and every stored value the list does not carry follows, marked unknown and
+ * selected. That is what keeps a choice the device stopped reporting on screen instead of silently dropping out of the configuration the next time the row is
+ * written.
+ */
+const resolveChoices = ({ catalog, controller, device, option, shown }) => {
+
+  let declared = option.choices;
+
+  if(typeof declared === "string") {
+
+    const source = declared;
+
+    declared = catalog.choiceSources[source]({ controller, device, option });
+
+    if(!Array.isArray(declared)) {
+
+      throw new TypeError("The choice source \"" + source + "\" did not return a list.");
+    }
+
+    for(const choice of declared) {
+
+      if(!isValidChoice(choice)) {
+
+        throw new TypeError("The choice source \"" + source + "\" returned an invalid choice.");
+      }
+    }
+  }
+
+  const selection = selectValues({ domain: declared.map((choice) => choice.value), multiple: option.multiple === true, value: shown });
+  const choices = declared.map((choice) => ({ label: choice.label, selected: selection.selected.includes(choice.value), unknown: false, value: choice.value }));
+
+  for(const entry of selection.unknown) {
+
+    choices.push({ label: entry, selected: true, unknown: true, value: entry });
+  }
+
+  return choices;
+};
+
 // The projection's compute path. Walks the catalog once, applies validators, resolves each option through the scope hierarchy, computes per-entry flags and the
 // overall counts. Pulled out of the memoize call site for readability - the function body is too long to inline in a property value.
 const computeProjection = (state) => {
 
   const { catalog, filter } = state;
   const idx = configIndex(state);
+  const controller = selectedController(state);
   const device = selectedDevice(state);
   const controllerId = scopingControllerId(state) ?? undefined;
   const deviceId = selectedDeviceId(state) ?? undefined;
@@ -499,6 +562,20 @@ const computeProjection = (state) => {
         }
       }
 
+      /* Resolve the option's list, if it declares one, against the value the row SHOWS - the resolved value where there is one, and otherwise the catalog default
+       * text, which is the same formula the renderer applies to a row that resolves to nothing. A locked or unset picker therefore previews its default selection
+       * exactly as a text row previews its default text.
+       *
+       * The selection is settled here, once, so the renderer and the deviation rule read one answer rather than each deriving their own. The one selection this
+       * does NOT describe is an armed row's, which is empty by the arming gesture's own rule and is written from the armed flag at render time.
+       */
+      let choices;
+
+      if(option.choices !== undefined) {
+
+        choices = resolveChoices({ catalog, controller, device, option, shown: value ?? String(option.defaultValue ?? "") });
+      }
+
       counts.total++;
 
       if(optionIsGrouped) {
@@ -519,11 +596,13 @@ const computeProjection = (state) => {
 
       entries.push({
 
+        choices,
         description: option.description,
         enabled: resolved.enabled,
         expandedName,
         isGrouped: optionIsGrouped,
         isModified: optionIsModified,
+        multiple: option.multiple === true,
         name: option.name,
         option,
         requiresParentBadge: visible && optionIsGrouped && !optionDependencyMet,

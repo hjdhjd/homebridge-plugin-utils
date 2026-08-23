@@ -1623,3 +1623,294 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
     assert.ok(notice(configTable), "the notice still stands and neither pass threw");
   });
 });
+
+/* The picker rows at the view layer. What the delegation has to get right is which gesture means what: a member checkbox is a value commit and never a tri-state
+ * click, a dropdown click belongs to the dropdown and never to the row, and a control the user abandons stands its row down the way a text field does.
+ */
+const PICKER_CATEGORIES = [{ description: "Picker Options", name: "Pick" }];
+
+const PICKER_OPTIONS = {
+
+  Pick: [
+
+    { choices: [ { label: "High", value: "high" }, { label: "Low", value: "low" } ], default: true, defaultValue: "high", description: "Stream tier.",
+      name: "Tier" },
+    { choices: [ { label: "High", value: "high" }, { label: "Low", value: "low" } ], default: false, defaultValue: "", description: "Stream tier, no default.",
+      name: "TierUnset" },
+    { choices: "types", default: true, defaultValue: "a,b", description: "Detected types.", multiple: true, name: "Types" },
+    { choices: "types", default: false, defaultValue: "", description: "Detected types, no default.", multiple: true, name: "TypesUnset" },
+    { choices: "types", default: true, defaultValue: "", description: "A single choice drawn from the same source.", name: "Named" },
+    { default: true, defaultValue: "", description: "Streaming account password.", name: "Password", secret: true }
+  ]
+};
+
+const pickerSetup = ({ configuredOptions = [], controllers = [], devices = [], mode = "device-only", scope, types } = {}) => {
+
+  const catalog = {
+
+    ...buildCatalogIndex(PICKER_CATEGORIES, PICKER_OPTIONS),
+
+    choiceSources: { types: types ?? (() => [ { label: "A", value: "a" }, { label: "B", value: "b" } ]) },
+
+    validators: { isController: (device) => device?.serialNumber?.startsWith("ctrl") === true, validOption: () => true, validOptionCategory: () => true }
+  };
+
+  const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+  const configTable = document.createElement("div");
+  const controller = new AbortController();
+
+  configTable.id = "configTable";
+  document.body.appendChild(configTable);
+
+  store.dispatch({ catalog, configuredOptions, controllers, mode, type: "model:loaded" });
+
+  mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
+
+  store.dispatch({ controllerId: scope?.controllerId ?? null, type: "devices:requested" });
+  store.dispatch({ controllerId: scope?.controllerId ?? null, devices, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+  store.dispatch({ scope: scope ?? { kind: "global" }, type: "scope:changed" });
+
+  const details = configTable.querySelector("details[data-category='Pick']");
+
+  details.open = true;
+  details.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+  return { abort: () => controller.abort(), configTable, store };
+};
+
+const pickerControl = (configTable, optionName) => configTable.querySelector("[id='row-Pick." + optionName + "'] .fo-option-value");
+
+describe("mountOptionsView - picker delegation", () => {
+
+  test("a member checkbox commits the list and never touches the option's enabled state", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = pickerSetup();
+    const group = pickerControl(configTable, "Types");
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.Types'] .fo-option-checkbox");
+
+    assert.equal(rowCheckbox.checked, true, "precondition: the row is enabled by its catalog default");
+
+    // Uncheck "b" out of the default "a,b" selection. A group's boxes are checkboxes inside the same row as the tri-state, so routing one to the tri-state machine
+    // would have a member selection flip the option itself.
+    const boxes = [...group.querySelectorAll(".fo-choice-checkbox")];
+
+    boxes[1].checked = false;
+    boxes[1].dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Types=a"], "the member change committed the list");
+    assert.equal(configTable.querySelector("[id='row-Pick.Types'] .fo-option-checkbox").checked, true, "and left the option enabled");
+  });
+
+  test("a dropdown change commits the picked value", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = pickerSetup();
+    const select = pickerControl(configTable, "Tier");
+
+    select.value = "low";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Tier=low"]);
+  });
+
+  test("clicking a dropdown never reaches the row checkbox, and clicking a member label answers as that member", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = pickerSetup();
+    const configuredBefore = store.state.configuredOptions;
+
+    // A click on the dropdown opens it and says nothing about the option. Neither click is a click on the row's whitespace, which is the only thing the row
+    // forward exists for, so neither may flip the option's own checkbox.
+    pickerControl(configTable, "Tier").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "the same array reference - a dropdown click dispatches nothing at all");
+
+    // A member label wraps its own box, so clicking it toggles that member natively and commits the list. What it must not do is toggle the row.
+    pickerControl(configTable, "Types").querySelector(".fo-choice").click();
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Types=b"], "the label click answered as its own member and committed the remaining list");
+    assert.equal(configTable.querySelector("[id='row-Pick.Types'] .fo-option-checkbox").checked, true, "and the option itself stayed enabled");
+  });
+
+  test("the busy lock reaches a dropdown and a group's boxes, and leaves the secret reveal alone", () => {
+
+    using _dom = createTestDom();
+
+    // A controller scope whose device list has not landed is the window the lock exists for.
+    const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], mode: "controller-based",
+      scope: { controllerId: "ctrl-a", kind: "controller" } });
+
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "precondition: the window is open");
+    assert.equal(pickerControl(configTable, "Tier").disabled, true, "a dropdown is write-capable and goes inert");
+    assert.deepEqual([...pickerControl(configTable, "Types").querySelectorAll(".fo-choice-checkbox")].map((b) => b.disabled), [ true, true ],
+      "every member box goes inert");
+    assert.equal(configTable.querySelector("[id='row-Pick.Password'] .fo-secret-toggle").disabled, false,
+      "the reveal reads a value rather than writing one, and keeps its own lock in applyRowState");
+  });
+
+  test("a locked row previews its default selection, as a text row previews its default text", () => {
+
+    using _dom = createTestDom();
+
+    // Nothing configured at any scope, and the option disabled, so the row is locked and shows what resolution would yield if it were not.
+    const { configTable } = pickerSetup({ configuredOptions: [ "Disable.Pick.Tier", "Disable.Pick.Types" ] });
+
+    assert.equal(pickerControl(configTable, "Tier").value, "high", "the dropdown rests on the declared default");
+    assert.deepEqual([...pickerControl(configTable, "Types").querySelectorAll(".fo-choice-checkbox")].map((b) => b.checked), [ true, true ],
+      "and the group shows the default list's selection");
+  });
+});
+
+describe("mountOptionsView - picker arming and abandonment", () => {
+
+  const DEVICE = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
+
+  const scopedPickerSetup = (extra = {}) => pickerSetup({ devices: [DEVICE], scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, ...extra });
+
+  test("arming a group row hands focus to its first member box", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = scopedPickerSetup();
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.TypesUnset'] .fo-option-checkbox");
+
+    rowCheckbox.checked = true;
+    rowCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, "Pick.TypesUnset", "an empty scoped picker arms rather than writing");
+    assert.ok(document.activeElement === pickerControl(configTable, "TypesUnset").querySelector(".fo-choice-checkbox"),
+      "a fieldset is not focusable, so the affordance is its first box");
+  });
+
+  test("arming a dropdown row hands focus to the dropdown", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = scopedPickerSetup();
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.TierUnset'] .fo-option-checkbox");
+
+    rowCheckbox.checked = true;
+    rowCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, "Pick.TierUnset");
+    assert.ok(document.activeElement === pickerControl(configTable, "TierUnset"), "a dropdown takes focus itself");
+  });
+
+  test("abandoning an armed picker row stands it down, for both control kinds", () => {
+
+    using _dom = createTestDom();
+
+    for(const optionName of [ "TierUnset", "TypesUnset" ]) {
+
+      const { configTable, store } = scopedPickerSetup();
+      const rowCheckbox = configTable.querySelector("[id='row-Pick." + optionName + "'] .fo-option-checkbox");
+
+      rowCheckbox.checked = true;
+      rowCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+      assert.equal(store.state.armedOption, "Pick." + optionName, "precondition: the row is armed");
+
+      // Focus leaves the row without a value ever being chosen, which is the abandonment gesture. The departing element may be the control itself or a part inside
+      // it, and both have to reach the same rule.
+      const departing = document.activeElement;
+
+      departing.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+      assert.equal(store.state.armedOption, null, optionName + " stands down when focus leaves with nothing chosen");
+      assert.equal(configTable.querySelector("[id='row-Pick." + optionName + "'] .fo-option-checkbox").checked, false, optionName + " unchecks with it");
+    }
+  });
+
+  test("an armed picker row that HAS a selection survives the focus departure", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = scopedPickerSetup();
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.TypesUnset'] .fo-option-checkbox");
+
+    rowCheckbox.checked = true;
+    rowCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    const box = pickerControl(configTable, "TypesUnset").querySelector(".fo-choice-checkbox");
+
+    box.checked = true;
+
+    box.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, "Pick.TypesUnset", "a row carrying a selection has something to commit and is not an abandonment");
+  });
+});
+
+describe("mountOptionsView - a controller refresh and a device switch re-derive a resolved list", () => {
+
+  test("a controllers-only refresh re-renders the row in place, with focus and node identity intact", () => {
+
+    using _dom = createTestDom();
+
+    const byController = ({ controller }) => [{ label: "Named", value: controller?.name ?? "none" }];
+    const { configTable, store } = pickerSetup({ controllers: [{ name: "old", serialNumber: "ctrl-a" }], mode: "controller-based",
+      scope: { controllerId: "ctrl-a", kind: "controller" }, types: byController });
+
+    const group = pickerControl(configTable, "TypesUnset");
+    const select = pickerControl(configTable, "Named");
+
+    assert.deepEqual([...group.querySelectorAll(".fo-choice-checkbox")].map((b) => b.value), ["old"], "the source read the controller in scope");
+    assert.deepEqual([...select.options].map((o) => o.value), [ "", "old" ], "and the dropdown drawn from the same source reads it too");
+
+    /* The FOCUSED control here is the source-backed dropdown itself, which is the whole point of the case: a dropdown holds nothing uncommitted, so it is written
+     * from the projection whether or not it has focus. Gating that write behind an activeElement check - the guard the text field needs - would strand a focused
+     * dropdown showing the departed controller's list, and this is the assertion that would catch it.
+     */
+    select.focus();
+
+    const focusedBefore = document.activeElement;
+    const rowBefore = configTable.querySelector("[id='row-Pick.TypesUnset']");
+
+    store.dispatch({ controllers: [{ name: "new", serialNumber: "ctrl-a" }], type: "controllers:loaded" });
+
+    assert.deepEqual([...pickerControl(configTable, "TypesUnset").querySelectorAll(".fo-choice-checkbox")].map((b) => b.value), ["new"],
+      "the refreshed controller gives the source a different list to offer");
+    assert.deepEqual([...pickerControl(configTable, "Named").options].map((o) => o.value), [ "", "new" ],
+      "and the focused dropdown is re-derived along with it rather than being left behind");
+    assert.ok(configTable.querySelector("[id='row-Pick.TypesUnset']") === rowBefore, "the row itself was re-derived in place, never detached and rebuilt");
+    assert.ok(document.activeElement === focusedBefore, "and whatever the user had focused still has focus");
+  });
+
+  test("switching devices rebuilds a resolved list rather than serving the prior device's from the DOM cache", () => {
+
+    using _dom = createTestDom();
+
+    // Two devices whose source answers differently. The per-device DOM cache is what makes this worth pinning: device A's row DOM is what device B would be shown
+    // if the cache were served without a re-derive.
+    const devices = [ { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "A", serialNumber: "dev-a" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "B", serialNumber: "dev-b" } ];
+
+    const perDevice = ({ device }) => (device?.serialNumber === "dev-b") ?
+      [ { label: "Y", value: "y" }, { label: "Z", value: "z" } ] :
+      [ { label: "X", value: "x" }, { label: "Y", value: "y" } ];
+
+    const { configTable, store } = pickerSetup({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, types: perDevice });
+
+    assert.deepEqual([...pickerControl(configTable, "TypesUnset").querySelectorAll(".fo-choice-checkbox")].map((b) => b.value), [ "x", "y" ],
+      "device A's own list");
+    assert.deepEqual([...pickerControl(configTable, "Named").options].map((o) => o.value), [ "", "x", "y" ], "and the dropdown drawn from the same source");
+
+    store.dispatch({ scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
+
+    const details = configTable.querySelector("details[data-category='Pick']");
+
+    details.open = true;
+    details.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    assert.deepEqual([...pickerControl(configTable, "TypesUnset").querySelectorAll(".fo-choice-checkbox")].map((b) => b.value), [ "y", "z" ],
+      "device B is shown its own list, not the one built for device A");
+    assert.deepEqual([...pickerControl(configTable, "Named").options].map((o) => o.value), [ "", "y", "z" ],
+      "and the dropdown too, with its leading empty option intact through the rebuild");
+  });
+});

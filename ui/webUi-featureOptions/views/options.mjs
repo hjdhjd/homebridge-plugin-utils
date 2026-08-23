@@ -5,7 +5,8 @@
 "use strict";
 
 import { applyCategoryStates, captureCategoryStates, createElement } from "../utils.mjs";
-import { applyRowState, categoryShell, optionRow, toggleSecretReveal, triStateTransition, valueCommitTransition } from "../rendering.mjs";
+import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, toggleSecretReveal, triStateTransition,
+  valueCommitTransition } from "../rendering.mjs";
 import { buildConfigIndex, hasValueContent } from "../../featureOptions.js";
 import { projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
@@ -32,12 +33,14 @@ const DEVICES_NOTICE_CLASS = "fo-devices-notice";
  *      category is missing, so what it derives is always the whole of what that category should be showing.
  *   5. **Visibility updates** on `filter:changed`: the same projection walk, doing the same two jobs - materializing what an open category lacks, then re-deriving
  *      each row, which includes its visibility and the "requires parent" badge.
- *   6. **Busy rendering** while a controller's device list is in flight: the table goes inert - every input disabled, the rows dimmed through a marker class - so
- *      no gesture can land a write at the wrong scope during the window. Derived at every row-state application; see {@link applyBusyState}.
- *   7. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), text-input changes (value-commit
+ *   6. **Controller refresh** on `controllers:loaded`: the same lightweight walk, for the one thing a controllers-only refresh can move - the list a plugin's
+ *      choice source derives from the selected controller.
+ *   7. **Busy rendering** while a controller's device list is in flight: the table goes inert - every write-capable control disabled, the rows dimmed through a
+ *      marker class - so no gesture can land a write at the wrong scope during the window. Derived at every row-state application; see {@link applyBusyState}.
+ *   8. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), value-control changes (value-commit
  *      transition + action dispatch). A gesture that leaves `configuredOptions` unchanged - a rejection, or an arm/disarm - restores the row through the shared
  *      applyRowState writer instead of relying on the projection walk.
- *   8. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
+ *   9. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
  *
  * The per-device DOM cache lets navigating from device A to device B and back return to A's previously-rendered DOM without re-running the projection or
  * rebuilding the category shells. The cache map's lifetime is the view's lifetime; aborting the signal releases it.
@@ -264,6 +267,26 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
     store
   });
 
+  // Controller refresh. A controllers-only refresh moves no option's value and changes no row's identity, so what the walk answers here is one thing: a choice
+  // source is handed the selected controller, and a refreshed controller may give it a different list to offer. The lightweight shape is deliberate - the
+  // scope-aware render above would detach and reattach every row, blurring whatever control the user has focused and standing down an armed row, for a refresh
+  // that asked for none of that.
+  effect({
+
+    events: ["controllers:loaded"],
+    fn: () => {
+
+      if(store.state.status.kind === "loading") {
+
+        return;
+      }
+
+      applyProjectionToDom({ configTable, state: store.state });
+    },
+    signal,
+    store
+  });
+
   // Re-evaluate the busy state when a device fetch is recorded. The scope-render effect above cannot answer this on its own: a sidebar click dispatches its
   // optimistic scope:changed BEFORE the devices:requested that records the fetch, and dispatch is fully synchronous, so on a revisit to a controller whose list is
   // already on screen the render pass sees that list still naming this controller with no fetch outstanding and reads the table as settled. The fetch record is
@@ -327,7 +350,15 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
 
     const row = event.target.closest(".fo-option-row");
 
-    if(!row || event.target.closest("input, label")) {
+    /* Anything that answers a click on its own account is left to answer it: an input, a label, and a dropdown whose click opens its list. A press on one of those
+     * would otherwise read as a click on the row's whitespace and flip the very option the user was operating.
+     *
+     * The `button` token does not carry the list editor's remove control, which never reaches this test at all: the editor answers that press on its own element,
+     * deeper in the tree, and removing the item detaches the pressed button along with it - so the row lookup above already reads null by the time the event
+     * arrives here, and the guard returns on `!row`. The token stays for the general case it names, which is any button a control puts inside a row and answers
+     * without detaching itself.
+     */
+    if(!row || event.target.closest("input, label, select, button")) {
 
       return;
     }
@@ -638,9 +669,12 @@ const applyBusyState = ({ configTable, root = configTable, state }) => {
     return;
   }
 
-  for(const input of root.querySelectorAll("input")) {
+  // Every control a gesture could write through goes inert: a row's checkbox and field, a picker's dropdown and member boxes, and the buttons a control builds to
+  // edit itself. The secret reveal is pointedly not among them - it reads a value rather than writing one, and it keeps its own lock in applyRowState, which ties
+  // it to the field it belongs to rather than to the table's busy window.
+  for(const control of root.querySelectorAll("input, select, .fo-list-remove")) {
 
-    input.disabled = true;
+    control.disabled = true;
   }
 };
 
@@ -649,10 +683,11 @@ const applyBusyState = ({ configTable, root = configTable, state }) => {
 // unavailable in some DOM environments (including the test harness), so a manual regex fallback covers those cases.
 const cssEscape = (value) => ((typeof CSS !== "undefined") && CSS.escape) ? CSS.escape(value) : value.replace(/[^\w-]/g, "\\$&");
 
-// Resolve the row element and its projection entry for any input element inside an option row. Shared by handleChange and handleFocusOut (and within
-// handleChange, by both its checkbox and value-input branches), so every caller works from the same projection state. The checkbox's id carries the option's
-// expanded name for both, since the value input has no identity of its own. Returns null when the element sits outside a materialized row or the projection no
-// longer carries the option.
+// Resolve the row element and its projection entry for any element inside an option row. Shared by handleChange and handleFocusOut (and within handleChange, by
+// both its checkbox and value-control branches), so every caller works from the same projection state. The row checkbox's id carries the option's expanded name
+// for both, since a value control has no identity of its own; it is addressed by its own class rather than as "the first checkbox in the row", because a checkbox
+// group's members are checkboxes too and one of them sits ahead of it in document order for no reason but layout. Returns null when the element sits outside a
+// materialized row or the projection no longer carries the option.
 //
 // The presented view scope rides back alongside the entry, read off the same projection the entry came from, so a handler re-deriving a single row describes the
 // page at exactly the scope the render pass gave every other row.
@@ -660,7 +695,7 @@ const rowContext = ({ state, target }) => {
 
   const row = target.closest(".fo-option-row");
   const categoryName = target.closest("details[data-category]")?.getAttribute("data-category");
-  const expandedName = row?.querySelector("input[type='checkbox']")?.id;
+  const expandedName = row?.querySelector(".fo-option-checkbox")?.id;
 
   if(!row || !categoryName || !expandedName) {
 
@@ -678,8 +713,12 @@ const rowContext = ({ state, target }) => {
 // machine computes the action, the dispatch drives the reactive re-projection, and applyRowState re-derives the affected rows - one DOM-writing path, the same
 // one construction uses, rather than an imperative apply here plus a re-derive on update that could drift apart.
 //
-// A value input is recognized by its class rather than by its type attribute. The class is what marks the element as an option's value field; the type is
-// presentation, and a masked field wears "password" there, so a type-keyed match would quietly drop every secret option out of the commit path.
+// A value commit is recognized by the control's class rather than by an element type. The class is what marks an element as an option's value control; the type is
+// presentation, and a masked field wears "password" there, so a type-keyed match would quietly drop every secret option out of the commit path. The match reaches
+// through `closest` because a change can originate inside a composite control - one of a checkbox group's boxes - and what commits is the control as a whole.
+//
+// The tri-state, by contrast, answers only to the row's own checkbox by its class. A group's boxes are checkboxes inside the same row, and routing one of them to
+// the tri-state machine would have a member selection flip the option's enabled state.
 //
 // A gesture that leaves the configured options untouched - an arm or disarm, whose action moves only the store's armedOption, or a gesture that resolves to
 // nothing at all - triggers no re-projection walk, so the affected row is re-derived here through the same single writer, against the post-dispatch armed state.
@@ -687,9 +726,9 @@ const rowContext = ({ state, target }) => {
 const handleChange = ({ event, store }) => {
 
   const target = event.target;
-  const isValueCommit = target.matches("input.fo-option-value");
+  const isValueCommit = target.closest(".fo-option-value") !== null;
 
-  if(!isValueCommit && !target.matches("input[type='checkbox']")) {
+  if(!isValueCommit && !target.matches(".fo-option-checkbox")) {
 
     return;
   }
@@ -703,16 +742,16 @@ const handleChange = ({ event, store }) => {
   }
 
   const { entry, row, viewScope } = context;
-  const inputValue = row.querySelector("input.fo-option-value");
+  const control = row.querySelector(".fo-option-value");
   const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
   const transitionArgs = {
 
     catalog: state.catalog,
     configIndex,
+    control,
     controllerId: scopingControllerId(state),
     deviceId: selectedDeviceId(state),
-    entry,
-    inputValue
+    entry
   };
   const { action } = isValueCommit ? valueCommitTransition(transitionArgs) :
     triStateTransition({ ...transitionArgs, armed: state.armedOption === entry.expandedName, checkbox: target });
@@ -728,11 +767,11 @@ const handleChange = ({ event, store }) => {
 
     applyRowState({ armed, entry, row, scopeKind: viewScope });
 
-    // An arming gesture opened the input for the value that will actually enable the option - hand it focus as the affordance for what comes next. Every other
-    // no-op keeps focus where it is: a rejected input commit means the user just moved on, and a disarm leaves a locked input nothing should focus.
+    // An arming gesture opened the control for the value that will actually enable the option - hand it focus as the affordance for what comes next. Every other
+    // no-op keeps focus where it is: a rejected commit means the user just moved on, and a disarm leaves a locked control nothing should focus.
     if(!isValueCommit && armed) {
 
-      inputValue?.focus();
+      focusControl(control);
     }
   }
 };
@@ -749,7 +788,11 @@ const handleFocusOut = ({ event, store }) => {
   const state = store.state;
   const target = event.target;
 
-  if((state.armedOption === null) || !target.matches?.("input.fo-option-value")) {
+  // The departing element either IS the row's value control or sits inside one, which is how a composite control's own parts - a group's boxes, a list editor's
+  // entry field - reach the abandonment rule that a plain field reaches directly.
+  const control = target.closest?.(".fo-option-value") ?? null;
+
+  if((state.armedOption === null) || !control) {
 
     return;
   }
@@ -771,7 +814,7 @@ const handleFocusOut = ({ event, store }) => {
     return;
   }
 
-  if(hasValueContent(target.value)) {
+  if(hasValueContent(controlValueText(control))) {
 
     return;
   }

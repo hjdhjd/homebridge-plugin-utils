@@ -6,9 +6,9 @@
 
 import { DeadlineExpiredError, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
+import { buildCatalogIndex, expandOption } from "./featureOptions.js";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { createElement, delay, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
-import { buildCatalogIndex } from "./featureOptions.js";
 import { modelLoaded } from "./webUi-featureOptions/selectors.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
@@ -196,6 +196,13 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {Object[]} [statusPanel.placeholderRows] - Row templates (id / label / sizer / optional latch, no value) the skeleton renders before the first snapshot.
  *   Defaults to `[]`, so an unconfigured skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
  * @property {Object} [ui] - UI validation and display options.
+ * @property {Object} [ui.choices] - The choice sources this plugin's catalog names, keyed by source name. Each value is a synchronous function
+ *   `({ controller, device, option }) => FeatureOptionChoice[]` returning the list that option offers in that context: `controller` is the selected controller entry
+ *   or null, `device` the selected device or undefined at global and controller scope, and `option` the raw catalog entry. Deriving the list and labelling it are the
+ *   plugin's business - a list of what a device reports comes from the device record the page already holds, and anything that needs a connection to know is attached
+ *   during the same `getDevices` call. The framework never mutates what a resolver returns, so a cached array serves as well as a fresh one. A resolver must be pure
+ *   and cheap: it runs on every projection recompute, the same cadence as `ui.validOption`. A catalog naming a source that no resolver here answers to fails the page
+ *   at load, since a picker with no list behind it can only render as an empty control the user cannot act on.
  * @property {string} [ui.connectingMessage="Loading..."] - The copy the boot affordance shows while the page loads. It holds the frame from the moment teardown empties
  *   the page until a terminal state takes it - the revealed page, the connection-error view, or the no-controllers helper - so it is the only thing on screen for a boot
  *   whose device fetch is slow. The framework default says nothing about what is being waited on, because only the plugin knows: a plugin whose boot is dominated by a
@@ -399,6 +406,9 @@ export class webUiFeatureOptions {
 
     this.#config = {
 
+      // An absent bag is an empty one rather than undefined, so the catalog's own declared-source check and the projection's lookup both read a map either way and
+      // neither has to ask whether the plugin declared any sources at all.
+      choiceSources: ui.choices ?? {},
       connectingMessage: ui.connectingMessage ?? "Loading...",
       connectionErrorPanel,
 
@@ -651,10 +661,14 @@ export class webUiFeatureOptions {
     window.addEventListener("blur", () => {
 
       const active = document.activeElement;
+      const control = active?.closest?.(".fo-option-value");
 
-      if(active?.matches?.("input.fo-option-value") && active.closest("#configTable")) {
+      // The commit fires on the CONTROL rather than on whatever inside it holds focus, because the control is what a commit reads and what the view's delegation
+      // routes. For a plain field the two are the same element; for a composite one they are not, and a value the user typed into an editor's own field would
+      // otherwise never reach the store.
+      if(control && control.closest("#configTable")) {
 
-        active.dispatchEvent(new Event("change", { bubbles: true }));
+        control.dispatchEvent(new Event("change", { bubbles: true }));
       }
 
       void this.#flushPersist?.();
@@ -760,8 +774,11 @@ export class webUiFeatureOptions {
 
       ...buildCatalogIndex(features.categories ?? [], features.options ?? {}),
 
+      choiceSources: this.#config.choiceSources,
       validators: this.#config.validators
     };
+
+    assertChoiceSources(catalog);
 
     // Snapshot for revert-to-saved. Preserved across show() / cleanup() cycles when the re-loaded options are set-equal to the prior snapshot (the user reordered
     // entries but did not save) - this means a revert after re-show restores the original order rather than the reloaded order. First show() sets the snapshot
@@ -1456,6 +1473,30 @@ export class webUiFeatureOptions {
     return result;
   }
 }
+
+/* Assert that every choice source the catalog names has a resolver behind it, throwing at catalog-construction time when one does not.
+ *
+ * A picker whose source resolves to nothing renders as a control with no list in it - present, focusable, and unable to express anything - which is a plugin
+ * programming error the user can neither see the cause of nor act on. It throws where the catalog's own `render` validation already throws and with the same
+ * consequence: the boot monitor takes it, and it deliberately does NOT route through the connection-error card, whose retry could never repair a catalog.
+ *
+ * Only a string declaration names a source. An inline list carries its own choices and was validated when the index was built, and an option declaring nothing at
+ * all is every other option on the page.
+ */
+const assertChoiceSources = (catalog) => {
+
+  for(const category of catalog.categories) {
+
+    for(const option of (catalog.options[category.name] ?? [])) {
+
+      if((typeof option.choices === "string") && !(option.choices in catalog.choiceSources)) {
+
+        throw new TypeError("ui.choices must register a resolver for every source the catalog names: option \"" + expandOption(category, option) +
+          "\" names the source \"" + option.choices + "\".");
+      }
+    }
+  }
+};
 
 // Mark the feature-options tab as the active one. The shared paint owns which buttons the menu has and what active and inactive look like, so this call site names
 // only the page it speaks for.

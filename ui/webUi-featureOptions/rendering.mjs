@@ -5,7 +5,7 @@
 "use strict";
 
 import { createElement, createSvgElement } from "./utils.mjs";
-import { hasValueContent, isValueOption, optionExists } from "../featureOptions.js";
+import { formatValueList, hasValueContent, isValueOption, optionExists, parseValueList, selectValues } from "../featureOptions.js";
 
 /**
  * Pure DOM construction for the feature options webUI.
@@ -19,6 +19,9 @@ import { hasValueContent, isValueOption, optionExists } from "../featureOptions.
  *   - {@link applyRowState} - the single writer for every state-dependent attribute of a row (tri-state, value-input state, label color, visibility, dependency
  *     badge), derived from the projection entry. The construction path and the per-mutation update walk both call it, so a freshly-built row and a re-derived row run
  *     identical code - no derived attribute can be set on one path and forgotten on the other. This is what makes the row DOM a pure function of the projection.
+ *   - {@link controlValueText} - reads what a row's value control currently holds, in the form storing it would take. The single answer to that question, shared by
+ *     the transitions below and by the view's abandonment check, so no caller has to know which controls answer to `.value` and which compose theirs from parts.
+ *   - {@link focusControl} - hands focus to the part of a control a user would act in, which an arming gesture owes them.
  *   - {@link toggleSecretReveal} - flips a masked value input between hidden and shown, and re-labels its toggle to match. The one row-DOM write that answers to a
  *     gesture rather than to the projection: whether a secret is currently on screen is a property of how the page is being read at this moment, not of the
  *     configuration, so no action is computed and nothing is dispatched.
@@ -80,9 +83,13 @@ export const categoryShell = ({ category, scopeKind }) => {
  *     crush its own label or widen sibling rows. `inputSize` controls only the field's declared width.
  *   - **Secret value options**: the same stack, with the masked field and its reveal toggle sharing a horizontal wrapper so the control sits beside the field rather
  *     than beneath it. An option that declares no secret gets neither the wrapper nor the toggle, so the unflagged row's shape is exactly the one described above.
+ *   - **Choice options**: the same stack with a `<select>` in place of the field, sized by the same `inputSize` declaration. Its members come from the projection,
+ *     which resolves whatever the catalog declared - an inline list, or a list a plugin's source derives from the device in view.
+ *   - **Multiple-choice options**: the same stack with a `<fieldset>` of checkboxes, one per member, laid out as a wrapping row.
  *
  * The row structure is uniform regardless of option kind: one row, one stacked content cell, so a long descriptive label and a compact value render through exactly
- * the same path and differ only in the field's declared width.
+ * the same path and differ only in the control the value is edited through. Every value control carries the `fo-option-value` class, which is how the view finds
+ * it, how the theme dresses it, and how the busy lock reaches it, so the row's DOM shape is one contract regardless of which control fills the slot.
  *
  * The element factories ({@link createCheckbox}, {@link createLabel}, {@link createValueInput}) build only the bare, state-independent shape. Every state-dependent
  * attribute - the checkbox tri-state, the value-input's value / disabled state, the label color, row visibility, the dependency badge - is set by {@link applyRowState}
@@ -110,7 +117,7 @@ export const optionRow = ({ armed = false, deviceId, entry, scopeKind }) => {
 
   if(valueCentric) {
 
-    content.push(option.secret ? createSecretField({ option }) : createValueInput({ option }));
+    content.push(createValueControl({ option }));
   }
 
   row.appendChild(createCheckbox({ deviceId, expandedName, option }));
@@ -136,14 +143,15 @@ export const optionRow = ({ armed = false, deviceId, entry, scopeKind }) => {
  *     otherwise the checkbox reflects the resolved enabled state directly.
  *   - **Label color** - the "where did this value come from / has it been modified" cue. Re-applying it here on every projection change is what makes a toggle that
  *     modifies (or reverts) an option re-color its label in place, rather than freezing the color at construction time.
- *   - **Value-input state** (value-centric options only) - the input is live exactly while the option can take a value at this scope: the row is enabled, or it is
- *     ARMED (the checkbox gesture opened the input and the first committed value is what will actually enable it - a scoped value entry always carries a value, so
- *     the checked-but-empty state persists nothing and lives only in the store's armedOption). Every other row locks its input, so a disabled or unset option can
- *     never take typing, and inheriting or parent-disabled rows lock regardless. The value text is re-derived from the projection EXCEPT while the user is
- *     actively editing it: uncommitted text exists only while the input holds focus (the `change` event commits on blur / Enter), so guarding on
- *     `document.activeElement` is exactly the condition under which a re-derive would clobber an in-progress edit. A secret option's reveal toggle locks and
- *     unlocks with the field it belongs to, and a row that locks returns to masked, so a row the user cannot type into is also a row they cannot read the value
- *     out of. A row that is still live keeps whatever reveal the user chose.
+ *   - **Value-control state** (value-centric options only) - the control is live exactly while the option can take a value at this scope: the row is enabled, or it
+ *     is ARMED (the checkbox gesture opened the control and the first committed value is what will actually enable it - a scoped value entry always carries a value,
+ *     so the checked-but-empty state persists nothing and lives only in the store's armedOption). Every other row locks its control, so a disabled or unset option
+ *     can never take an edit, and inheriting or parent-disabled rows lock regardless. The value is re-derived from the projection through {@link writeControlValue},
+ *     which is where the one exception lives: a control that can hold an UNCOMMITTED edit is left alone while it has focus, since the `change` event commits on
+ *     blur or Enter and a re-derive would clobber what the user is still typing. A dropdown and a checkbox group commit the moment they are operated and so hold
+ *     nothing uncommitted, which is why they are written from the projection whether they have focus or not. A secret option's reveal toggle locks and unlocks with
+ *     the field it belongs to, and a row that locks returns to masked, so a row the user cannot type into is also a row they cannot read the value out of. A row
+ *     that is still live keeps whatever reveal the user chose.
  *
  * @param {Object} args
  * @param {boolean} [args.armed=false] - Whether this row is the store's armed value row. An armed row renders checked with a live input while persisting nothing.
@@ -177,24 +185,18 @@ export const applyRowState = ({ armed = false, entry, row, scopeKind }) => {
     applyLabelColor({ entry, inheriting, label });
   }
 
-  const input = row.querySelector(".fo-option-value");
+  const control = row.querySelector(".fo-option-value");
 
-  if(input) {
+  if(control) {
 
-    // The input is live exactly while the option can take a value at this scope: enabled, or armed and awaiting its first value. A disabled or unset row locks
-    // its input - the checkbox is the affordance that arms it - and inheriting or parent-disabled rows lock regardless.
+    // The control is live exactly while the option can take a value at this scope: enabled, or armed and awaiting its first value. A disabled or unset row locks
+    // its control - the checkbox is the affordance that arms it - and inheriting or parent-disabled rows lock regardless.
     const locked = inheriting || entry.requiresParentBadge || (!entry.enabled && !armed);
 
-    input.readOnly = locked;
-    input.disabled = locked;
-
-    if(locked) {
-
-      input.setAttribute("aria-disabled", "true");
-    } else {
-
-      input.removeAttribute("aria-disabled");
-    }
+    // The value is written before the lock is applied, because a composite control's parts ARE its value: a group's boxes come from the projection, so a lock
+    // applied ahead of the write would have nothing to reach on a freshly-built row and the members would arrive live inside a locked row.
+    writeControlValue({ armed, control, entry });
+    applyControlLock({ control, locked });
 
     // A secret row's reveal answers to the same lock as its field: the toggle disables, and the field returns to masked. Both halves are needed for the rule to
     // hold - a field revealed while the row was live would otherwise sit there in clear text with the only control that could re-mask it disabled. A row still
@@ -208,16 +210,8 @@ export const applyRowState = ({ armed = false, entry, row, scopeKind }) => {
 
       if(locked) {
 
-        applySecretMasking({ input, revealed: false, toggle: secretToggle });
+        applySecretMasking({ input: control, revealed: false, toggle: secretToggle });
       }
-    }
-
-    // Never overwrite the value the user is currently editing. Outside an active edit the projection's resolved value is authoritative - except on an armed row,
-    // which presents an EMPTY field: arming asks the user for the option's first value, and the default display belongs to rows describing what resolution
-    // already yields, not to a prompt awaiting entry. The empty field is also what lets the abandonment path read "still no value" honestly.
-    if(document.activeElement !== input) {
-
-      input.value = armed ? "" : (entry.value ?? defaultDisplay(entry.option));
     }
   }
 };
@@ -283,14 +277,14 @@ export const toggleSecretReveal = (toggle) => {
  * @param {import("../featureOptions.js").ConfigIndex} args.configIndex - The current config lookup index.
  * @param {string | null} args.controllerId - The in-scope controller's scoping identity (the serial its entries are keyed by, from
  *        {@link scopingControllerId}), or null when no controller is in context.
+ * @param {HTMLElement | null} args.control - The value control, when the option is value-centric; null otherwise.
  * @param {string | null} args.deviceId - The current view's device serial, or null for global view.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for the option.
- * @param {HTMLInputElement | null} args.inputValue - The value-input element, when the option is value-centric; null otherwise.
  * @returns {{ action: Object }} The action to dispatch.
  */
-export const triStateTransition = ({ armed = false, catalog, checkbox, configIndex, controllerId, deviceId, entry, inputValue }) => {
+export const triStateTransition = ({ armed = false, catalog, checkbox, configIndex, control, controllerId, deviceId, entry }) => {
 
-  const { expandedName, option } = entry;
+  const { expandedName } = entry;
   const upstream = hasUpstreamOption({ catalog, configIndex, controllerId, deviceId, expandedName });
 
   // Transition 0: an armed row just unchecked. Nothing was ever persisted, so the row simply stands down - a write-shaped action here would disable or clear
@@ -303,7 +297,7 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
   // Transition 1: was indeterminate (readOnly). The user clicked through to an explicit state at this scope.
   if(checkbox.readOnly) {
 
-    return { action: writeAction({ deviceId, enabled: false, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
+    return { action: writeAction({ control, deviceId, enabled: false, entry, expandedName, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
   }
 
   // Transition 2: just transitioned to unchecked. With an upstream entry the clearOption returns the row to inheritance; without one the explicit disable stays
@@ -315,19 +309,19 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
       return { action: { args: { id: deviceId ?? undefined, option: expandedName }, type: "option:cleared" } };
     }
 
-    return { action: writeAction({ deviceId, enabled: false, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
+    return { action: writeAction({ control, deviceId, enabled: false, entry, expandedName, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
   }
 
-  // Transition 3: just transitioned to checked. A SCOPED value-centric row with no value content arms rather than writes - a scoped value entry always carries a
-  // value, so there is nothing to persist until one is typed, and arming is what unlocks the input to take it. The global view is deliberately outside this arm:
-  // a bare valueless enable is a legal global entry, so the write below persists it and the enabled row's input unlocks through the ordinary lock rule.
-  if((deviceId !== null) && isValueOption(catalog, expandedName) && !hasValueContent(inputValue?.value ?? "")) {
+  // Transition 3: just transitioned to checked. A SCOPED value-centric row carrying no value content arms rather than writes - a scoped value entry always carries
+  // a value, so there is nothing to persist until one is given, and arming is what unlocks the control to take it. The global view is deliberately outside this
+  // arm: a bare valueless enable is a legal global entry, so the write below persists it and the enabled row's control unlocks through the ordinary lock rule.
+  if((deviceId !== null) && isValueOption(catalog, expandedName) && !hasValueContent(controlValueText(control))) {
 
     return { action: { option: expandedName, type: "option:armed" } };
   }
 
   // Explicit enable at this scope.
-  return { action: writeAction({ deviceId, enabled: true, expandedName, inputValue, option, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
+  return { action: writeAction({ control, deviceId, enabled: true, entry, expandedName, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
 };
 
 /**
@@ -351,21 +345,21 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
  * @param {Object} args
  * @param {import("./state.mjs").Catalog} args.catalog - The catalog index (for the upstream probe).
  * @param {import("../featureOptions.js").ConfigIndex} args.configIndex - The current config lookup index.
+ * @param {HTMLElement} args.control - The value control carrying the committed value.
  * @param {string | null} args.controllerId - The in-scope controller's scoping identity (the serial its entries are keyed by, from
  *        {@link scopingControllerId}), or null when no controller is in context.
  * @param {string | null} args.deviceId - The current view's device serial, or null for global view.
  * @param {import("./selectors.mjs").ProjectionEntry} args.entry - The projection entry for the option.
- * @param {HTMLInputElement} args.inputValue - The value-input element carrying the committed text.
  * @returns {{ action: Object | null }} The action to dispatch, or null when the commit has nothing to write.
  */
-export const valueCommitTransition = ({ catalog, configIndex, controllerId, deviceId, entry, inputValue }) => {
+export const valueCommitTransition = ({ catalog, configIndex, control, controllerId, deviceId, entry }) => {
 
-  const { expandedName, option } = entry;
+  const { expandedName } = entry;
 
   // A row is explicitly enabled at this scope when its own entry - not an inherited one - resolves it enabled: an entry exists at exactly this scope and the
   // resolved state is enabled, which a local disable would have overruled.
   const locallyEnabled = entry.enabled && optionExists({ configIndex, id: deviceId ?? undefined, option: expandedName });
-  const emptyCommit = !hasValueContent(inputValue.value);
+  const emptyCommit = !hasValueContent(controlValueText(control));
 
   if(emptyCommit && !locallyEnabled) {
 
@@ -381,7 +375,7 @@ export const valueCommitTransition = ({ catalog, configIndex, controllerId, devi
 
   const upstream = hasUpstreamOption({ catalog, configIndex, controllerId, deviceId, expandedName });
 
-  return { action: writeAction({ deviceId, enabled: true, expandedName, inputValue, option, upstream, valueCentric: true }) };
+  return { action: writeAction({ control, deviceId, enabled: true, entry, expandedName, upstream, valueCentric: true }) };
 };
 
 // Map a view scope kind to the suffix label rendered on category headers. Switch on the tag; every scope kind maps to its own label.
@@ -533,6 +527,237 @@ const createValueInput = ({ option }) => createElement("input", {
   type: option.secret ? "password" : "text"
 });
 
+// The title an unknown member carries, naming why it reads differently from the rest of the list.
+const UNKNOWN_CHOICE_TITLE = "Not offered for this device.";
+
+// Build the control a value-centric option is edited through, chosen by what the option declares. A picker offers a list - a dropdown for one choice, a group of
+// checkboxes for several - and an option declaring no list keeps the free-text field, masked when it holds a secret. Every branch returns an element carrying
+// `fo-option-value`, which is the one class the view, the theme, and the busy lock all address the control by.
+const createValueControl = ({ option }) => {
+
+  if(option.choices !== undefined) {
+
+    return option.multiple ? createChoiceGroup() : createChoiceSelect({ option });
+  }
+
+  return option.secret ? createSecretField({ option }) : createValueInput({ option });
+};
+
+// Build a single-choice option's dropdown. Pure: the bare element carrying only the leading empty option, since the members themselves come from the projection
+// and are written by {@link applyRowState}. It is sized by `inputSize` exactly as the text field is, and it carries no inline font - a label is prose and reads in
+// the body font by inheritance, while the monospace token belongs to a field where the user types a raw value.
+//
+// The empty first option is structural rather than decoration. It is the spelling of "no value" that a scoped row arms through, that an empty commit reads as a
+// clear-to-fall-back, and that a row whose stored value the list does not offer rests at.
+const createChoiceSelect = ({ option }) => {
+
+  const select = createElement("select", {
+
+    classList: [ "form-control", "shadow-none", "fo-option-value" ],
+    style: {
+
+      boxSizing: "content-box",
+      maxWidth: "100%",
+      width: (option.inputSize ?? 5) + "ch"
+    }
+  });
+
+  select.appendChild(createElement("option", { value: "" }));
+
+  return select;
+};
+
+// Build a multiple-choice option's checkbox group. Pure and empty: every box comes from the projection's resolved list, written by {@link applyRowState}. The
+// fieldset is what makes the boxes one control rather than several - the class the view finds, the lock addresses, and the theme lays out as a wrapping row.
+const createChoiceGroup = () => createElement("fieldset", { classList: [ "fo-option-value", "fo-choice-group" ] });
+
+// Build one member of a dropdown. An unknown member - a stored value the list no longer offers - carries its own class and a title saying so, since it is on
+// screen to be seen and removed rather than to be chosen again.
+const createChoiceOption = (member) => createElement("option", {
+
+  ...(member.unknown ? { classList: ["fo-choice-unknown"], title: UNKNOWN_CHOICE_TITLE } : {}),
+  value: member.value
+}, [member.label]);
+
+// Build one member of a checkbox group: a label wrapping its own box, so the text is part of the control's hit area without needing an id to pair them. Unknown
+// members are marked exactly as they are in a dropdown.
+const createChoiceLabel = (member) => createElement("label", {
+
+  classList: [ "fo-choice", ...(member.unknown ? ["fo-choice-unknown"] : []) ],
+  ...(member.unknown ? { title: UNKNOWN_CHOICE_TITLE } : {})
+}, [ createElement("input", { classList: ["fo-choice-checkbox"], type: "checkbox", value: member.value }), member.label ]);
+
+/**
+ * Read the value a control currently holds, in the storage grammar. One of the three places the control kinds are told apart, and the single answer to "what would
+ * committing this control store" - the transitions, the write rule, and the view's abandonment check all ask here rather than reaching for a `.value` that only
+ * some controls have.
+ *
+ * A boolean row has no control at all and reads as the empty string, which is what lets every caller pass whatever the row carries without checking first.
+ *
+ * @param {HTMLElement | null} control - The row's value control, or null when the row has none.
+ * @returns {string} The value the control holds, in the form storing it would take.
+ */
+export const controlValueText = (control) => {
+
+  if(!control) {
+
+    return "";
+  }
+
+  if(control.matches(".fo-choice-group")) {
+
+    return formatValueList([...control.querySelectorAll(".fo-choice-checkbox")].filter((box) => box.checked).map((box) => box.value));
+  }
+
+  return control.value;
+};
+
+/* Write a control's value from the projection entry. The second of the three kind-aware functions, and the only writer of a control's value. Its one caller has
+ * already found a control on the row, so unlike the two functions either side of it there is no boolean-row case to answer here.
+ *
+ * Where an uncommitted edit is possible the write yields to it: text sitting in a focused field has not been committed yet - the `change` event does that on blur
+ * or Enter - so re-deriving over it would destroy what the user is typing. A dropdown and a checkbox group have no such state, since operating either one commits
+ * it immediately, so they are written whether they hold focus or not. The value-equality rebuild below is what makes that safe for a focused dropdown: its option
+ * nodes stay in place when the list has not changed, so the control the user has open does not shift underneath them.
+ *
+ * An armed row is the deliberate exception to showing the resolved value: arming asks for the option's FIRST value, so the control presents empty - nothing typed,
+ * nothing picked, no box checked - and the default display belongs to rows describing what resolution already yields rather than to a prompt awaiting entry.
+ */
+const writeControlValue = ({ armed, control, entry }) => {
+
+  if(control.matches(".fo-choice-group")) {
+
+    writeChoiceGroup({ armed, control, entry });
+
+    return;
+  }
+
+  if(control.matches("select")) {
+
+    writeChoiceSelect({ armed, control, entry });
+
+    return;
+  }
+
+  if(document.activeElement !== control) {
+
+    control.value = armed ? "" : (entry.value ?? defaultDisplay(entry.option));
+  }
+};
+
+/**
+ * Hand focus to whatever part of a control the user would act in. The third kind-aware function, called when an arming gesture opens a row and owes the user
+ * somewhere to go next. A group's focus belongs on its first box, since the fieldset itself is not focusable, and a row with no control at all is a quiet no-op.
+ *
+ * @param {HTMLElement | null} control - The row's value control, or null when the row has none.
+ */
+export const focusControl = (control) => {
+
+  if(!control) {
+
+    return;
+  }
+
+  if(control.matches(".fo-choice-group")) {
+
+    control.querySelector(".fo-choice-checkbox")?.focus();
+
+    return;
+  }
+
+  control.focus();
+};
+
+// Whether the members already rendered say the same thing as the projection's list. The comparison is by VALUE rather than by reference because a plugin's source
+// may allocate a fresh array on every recompute while describing exactly the same list - and rebuilding on every projection pass would replace the option nodes
+// under an open dropdown and drop a focused control out from under the user.
+const sameChoiceMembers = (rendered, members) => (rendered.length === members.length) &&
+  members.every((member, index) => (rendered[index].label === member.label) && (rendered[index].unknown === member.unknown) && (rendered[index].value === member.value));
+
+// Write a dropdown from the projection: rebuild its members only when they differ from what is already there, then select the one the projection marked. An armed
+// row and a row whose selection names nothing both rest on the leading empty option, whose empty value is what a commit reads as "no value here."
+const writeChoiceSelect = ({ armed, control, entry }) => {
+
+  // A dropdown exists only on an option that declares a list, and the projection resolves one for every such option, so the members are always there to read.
+  const members = entry.choices;
+  const rendered = [...control.options].slice(1);
+
+  if(!sameChoiceMembers(rendered.map((node) => ({ label: node.textContent, unknown: node.classList.contains("fo-choice-unknown"), value: node.value })), members)) {
+
+    for(const node of rendered) {
+
+      node.remove();
+    }
+
+    for(const member of members) {
+
+      control.appendChild(createChoiceOption(member));
+    }
+  }
+
+  control.value = (armed ? undefined : members.find((member) => member.selected)?.value) ?? "";
+};
+
+// Write a checkbox group from the projection under the same rules as a dropdown: rebuild the labels only when the list has changed, then check each box from its
+// own member. The projection decided the selection - including which stored values the list no longer offers - so this only shows it.
+const writeChoiceGroup = ({ armed, control, entry }) => {
+
+  const members = entry.choices;
+  const rendered = [...control.querySelectorAll(".fo-choice")];
+
+  if(!sameChoiceMembers(rendered.map((node) => ({ label: node.textContent, unknown: node.classList.contains("fo-choice-unknown"),
+    value: node.querySelector(".fo-choice-checkbox").value })), members)) {
+
+    for(const node of rendered) {
+
+      node.remove();
+    }
+
+    for(const member of members) {
+
+      control.appendChild(createChoiceLabel(member));
+    }
+  }
+
+  // The boxes pair with the members positionally, which the sync above is what guarantees: either the rendered members already said the same thing as the
+  // projection's, or they were just rebuilt from them.
+  const boxes = [...control.querySelectorAll(".fo-choice-checkbox")];
+
+  for(const [ index, member ] of members.entries()) {
+
+    boxes[index].checked = !armed && member.selected;
+  }
+};
+
+// Apply a row's lock to whichever control it carries. A text field locks on readOnly and disabled together - the pair that both refuses typing and takes the field
+// out of the tab order - a dropdown has no readOnly to speak of and locks on disabled alone, and a group locks each of its own boxes, since the boxes are what a
+// user would otherwise click. Every kind carries aria-disabled, which is what assistive tech reads regardless of how the lock was applied.
+const applyControlLock = ({ control, locked }) => {
+
+  if(control.matches(".fo-choice-group")) {
+
+    for(const box of control.querySelectorAll(".fo-choice-checkbox")) {
+
+      box.disabled = locked;
+    }
+  } else if(control.matches("select")) {
+
+    control.disabled = locked;
+  } else {
+
+    control.readOnly = locked;
+    control.disabled = locked;
+  }
+
+  if(locked) {
+
+    control.setAttribute("aria-disabled", "true");
+  } else {
+
+    control.removeAttribute("aria-disabled");
+  }
+};
+
 // The reveal toggle's two accessible names. Each names what the next click does rather than what the field is currently doing, which is what a control announced
 // as a button wants to say.
 const SECRET_HIDE_LABEL = "Hide the value.";
@@ -625,18 +850,56 @@ const hasUpstreamOption = ({ catalog, configIndex, controllerId, deviceId, expan
   return (!declaredScopes || declaredScopes.includes("global")) && optionExists({ configIndex, option: expandedName });
 };
 
+/* Whether the committed value differs from what the option would resolve to on its own. The comparison is by what the value MEANS, which is not the same question
+ * as whether the text matches, and the three answers below are the three grammars a value control speaks.
+ *
+ * A choice group's value is a SET. The same members chosen in a different order say the same thing, and every member chosen says exactly what an all-choices
+ * default says - so the two sides are read through the shared selection derivation and compared as selections. That is what lets a group the user brings back to
+ * fully checked clear its entry and resume tracking a domain the plugin derives, rather than freezing today's members into the configuration as a literal list.
+ * Unknown members are excluded from the domain the comparison reads against, since they are values the option no longer offers and the default could never name.
+ *
+ * A free-form list is ORDERED - the sequence is part of what the user entered - so only the grammar's own normalization is applied to each side before comparing,
+ * and re-typing the same entries with different spacing is correctly no change while reordering them is.
+ *
+ * Every other value is its own text, compared as it always has been.
+ */
+const valueDeviatesFromDefault = ({ committed, entry }) => {
+
+  const defaultText = defaultDisplay(entry.option);
+
+  if(entry.multiple && entry.choices) {
+
+    const domain = entry.choices.filter((choice) => !choice.unknown).map((choice) => choice.value);
+
+    return formatValueList(selectValues({ domain, multiple: true, value: committed }).selected) !==
+      formatValueList(selectValues({ domain, multiple: true, value: defaultText }).selected);
+  }
+
+  if(entry.multiple) {
+
+    return formatValueList(parseValueList(committed)) !== formatValueList(parseValueList(defaultText));
+  }
+
+  return committed !== defaultText;
+};
+
+// The text a commit actually stores. A free-form list settles through the grammar, so stray spacing and empty entries the user typed normalize into the canonical
+// form the read side parses rather than persisting as written. A checkbox group already composes canonical text and every other control stores exactly what it
+// holds, so both pass through untouched.
+const storedText = ({ committed, entry }) => (entry.multiple && !entry.choices) ? formatValueList(parseValueList(committed)) : committed;
+
 // Decide whether the post-transition state warrants writing a new entry, or whether clearing the option falls back to the default. We write when the user's intent
 // differs from the catalog default on the boolean axis, when an enabled post-state carries a value differing from the default, or when there is an upstream entry
 // that the local state needs to override. Otherwise clearing is equivalent and keeps the configuredOptions array minimal.
 //
-// The value axis counts only toward an enabled post-state, because a disabled entry never carries a value: the entry writer strips it, so text left sitting in the
-// input has no bearing on what a disable would persist. This rule is a prediction of what the writer will actually store and it has to agree with the writer
-// exactly...treating residual text as a deviation would compose an explicit disable that says nothing the catalog default does not already say.
-const writeAction = ({ deviceId, enabled, expandedName, inputValue, option, upstream, valueCentric }) => {
+// The value axis counts only toward an enabled post-state, because a disabled entry never carries a value: the entry writer strips it, so a value left sitting in
+// the control has no bearing on what a disable would persist. This rule is a prediction of what the writer will actually store and it has to agree with the writer
+// exactly...treating a residual value as a deviation would compose an explicit disable that says nothing the catalog default does not already say.
+const writeAction = ({ control, deviceId, enabled, entry, expandedName, upstream, valueCentric }) => {
 
-  const inputValueText = inputValue?.value ?? "";
-  const valueDeviates = enabled && (inputValue !== null) && (inputValueText !== defaultDisplay(option));
-  const booleanDeviates = enabled !== option.default;
+  const committed = controlValueText(control);
+  const valueDeviates = enabled && (control !== null) && valueDeviatesFromDefault({ committed, entry });
+  const booleanDeviates = enabled !== entry.option.default;
   const writeNeeded = booleanDeviates || valueDeviates || upstream;
   const id = deviceId ?? undefined;
 
@@ -645,7 +908,8 @@ const writeAction = ({ deviceId, enabled, expandedName, inputValue, option, upst
     return { args: { id, option: expandedName }, type: "option:cleared" };
   }
 
-  const value = (valueCentric && enabled && (inputValueText.length > 0)) ? inputValueText : undefined;
+  const stored = storedText({ committed, entry });
+  const value = (valueCentric && enabled && (stored.length > 0)) ? stored : undefined;
 
   return { args: { enabled, id, option: expandedName, value }, type: "option:set" };
 };

@@ -5262,3 +5262,160 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     assert.doesNotThrow(() => new webUiFeatureOptions(), "and the wiring stays entirely optional");
   });
 });
+
+/* Picker catalogs at the page boundary. Two things the orchestrator owns here: the declared-source check, which is the one place a catalog naming a source nothing
+ * answers to can be caught, and the pre-Save force-commit, which has to reach whatever control the user left focused rather than only a text field.
+ */
+const PICKER_FEATURES = {
+
+  categories: [{ description: "Motion Options", name: "Motion" }],
+
+  options: {
+
+    Motion: [{ choices: "tiers", default: true, defaultValue: "high", description: "Stream tier.", name: "Tier" }]
+  }
+};
+
+describe("webUiFeatureOptions - the declared choice-source check", () => {
+
+  test("fails the load with a TypeError naming both the option and the source when no resolver answers to it", async () => {
+
+    using _dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", PICKER_FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // No ui.choices at all: a catalog naming a source is a plugin programming error, and a picker with nothing behind it would otherwise render as a control the
+    // user can neither read nor act on. It throws where the catalog's own render validation throws, and deliberately not through the connection-error card, whose
+    // retry could never repair a catalog.
+    const orchestrator = new webUiFeatureOptions();
+    const session = await openTestSession();
+
+    await assert.rejects(() => orchestrator.show(session), (err) => {
+
+      assert.equal(err instanceof TypeError, true, "a plugin contract failure is a TypeError, as the getDevices guard is");
+      assert.match(err.message, /option "Motion\.Tier"/, "the message names the option that declared the source");
+      assert.match(err.message, /source "tiers"/, "and the source it named");
+
+      return true;
+    });
+
+    orchestrator.cleanup();
+  });
+
+  test("loads cleanly when every named source has a resolver, and an inline list needs none", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    // The second category declares no options at all, which a plugin does when it has reserved a category for options it has not written yet. The check walks
+    // whatever the catalog carries, so it has to read that as nothing to check rather than as something to trip over.
+    const inlineFeatures = {
+
+      categories: [ { description: "Motion Options", name: "Motion" }, { description: "Reserved", name: "Later" } ],
+      options: { Motion: [{ choices: [{ label: "High", value: "high" }], default: true, defaultValue: "high", description: "Stream tier.", name: "Tier" }] }
+    };
+
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", inlineFeatures ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions();
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.configTable.querySelectorAll("details[data-category]").length, 1, "an inline list declares its own choices and names no source, and a " +
+      "category holding no options contributes no row");
+
+    orchestrator.cleanup();
+  });
+});
+
+describe("webUiFeatureOptions - the pre-Save force-commit reaches every value control", () => {
+
+  test("commits a focused dropdown when the window loses focus ahead of the host's Save", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", PICKER_FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      ui: { choices: { tiers: () => [ { label: "High", value: "high" }, { label: "Low", value: "low" } ] } }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+
+    const select = skeleton.configTable.querySelector("[id='row-Motion.Tier'] .fo-option-value");
+
+    assert.equal(select.tagName, "SELECT", "the row's control is the dropdown the catalog declared");
+
+    // The user picks a value and then clicks the host's Save in the parent document, which moves focus out of this window without ever blurring the element.
+    select.focus();
+    select.value = "low";
+
+    window.dispatchEvent(new Event("blur"));
+
+    await settlePersist();
+
+    const lastUpdate = fake.observed.updatedConfigs.at(-1);
+
+    assert.ok(lastUpdate?.[0]?.options?.includes("Enable.Motion.Tier=low"), "the pick the user left on screen reaches the host's Save rather than being dropped");
+
+    orchestrator.cleanup();
+  });
+
+  test("a window blur with focus outside any value control commits nothing", () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", PICKER_FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // The search field stages nothing and is deliberately outside the commit rule, and most blurs happen with nothing focused at all. Either way the listener has
+    // to find no control and cost one no-op flush rather than dispatching a change at whatever happens to hold focus.
+    const before = fake.observed.updatedConfigs.length;
+
+    skeleton.search?.focus?.();
+
+    window.dispatchEvent(new Event("blur"));
+
+    assert.equal(fake.observed.updatedConfigs.length, before, "nothing was committed and nothing was persisted");
+  });
+});

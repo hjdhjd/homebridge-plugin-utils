@@ -4,12 +4,12 @@
  */
 "use strict";
 
+import { ALL_CHOICES, buildCatalogIndex } from "../featureOptions.js";
 import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId,
   tablePresentation } from "./selectors.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
-import { buildCatalogIndex } from "../featureOptions.js";
 
 // Catalog fixture: a small set of categories with a mix of boolean, grouped, value-centric, and ungrouped options. Drives visibility, modification,
 // dependency, and value resolution paths.
@@ -889,5 +889,138 @@ describe("tablePresentation - the nothing-to-list variant", () => {
   test("an empty outcome that named no message keeps today's behavior - the full table at controller scope", () => {
 
     assert.deepEqual(tablePresentation(emptyAt({ emptyMessage: undefined })), { kind: "options" });
+  });
+});
+
+/* The projection's resolution of a picker's list. The catalog says WHICH list an option offers - a fixed one it declares inline, or the name of a plugin function
+ * that derives one - and the projection is where that declaration becomes a concrete list with the row's selection already marked on it. Settling the selection
+ * once here is what keeps the renderer and the write rule reading one answer.
+ */
+const PICKER_CATEGORIES = [{ description: "Picker Options", name: "Pick" }];
+
+const TIER_CHOICES = [ { label: "High", value: "high" }, { label: "Low", value: "low" } ];
+
+const PICKER_OPTIONS = {
+
+  Pick: [
+
+    { choices: TIER_CHOICES, default: true, defaultValue: "high", description: "Stream tier.", name: "Tier" },
+    { choices: "types", default: true, defaultValue: ALL_CHOICES, description: "Detected types.", multiple: true, name: "Types" },
+    { choices: "byController", default: true, defaultValue: "", description: "Named after the controller.", name: "Named" },
+    { default: true, description: "An ordinary boolean beside them.", name: "Plain" }
+  ]
+};
+
+const pickerState = ({ configuredOptions = [], controllers = [], sources = {} } = {}) => {
+
+  const catalog = {
+
+    ...buildCatalogIndex(PICKER_CATEGORIES, PICKER_OPTIONS),
+
+    choiceSources: {
+
+      byController: ({ controller }) => [{ label: "Named", value: controller?.name ?? "none" }],
+      types: () => [ { label: "A", value: "a" }, { label: "B", value: "b" } ],
+      ...sources
+    },
+
+    validators: {
+
+      isController: () => false,
+      validOption: () => true,
+      validOptionCategory: () => true
+    }
+  };
+
+  const base = reducer(initialState(), { catalog, configuredOptions, controllers, mode: "device-only", type: "model:loaded" });
+  const requested = reducer(base, { controllerId: null, type: "devices:requested" });
+
+  return reducer(requested, { controllerId: null, devices: [], error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+};
+
+const pickerEntry = (state, optionName) => projection(state).categories.find((c) => c.name === "Pick").entries.find((e) => e.name === optionName);
+
+describe("projection - resolved choices", () => {
+
+  test("an inline list resolves to itself, with the row's single selection marked", () => {
+
+    const entry = pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.Tier=low"] }), "Tier");
+
+    assert.equal(entry.multiple, false, "a single choice reports itself as such");
+    assert.deepEqual(entry.choices, [ { label: "High", selected: false, unknown: false, value: "high" },
+      { label: "Low", selected: true, unknown: false, value: "low" } ]);
+  });
+
+  test("a named source is called and its list resolves with the row's selection marked", () => {
+
+    const entry = pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.Types=b"] }), "Types");
+
+    assert.equal(entry.multiple, true, "a list option reports itself as such");
+    assert.deepEqual(entry.choices, [ { label: "A", selected: false, unknown: false, value: "a" },
+      { label: "B", selected: true, unknown: false, value: "b" } ]);
+  });
+
+  test("an option declaring no list carries no choices at all, the same absence spelling value uses", () => {
+
+    assert.equal(pickerEntry(pickerState(), "Plain").choices, undefined, "a boolean option declares no list");
+  });
+
+  test("a row with nothing configured previews its default's selection, so a locked row shows what resolution already yields", () => {
+
+    const state = pickerState();
+
+    assert.deepEqual(pickerEntry(state, "Tier").choices.map((c) => c.selected), [ true, false ], "the declared default is what a single choice previews");
+    assert.deepEqual(pickerEntry(state, "Types").choices.map((c) => c.selected), [ true, true ], "the all-choices default previews the whole domain");
+  });
+
+  test("a stored value the list does not offer is appended, marked unknown, and left selected", () => {
+
+    const entry = pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.Types=a,zzz"] }), "Types");
+
+    assert.deepEqual(entry.choices, [ { label: "A", selected: true, unknown: false, value: "a" }, { label: "B", selected: false, unknown: false, value: "b" },
+      { label: "zzz", selected: true, unknown: true, value: "zzz" } ], "the value the device stopped offering is still on screen and still chosen");
+  });
+
+  test("a resolver that answers in the wrong shape throws, naming the source and what it did", () => {
+
+    const state = pickerState({ sources: { types: () => "not a list" } });
+
+    assert.throws(() => projection(state), /The choice source "types" did not return a list\./, "a plugin bug surfaces loudly rather than as an empty control");
+  });
+
+  test("a resolver returning an illegal choice throws, naming the source and what it did", () => {
+
+    const state = pickerState({ sources: { types: () => [{ label: "", value: "a" }] } });
+
+    assert.throws(() => projection(state), /The choice source "types" returned an invalid choice\./);
+  });
+
+  test("a throwing resolver leaves the projection recomputing rather than poisoned, once the plugin is fixed", () => {
+
+    // The memo records its cache only after the derivation returns, so the throw above cannot leave a state's slices matching against a result that never existed.
+    let broken = true;
+    const state = pickerState({ sources: { types: () => broken ? "not a list" : [{ label: "A", value: "a" }] } });
+
+    assert.throws(() => projection(state), /did not return a list/);
+
+    broken = false;
+
+    // The all-choices default is what makes the single member read as selected here, which is also the proof that the recompute ran the whole derivation rather
+    // than handing back some remnant of the failed pass.
+    assert.deepEqual(projection(state).categories.find((c) => c.name === "Pick").entries.find((e) => e.name === "Types").choices,
+      [{ label: "A", selected: true, unknown: false, value: "a" }], "the very same state recomputes rather than serving a cached failure");
+  });
+
+  test("the projection recomputes on a controllers-only refresh, since a source reads the selected controller", () => {
+
+    const controllers = [{ name: "old", serialNumber: "ctrl-a" }];
+    const state = reducer(pickerState({ controllers }), { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+
+    assert.deepEqual(pickerEntry(state, "Named").choices.map((c) => c.value), ["old"], "the source read the controller in scope");
+
+    const refreshed = reducer(state, { controllers: [{ name: "new", serialNumber: "ctrl-a" }], type: "controllers:loaded" });
+
+    assert.deepEqual(pickerEntry(refreshed, "Named").choices.map((c) => c.value), ["new"],
+      "a controllers-only refresh moves the controllers slice, which the projection memo watches");
   });
 });

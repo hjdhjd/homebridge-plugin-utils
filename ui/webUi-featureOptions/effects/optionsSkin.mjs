@@ -274,6 +274,18 @@ const buildOptionsSkinCss = () => [
   ":root.fo-dark .fo-option-value { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); color: var(--fo-text-on-elevated); }",
   ":root.fo-dark .fo-option-value::placeholder { color: var(--fo-form-control-placeholder); }",
   ":root.fo-dark .fo-option-value:focus { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-focus-border); " +
-    "box-shadow: var(--fo-focus-ring); color: var(--fo-text-on-elevated); }"
+    "box-shadow: var(--fo-focus-ring); color: var(--fo-text-on-elevated); }",
+
+  /* A multiple-choice option's group. The members lay out as a wrapping row so a long list reads across the content cell rather than down it, and each member's
+   * box sits beside its own text. The fieldset surrenders the browser's default margin and padding, which exist for a bordered fieldset and read as stray
+   * indentation on one that carries no border.
+   *
+   * A member the option no longer offers reads in the attention color, which is the page's existing vocabulary for "this is here but is not ordinary." Nothing
+   * else is needed: the boxes are native checkboxes and follow `color-scheme` in both themes, and the group's own dark-mode surface comes from the
+   * `.fo-option-value` rules above, which the fieldset carries.
+   */
+  ".fo-choice-group { display: flex; flex-wrap: wrap; gap: var(--fo-space-xs) var(--fo-space-md); border: 0; margin: 0; padding: 0; min-width: 0; }",
+  ".fo-choice { display: inline-flex; align-items: center; gap: var(--fo-space-xs); margin: 0; cursor: pointer; }",
+  ".fo-choice-unknown { color: var(--fo-text-attention); }"
 
 ].join("\n");

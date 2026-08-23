@@ -365,3 +365,48 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
     assert.match(skinCss(), /\.nav-link\.active\s*\{[^}]*background-color:\s*var\(--fo-accent-bg\)/, "and the shared accent fill when it is the selection");
   });
 });
+
+describe("buildOptionsSkinCss - the choice group", () => {
+
+  test("lays the group's members out as a wrapping row on the shared spacing tokens", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+
+    // A long list has to read across the content cell rather than down it, and the fieldset's own default chrome - the margin and padding a bordered fieldset
+    // wants - reads as stray indentation on one carrying no border.
+    assert.match(text, /\.fo-choice-group\s*\{[^}]*display:\s*flex/);
+    assert.match(text, /\.fo-choice-group\s*\{[^}]*flex-wrap:\s*wrap/);
+    assert.match(text, /\.fo-choice-group\s*\{[^}]*gap:\s*var\(--fo-space-xs\)\s+var\(--fo-space-md\)/);
+    assert.match(text, /\.fo-choice-group\s*\{[^}]*border:\s*0/);
+    assert.match(text, /\.fo-choice\s*\{[^}]*display:\s*inline-flex/);
+    assert.match(text, /\.fo-choice\s*\{[^}]*gap:\s*var\(--fo-space-xs\)/);
+  });
+
+  test("reads a member the device no longer offers in the attention color, in both lighting modes", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+
+    // The token itself carries the per-mode value, so one unqualified rule is correct in both modes - and pinning it to the token is what keeps a literal color
+    // from becoming a second definition of something the tokens module owns.
+    assert.match(text, /\.fo-choice-unknown\s*\{[^}]*color:\s*var\(--fo-text-attention\)/);
+
+    const unknownRules = text.match(/^.*\.fo-choice-unknown.*$/gm) ?? [];
+
+    assert.equal(unknownRules.length, 1, "one rule states it, so neither mode can drift from the other");
+    assert.equal(unknownRules[0].startsWith(":root.fo-dark"), false, "and it is deliberately not mode-qualified");
+  });
+
+  test("the group inherits the dark surface through the shared value class rather than restating it", () => {
+
+    using _dom = createTestDom();
+
+    // The fieldset carries fo-option-value, so the dark form-control treatment above already reaches it; a rule of its own would be a second place to keep in step.
+    const groupRules = skinCss().match(/^.*\.fo-choice-group.*$/gm) ?? [];
+
+    assert.equal(groupRules.every((rule) => !rule.includes("background-color")), true, "the group declares no surface of its own");
+  });
+});

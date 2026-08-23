@@ -82,15 +82,18 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
 
 /**
  * Catalog - The plugin-provided immutable configuration bundle. `CatalogIndex` from featureOptions.ts carries the catalog data and its derived indices; the
- * `validators` field adds the webUI-specific predicates plugins supply for device-aware visibility. Both halves are set once at {@link model:loaded} and never
- * change during a session; consumers can rely on reference stability for memoization.
+ * `validators` field adds the webUI-specific predicates plugins supply for device-aware visibility, and `choiceSources` the resolvers behind whatever pickers the
+ * catalog declares by name. All three halves are set once at {@link model:loaded} and never change during a session; consumers can rely on reference stability for
+ * memoization.
  *
  * @typedef {Object} Catalog
  * @property {readonly import("../featureOptions.js").FeatureCategoryEntry[]} categories
+ * @property {Readonly<Record<string, (args: Object) => readonly import("../featureOptions.js").FeatureOptionChoice[]>>} choiceSources
  * @property {Readonly<Record<string, boolean>>} defaults
  * @property {Readonly<Record<string, string>>} groupParents
  * @property {Readonly<Record<string, readonly string[]>>} groups
  * @property {Readonly<Record<string, readonly import("../featureOptions.js").FeatureOptionEntry[]>>} options
+ * @property {Readonly<Record<string, import("../featureOptions.js").FeatureOptionEntry>>} optionsByName
  * @property {Readonly<Record<string, (value: string) => string>>} renderers
  * @property {Readonly<Record<string, readonly import("../featureOptions.js").FeatureOptionScope[]>>} scopes
  * @property {readonly string[]} sortedValueOptionNames
@@ -175,6 +178,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
 export const EMPTY_CATALOG = {
 
   ...buildCatalogIndex([], {}),
+
+  // No catalog means no picker can name a source, so the empty map is the whole truth here rather than a placeholder standing in for one.
+  choiceSources: {},
 
   validators: {
 

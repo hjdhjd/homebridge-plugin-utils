@@ -150,6 +150,7 @@ export const effect = ({ events, fn, signal, store }) => {
  *
  * @param {Object} args
  * @param {(state: Object) => unknown} args.compute - The pure derivation. Invoked when any slice's reference changes; the result is cached until the next change.
+ *                                                    A derivation that throws leaves the cache untouched, so the next call with the same slices recomputes.
  * @param {readonly ((state: Object) => unknown)[]} args.slices - The state-slice accessors. Their return values are compared by `===` against the previous call's.
  *                                                                 Order matters - the comparison is positional.
  * @returns {(state: Object) => unknown} The memoized selector. Call it with the current state to read the derivation.
@@ -173,9 +174,14 @@ export const memoize = ({ compute, slices }) => {
       return lastResult;
     }
 
-    lastKeys = keys;
-    lastResult = compute(state);
+    // The cache is recorded only once the derivation has returned. A compute that throws - a plugin's own hook rejecting what it was handed, surfaced loudly
+    // rather than swallowed - must leave the cache exactly as it was, so the next call recomputes rather than serving the previous result against keys that now
+    // match. Assigning the keys first would poison the cache for the life of the page after a single throw.
+    const result = compute(state);
 
-    return lastResult;
+    lastKeys = keys;
+    lastResult = result;
+
+    return result;
   };
 };

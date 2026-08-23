@@ -4,8 +4,9 @@
  */
 "use strict";
 
-import { applyRowState, categoryShell, optionRow, toggleSecretReveal, triStateTransition, valueCommitTransition } from "./rendering.mjs";
-import { buildCatalogIndex, buildConfigIndex } from "../featureOptions.js";
+import { ALL_CHOICES, buildCatalogIndex, buildConfigIndex } from "../featureOptions.js";
+import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, toggleSecretReveal, triStateTransition,
+  valueCommitTransition } from "./rendering.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
@@ -567,7 +568,7 @@ describe("triStateTransition - was indeterminate (readOnly)", () => {
     checkbox.readOnly = true;
     checkbox.indeterminate = true;
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue: null });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control: null, controllerId: null, deviceId: "dev-a", entry });
 
     // Default is true, post-state is false: deviates. AND there is upstream (the global Disable). Write needed. The transition returns only the action - the resulting
     // DOM state is re-derived from the post-dispatch projection by applyRowState (covered by its own tests), not returned here.
@@ -595,7 +596,7 @@ describe("triStateTransition - was checked, just unchecked", () => {
     checkbox.type = "checkbox";
     checkbox.checked = false;
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue: null });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control: null, controllerId: null, deviceId: null, entry });
 
     // Audio.Volume default is false; post-state is false; no value deviation; no upstream. ClearOption.
     assert.equal(result.action.type, "option:cleared");
@@ -621,7 +622,7 @@ describe("triStateTransition - was checked, just unchecked", () => {
     checkbox.type = "checkbox";
     checkbox.checked = false;
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue: null });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control: null, controllerId: null, deviceId: "dev-a", entry });
 
     // Upstream exists (the global Enable), so unchecking falls back to inheritance via a clearOption. The resulting indeterminate + readOnly DOM state is re-derived by
     // applyRowState from the post-clear projection, not returned here.
@@ -645,12 +646,12 @@ describe("triStateTransition - was checked, just unchecked", () => {
 
     // The gesture hands over the row's input element as it stands at click time, still showing the committed value: the DOM is re-derived from the projection only
     // after the dispatch, so the field has not been emptied yet.
-    const inputValue = document.createElement("input");
+    const control = document.createElement("input");
 
-    inputValue.type = "text";
-    inputValue.value = "75";
+    control.type = "text";
+    control.value = "75";
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control, controllerId: null, deviceId: null, entry });
 
     // Audio.Volume defaults off, the post-state is off, and nothing upstream needs overriding. A disable would persist no value at all, so the text still in the
     // field cannot justify one and the entry goes away entirely.
@@ -678,12 +679,12 @@ describe("triStateTransition - was checked, just unchecked", () => {
     checkbox.type = "checkbox";
     checkbox.checked = false;
 
-    const inputValue = document.createElement("input");
+    const control = document.createElement("input");
 
-    inputValue.type = "text";
-    inputValue.value = "75";
+    control.type = "text";
+    control.value = "75";
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control, controllerId: null, deviceId: "dev-a", entry });
 
     // Nothing sits above the device entry, so there is no upstream to override and the post-state matches the default. The clear addresses the device scope the
     // gesture was made at.
@@ -705,12 +706,12 @@ describe("triStateTransition - was checked, just unchecked", () => {
     checkbox.type = "checkbox";
     checkbox.checked = false;
 
-    const inputValue = document.createElement("input");
+    const control = document.createElement("input");
 
-    inputValue.type = "text";
-    inputValue.value = "mono";
+    control.type = "text";
+    control.value = "mono";
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control, controllerId: null, deviceId: null, entry });
 
     // Audio.Layout defaults on, so turning it off deviates on the boolean axis and the explicit entry is the only way to record that. The entry addresses the option
     // and nothing else.
@@ -737,12 +738,12 @@ describe("triStateTransition - was unchecked, just checked", () => {
     checkbox.type = "checkbox";
     checkbox.checked = true;
 
-    const inputValue = document.createElement("input");
+    const control = document.createElement("input");
 
-    inputValue.type = "text";
-    inputValue.value = "60";
+    control.type = "text";
+    control.value = "60";
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control, controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action.type, "option:set");
     assert.equal(result.action.args.enabled, true);
@@ -764,7 +765,7 @@ describe("triStateTransition - was unchecked, just checked", () => {
     checkbox.type = "checkbox";
     checkbox.checked = true;
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue: null });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control: null, controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action.type, "option:cleared", "back to default with no upstream - clearOption keeps the array minimal");
   });
@@ -794,12 +795,12 @@ describe("triStateTransition - the armed-row transitions", () => {
     checkbox.type = "checkbox";
     checkbox.checked = true;
 
-    const inputValue = document.createElement("input");
+    const control = document.createElement("input");
 
-    inputValue.type = "text";
-    inputValue.value = "";
+    control.type = "text";
+    control.value = "";
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control, controllerId: null, deviceId: "dev-a", entry });
 
     // A scoped value entry always carries a value, so there is nothing to persist yet - the row arms, unlocking the input for the value that will.
     assert.equal(result.action.type, "option:armed", "a scoped empty enable arms instead of writing");
@@ -816,12 +817,12 @@ describe("triStateTransition - the armed-row transitions", () => {
     checkbox.type = "checkbox";
     checkbox.checked = false;
 
-    const inputValue = document.createElement("input");
+    const control = document.createElement("input");
 
-    inputValue.type = "text";
-    inputValue.value = "";
+    control.type = "text";
+    control.value = "";
 
-    const result = triStateTransition({ armed: true, catalog, checkbox, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue });
+    const result = triStateTransition({ armed: true, catalog, checkbox, configIndex, control, controllerId: null, deviceId: "dev-a", entry });
 
     // Nothing was ever persisted while armed, so a write-shaped action would disable or clear state the arming gesture never touched.
     assert.equal(result.action.type, "option:disarmed", "an armed row unchecks into a disarm, never a disable");
@@ -840,12 +841,12 @@ describe("triStateTransition - the armed-row transitions", () => {
     checkbox.type = "checkbox";
     checkbox.checked = true;
 
-    const inputValue = document.createElement("input");
+    const control = document.createElement("input");
 
-    inputValue.type = "text";
-    inputValue.value = "";
+    control.type = "text";
+    control.value = "";
 
-    const result = triStateTransition({ catalog, checkbox, configIndex, controllerId: null, deviceId: null, entry, inputValue });
+    const result = triStateTransition({ catalog, checkbox, configIndex, control, controllerId: null, deviceId: null, entry });
 
     // A bare valueless enable is a legal global entry, so the global view never arms - the write persists and the enabled row's input unlocks normally.
     assert.equal(result.action.type, "option:set", "the global view writes the bare enable rather than arming");
@@ -875,7 +876,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const catalog = state.catalog;
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Audio", "Volume");
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("60") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput("60"), controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action.type, "option:set");
     assert.equal(result.action.args.enabled, true);
@@ -890,7 +891,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const catalog = state.catalog;
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Audio", "Volume");
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("60") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput("60"), controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action.type, "option:set", "typing a value overrides the explicit disable at the same scope");
     assert.equal(result.action.args.enabled, true);
@@ -905,7 +906,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const catalog = state.catalog;
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Audio", "Volume");
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput(""), controllerId: null, deviceId: null, entry });
 
     // Emptying the field drops the entry instead of writing an enable with nothing behind it, so resolution falls back to the hierarchy - here to the catalog
     // default, which leaves this default-off option unset.
@@ -927,7 +928,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
     assert.equal(entry.value, "mono", "the row starts out showing its explicit value");
 
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput(""), controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action.type, "option:cleared");
     assert.equal(result.action.args.option, "Audio.Layout");
@@ -956,7 +957,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const catalog = state.catalog;
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Audio", "Volume");
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue: textInput("") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput(""), controllerId: null, deviceId: "dev-a", entry });
 
     assert.equal(result.action.type, "option:cleared");
     assert.equal(result.action.args.id, "dev-a", "the clear addresses the device scope the gesture was made at");
@@ -970,7 +971,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const catalog = state.catalog;
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Audio", "Volume");
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("   ") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput("   "), controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action, null, "nothing to say and nothing to remove - the caller restores the row instead of dispatching");
   });
@@ -984,7 +985,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const catalog = state.catalog;
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Audio", "Volume");
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput("") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput(""), controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action, null, "the explicit disable survives an empty commit untouched");
   });
@@ -1008,7 +1009,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     assert.equal(entry.enabled, true, "the row reads enabled");
     assert.equal(entry.scope, "global", "but the entry answering it is upstream, not local");
 
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: "dev-a", entry, inputValue: textInput("") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput(""), controllerId: null, deviceId: "dev-a", entry });
 
     assert.equal(result.action, null, "the upstream entry survives a gesture made at a lower scope");
   });
@@ -1022,7 +1023,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
     const catalog = state.catalog;
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Audio", "Volume");
-    const result = valueCommitTransition({ catalog, configIndex, controllerId: null, deviceId: null, entry, inputValue: textInput(" == ") });
+    const result = valueCommitTransition({ catalog, configIndex, control: textInput(" == "), controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action, null);
   });
@@ -1074,10 +1075,10 @@ describe("triStateTransition - the upstream probe honors declared scopes", () =>
       catalog: state.catalog,
       checkbox,
       configIndex: buildConfigIndex(state.catalog, state.configuredOptions),
+      control: null,
       controllerId: null,
       deviceId: "dev-a",
-      entry: findEntry(state, "Probe", optionName),
-      inputValue: null
+      entry: findEntry(state, "Probe", optionName)
     });
   };
 
@@ -1222,5 +1223,503 @@ describe("applyRowState - re-derivation on the update path", () => {
 
     assert.equal(checkbox.indeterminate, true, "re-derives to indeterminate when the resolved scope is upstream");
     assert.equal(checkbox.readOnly, true, "inheriting from upstream - readOnly");
+  });
+});
+
+/* The picker controls. A choice option's row is the same row every other option gets - one checkbox, one stacked content cell - with a control that offers a list
+ * instead of a field that takes text. What these tests hold to is that the list on screen is the projection's, that operating the control commits what it means,
+ * and that a re-derivation which changes nothing leaves the DOM the user is working in exactly where it was.
+ */
+const PICKER_CATEGORIES = [{ description: "Picker Options", name: "Pick" }];
+
+const TIER_CHOICES = [ { label: "High", value: "high" }, { label: "Low", value: "low" } ];
+
+const PICKER_OPTIONS = {
+
+  Pick: [
+
+    { choices: TIER_CHOICES, default: true, defaultValue: "high", description: "Stream tier.", inputSize: 12, name: "Tier" },
+    { choices: TIER_CHOICES, default: true, defaultValue: "", description: "Stream tier, no default.", name: "TierUnset" },
+    { choices: "types", default: true, defaultValue: ALL_CHOICES, description: "Detected types.", multiple: true, name: "Types" },
+    { choices: "types", default: true, defaultValue: "", description: "Detected types, no default.", multiple: true, name: "TypesUnset" },
+    { default: true, defaultValue: "a,b", description: "Licence plates.", multiple: true, name: "Plates" },
+    { default: true, defaultValue: "plain", description: "An ordinary value beside them.", name: "Plain" }
+  ]
+};
+
+// The default source: three members, freshly allocated on every call, which is exactly the shape that would rebuild the DOM on every recompute if the renderer
+// compared by reference.
+const abcSource = () => [ { label: "A", value: "a" }, { label: "B", value: "b" }, { label: "C", value: "c" } ];
+
+const pickerState = ({ configuredOptions = [], devices = [], scope, types = abcSource } = {}) => {
+
+  const catalog = {
+
+    ...buildCatalogIndex(PICKER_CATEGORIES, PICKER_OPTIONS),
+
+    choiceSources: { types },
+
+    validators: {
+
+      isController: () => false,
+      validOption: () => true,
+      validOptionCategory: () => true
+    }
+  };
+
+  const base = reducer(initialState(), { catalog, configuredOptions, controllers: [], mode: "device-only", type: "model:loaded" });
+  const requested = reducer(base, { controllerId: null, type: "devices:requested" });
+  const withDevices = reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+  return scope ? reducer(withDevices, { scope, type: "scope:changed" }) : withDevices;
+};
+
+const pickerEntry = (state, optionName) => findEntry(state, "Pick", optionName);
+
+const pickerRow = (state, optionName, { armed = false, deviceId = null, scopeKind = "global" } = {}) => optionRow({ armed, deviceId,
+  entry: pickerEntry(state, optionName), scopeKind });
+
+const checkboxStub = (checked, { readOnly = false } = {}) => {
+
+  const checkbox = document.createElement("input");
+
+  checkbox.type = "checkbox";
+  checkbox.checked = checked;
+  checkbox.readOnly = readOnly;
+
+  return checkbox;
+};
+
+describe("the choice controls - construction", () => {
+
+  test("a single-choice option builds a select carrying the shared value class, sized by inputSize, in the body font", () => {
+
+    using _dom = createTestDom();
+
+    const control = pickerRow(pickerState(), "Tier").querySelector(".fo-option-value");
+
+    assert.equal(control.tagName, "SELECT", "one choice is a dropdown");
+    assert.equal(control.classList.contains("fo-option-value"), true, "the class the view, the theme, and the busy lock all address it by");
+    assert.equal(control.classList.contains("form-control"), true, "dressed as a form control like the text field beside it");
+    assert.equal(control.style.width, "12ch", "sized by the option's inputSize declaration");
+    assert.equal(control.style.fontFamily, "", "a label is prose and reads in the inherited body font - monospace belongs to raw-value fields");
+  });
+
+  test("a select's first option is always the empty one, which is how the row expresses no value at all", () => {
+
+    using _dom = createTestDom();
+
+    const control = pickerRow(pickerState(), "TierUnset").querySelector(".fo-option-value");
+
+    assert.equal(control.options[0].value, "", "the leading option stores nothing");
+    assert.equal(control.options[0].textContent, "", "and shows nothing");
+  });
+
+  test("a multiple-choice option builds a checkbox group carrying the shared value class, in the body font", () => {
+
+    using _dom = createTestDom();
+
+    const control = pickerRow(pickerState(), "Types").querySelector(".fo-option-value");
+
+    assert.equal(control.tagName, "FIELDSET", "several choices are a group");
+    assert.equal(control.classList.contains("fo-option-value"), true, "the group is the control, so the class sits on it");
+    assert.equal(control.classList.contains("fo-choice-group"), true);
+    assert.equal(control.style.fontFamily, "", "member labels read in the inherited body font");
+  });
+});
+
+describe("the choice controls - applyRowState", () => {
+
+  test("a select shows the projection's members and picks the resolved one", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: ["Enable.Pick.Tier=low"] });
+    const control = pickerRow(state, "Tier").querySelector(".fo-option-value");
+
+    assert.deepEqual([...control.options].map((o) => o.value), [ "", "high", "low" ], "the empty option, then the declared list in order");
+    assert.deepEqual([...control.options].map((o) => o.textContent), [ "", "High", "Low" ], "each member shows its own label");
+    assert.equal(control.value, "low", "the stored value is what the dropdown rests on");
+  });
+
+  test("a group checks exactly the members the stored value selects", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=c,a"] });
+    const control = pickerRow(state, "TypesUnset").querySelector(".fo-option-value");
+    const boxes = [...control.querySelectorAll(".fo-choice-checkbox")];
+
+    assert.deepEqual(boxes.map((b) => b.value), [ "a", "b", "c" ], "members read in the source's own order, not the stored order");
+    assert.deepEqual(boxes.map((b) => b.checked), [ true, false, true ], "the stored value decides which boxes are checked");
+  });
+
+  test("an all-choices default renders every box checked", () => {
+
+    using _dom = createTestDom();
+
+    const control = pickerRow(pickerState(), "Types").querySelector(".fo-option-value");
+
+    assert.deepEqual([...control.querySelectorAll(".fo-choice-checkbox")].map((b) => b.checked), [ true, true, true ],
+      "the wildcard default stands for the whole domain, and the boxes say so honestly");
+  });
+
+  test("a stored value the list no longer offers is preserved, marked, and still selected", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a,zzz"] });
+    const control = pickerRow(state, "TypesUnset").querySelector(".fo-option-value");
+    const boxes = [...control.querySelectorAll(".fo-choice-checkbox")];
+    const labels = [...control.querySelectorAll(".fo-choice")];
+
+    assert.deepEqual(boxes.map((b) => b.value), [ "a", "b", "c", "zzz" ], "the absent value is appended rather than dropped");
+    assert.deepEqual(boxes.map((b) => b.checked), [ true, false, false, true ], "and stays selected, since the user chose it");
+    assert.equal(labels[3].classList.contains("fo-choice-unknown"), true, "marked as something this device does not offer");
+    assert.equal(labels[3].title, "Not offered for this device.", "and says so on hover");
+    assert.equal(labels[0].classList.contains("fo-choice-unknown"), false, "an offered member carries no mark");
+  });
+
+  test("a select marks an unknown stored value the same way", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: ["Enable.Pick.Tier=gone"] });
+    const control = pickerRow(state, "Tier").querySelector(".fo-option-value");
+
+    assert.deepEqual([...control.options].map((o) => o.value), [ "", "high", "low", "gone" ], "the stored value is offered so the user can see what is set");
+    assert.equal(control.value, "gone", "and the dropdown rests on it");
+    assert.equal(control.options[3].classList.contains("fo-choice-unknown"), true);
+    assert.equal(control.options[3].title, "Not offered for this device.");
+  });
+
+  test("a re-derive against a fresh-but-equal list leaves the option and label NODES in place", () => {
+
+    using _dom = createTestDom();
+
+    // The source allocates a new array every call, so identity comparison would rebuild here and drop the nodes out from under an open dropdown or a focused box.
+    const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"] });
+    const groupRow = pickerRow(state, "TypesUnset");
+    const group = groupRow.querySelector(".fo-option-value");
+    const groupNodes = [...group.querySelectorAll(".fo-choice")];
+
+    const selectRow = pickerRow(state, "Tier");
+    const select = selectRow.querySelector(".fo-option-value");
+    const selectNodes = [...select.options];
+
+    const again = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"] });
+
+    applyRowState({ entry: pickerEntry(again, "TypesUnset"), row: groupRow, scopeKind: "global" });
+    applyRowState({ entry: pickerEntry(again, "Tier"), row: selectRow, scopeKind: "global" });
+
+    assert.deepEqual([...group.querySelectorAll(".fo-choice")], groupNodes, "every group label is the same node it was");
+    assert.deepEqual([...select.options], selectNodes, "every option is the same node it was");
+  });
+
+  test("a re-derive against a CHANGED list replaces the nodes, for a group and for a select alike", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"] });
+    const row = pickerRow(state, "TypesUnset");
+    const group = row.querySelector(".fo-option-value");
+    const before = [...group.querySelectorAll(".fo-choice")];
+
+    const changed = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"], types: () => [ { label: "A", value: "a" }, { label: "D", value: "d" } ] });
+
+    applyRowState({ entry: pickerEntry(changed, "TypesUnset"), row, scopeKind: "global" });
+
+    const after = [...group.querySelectorAll(".fo-choice")];
+
+    assert.deepEqual(after.map((node) => node.querySelector(".fo-choice-checkbox").value), [ "a", "d" ], "the group shows the list it was handed");
+    assert.equal(after.some((node) => before.includes(node)), false, "and none of the prior nodes survived a list that genuinely moved");
+
+    // The same rule on a dropdown, whose members change when a stored value the list does not carry arrives or departs.
+    const selectRow = pickerRow(state, "Tier");
+    const select = selectRow.querySelector(".fo-option-value");
+    const selectBefore = [...select.options].slice(1);
+
+    applyRowState({ entry: pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.Tier=gone"] }), "Tier"), row: selectRow, scopeKind: "global" });
+
+    const selectAfter = [...select.options].slice(1);
+
+    assert.deepEqual(selectAfter.map((node) => node.value), [ "high", "low", "gone" ], "the dropdown gains the value the list does not offer");
+    assert.equal(selectAfter.some((node) => selectBefore.includes(node)), false, "and its option nodes were rebuilt, since the list genuinely moved");
+    assert.equal(select.options[0].value, "", "the leading empty option survives every rebuild - it is structure, not a member");
+  });
+
+  test("a locked row disables the select, and an unlocked one does not", () => {
+
+    using _dom = createTestDom();
+
+    const locked = pickerState({ configuredOptions: ["Disable.Pick.Tier"] });
+    const lockedControl = pickerRow(locked, "Tier").querySelector(".fo-option-value");
+
+    assert.equal(lockedControl.disabled, true, "a disabled row cannot be picked from");
+    assert.equal(lockedControl.getAttribute("aria-disabled"), "true");
+
+    const liveControl = pickerRow(pickerState(), "Tier").querySelector(".fo-option-value");
+
+    assert.equal(liveControl.disabled, false);
+    assert.equal(liveControl.getAttribute("aria-disabled"), null);
+  });
+
+  test("a locked row disables every box of a group and marks the fieldset, and an unlocked one releases both", () => {
+
+    using _dom = createTestDom();
+
+    const locked = pickerState({ configuredOptions: ["Disable.Pick.Types"] });
+    const lockedControl = pickerRow(locked, "Types").querySelector(".fo-option-value");
+
+    assert.deepEqual([...lockedControl.querySelectorAll(".fo-choice-checkbox")].map((b) => b.disabled), [ true, true, true ], "each box is what a user would click");
+    assert.equal(lockedControl.getAttribute("aria-disabled"), "true", "and the group as a whole says it is unavailable");
+
+    const liveControl = pickerRow(pickerState(), "Types").querySelector(".fo-option-value");
+
+    assert.deepEqual([...liveControl.querySelectorAll(".fo-choice-checkbox")].map((b) => b.disabled), [ false, false, false ]);
+    assert.equal(liveControl.getAttribute("aria-disabled"), null);
+  });
+
+  test("an armed row presents an empty selection whatever the projection resolved", () => {
+
+    using _dom = createTestDom();
+
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const selectControl = pickerRow(state, "Tier", { armed: true, deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+    const groupControl = pickerRow(state, "Types", { armed: true, deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+
+    assert.equal(selectControl.value, "", "arming asks for the first value, so the dropdown rests on the empty option");
+    assert.deepEqual([...groupControl.querySelectorAll(".fo-choice-checkbox")].map((b) => b.checked), [ false, false, false ],
+      "and no box is checked, even under an all-choices default");
+  });
+
+  test("a select is re-derived even while it holds focus, since a pick commits the moment it happens", () => {
+
+    using _dom = createTestDom();
+
+    const row = pickerRow(pickerState(), "TierUnset");
+    const control = row.querySelector(".fo-option-value");
+
+    document.body.appendChild(row);
+    control.focus();
+
+    assert.equal(document.activeElement, control, "the dropdown holds focus");
+
+    applyRowState({ entry: pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.TierUnset=low"] }), "TierUnset"), row, scopeKind: "global" });
+
+    assert.equal(control.value, "low", "a dropdown holds nothing uncommitted, so the projection is always authoritative");
+  });
+
+  test("a focused text field is still left alone, which is the guard the pickers do not need", () => {
+
+    using _dom = createTestDom();
+
+    const row = pickerRow(pickerState(), "Plain");
+    const control = row.querySelector(".fo-option-value");
+
+    document.body.appendChild(row);
+    control.focus();
+    control.value = "typing-in-progress";
+
+    applyRowState({ entry: pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.Plain=other"] }), "Plain"), row, scopeKind: "global" });
+
+    assert.equal(control.value, "typing-in-progress", "an uncommitted edit survives a re-derive");
+  });
+});
+
+describe("focusControl", () => {
+
+  test("hands focus to the control itself, to a group's first box, and does nothing at all for a boolean row", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState();
+    const selectRow = pickerRow(state, "Tier");
+    const groupRow = pickerRow(state, "Types");
+    const textRow = pickerRow(state, "Plates");
+
+    document.body.append(selectRow, groupRow, textRow);
+
+    focusControl(selectRow.querySelector(".fo-option-value"));
+    assert.equal(document.activeElement, selectRow.querySelector(".fo-option-value"), "a dropdown takes focus itself");
+
+    focusControl(groupRow.querySelector(".fo-option-value"));
+    assert.equal(document.activeElement, groupRow.querySelector(".fo-choice-checkbox"), "a fieldset is not focusable, so its first box takes it");
+
+    focusControl(textRow.querySelector(".fo-option-value"));
+    assert.equal(document.activeElement, textRow.querySelector(".fo-option-value"), "a text field takes focus itself");
+
+    assert.doesNotThrow(() => focusControl(null), "a boolean row carries no control and is a quiet no-op");
+  });
+
+  test("a group whose source offered nothing has no box to focus, and asks for none", () => {
+
+    using _dom = createTestDom();
+
+    // A device that reports none of what the option is about resolves to an empty list. The group is still the row's control - it is what the lock and the theme
+    // address - but there is nothing inside it to hand focus to.
+    const row = pickerRow(pickerState({ types: () => [] }), "TypesUnset");
+    const control = row.querySelector(".fo-option-value");
+
+    document.body.appendChild(row);
+
+    assert.equal(control.querySelectorAll(".fo-choice").length, 0, "precondition: the source offered nothing");
+    assert.doesNotThrow(() => focusControl(control), "an empty group is a quiet no-op rather than a throw inside an arming gesture");
+  });
+});
+
+describe("controlValueText", () => {
+
+  test("reads each control kind in the grammar a commit would store", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: [ "Enable.Pick.Tier=low", "Enable.Pick.TypesUnset=c,a" ] });
+
+    assert.equal(controlValueText(pickerRow(state, "Tier").querySelector(".fo-option-value")), "low", "a dropdown reads as its picked value");
+    assert.equal(controlValueText(pickerRow(state, "TypesUnset").querySelector(".fo-option-value")), "a,c",
+      "a group composes the canonical list of its checked boxes, in the order they are offered");
+    assert.equal(controlValueText(pickerRow(pickerState(), "Plates").querySelector(".fo-option-value")), "a,b", "a text field reads as its text");
+    assert.equal(controlValueText(null), "", "a boolean row reads as nothing at all");
+  });
+});
+
+describe("the picker transitions", () => {
+
+  test("a scoped picker with no selection arms rather than writing, for both control kinds", () => {
+
+    using _dom = createTestDom();
+
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
+
+    for(const optionName of [ "TierUnset", "TypesUnset" ]) {
+
+      const entry = pickerEntry(state, optionName);
+      const control = pickerRow(state, optionName, { armed: true, deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+      const result = triStateTransition({ catalog: state.catalog, checkbox: checkboxStub(true), configIndex, control, controllerId: null, deviceId: "dev-a", entry });
+
+      assert.equal(result.action.type, "option:armed", optionName + " has no value to persist yet, so the row arms");
+    }
+  });
+
+  test("a scoped picker that already previews a selection writes rather than arming", () => {
+
+    using _dom = createTestDom();
+
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
+
+    for(const optionName of [ "Tier", "Types" ]) {
+
+      const entry = pickerEntry(state, optionName);
+      const control = pickerRow(state, optionName, { deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+      const result = triStateTransition({ catalog: state.catalog, checkbox: checkboxStub(true), configIndex, control, controllerId: null, deviceId: "dev-a", entry });
+
+      // A row already showing its default has something to persist, so it takes the write rule rather than arming. That rule then finds this state is exactly what
+      // the entry-less resolution already yields - default-on, default value - and clears, which is the same answer a text row with its default showing gives.
+      assert.notEqual(result.action.type, "option:armed", optionName + " has a selection on screen, so there is nothing to arm for");
+      assert.equal(result.action.type, "option:cleared", optionName + " matches its own default on both axes, so no entry is needed to say so");
+    }
+  });
+
+  test("a scoped picker whose shown selection deviates writes that selection at this scope", () => {
+
+    using _dom = createTestDom();
+
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const state = pickerState({ configuredOptions: [ "Enable.Pick.Tier=low", "Enable.Pick.Types=a" ], devices,
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
+
+    for(const [ optionName, expected ] of [ [ "Tier", "low" ], [ "Types", "a" ] ]) {
+
+      const entry = pickerEntry(state, optionName);
+      const control = pickerRow(state, optionName, { deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+      const result = triStateTransition({ catalog: state.catalog, checkbox: checkboxStub(true), configIndex, control, controllerId: null, deviceId: "dev-a", entry });
+
+      assert.equal(result.action.type, "option:set", optionName + " inherits a selection that differs from its default, so the device scope records it");
+      assert.equal(result.action.args.value, expected, optionName + " writes exactly what the control shows");
+    }
+  });
+
+  test("unchecking one member of an all-choices group commits the explicit list", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState();
+    const entry = pickerEntry(state, "Types");
+    const control = pickerRow(state, "Types").querySelector(".fo-option-value");
+
+    // The user unchecks "b" out of a group every box of which was checked by the all-choices default.
+    control.querySelectorAll(".fo-choice-checkbox")[1].checked = false;
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry });
+
+    assert.equal(result.action.type, "option:set", "a selection short of the whole domain is a real choice and is stored");
+    assert.equal(result.action.args.value, "a,c", "stored as the explicit list, never as the wildcard");
+  });
+
+  test("re-checking every member of an all-choices group clears the entry, so the option tracks the domain again", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: ["Enable.Pick.Types=a,c"] });
+    const entry = pickerEntry(state, "Types");
+    const control = pickerRow(state, "Types").querySelector(".fo-option-value");
+
+    control.querySelectorAll(".fo-choice-checkbox")[1].checked = true;
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry });
+
+    // Freezing "a,b,c" into the configuration would silently stop tracking a domain the plugin derives - a type added by a firmware update would arrive unselected.
+    assert.equal(result.action.type, "option:cleared", "a fully checked group says exactly what the all-choices default says, so the entry goes");
+  });
+
+  test("a free-form list judges deviation on the normalized list, not the typed text", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState();
+    const entry = pickerEntry(state, "Plates");
+    const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
+    const control = pickerRow(state, "Plates").querySelector(".fo-option-value");
+
+    // The declared default is "a,b". Re-typing it with stray spacing says the same thing and must not persist an entry.
+    control.value = " a , b ";
+
+    const same = valueCommitTransition({ catalog: state.catalog, configIndex, control, controllerId: null, deviceId: null, entry });
+
+    assert.equal(same.action.type, "option:cleared", "spacing is not a change");
+
+    // Order, on the other hand, IS part of a free-form list.
+    control.value = "b,a";
+
+    const reordered = valueCommitTransition({ catalog: state.catalog, configIndex, control, controllerId: null, deviceId: null, entry });
+
+    assert.equal(reordered.action.type, "option:set", "a reordered list is a different list");
+    assert.equal(reordered.action.args.value, "b,a");
+  });
+
+  test("a free-form list commit is normalized through the grammar before it is stored", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState();
+    const entry = pickerEntry(state, "Plates");
+    const control = pickerRow(state, "Plates").querySelector(".fo-option-value");
+
+    control.value = "a, b,,c ";
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry });
+
+    assert.equal(result.action.type, "option:set");
+    assert.equal(result.action.args.value, "a,b,c", "stray spacing and empty entries settle into the canonical form the read side parses");
   });
 });

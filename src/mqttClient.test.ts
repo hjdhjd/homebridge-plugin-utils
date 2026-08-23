@@ -11,7 +11,7 @@
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
-import { assertNoUnhandledRejections, capturingLog, silentLog } from "./testing/index.ts";
+import { assertNoUnhandledRejections, capturingLog, formatLogEntry, silentLog } from "./testing/index.ts";
 import { awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
@@ -19,19 +19,17 @@ import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { format } from "node:util";
 import { once } from "node:events";
 
-// Render the first entry of `log` as a single interpolated string by feeding `(message, ...params)` through `node:util.format`, matching how a real logger would
-// print the entry. Asserts that at least one entry exists so a regression that silently swallows the log call fails loudly here rather than producing a misleading
-// empty-string match.
+// Render the first entry of `log` as a single interpolated string, matching how a real logger would print the entry. Asserts that at least one entry exists so a
+// regression that silently swallows the log call fails loudly here rather than producing a misleading empty-string match.
 function firstRendered(log: CapturingLog): string {
 
   const [entry] = log.entries;
 
   assert.ok(entry, "expected at least one log entry to have been emitted");
 
-  return format(entry.message, ...entry.params);
+  return formatLogEntry(entry);
 }
 
 // Per-test event-loop settling window. After awaiting a deterministic broker event, this short delay lets any speculative-but-erroneous additional packet (the kind
@@ -296,7 +294,7 @@ describe("MqttClient - publishGuarded", () => {
 
       await waitForLog(log, (entry) => entry.level === "error");
 
-      const failures = log.entries.filter((entry) => entry.level === "error").map((entry) => format(entry.message, ...entry.params));
+      const failures = log.entries.filter((entry) => entry.level === "error").map((entry) => formatLogEntry(entry));
 
       assert.deepEqual(failures, ["Unable to publish to the MQTT topic test/device1/status: broker refused the message."]);
     });

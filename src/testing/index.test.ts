@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, silentLog, capturingLog, assertNoUnhandledRejections.
- * Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every error path, every async outcome - because
- * a bug in a shared helper cascades into every test that consumes it.
+ * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, silentLog, capturingLog, formatLogEntry, loggedAt, logCount,
+ * assertNoUnhandledRejections. Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every error path,
+ * every async outcome - because a bug in a shared helper cascades into every test that consumes it.
  */
-import { assertNoUnhandledRejections, capturingLog, expectAt, silentLog } from "./index.ts";
+import type { CapturingLog, TestLogEntry } from "./index.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, logCount, loggedAt, silentLog } from "./index.ts";
 import { describe, test } from "node:test";
-import type { CapturingLog } from "./index.ts";
 import assert from "node:assert/strict";
 
 describe("expectAt", () => {
@@ -141,6 +141,101 @@ describe("capturingLog", () => {
 
     assert.equal(a.entries.length, 1, "entries must accumulate on the logger that received the emission");
     assert.equal(b.entries.length, 0, "the other logger must not see emissions from the first one");
+  });
+});
+
+describe("formatLogEntry", () => {
+
+  test("interpolates params into the message's format tokens", () => {
+
+    // The expectation is written out literally rather than derived from a `util.format` call of our own, which would assert only that the implementation equals
+    // itself and would pass just as happily if the render were dropped on both sides.
+    const entry: TestLogEntry = { level: "info", message: "Motion on %s at %d.", params: [ "porch", 5 ] };
+
+    assert.equal(formatLogEntry(entry), "Motion on porch at 5.", "each token must be replaced by the param in the corresponding position");
+  });
+
+  test("returns the message unchanged when there are no params, including an unconsumed token", () => {
+
+    // A message logged with no params is not a template awaiting arguments...an unconsumed token stays exactly as written, so a finder matching the rendered line
+    // still sees the literal "%s" a caller wrote.
+    assert.equal(formatLogEntry({ level: "warn", message: "Stream stalled.", params: [] }), "Stream stalled.", "a message with no tokens must survive verbatim");
+    assert.equal(formatLogEntry({ level: "warn", message: "A literal %s token.", params: [] }), "A literal %s token.",
+      "with no params there is nothing to substitute, so the token itself is the output");
+  });
+});
+
+describe("loggedAt and logCount", () => {
+
+  test("finds a value that lives only in params, where a raw message match cannot see it", () => {
+
+    // This is the whole reason the family exists, so both halves are asserted together: the value the caller wants to pin is a format parameter, and the captured
+    // message carries only the token that will consume it.
+    const entries: TestLogEntry[] = [{ level: "warn", message: "Retrying in %d seconds.", params: [30] }];
+    const entry = expectAt(entries, 0, "the retry entry");
+
+    assert.equal(entry.message.includes("30"), false, "the captured message holds the token rather than the value, so a raw match must miss it");
+    assert.ok(loggedAt(entries, "warn", "30"), "the rendered line holds the value, so the finder must match it");
+  });
+
+  test("restricts both the search and the count to the requested level", () => {
+
+    // The same text at two severities is a realistic shape - a line that is debug detail in one path and a reported failure in another - and "this was reported as
+    // an error" is the claim a test means to make.
+    const entries: TestLogEntry[] = [
+
+      { level: "debug", message: "Connection refused.", params: [] },
+      { level: "info", message: "Connection refused.", params: [] }
+    ];
+
+    assert.equal(loggedAt(entries, "error", "Connection refused"), false, "matches at other levels must not satisfy an error-level search");
+    assert.ok(loggedAt(entries, "debug", "Connection refused"), "the same text at the requested level must match");
+    assert.equal(logCount(entries, "error", "Connection refused"), 0, "the count must ignore entries at other levels");
+    assert.equal(logCount(entries, "debug", "Connection refused"), 1, "the count must include the requested level only");
+  });
+
+  test("counts every match at the level rather than reporting mere presence", () => {
+
+    // Two matches at the level, one at another level, one non-matching entry. A count that collapsed to a presence test would report 1 here and pass every
+    // exactly-once assertion a retry loop is supposed to fail.
+    const entries: TestLogEntry[] = [
+
+      { level: "error", message: "Unable to publish to %s.", params: ["test/device1/status"] },
+      { level: "error", message: "Unable to publish to %s.", params: ["test/device2/status"] },
+      { level: "info", message: "Unable to publish to %s.", params: ["test/device3/status"] },
+      { level: "error", message: "Connected to the broker.", params: [] }
+    ];
+
+    assert.equal(logCount(entries, "error", "Unable to publish"), 2, "both error-level matches must be counted, and neither the info-level nor the unrelated entry");
+    assert.ok(loggedAt(entries, "error", "Unable to publish"), "a repeated line is still found");
+    assert.equal(loggedAt(entries, "error", "Unable to subscribe"), false, "a substring that appears nowhere must not match");
+    assert.equal(logCount(entries, "error", "Unable to subscribe"), 0, "a substring that appears nowhere must count zero");
+  });
+
+  test("reports nothing found against an empty entries array", () => {
+
+    assert.equal(loggedAt([], "info", "anything"), false, "an empty array can carry no match");
+    assert.equal(logCount([], "info", "anything"), 0, "an empty array counts zero");
+  });
+
+  test("composes with a live capturingLog, including over a slice of its entries", () => {
+
+    const log = capturingLog();
+
+    log.info("Connected to %s.", "mqtt://127.0.0.1:1883");
+    log.warn("Retrying in %d seconds.", 30);
+
+    assert.ok(loggedAt(log.entries, "info", "mqtt://127.0.0.1:1883"), "the readonly entries view must feed the finders with no adaptation");
+    assert.equal(logCount(log.entries, "warn", "Retrying"), 1, "the count reads the live capture the same way it reads a literal array");
+
+    // Searching a slice is the reason the finders take the entries array rather than the logger: it answers "one more line after this point" without a second
+    // logger, and the slice's own entries must still render their params.
+    const before = log.entries.length;
+
+    log.warn("Retrying in %d seconds.", 60);
+
+    assert.equal(logCount(log.entries.slice(before), "warn", "Retrying"), 1, "a slice must see only the entries it contains");
+    assert.ok(loggedAt(log.entries.slice(before), "warn", "60"), "an entry reached through a slice must still be rendered before matching");
   });
 });
 

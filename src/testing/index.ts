@@ -24,6 +24,7 @@
 import type { HomebridgePluginLogging } from "../util.ts";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
+import { format } from "node:util";
 import { noOpLog } from "../util.ts";
 
 /* The shipped doubles, aggregated from their physical homes, and the guard machinery that lives in this directory alongside the helpers. Each module is re-exported
@@ -179,6 +180,78 @@ export function capturingLog(): CapturingLog {
       entries.push({ level: "warn", message, params });
     }
   };
+}
+
+/**
+ * Render a captured {@link TestLogEntry} the way a real logger prints it, interpolating `params` into `message`'s format tokens.
+ *
+ * Plugin log calls carry their values printf-style - `log.info("Retrying in %d seconds.", 30)` - so the value a test cares about lives in `params` and never appears
+ * in the captured `message` at all. Rendering is what puts it back into a single string that can be matched. This is the one rendering definition the finders below
+ * compose, and it is exported on its own so a harness that wants the rendered line for an assertion shape of its own does not re-derive the render.
+ *
+ * @param entry - The captured entry to render.
+ *
+ * @returns The entry's message with its params interpolated.
+ *
+ * @category Testing
+ */
+export function formatLogEntry(entry: TestLogEntry): string {
+
+  return format(entry.message, ...entry.params);
+}
+
+/**
+ * Report whether any entry at `level`, once rendered through {@link formatLogEntry}, contains `substring`.
+ *
+ * The render is what makes the match meaningful - a search of the raw `message` field misses every value that arrived as a format parameter. The level restriction is
+ * part of the assertion rather than a convenience: "this was reported as an error" and "this was mentioned at debug" are different claims about the same text.
+ *
+ * Takes the entries array rather than the {@link CapturingLog} itself, so a caller can search a slice. `loggedAt(log.entries.slice(before), "info", "Reconnected")`
+ * answers "one more line after the reconnect" without standing up a second logger, and a harness holding a bare array needs no adapter.
+ *
+ * @param entries   - The captured entries to search.
+ * @param level     - The severity to restrict the search to.
+ * @param substring - The text to look for in the rendered line.
+ *
+ * @returns `true` when at least one entry at `level` renders to a line containing `substring`.
+ *
+ * @example
+ *
+ * ```ts
+ * import { capturingLog, loggedAt } from "homebridge-plugin-utils/testing";
+ *
+ * const log = capturingLog();
+ *
+ * classUnderTest.retry(log);
+ *
+ * // The emission was `log.warn("Retrying in %d seconds.", 30)`, so "30" is nowhere in the captured message...only the render finds it.
+ * assert.ok(loggedAt(log.entries, "warn", "30"));
+ * ```
+ *
+ * @category Testing
+ */
+export function loggedAt(entries: readonly TestLogEntry[], level: TestLogEntry["level"], substring: string): boolean {
+
+  return entries.some((entry) => (entry.level === level) && formatLogEntry(entry).includes(substring));
+}
+
+/**
+ * Count the entries at `level` whose rendered line contains `substring`, matching by the same rules as {@link loggedAt}.
+ *
+ * Distinct from {@link loggedAt} because "emitted exactly once" is a stronger claim than "emitted at all", and it is the one worth pinning around retry loops and
+ * reconnect handlers: a path that logs its warning on every attempt satisfies a presence check and fails a count of one.
+ *
+ * @param entries   - The captured entries to search.
+ * @param level     - The severity to restrict the count to.
+ * @param substring - The text to look for in the rendered line.
+ *
+ * @returns The number of entries at `level` whose rendered line contains `substring`.
+ *
+ * @category Testing
+ */
+export function logCount(entries: readonly TestLogEntry[], level: TestLogEntry["level"], substring: string): number {
+
+  return entries.filter((entry) => (entry.level === level) && formatLogEntry(entry).includes(substring)).length;
 }
 
 /**

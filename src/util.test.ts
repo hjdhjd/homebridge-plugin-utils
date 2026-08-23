@@ -10,7 +10,7 @@ import { HbpuAbortError, Watchdog, composeSignals, debugGatedLog, defaultRetryBa
   retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
-import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing/index.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry } from "./testing/index.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -2161,8 +2161,8 @@ describe("prefixedLog", () => {
     const parameterized = expectAt(base.entries, 0, "the parameterized entry");
     const bare = expectAt(base.entries, 1, "the bare entry");
 
-    assert.equal(util.format(parameterized.message, ...parameterized.params), util.format(prefix + ": " + "Motion on %s at %d.", "front", 5, { zone: "porch" }));
-    assert.equal(util.format(bare.message, ...bare.params), util.format(prefix + ": " + "Stream stalled."));
+    assert.equal(formatLogEntry(parameterized), util.format(prefix + ": " + "Motion on %s at %d.", "front", 5, { zone: "porch" }));
+    assert.equal(formatLogEntry(bare), util.format(prefix + ": " + "Stream stalled."));
   });
 
   test("each wrapped level routes to the base method of the same name and no other", () => {

@@ -2004,6 +2004,32 @@ describe("FeatureOptions - enumerateConfiguredEntries", () => {
       "the shorter option is not configured by an entry the longer one claimed");
   });
 
+  test("a raw tail carrying the delimiter never reads as a scope", () => {
+
+    // The composer ends an address at the first "=", so no id it writes can hold the delimiter. That decides what the raw tail of a canonical value entry says
+    // about a shorter option: `Enable.Device.Name=Foo` is the Device.Name option carrying "Foo", and it is not the Device option at a scope named "Name=Foo",
+    // because no configuration can express that scope in the first place.
+    const deviceCatalog = buildCatalogIndex([{ description: "Device Options", name: "Device" }], {
+
+      Device: [
+
+        { default: false, description: "Device top-level toggle.", name: "" },
+        { default: false, defaultValue: "unnamed", description: "Device name override.", name: "Name" }
+      ]
+    });
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog: deviceCatalog, configuredOptions: ["Enable.Device.Name=Foo"], option: "Device" })], [],
+      "a delimiter-bearing raw tail is not a scope of the shorter option");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog: deviceCatalog, configuredOptions: ["Enable.Device.Name=Foo"], option: "Device.Name" })],
+      [{ enabled: true, id: "", value: "Foo" }], "the entry is the value option's global value");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog: deviceCatalog, configuredOptions: ["Enable.Device.Name.SERIAL=Foo"], option: "Device" })], [],
+      "the scoped value form says nothing about the shorter option either");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog: deviceCatalog, configuredOptions: ["Enable.Device.Name.SERIAL=Foo"], option: "Device.Name" })],
+      [{ enabled: true, id: "SERIAL", value: "Foo" }], "the scoped value form still yields the id it carries");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Motion.Detect.abc=def"], option: "Motion.Detect" })], [],
+      "a delimiter-bearing tail on a boolean option is an address the composer cannot write either");
+  });
+
   test("a catalog option name is never read as a scope of a shorter option", () => {
 
     // "Motion.Detect" is an option in its own right, so `Enable.Motion.Detect` cannot be the "Motion" option at a scope named "Detect" - and there is no "Motion"

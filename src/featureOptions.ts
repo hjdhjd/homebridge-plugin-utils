@@ -730,8 +730,10 @@ export function buildConfigIndex(catalog: CatalogIndex, configuredOptions: reado
 }
 
 // Decide whether a lookup key addresses a given option. A key does so when it is the option itself - the global scope - or the option followed by a single
-// dot-free identifier segment, which is the only scoped address the grammar can write. A key that is itself a catalog option name is that option rather than a
-// scope of a shorter one: `Enable.Motion.Detect` is the `Motion.Detect` option, never `Motion` at a scope named "Detect", and the catalog is what settles it.
+// identifier segment carrying neither a dot nor the payload delimiter, which is the only scoped address the grammar can write: the composer joins an id onto the
+// option name with a dot and ends the address at the first "=", so an id holding either character names a scope nothing can write and nothing can resolve. A key
+// that is itself a catalog option name is that option rather than a scope of a shorter one: `Enable.Motion.Detect` is the `Motion.Detect` option, never `Motion`
+// at a scope named "Detect", and the catalog is what settles it.
 function keyAddressesOption({ catalog, key, optionKey }: { catalog: CatalogIndex; key: string; optionKey: string }): boolean {
 
   if(key === optionKey) {
@@ -746,7 +748,7 @@ function keyAddressesOption({ catalog, key, optionKey }: { catalog: CatalogIndex
 
   const id = key.slice(optionKey.length + 1);
 
-  return !!id.length && !id.includes(".");
+  return !!id.length && !id.includes(".") && !id.includes("=");
 }
 
 // Recover a scope identifier in the casing the entry carried. The lookup keys are lowercased slices of the same tail, so the matched key's length is where the

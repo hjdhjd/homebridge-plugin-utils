@@ -1640,6 +1640,8 @@ const PICKER_OPTIONS = {
     { choices: "types", default: true, defaultValue: "a,b", description: "Detected types.", multiple: true, name: "Types" },
     { choices: "types", default: false, defaultValue: "", description: "Detected types, no default.", multiple: true, name: "TypesUnset" },
     { choices: "types", default: true, defaultValue: "", description: "A single choice drawn from the same source.", name: "Named" },
+    { default: true, defaultValue: "a,b", description: "Licence plates.", multiple: true, name: "Plates" },
+    { default: false, defaultValue: "", description: "Licence plates, no default.", multiple: true, name: "PlatesUnset" },
     { default: true, defaultValue: "", description: "Streaming account password.", name: "Password", secret: true }
   ]
 };
@@ -1912,5 +1914,125 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
       "device B is shown its own list, not the one built for device A");
     assert.deepEqual([...pickerControl(configTable, "Named").options].map((o) => o.value), [ "", "y", "z" ],
       "and the dropdown too, with its leading empty option intact through the rebuild");
+  });
+});
+
+/* The list editor at the view layer. The editor edits itself through its own gestures, so what the view has to prove is that the result reaches the store by the
+ * same route a text field's commit takes, and that the row's own machinery - the click forward, the busy lock, the abandonment rule - treats it as one control.
+ */
+describe("mountOptionsView - the list editor", () => {
+
+  const editorControl = (configTable) => configTable.querySelector("[id='row-Pick.Plates'] .fo-option-value");
+
+  const typeInto = (control, text, key = "Enter") => {
+
+    const field = control.querySelector(".fo-list-entry");
+
+    field.value = text;
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key }));
+  };
+
+  test("each gesture commits through the same path a text field's commit takes", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = pickerSetup();
+    const control = editorControl(configTable);
+
+    typeInto(control, "zed");
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Plates=a,b,zed"], "an added entry reaches the store");
+
+    control.querySelectorAll(".fo-list-remove")[0].click();
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Plates=b,zed"], "a removed entry does too");
+
+    const field = control.querySelector(".fo-list-entry");
+
+    field.value = "";
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Backspace" }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Plates=b"], "and so does a Backspace erase");
+  });
+
+  test("pressing a remove control removes its entry and leaves the option's own checkbox untouched", () => {
+
+    using _dom = createTestDom();
+
+    /* What this proves is the OUTCOME, not the route. The row-level click forward is not what spares the checkbox here: the editor answers the press on its own
+     * element, deeper in the tree, and detaching the item takes the pressed button out of the document with it - so the row lookup in the delegation already reads
+     * null when the event arrives, and the exclusion list is never consulted for this gesture.
+     */
+    const { configTable, store } = pickerSetup();
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.Plates'] .fo-option-checkbox");
+
+    assert.equal(rowCheckbox.checked, true, "precondition: the row is enabled by its catalog default");
+
+    editorControl(configTable).querySelectorAll(".fo-list-remove")[0].click();
+
+    assert.equal(configTable.querySelector("[id='row-Pick.Plates'] .fo-option-checkbox").checked, true,
+      "the press removed an entry and said nothing about the option itself");
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Plates=b"], "the only thing it moved is the list");
+  });
+
+  test("the busy lock reaches the editor's field and its remove controls", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], mode: "controller-based",
+      scope: { controllerId: "ctrl-a", kind: "controller" } });
+
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+
+    const control = editorControl(configTable);
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "precondition: the window is open");
+    assert.equal(control.querySelector(".fo-list-entry").disabled, true, "the entry field is write-capable and goes inert");
+    assert.deepEqual([...control.querySelectorAll(".fo-list-remove")].map((b) => b.disabled), [ true, true ], "and so does every remove control");
+  });
+
+  test("abandoning an armed editor row stands it down", () => {
+
+    using _dom = createTestDom();
+
+    // The option that declares no default is the one that can arm at all: a row previewing a default already has something to persist, so checking it writes.
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const { configTable, store } = pickerSetup({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.PlatesUnset'] .fo-option-checkbox");
+
+    rowCheckbox.checked = true;
+    rowCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, "Pick.PlatesUnset", "an empty scoped editor arms rather than writing");
+    assert.ok(document.activeElement === configTable.querySelector("[id='row-Pick.PlatesUnset'] .fo-list-entry"),
+      "and focus lands where the first entry is typed");
+
+    // Focus leaves the row with nothing ever entered, which is the abandonment gesture. The departing element is INSIDE the control rather than being it.
+    document.activeElement.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, null, "the row stands down");
+    assert.equal(configTable.querySelector("[id='row-Pick.PlatesUnset'] .fo-option-checkbox").checked, false, "and unchecks with it");
+  });
+
+  test("a change on the editor commits its entries together with whatever is still pending in the field", () => {
+
+    using _dom = createTestDom();
+
+    /* The control-level half of the pending-text rule: whatever raises a change on the editor, the value that reaches the store carries the field's unfinished
+     * text along with the entries. The other half - that the pre-Save window blur is what raises it while the field still holds focus and has never blurred -
+     * is exercised against the real window listener in webUi-featureOptions.test.mjs, since that listener belongs to the orchestrator rather than to this view.
+     */
+    const { configTable, store } = pickerSetup();
+    const control = editorControl(configTable);
+    const field = control.querySelector(".fo-list-entry");
+
+    field.focus();
+    field.value = "typed-not-entered";
+
+    control.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Plates=a,b,typed-not-entered"],
+      "the pending text rode along with the entries rather than being dropped");
   });
 });

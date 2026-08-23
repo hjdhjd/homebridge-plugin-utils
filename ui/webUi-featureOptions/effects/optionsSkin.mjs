@@ -286,6 +286,26 @@ const buildOptionsSkinCss = () => [
    */
   ".fo-choice-group { display: flex; flex-wrap: wrap; gap: var(--fo-space-xs) var(--fo-space-md); border: 0; margin: 0; padding: 0; min-width: 0; }",
   ".fo-choice { display: inline-flex; align-items: center; gap: var(--fo-space-xs); margin: 0; cursor: pointer; }",
-  ".fo-choice-unknown { color: var(--fo-text-attention); }"
+  ".fo-choice-unknown { color: var(--fo-text-attention); }",
+
+  /* A free-form list's editor. Its entries read as small inline boxes on the accent fill, wrapping the same way a choice group's members do, with the entry field
+   * sitting among them as the next place to type. The remove control surrenders its chrome exactly as the reveal toggle does, so what the user sees is the glyph
+   * and its hit area rather than a button.
+   */
+  ".fo-list-editor { display: flex; flex-wrap: wrap; align-items: center; gap: var(--fo-space-xs) var(--fo-space-sm); min-width: 0; }",
+  ".fo-list-item { display: inline-flex; align-items: center; gap: var(--fo-space-xs); padding: 0 var(--fo-space-xs); border-radius: var(--fo-radius-sm); " +
+    "background-color: var(--fo-accent-bg); color: var(--fo-accent-fg); }",
+  ".fo-list-remove { display: inline-flex; align-items: center; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }",
+
+  /* The entry field's own dark treatment. The `.fo-option-value` rules above cannot reach it: that class sits on the editor's wrapper, `:focus` matches only the
+   * element actually holding focus, `::placeholder` exists only on a field, and neither background nor border is inherited - so the field would render light on
+   * the dark surface while the text field in the row above it rendered dark. The three declarations are the same ones, read from the same tokens, addressed to
+   * the field as a descendant.
+   */
+  ":root.fo-dark .fo-list-editor .fo-list-entry { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); " +
+    "color: var(--fo-text-on-elevated); }",
+  ":root.fo-dark .fo-list-editor .fo-list-entry::placeholder { color: var(--fo-form-control-placeholder); }",
+  ":root.fo-dark .fo-list-editor .fo-list-entry:focus { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-focus-border); " +
+    "box-shadow: var(--fo-focus-ring); color: var(--fo-text-on-elevated); }"
 
 ].join("\n");

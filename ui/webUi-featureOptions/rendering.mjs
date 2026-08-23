@@ -86,6 +86,8 @@ export const categoryShell = ({ category, scopeKind }) => {
  *   - **Choice options**: the same stack with a `<select>` in place of the field, sized by the same `inputSize` declaration. Its members come from the projection,
  *     which resolves whatever the catalog declared - an inline list, or a list a plugin's source derives from the device in view.
  *   - **Multiple-choice options**: the same stack with a `<fieldset>` of checkboxes, one per member, laid out as a wrapping row.
+ *   - **Free-form list options**: the same stack with an editor holding one removable entry per value plus the field the next one is typed into. It edits itself
+ *     through its own gestures and reports the result the way a text field does, with one `change` event carrying the whole value.
  *
  * The row structure is uniform regardless of option kind: one row, one stacked content cell, so a long descriptive label and a compact value render through exactly
  * the same path and differ only in the control the value is edited through. Every value control carries the `fo-option-value` class, which is how the view finds
@@ -144,8 +146,9 @@ export const optionRow = ({ armed = false, deviceId, entry, scopeKind }) => {
  *   - **Label color** - the "where did this value come from / has it been modified" cue. Re-applying it here on every projection change is what makes a toggle that
  *     modifies (or reverts) an option re-color its label in place, rather than freezing the color at construction time.
  *   - **Value-control state** (value-centric options only) - the control is live exactly while the option can take a value at this scope: the row is enabled, or it
- *     is ARMED (the checkbox gesture opened the control and the first committed value is what will actually enable it - a scoped value entry always carries a value,
- *     so the checked-but-empty state persists nothing and lives only in the store's armedOption). Every other row locks its control, so a disabled or unset option
+ *     is ARMED (the checkbox gesture opened the control and the first committed value is what will actually enable it - a checked-but-empty row has made no choice
+ *     yet, so it persists nothing and lives only in the store's armedOption, a list included: its explicit empty selection is reached by unchecking the boxes of a
+ *     row that already has an entry). Every other row locks its control, so a disabled or unset option
  *     can never take an edit, and inheriting or parent-disabled rows lock regardless. The value is re-derived from the projection through {@link writeControlValue},
  *     which is where the one exception lives: a control that can hold an UNCOMMITTED edit is left alone while it has focus, since the `change` event commits on
  *     blur or Enter and a re-derive would clobber what the user is still typing. A dropdown and a checkbox group commit the moment they are operated and so hold
@@ -259,8 +262,8 @@ export const toggleSecretReveal = (toggle) => {
  *   - **just unchecked (was checked)** -> if an upstream entry exists, clear so resolution falls back to inheritance (the row returns to indeterminate); otherwise the
  *     explicit disable stays, recorded or normalized to a clear per the write rule.
  *   - **just checked (was unchecked)** -> set explicitly (or clear when the post-state matches default with no upstream). A value-centric row whose input carries no
- *     content ARMS instead: a scoped value entry always carries a value, so there is nothing to persist yet, and arming is what unlocks the input for the value
- *     that will.
+ *     content ARMS instead: checking a box is not yet a choice of value, so there is nothing to persist, and arming is what unlocks the input for the value that
+ *     will be.
  *
  * Write rule (parallels {@link FeatureOptions} semantics): a clearOption is correct when the resulting resolution equals the user's intent at this scope - that is,
  * when the catalog default matches AND no upstream entry exists. In that case the entry-less lookup naturally produces the right value. A setOption is needed when
@@ -312,9 +315,11 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
     return { action: writeAction({ control, deviceId, enabled: false, entry, expandedName, upstream, valueCentric: isValueOption(catalog, expandedName) }) };
   }
 
-  // Transition 3: just transitioned to checked. A SCOPED value-centric row carrying no value content arms rather than writes - a scoped value entry always carries
-  // a value, so there is nothing to persist until one is given, and arming is what unlocks the control to take it. The global view is deliberately outside this
-  // arm: a bare valueless enable is a legal global entry, so the write below persists it and the enabled row's control unlocks through the ordinary lock rule.
+  // Transition 3: just transitioned to checked. A SCOPED value-centric row carrying no value content arms rather than writes - checking the box says the option
+  // applies here, not what it should carry, so there is nothing to persist until a value is given and arming is what unlocks the control to take it. A list is
+  // no exception: its explicit empty selection is a commit made on the control, reached by unchecking the boxes of a row that already carries an entry. The
+  // global view is deliberately outside this arm: a bare valueless enable is a legal global entry, so the write below persists it and the enabled row's control
+  // unlocks through the ordinary lock rule.
   if((deviceId !== null) && isValueOption(catalog, expandedName) && !hasValueContent(controlValueText(control))) {
 
     return { action: { option: expandedName, type: "option:armed" } };
@@ -339,6 +344,11 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
  * remove and an enable-shaped dispatch would disturb state the gesture never addressed, so the commit yields no action and the caller restores the row from
  * the projection instead.
  *
+ * A LIST row is where that reasoning stops. Unchecking every box says "on, with nothing selected", which the entry grammar spells and the writer stores, so an
+ * empty commit there flows to the write rule exactly as a content-bearing one does and the selection compare decides what happens: an empty selection differing
+ * from the default is written, and one matching a default that is itself empty clears, which keeps the configuration minimal on the row where clearing and
+ * storing say the same thing.
+ *
  * The function neither mutates nor returns DOM state, mirroring {@link triStateTransition}: the caller dispatches the action (when there is one) and the
  * reactive re-projection drives the row's DOM through {@link applyRowState}.
  *
@@ -361,21 +371,27 @@ export const valueCommitTransition = ({ catalog, configIndex, control, controlle
   const locallyEnabled = entry.enabled && optionExists({ configIndex, id: deviceId ?? undefined, option: expandedName });
   const emptyCommit = !hasValueContent(controlValueText(control));
 
-  if(emptyCommit && !locallyEnabled) {
+  // An empty commit means two different things depending on what the row edits. On a list it is the explicit empty selection, a state the grammar spells, so it
+  // rides through to the write rule below. On every other row it is the clear gesture the two exits answer. The two readings are complements by construction,
+  // so no row can take both paths or neither.
+  const emptySelectionCommit = emptyCommit && entry.multiple;
+  const clearingCommit = emptyCommit && !entry.multiple;
+
+  if(clearingCommit && !locallyEnabled) {
 
     return { action: null };
   }
 
   // Emptying the field on a row enabled here drops its entry outright, handing resolution back to the hierarchy. The alternative - composing an enable with no
   // value behind it - would answer the option with nothing at all, which is the opposite of what clearing a pre-filled field asks for.
-  if(emptyCommit) {
+  if(clearingCommit) {
 
     return { action: { args: { id: deviceId ?? undefined, option: expandedName }, type: "option:cleared" } };
   }
 
   const upstream = hasUpstreamOption({ catalog, configIndex, controllerId, deviceId, expandedName });
 
-  return { action: writeAction({ control, deviceId, enabled: true, entry, expandedName, upstream, valueCentric: true }) };
+  return { action: writeAction({ control, deviceId, emptySelectionCommit, enabled: true, entry, expandedName, upstream, valueCentric: true }) };
 };
 
 // Map a view scope kind to the suffix label rendered on category headers. Switch on the tag; every scope kind maps to its own label.
@@ -540,6 +556,11 @@ const createValueControl = ({ option }) => {
     return option.multiple ? createChoiceGroup() : createChoiceSelect({ option });
   }
 
+  if(option.multiple) {
+
+    return createListEditor({ option });
+  }
+
   return option.secret ? createSecretField({ option }) : createValueInput({ option });
 };
 
@@ -579,6 +600,138 @@ const createChoiceOption = (member) => createElement("option", {
   value: member.value
 }, [member.label]);
 
+/* Build a free-form list option's editor: the entries the option currently holds, each removable on its own, followed by the field the next one is typed into.
+ *
+ * A list edited as one comma-joined string in a text field asks the user to do the grammar's bookkeeping by hand - find the right comma, delete the right span,
+ * leave the neighbours intact. Entries the user can see and remove individually put that work where it belongs, and the stored form is unchanged: the editor
+ * composes the same canonical text the grammar has always read.
+ *
+ * The gestures live here, on the elements they belong to, rather than in the view's delegation, because they are how this control edits ITSELF - the same way a
+ * text field's own caret handling is not the view's business. What the view sees is what it sees from a text field: one `change` event on the control, carrying
+ * the whole value.
+ */
+const createListEditor = ({ option }) => {
+
+  const field = createElement("input", {
+
+    classList: ["fo-list-entry"],
+    style: {
+
+      boxSizing: "content-box",
+      maxWidth: "100%",
+      width: (option.inputSize ?? 5) + "ch"
+    },
+    type: "text"
+  });
+
+  const editor = createElement("div", { classList: [ "fo-option-value", "fo-list-editor" ] }, [field]);
+
+  /* Enter and the comma both mean "this entry is finished", so both convert the pending text into an item and neither reaches the field as a character - the comma
+   * above all, since it is the grammar's delimiter and typing it into an entry would spell a value the grammar cannot store.
+   *
+   * Backspace on an EMPTY field removes the last item, the erasing gesture a chip list conventionally offers. The test is for the empty string exactly rather than
+   * for empty-after-trimming: a field holding a space is a field the user is typing in, and erasing their neighbour's entry out from under them would be a
+   * surprise no keystroke asked for.
+   */
+  field.addEventListener("keydown", (event) => {
+
+    if((event.key === "Enter") || (event.key === ",")) {
+
+      event.preventDefault();
+      commitPendingEntry(editor);
+
+      return;
+    }
+
+    if((event.key === "Backspace") && (field.value === "")) {
+
+      const last = [...editor.querySelectorAll(".fo-list-item")].at(-1);
+
+      if(last) {
+
+        last.remove();
+        announceListChange(editor);
+      }
+    }
+  });
+
+  // Text left in the field when focus departs is text the user meant, so it becomes an item rather than being discarded. The commit that follows reads the item
+  // along with the rest, which is also what makes the pending-text rule in controlValueText a second line of defense rather than the only one.
+  field.addEventListener("blur", () => commitPendingEntry(editor));
+
+  editor.addEventListener("click", (event) => {
+
+    const remove = event.target.closest(".fo-list-remove");
+
+    if(!remove) {
+
+      return;
+    }
+
+    remove.closest(".fo-list-item").remove();
+    announceListChange(editor);
+  });
+
+  return editor;
+};
+
+// Turn the entry field's pending text into an item, or do nothing at all when there is none. Trimming is what makes "nothing" mean whitespace too, so a stray
+// space and a bare Enter both leave the list as it was.
+const commitPendingEntry = (editor) => {
+
+  const field = editor.querySelector(".fo-list-entry");
+  const pending = field.value.trim();
+
+  if(!pending.length) {
+
+    return;
+  }
+
+  editor.insertBefore(createListItem(pending), field);
+  field.value = "";
+  announceListChange(editor);
+};
+
+// Tell the view that the list moved, in the one vocabulary it already listens for. A text field fires `change` when its value settles, so the editor fires the
+// same event on itself and every commit - the delegation, the write rule, the store - runs the path a text field's own commit runs.
+const announceListChange = (editor) => editor.dispatchEvent(new Event("change", { bubbles: true }));
+
+// Build one entry of a list editor: its text and the control that removes it. The value rides on the element as data rather than being read back out of its text,
+// so the rebuild comparison and the value read both address what the entry IS rather than how it happens to render.
+const createListItem = (value) => createElement("span", { classList: ["fo-list-item"], "data-value": value }, [ value, createElement("button", {
+
+  "aria-label": "Remove " + value + ".",
+  classList: ["fo-list-remove"],
+  type: "button"
+}, [createRemoveGlyph()]) ]);
+
+// The cross the remove control wears: two strokes through the middle of the box. Drawn the way the reveal toggle draws its eye - in currentColor, sized in em - so
+// it takes the color and the scale of the text beside it.
+const REMOVE_GLYPH_PATH = "M4.5 4.5l7 7M11.5 4.5l-7 7";
+
+const createRemoveGlyph = () => {
+
+  const glyph = createSvgElement({
+
+    attributes: {
+
+      "aria-hidden": "true",
+      "fill": "none",
+      "height": "1em",
+      "stroke": "currentColor",
+      "stroke-linecap": "round",
+      "stroke-width": "1.5",
+      "viewBox": "0 0 16 16",
+      "width": "1em"
+    },
+    tag: "svg"
+  });
+
+  glyph.appendChild(createSvgElement({ attributes: { "d": REMOVE_GLYPH_PATH }, tag: "path" }));
+
+  return glyph;
+};
+
 // Build one member of a checkbox group: a label wrapping its own box, so the text is part of the control's hit area without needing an id to pair them. Unknown
 // members are marked exactly as they are in a dropdown.
 const createChoiceLabel = (member) => createElement("label", {
@@ -607,6 +760,18 @@ export const controlValueText = (control) => {
   if(control.matches(".fo-choice-group")) {
 
     return formatValueList([...control.querySelectorAll(".fo-choice-checkbox")].filter((box) => box.checked).map((box) => box.value));
+  }
+
+  /* A list editor reads as its items FOLLOWED BY whatever is still sitting in its entry field. The trailing text matters because a commit can arrive without the
+   * field ever blurring: the pre-Save window blur fires while the field still holds focus, and a rule that read only the items would drop the entry the user had
+   * just finished typing on their way to clicking Save.
+   */
+  if(control.matches(".fo-list-editor")) {
+
+    const items = [...control.querySelectorAll(".fo-list-item")].map((item) => item.dataset.value);
+    const pending = control.querySelector(".fo-list-entry").value.trim();
+
+    return formatValueList(pending.length ? [ ...items, pending ] : items);
   }
 
   return control.value;
@@ -639,6 +804,13 @@ const writeControlValue = ({ armed, control, entry }) => {
     return;
   }
 
+  if(control.matches(".fo-list-editor")) {
+
+    writeListEditor({ armed, control, entry });
+
+    return;
+  }
+
   if(document.activeElement !== control) {
 
     control.value = armed ? "" : (entry.value ?? defaultDisplay(entry.option));
@@ -661,6 +833,13 @@ export const focusControl = (control) => {
   if(control.matches(".fo-choice-group")) {
 
     control.querySelector(".fo-choice-checkbox")?.focus();
+
+    return;
+  }
+
+  if(control.matches(".fo-list-editor")) {
+
+    control.querySelector(".fo-list-entry").focus();
 
     return;
   }
@@ -729,6 +908,41 @@ const writeChoiceGroup = ({ armed, control, entry }) => {
   }
 };
 
+/* Write a list editor from the projection: rebuild its items only when they differ from what is already shown, and empty the entry field.
+ *
+ * The focus guard reaches INSIDE the control here, because the uncommitted edit lives in the editor's own field rather than on the control the row is addressed
+ * by. Yielding to it is the same rule a plain text field follows, for the same reason - text a user is still typing is not the projection's to overwrite - and
+ * skipping the field's clearing along with it is what keeps that text where they left it.
+ */
+const writeListEditor = ({ armed, control, entry }) => {
+
+  if(control.contains(document.activeElement)) {
+
+    return;
+  }
+
+  // An armed row shows an empty list for the same reason an armed field shows empty text: arming asks for the option's first value, and previewing a default here
+  // would put entries on screen that the user would then have to remove to say what they meant.
+  const items = armed ? [] : parseValueList(entry.value ?? defaultDisplay(entry.option));
+  const rendered = [...control.querySelectorAll(".fo-list-item")];
+  const field = control.querySelector(".fo-list-entry");
+
+  if((rendered.length !== items.length) || !items.every((item, index) => rendered[index].dataset.value === item)) {
+
+    for(const node of rendered) {
+
+      node.remove();
+    }
+
+    for(const item of items) {
+
+      control.insertBefore(createListItem(item), field);
+    }
+  }
+
+  field.value = "";
+};
+
 // Apply a row's lock to whichever control it carries. A text field locks on readOnly and disabled together - the pair that both refuses typing and takes the field
 // out of the tab order - a dropdown has no readOnly to speak of and locks on disabled alone, and a group locks each of its own boxes, since the boxes are what a
 // user would otherwise click. Every kind carries aria-disabled, which is what assistive tech reads regardless of how the lock was applied.
@@ -739,6 +953,12 @@ const applyControlLock = ({ control, locked }) => {
     for(const box of control.querySelectorAll(".fo-choice-checkbox")) {
 
       box.disabled = locked;
+    }
+  } else if(control.matches(".fo-list-editor")) {
+
+    for(const part of control.querySelectorAll(".fo-list-entry, .fo-list-remove")) {
+
+      part.disabled = locked;
     }
   } else if(control.matches("select")) {
 
@@ -895,7 +1115,12 @@ const storedText = ({ committed, entry }) => (entry.multiple && !entry.choices) 
 // The value axis counts only toward an enabled post-state, because a disabled entry never carries a value: the entry writer strips it, so a value left sitting in
 // the control has no bearing on what a disable would persist. This rule is a prediction of what the writer will actually store and it has to agree with the writer
 // exactly...treating a residual value as a deviation would compose an explicit disable that says nothing the catalog default does not already say.
-const writeAction = ({ control, deviceId, enabled, entry, expandedName, upstream, valueCentric }) => {
+//
+// An empty value normally composes no payload at all, which is what a checkbox gesture on a global list row needs: checking the box with an untouched picker is
+// a bare valueless enable, not a claim about the selection. `emptySelectionCommit` is the caller's statement that the empty text IS the gesture - the value
+// transition sets it when a list row's own control was committed empty - so the marker rides on what the user did rather than on the row's kind, which is what
+// keeps the two callers of this shared writer apart.
+const writeAction = ({ control, deviceId, emptySelectionCommit = false, enabled, entry, expandedName, upstream, valueCentric }) => {
 
   const committed = controlValueText(control);
   const valueDeviates = enabled && (control !== null) && valueDeviatesFromDefault({ committed, entry });
@@ -909,7 +1134,7 @@ const writeAction = ({ control, deviceId, enabled, entry, expandedName, upstream
   }
 
   const stored = storedText({ committed, entry });
-  const value = (valueCentric && enabled && (stored.length > 0)) ? stored : undefined;
+  const value = (valueCentric && enabled && ((stored.length > 0) || emptySelectionCommit)) ? stored : undefined;
 
   return { args: { enabled, id, option: expandedName, value }, type: "option:set" };
 };

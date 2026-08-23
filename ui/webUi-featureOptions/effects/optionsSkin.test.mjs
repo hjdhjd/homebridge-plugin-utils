@@ -410,3 +410,52 @@ describe("buildOptionsSkinCss - the choice group", () => {
     assert.equal(groupRules.every((rule) => !rule.includes("background-color")), true, "the group declares no surface of its own");
   });
 });
+
+describe("buildOptionsSkinCss - the list editor", () => {
+
+  test("lays the entries out as wrapping inline boxes on the accent tokens", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+
+    assert.match(text, /\.fo-list-editor\s*\{[^}]*display:\s*flex/);
+    assert.match(text, /\.fo-list-editor\s*\{[^}]*flex-wrap:\s*wrap/);
+    assert.match(text, /\.fo-list-item\s*\{[^}]*background-color:\s*var\(--fo-accent-bg\)/);
+    assert.match(text, /\.fo-list-item\s*\{[^}]*color:\s*var\(--fo-accent-fg\)/);
+    assert.match(text, /\.fo-list-item\s*\{[^}]*border-radius:\s*var\(--fo-radius-sm\)/);
+
+    // The remove control surrenders its chrome the way the reveal toggle does, so what reads is the glyph rather than a button.
+    assert.match(text, /\.fo-list-remove\s*\{[^}]*border:\s*0/);
+    assert.match(text, /\.fo-list-remove\s*\{[^}]*color:\s*inherit/);
+  });
+
+  test("dresses the entry field for dark mode as a descendant, since the shared value rules cannot reach it", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+
+    /* The fo-option-value class sits on the editor's wrapper, not on the field: `:focus` matches only the element actually holding focus, `::placeholder` exists
+     * only on a field, and neither background nor border is inherited. Without these three the field would render light on the dark surface while the text field
+     * in the row above it rendered dark. Each value is pinned to the same token the shared rules read, so the two cannot drift.
+     */
+    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
+    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*border-color:\s*var\(--fo-form-control-border\)/);
+    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)/);
+    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry::placeholder\s*\{[^}]*color:\s*var\(--fo-form-control-placeholder\)/);
+    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry:focus\s*\{[^}]*border-color:\s*var\(--fo-form-control-focus-border\)/);
+    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry:focus\s*\{[^}]*box-shadow:\s*var\(--fo-focus-ring\)/);
+  });
+
+  test("the light-mode editor rules touch no surface the dark rules own, so the two do not fight", () => {
+
+    using _dom = createTestDom();
+
+    // The entry field's own treatment is dark-only, matching the stance the shared value rules take: light mode is Bootstrap's.
+    const fieldRules = skinCss().match(/^.*\.fo-list-entry.*$/gm) ?? [];
+
+    assert.ok(fieldRules.length > 0, "precondition: the skin does declare entry-field rules");
+    assert.ok(fieldRules.every((rule) => rule.startsWith(":root.fo-dark ")), "and every one of them is dark-qualified");
+  });
+});

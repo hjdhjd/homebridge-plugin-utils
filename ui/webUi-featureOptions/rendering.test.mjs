@@ -1243,6 +1243,7 @@ const PICKER_OPTIONS = {
     { choices: "types", default: true, defaultValue: ALL_CHOICES, description: "Detected types.", multiple: true, name: "Types" },
     { choices: "types", default: true, defaultValue: "", description: "Detected types, no default.", multiple: true, name: "TypesUnset" },
     { default: true, defaultValue: "a,b", description: "Licence plates.", multiple: true, name: "Plates" },
+    { choices: "types", default: false, defaultValue: "", description: "Detected types, off by default.", multiple: true, name: "TypesOff" },
     { default: true, defaultValue: "plain", description: "An ordinary value beside them.", name: "Plain" }
   ]
 };
@@ -1412,8 +1413,10 @@ describe("the choice controls - applyRowState", () => {
     applyRowState({ entry: pickerEntry(again, "TypesUnset"), row: groupRow, scopeKind: "global" });
     applyRowState({ entry: pickerEntry(again, "Tier"), row: selectRow, scopeKind: "global" });
 
-    assert.deepEqual([...group.querySelectorAll(".fo-choice")], groupNodes, "every group label is the same node it was");
-    assert.deepEqual([...select.options], selectNodes, "every option is the same node it was");
+    // DOM identity is compared through assert.ok rather than assert.equal: a failing assert.equal would try to render two Happy-DOM elements into its message and
+    // never come back, so a real regression here has to be able to report itself.
+    assert.ok([...group.querySelectorAll(".fo-choice")].every((node, index) => node === groupNodes[index]), "every group label is the same node it was");
+    assert.ok([...select.options].every((node, index) => node === selectNodes[index]), "every option is the same node it was");
   });
 
   test("a re-derive against a CHANGED list replaces the nodes, for a group and for a select alike", () => {
@@ -1504,7 +1507,7 @@ describe("the choice controls - applyRowState", () => {
     document.body.appendChild(row);
     control.focus();
 
-    assert.equal(document.activeElement, control, "the dropdown holds focus");
+    assert.ok(document.activeElement === control, "the dropdown holds focus");
 
     applyRowState({ entry: pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.TierUnset=low"] }), "TierUnset"), row, scopeKind: "global" });
 
@@ -1537,18 +1540,22 @@ describe("focusControl", () => {
     const state = pickerState();
     const selectRow = pickerRow(state, "Tier");
     const groupRow = pickerRow(state, "Types");
-    const textRow = pickerRow(state, "Plates");
+    const textRow = pickerRow(state, "Plain");
+    const editorRow = pickerRow(state, "Plates");
 
-    document.body.append(selectRow, groupRow, textRow);
+    document.body.append(selectRow, groupRow, textRow, editorRow);
 
     focusControl(selectRow.querySelector(".fo-option-value"));
-    assert.equal(document.activeElement, selectRow.querySelector(".fo-option-value"), "a dropdown takes focus itself");
+    assert.ok(document.activeElement === selectRow.querySelector(".fo-option-value"), "a dropdown takes focus itself");
 
     focusControl(groupRow.querySelector(".fo-option-value"));
-    assert.equal(document.activeElement, groupRow.querySelector(".fo-choice-checkbox"), "a fieldset is not focusable, so its first box takes it");
+    assert.ok(document.activeElement === groupRow.querySelector(".fo-choice-checkbox"), "a fieldset is not focusable, so its first box takes it");
 
     focusControl(textRow.querySelector(".fo-option-value"));
-    assert.equal(document.activeElement, textRow.querySelector(".fo-option-value"), "a text field takes focus itself");
+    assert.ok(document.activeElement === textRow.querySelector(".fo-option-value"), "a text field takes focus itself");
+
+    focusControl(editorRow.querySelector(".fo-option-value"));
+    assert.ok(document.activeElement === editorRow.querySelector(".fo-list-entry"), "a list editor hands focus to the field the next entry is typed into");
 
     assert.doesNotThrow(() => focusControl(null), "a boolean row carries no control and is a quiet no-op");
   });
@@ -1580,7 +1587,10 @@ describe("controlValueText", () => {
     assert.equal(controlValueText(pickerRow(state, "Tier").querySelector(".fo-option-value")), "low", "a dropdown reads as its picked value");
     assert.equal(controlValueText(pickerRow(state, "TypesUnset").querySelector(".fo-option-value")), "a,c",
       "a group composes the canonical list of its checked boxes, in the order they are offered");
-    assert.equal(controlValueText(pickerRow(pickerState(), "Plates").querySelector(".fo-option-value")), "a,b", "a text field reads as its text");
+    assert.equal(controlValueText(pickerRow(pickerState(), "Plain").querySelector(".fo-option-value")), "plain",
+      "a plain text field - no choices, no list - reads as the text it holds");
+    assert.equal(controlValueText(pickerRow(pickerState(), "Plates").querySelector(".fo-option-value")), "a,b",
+      "a list editor composes its entries, which is the same grammar its text spelled before it had entries");
     assert.equal(controlValueText(null), "", "a boolean row reads as nothing at all");
   });
 });
@@ -1681,7 +1691,7 @@ describe("the picker transitions", () => {
     assert.equal(result.action.type, "option:cleared", "a fully checked group says exactly what the all-choices default says, so the entry goes");
   });
 
-  test("a free-form list judges deviation on the normalized list, not the typed text", () => {
+  test("a free-form list judges deviation on the normalized list, not on how it was entered", () => {
 
     using _dom = createTestDom();
 
@@ -1690,15 +1700,19 @@ describe("the picker transitions", () => {
     const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
     const control = pickerRow(state, "Plates").querySelector(".fo-option-value");
 
-    // The declared default is "a,b". Re-typing it with stray spacing says the same thing and must not persist an entry.
-    control.value = " a , b ";
-
+    // The declared default is "a,b", so the editor opens holding exactly those two entries. Committing them as they stand says what the default says.
     const same = valueCommitTransition({ catalog: state.catalog, configIndex, control, controllerId: null, deviceId: null, entry });
 
-    assert.equal(same.action.type, "option:cleared", "spacing is not a change");
+    assert.equal(same.action.type, "option:cleared", "re-committing the default list is not a change");
 
-    // Order, on the other hand, IS part of a free-form list.
-    control.value = "b,a";
+    // Order, on the other hand, IS part of a free-form list: the sequence is something the user chose.
+    typeEntry(control, "b");
+    typeEntry(control, "a");
+
+    for(const item of [...control.querySelectorAll(".fo-list-item")].slice(0, 2)) {
+
+      item.remove();
+    }
 
     const reordered = valueCommitTransition({ catalog: state.catalog, configIndex, control, controllerId: null, deviceId: null, entry });
 
@@ -1714,12 +1728,465 @@ describe("the picker transitions", () => {
     const entry = pickerEntry(state, "Plates");
     const control = pickerRow(state, "Plates").querySelector(".fo-option-value");
 
-    control.value = "a, b,,c ";
+    for(const item of [...control.querySelectorAll(".fo-list-item")]) {
+
+      item.remove();
+    }
+
+    // Entries arrive already trimmed by the gesture that made them, and the field's pending text is trimmed as it is read, so what a commit composes is canonical
+    // whichever way the user got there.
+    typeEntry(control, " a ");
+    typeEntry(control, "b");
+    control.querySelector(".fo-list-entry").value = " c ";
 
     const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
       controllerId: null, deviceId: null, entry });
 
     assert.equal(result.action.type, "option:set");
-    assert.equal(result.action.args.value, "a,b,c", "stray spacing and empty entries settle into the canonical form the read side parses");
+    assert.equal(result.action.args.value, "a,b,c", "stray spacing settles into the canonical form the read side parses");
+  });
+
+  test("emptying a group whose default is not empty stores the empty selection instead of clearing back to that default", () => {
+
+    using _dom = createTestDom();
+
+    // The state the entry grammar spells and this gesture asks for: on, with nothing selected. Clearing here would hand the row back to the all-choices default,
+    // which is the opposite of what unchecking every box says.
+    const state = pickerState();
+    const entry = pickerEntry(state, "Types");
+    const control = pickerRow(state, "Types").querySelector(".fo-option-value");
+
+    for(const box of control.querySelectorAll(".fo-choice-checkbox")) {
+
+      box.checked = false;
+    }
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry });
+
+    assert.equal(result.action.type, "option:set", "an empty selection differing from the default is a choice, so it is written");
+    assert.equal(result.action.args.value, "", "written as the empty selection itself");
+
+    // Driven through the reducer, the same way the view dispatches: the entry lands in the grammar's own spelling and the row comes back showing no members.
+    const stored = reducer(state, result.action);
+    const resolved = pickerEntry(stored, "Types");
+
+    assert.deepEqual(stored.configuredOptions, ["Enable.Pick.Types="], "the empty selection persists as the bare-delimiter entry");
+    assert.deepEqual(resolved.choices.filter((choice) => choice.selected).map((choice) => choice.value), [], "and the row shows nothing selected");
+  });
+
+  test("emptying a scoped group stores the empty selection at that scope", () => {
+
+    using _dom = createTestDom();
+
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const state = pickerState({ configuredOptions: ["Enable.Pick.Types.dev-a=a"], devices,
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const entry = pickerEntry(state, "Types");
+    const control = pickerRow(state, "Types", { deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+
+    for(const box of control.querySelectorAll(".fo-choice-checkbox")) {
+
+      box.checked = false;
+    }
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: "dev-a", entry });
+
+    assert.equal(result.action.type, "option:set", "the scope records its own empty selection");
+    assert.equal(result.action.args.id, "dev-a", "at the scope the gesture was made from");
+    assert.equal(result.action.args.value, "");
+
+    const stored = reducer(state, result.action);
+
+    assert.deepEqual(stored.configuredOptions, ["Enable.Pick.Types.dev-a="], "the scoped empty selection has a spelling of its own");
+  });
+
+  test("emptying a free-form list stores the empty selection the same way a checkbox group does", () => {
+
+    using _dom = createTestDom();
+
+    // A list without choices edits through the list editor rather than a checkbox group, and the two controls answer to one rule: removing the last entry says
+    // the same thing unchecking the last box says. The commit settles through the grammar on its way out, so what an emptied editor stores is the empty
+    // selection rather than an empty entry.
+    const state = pickerState();
+    const entry = pickerEntry(state, "Plates");
+    const control = pickerRow(state, "Plates").querySelector(".fo-option-value");
+
+    for(const item of [...control.querySelectorAll(".fo-list-item")]) {
+
+      item.remove();
+    }
+
+    assert.equal(controlValueText(control), "", "the editor holds no entries and nothing pending in its field");
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry });
+
+    assert.equal(result.action.type, "option:set", "an emptied list differs from the declared default, so it is written");
+    assert.equal(result.action.args.value, "", "as the empty selection, not as the default it was emptied of");
+
+    const stored = reducer(state, result.action);
+
+    assert.deepEqual(stored.configuredOptions, ["Enable.Pick.Plates="], "stored in the same spelling the checkbox group's empty selection takes");
+  });
+
+  test("emptying a group whose default is also empty clears, keeping the configuration minimal", () => {
+
+    using _dom = createTestDom();
+
+    // The boundary the selection compare draws. Storing an empty selection over a default that is already empty would say nothing the entry-less resolution does
+    // not already say, so the entry goes instead.
+    const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"] });
+    const entry = pickerEntry(state, "TypesUnset");
+    const control = pickerRow(state, "TypesUnset").querySelector(".fo-option-value");
+
+    for(const box of control.querySelectorAll(".fo-choice-checkbox")) {
+
+      box.checked = false;
+    }
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry });
+
+    assert.equal(result.action.type, "option:cleared", "an empty selection matching an empty default needs no entry to say so");
+
+    const cleared = reducer(state, result.action);
+
+    assert.deepEqual(cleared.configuredOptions, [], "and nothing is left behind");
+  });
+
+  test("emptying a scoped group over an upstream entry writes the local empty selection that masks it", () => {
+
+    using _dom = createTestDom();
+
+    // Neither axis deviates from the catalog here - the default is empty and so is the commit - so the write happens for the upstream reason alone, and what it
+    // has to carry is the explicit none. A clear would hand the row straight back to the entry it was meant to override.
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"], devices,
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const entry = pickerEntry(state, "TypesUnset");
+    const control = pickerRow(state, "TypesUnset", { deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+
+    assert.deepEqual(entry.choices.filter((choice) => choice.selected).map((choice) => choice.value), ["a"], "the device row starts out inheriting the global pick");
+
+    for(const box of control.querySelectorAll(".fo-choice-checkbox")) {
+
+      box.checked = false;
+    }
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: "dev-a", entry });
+
+    assert.equal(result.action.type, "option:set", "the upstream entry is what the local row has to override");
+    assert.equal(result.action.args.value, "", "and the explicit none is what overrides it");
+
+    const stored = reducer(state, result.action);
+
+    assert.deepEqual(stored.configuredOptions, [ "Enable.Pick.TypesUnset=a", "Enable.Pick.TypesUnset.dev-a=" ], "the global pick stands, masked at the device");
+  });
+
+  test("emptying an ordinary value field still clears, on the same row family the pickers live in", () => {
+
+    using _dom = createTestDom();
+
+    // The policy boundary from the other side: the empty selection belongs to lists alone, and every other control keeps the clear that makes emptying a field
+    // restore the default.
+    const state = pickerState({ configuredOptions: ["Enable.Pick.Plain=custom"] });
+    const entry = pickerEntry(state, "Plain");
+    const control = pickerRow(state, "Plain").querySelector(".fo-option-value");
+
+    control.value = "";
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry });
+
+    assert.equal(result.action.type, "option:cleared", "an emptied text field drops its entry and resolution falls back to the default");
+
+    const cleared = reducer(state, result.action);
+
+    assert.deepEqual(cleared.configuredOptions, [], "nothing is stored in its place");
+  });
+
+  test("checking a GLOBAL list row with an untouched picker still writes the bare valueless enable", () => {
+
+    using _dom = createTestDom();
+
+    // The checkbox gesture is not a claim about the selection: it says the option applies, and the picker was never operated. The write has to compose the bare
+    // enable, exactly as it does for any other value option checked at the global scope, which is why the writer takes the empty selection from the caller's
+    // gesture rather than from the row being a list.
+    const state = pickerState();
+    const entry = pickerEntry(state, "TypesOff");
+    const control = pickerRow(state, "TypesOff").querySelector(".fo-option-value");
+
+    assert.equal(controlValueText(control), "", "the untouched picker of a default-off list holds nothing");
+
+    const result = triStateTransition({ catalog: state.catalog, checkbox: checkboxStub(true), configIndex: buildConfigIndex(state.catalog,
+      state.configuredOptions), control, controllerId: null, deviceId: null, entry });
+
+    assert.equal(result.action.type, "option:set", "turning on a default-off option is a deviation worth recording");
+    assert.equal(result.action.args.enabled, true);
+    assert.equal(result.action.args.value, undefined, "and it carries no value at all, rather than an empty selection nobody chose");
+
+    const stored = reducer(state, result.action);
+
+    assert.deepEqual(stored.configuredOptions, ["Enable.Pick.TypesOff"], "the bare enable, with no payload delimiter in sight");
+  });
+});
+
+/* The list editor. A free-form list is a set of values the user builds up one at a time, and editing it as one comma-joined string in a text field asks them to do
+ * the grammar's bookkeeping by hand. What these tests hold to is that each gesture does exactly what it says and nothing more - each with its own negative control,
+ * because a remove that fires one keystroke early costs the user an entry they did not ask to lose - and that the whole thing still reports itself to the view the
+ * way a text field does.
+ */
+const editorRowFor = (state, optionName = "Plates") => {
+
+  const row = pickerRow(state, optionName);
+
+  document.body.appendChild(row);
+
+  return row;
+};
+
+const editorItems = (control) => [...control.querySelectorAll(".fo-list-item")].map((item) => item.dataset.value);
+
+// Type text into the entry field and finish it with Enter, which is the gesture that turns pending text into an entry.
+const typeEntry = (control, text, key = "Enter") => {
+
+  const field = control.querySelector(".fo-list-entry");
+
+  field.value = text;
+  field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key }));
+};
+
+describe("the list editor - construction", () => {
+
+  test("builds the option's entries, each with its own remove control, followed by the field the next one is typed into", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+
+    assert.equal(control.tagName, "DIV");
+    assert.equal(control.classList.contains("fo-option-value"), true, "the editor is the control, so it carries the shared class");
+    assert.equal(control.classList.contains("fo-list-editor"), true);
+    assert.deepEqual(editorItems(control), [ "a", "b" ], "the declared default's entries, parsed through the shared grammar");
+    assert.equal(control.querySelectorAll(".fo-list-remove").length, 2, "each entry carries its own remove control");
+    assert.equal(control.querySelector(".fo-list-item .fo-list-remove").getAttribute("aria-label"), "Remove a.", "which names the entry it removes");
+    assert.equal(control.querySelector(".fo-list-entry").style.fontFamily, "", "the field reads in the inherited body font");
+    assert.ok(control.lastElementChild.matches(".fo-list-entry"), "the field sits after the entries, where the next one is typed");
+  });
+});
+
+describe("the list editor - gestures", () => {
+
+  test("Enter turns the pending text into an entry, and adds nothing when there is no text to turn", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+
+    typeEntry(control, "zed");
+
+    assert.deepEqual(editorItems(control), [ "a", "b", "zed" ], "the typed text became an entry");
+    assert.equal(control.querySelector(".fo-list-entry").value, "", "and the field is clear for the next one");
+
+    typeEntry(control, "");
+    typeEntry(control, "   ");
+
+    assert.deepEqual(editorItems(control), [ "a", "b", "zed" ], "an empty field and a whitespace-only field both add nothing at all");
+  });
+
+  test("a typed comma finishes an entry the way Enter does, and never reaches the field as a character", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+
+    typeEntry(control, "zed", ",");
+
+    assert.deepEqual(editorItems(control), [ "a", "b", "zed" ], "the comma is the separator gesture, not a character");
+    assert.equal(control.querySelector(".fo-list-entry").value, "", "the field is clear, with no delimiter left sitting in it");
+
+    typeEntry(control, "  ", ",");
+
+    assert.deepEqual(editorItems(control), [ "a", "b", "zed" ], "a comma over whitespace alone adds nothing");
+  });
+
+  test("Backspace on an empty field removes the last entry, and removes nothing while there is text to erase", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+    const field = control.querySelector(".fo-list-entry");
+
+    // The negative controls first: a field the user is typing in must never erase their neighbour's entry out from under them.
+    field.value = "still typing";
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Backspace" }));
+
+    assert.deepEqual(editorItems(control), [ "a", "b" ], "text in the field means Backspace belongs to the text");
+
+    field.value = " ";
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Backspace" }));
+
+    assert.deepEqual(editorItems(control), [ "a", "b" ], "a field holding a space is still a field being typed in");
+
+    field.value = "";
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Backspace" }));
+
+    assert.deepEqual(editorItems(control), ["a"], "an empty field is what makes Backspace reach the list");
+  });
+
+  test("the remove control removes its own entry, and a click anywhere else in the editor removes none", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+
+    // The negative control first: the editor answers clicks on its own account, so a click that is not on a remove control has to fall through silently rather
+    // than removing whatever happens to be nearest.
+    control.click();
+    control.querySelector(".fo-list-item").click();
+
+    assert.deepEqual(editorItems(control), [ "a", "b" ], "clicking the editor or an entry's own text removes nothing");
+
+    control.querySelectorAll(".fo-list-remove")[0].click();
+
+    assert.deepEqual(editorItems(control), ["b"], "the entry whose control was pressed is the one that went");
+  });
+
+  test("blurring the field with text in it keeps that text as an entry rather than discarding it", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+    const field = control.querySelector(".fo-list-entry");
+
+    field.value = "zed";
+    field.dispatchEvent(new Event("blur"));
+
+    assert.deepEqual(editorItems(control), [ "a", "b", "zed" ], "text the user typed and moved away from is text they meant");
+  });
+
+  test("every gesture that moves the list announces one change event on the editor itself", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+    let changes = 0;
+
+    control.addEventListener("change", (event) => {
+
+      assert.ok(event.bubbles, "the event bubbles, which is how the view's delegation reaches it");
+      changes++;
+    });
+
+    typeEntry(control, "zed");
+    control.querySelectorAll(".fo-list-remove")[0].click();
+
+    const field = control.querySelector(".fo-list-entry");
+
+    field.value = "";
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Backspace" }));
+
+    assert.equal(changes, 3, "an add, a remove, and a Backspace erase - one event each");
+
+    typeEntry(control, "  ");
+
+    assert.equal(changes, 3, "a gesture that moved nothing announces nothing");
+  });
+});
+
+describe("the list editor - reading and writing its value", () => {
+
+  test("reads as its entries followed by whatever is still pending in the field", () => {
+
+    using _dom = createTestDom();
+
+    const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
+
+    assert.equal(controlValueText(control), "a,b", "the entries alone when the field is empty");
+
+    control.querySelector(".fo-list-entry").value = "  zed  ";
+
+    assert.equal(controlValueText(control), "a,b,zed", "text the user has not finished still counts - a commit can arrive before any blur does");
+
+    control.querySelector(".fo-list-entry").value = "   ";
+
+    assert.equal(controlValueText(control), "a,b", "whitespace alone is not a pending entry");
+  });
+
+  test("a re-derive rebuilds the entries from the projection and clears the field", () => {
+
+    using _dom = createTestDom();
+
+    const row = editorRowFor(pickerState());
+    const control = row.querySelector(".fo-option-value");
+
+    control.querySelector(".fo-list-entry").value = "abandoned";
+
+    applyRowState({ entry: pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.Plates=x,y,z"] }), "Plates"), row, scopeKind: "global" });
+
+    assert.deepEqual(editorItems(control), [ "x", "y", "z" ], "the projection's list is what the editor shows");
+    assert.equal(control.querySelector(".fo-list-entry").value, "", "and the field starts clean beneath it");
+  });
+
+  test("a re-derive against an unchanged list leaves the entry NODES in place", () => {
+
+    using _dom = createTestDom();
+
+    const row = editorRowFor(pickerState());
+    const control = row.querySelector(".fo-option-value");
+    const before = [...control.querySelectorAll(".fo-list-item")];
+
+    applyRowState({ entry: pickerEntry(pickerState(), "Plates"), row, scopeKind: "global" });
+
+    assert.ok([...control.querySelectorAll(".fo-list-item")].every((node, index) => node === before[index]), "an unchanged list is not rebuilt");
+  });
+
+  test("a re-derive yields to an edit in progress inside the editor", () => {
+
+    using _dom = createTestDom();
+
+    const row = editorRowFor(pickerState());
+    const control = row.querySelector(".fo-option-value");
+    const field = control.querySelector(".fo-list-entry");
+
+    field.focus();
+    field.value = "typing-in-progress";
+
+    applyRowState({ entry: pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.Plates=x,y"] }), "Plates"), row, scopeKind: "global" });
+
+    assert.equal(field.value, "typing-in-progress", "the uncommitted entry survives, exactly as a text field's uncommitted text does");
+    assert.deepEqual(editorItems(control), [ "a", "b" ], "and the entries beside it are left alone with it");
+  });
+
+  test("an armed row opens the editor empty rather than previewing a default list", () => {
+
+    using _dom = createTestDom();
+
+    const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+    const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const control = pickerRow(state, "Plates", { armed: true, deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+
+    assert.deepEqual(editorItems(control), [], "arming asks for the first entry, so there is nothing to remove first");
+  });
+
+  test("a locked row disables the field and every remove control, and marks the editor", () => {
+
+    using _dom = createTestDom();
+
+    const locked = pickerState({ configuredOptions: ["Disable.Pick.Plates"] });
+    const control = editorRowFor(locked).querySelector(".fo-option-value");
+
+    assert.equal(control.querySelector(".fo-list-entry").disabled, true, "nothing can be typed into a locked row");
+    assert.deepEqual([...control.querySelectorAll(".fo-list-remove")].map((b) => b.disabled), [ true, true ], "and nothing can be removed from it");
+    assert.equal(control.getAttribute("aria-disabled"), "true");
+
+    const live = editorRowFor(pickerState()).querySelector(".fo-option-value");
+
+    assert.equal(live.querySelector(".fo-list-entry").disabled, false);
+    assert.deepEqual([...live.querySelectorAll(".fo-list-remove")].map((b) => b.disabled), [ false, false ]);
+    assert.equal(live.getAttribute("aria-disabled"), null);
   });
 });

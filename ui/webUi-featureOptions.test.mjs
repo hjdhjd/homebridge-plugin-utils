@@ -5393,6 +5393,59 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
     orchestrator.cleanup();
   });
 
+  test("commits a list editor's typed-but-unentered text when the window loses focus ahead of the host's Save", async () => {
+
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const listFeatures = {
+
+      categories: [{ description: "Motion Options", name: "Motion" }],
+      options: { Motion: [{ default: true, defaultValue: "a,b", description: "Licence plates.", multiple: true, name: "Plates" }] }
+    };
+
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", listFeatures ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions();
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+
+    const editor = skeleton.configTable.querySelector("[id='row-Motion.Plates'] .fo-option-value");
+    const field = editor.querySelector(".fo-list-entry");
+
+    assert.ok(field, "the row's control is the list editor the catalog declared");
+
+    /* The case the pending-text rule exists for. The user types an entry and goes straight for the host's Save in the parent document, so the field never blurs
+     * and the entry never becomes an item - and the element holding focus is the field INSIDE the control, not the control the commit has to fire on. Both halves
+     * are exercised here because the real window listener is what runs: its lookup walks from the focused field out to the control, and the control's value read
+     * is what carries the unfinished text.
+     */
+    field.focus();
+    field.value = "typed-not-entered";
+
+    window.dispatchEvent(new Event("blur"));
+
+    await settlePersist();
+
+    const lastUpdate = fake.observed.updatedConfigs.at(-1);
+
+    assert.ok(lastUpdate?.[0]?.options?.includes("Enable.Motion.Plates=a,b,typed-not-entered"),
+      "the entry the user had just finished typing reaches the host's Save rather than being dropped");
+
+    orchestrator.cleanup();
+  });
+
   test("a window blur with focus outside any value control commits nothing", () => {
 
     using _dom = createTestDom();

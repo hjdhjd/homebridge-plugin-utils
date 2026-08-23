@@ -11,9 +11,9 @@
  * `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
  *
  * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
- * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts` - because a double and its subject drift apart the moment they stop sharing a
- * directory. Only their export path lives here. The helpers and the guard machinery are the other case: they have no production subject to sit beside, so this
- * directory is where they are defined rather than merely re-exported.
+ * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
+ * subject drift apart the moment they stop sharing a directory. Only their export path lives here. The helpers and the guard machinery are the other case: they have
+ * no production subject to sit beside, so this directory is where they are defined rather than merely re-exported.
  *
  * Nothing in production may import from this module, and that is what the dedicated subpath buys over a category tag on the main barrel. The production/test category
  * boundary becomes structural: a production module reaching for a double names a specifier that a reader and a grep can both see is wrong, rather than one everybody
@@ -34,6 +34,7 @@ export * from "../clock-double.ts";
 export * from "../ffmpeg/fmp4-builders.ts";
 export * from "../ffmpeg/recording-process-double.ts";
 export * from "../logclient/socket-double.ts";
+export * from "../mqtt-client-double.ts";
 export * from "./runtime-floor.ts";
 
 /**

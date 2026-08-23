@@ -32,7 +32,7 @@ import { Pool, interceptors } from "undici";
 /* The scalar half of the family's retry configuration, held once. The status list is deliberately NOT here: it is exported surface in its own right, and it has to be
  * copied rather than shared on each derivation, which a constant sitting in this object would quietly stop happening.
  */
-const API_RETRY_DEFAULTS: RetryHandler.RetryOptions = Object.freeze({ maxRetries: 3, maxTimeout: 5000, minTimeout: 1000, timeoutFactor: 2 });
+const API_RETRY_DEFAULTS = Object.freeze({ maxRetries: 3, maxTimeout: 5000, minTimeout: 1000, timeoutFactor: 2 } satisfies RetryHandler.RetryOptions);
 
 /* One entry of the tuple form of a dispatch's header set: a name beside its value. Written out here because the transport keeps that union's element type internal to
  * its own declarations, while a rewritten list has to be assignable back to it.

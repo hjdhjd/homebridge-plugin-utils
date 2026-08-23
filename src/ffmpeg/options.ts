@@ -290,12 +290,12 @@ function canonicalDecodeCodec(codec: string): SupportedDecodeCodec | undefined {
 
 // Intel QSV decoder naming: each canonical codec maps to its `<codec>_qsv` variant. Typed against `SupportedDecodeCodec` (not `string`) so the lookup is total at the
 // type level and handlers don't need runtime fallbacks. Frozen so the mapping is effectively immutable at the module boundary.
-const QSV_DECODER_BY_CODEC: Readonly<Record<SupportedDecodeCodec, string>> = Object.freeze({
+const QSV_DECODER_BY_CODEC = Object.freeze({
 
   "av1": "av1_qsv",
   "h264": "h264_qsv",
   "hevc": "hevc_qsv"
-});
+} satisfies Record<SupportedDecodeCodec, string>);
 
 // Minimal view of the encoder options that the hardware-transfer and hardware-device-init helpers actually need. `Required<Pick<...>>` so every flag this view exposes
 // is a definite boolean at the type level: every caller either passes a `ResolvedVideoEncoderOptions` (where the resolver guarantees the fields) or an inline object

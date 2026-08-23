@@ -660,7 +660,9 @@ export function prefixedLog(base: Logger, prefix: () => string): HomebridgePlugi
  * lives in the closure rather than being threaded through each logging call.
  *
  * Compose with {@link prefixedLog} gate-outermost, as `debugGatedLog(prefixedLog(base, prefix), isEnabled)`, so a suppressed debug line pays for the predicate and
- * nothing else. The reverse nesting builds the prefixed string before the gate ever runs, which is precisely the work the gate exists to skip.
+ * nothing else. The reverse nesting builds the prefixed string before the gate ever runs, which is precisely the work the gate exists to skip. A base that is
+ * itself already gated needs no special handling: a device that re-gates outermost around a `prefixedLog` over a platform's own gated logger pays one predicate
+ * to drop a suppressed line, since the outer gate returns before the inner one is ever consulted.
  *
  * @param base      - The logger that receives the passed-through calls and the gated debug output.
  * @param isEnabled - Predicate deciding whether a debug line is emitted, evaluated on every `debug` call.

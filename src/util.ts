@@ -369,6 +369,50 @@ export function sameEntries<T>(a: readonly T[], b: readonly T[], same: (x: T, y:
 }
 
 /**
+ * Compute the membership delta between the ids a source currently reports and the ids already configured: `toAdd` holds the current ids that are not yet
+ * configured, `toRemove` the configured ids that are no longer current.
+ *
+ * The use case this exists for is reconciliation: a plugin asks its source what exists, holds the set of things it has already configured, and needs to know
+ * what arrived and what left before it touches anything. One diff answers both halves at once, and isolating it lets the reconcile that consumes it read as a
+ * decision followed by its effects rather than as two membership walks tangled into the work they drive. What the ids mean, and what adding or removing one
+ * entails, stay entirely with the caller...this decides only which ids fall on which side.
+ *
+ * Each direction is filtered against a `Set` built from the opposing input, so the cost is linear in the two lengths rather than their product. The filtering
+ * walks the original arrays rather than the sets, which is what keeps each output in the order its own input arrived in - the result is never sorted - and what
+ * keeps duplicates: an id appearing twice in `currentIds` and absent from `configuredIds` appears twice in `toAdd`. Identity is SameValueZero, the comparison
+ * `Set` itself uses, so `NaN` matches `NaN` and `0` matches `-0`.
+ *
+ * Neither input is mutated, and the returned arrays are freshly built, so a caller is free to sort or splice them without disturbing what it passed in.
+ *
+ * @typeParam T - The id type, commonly a string or a numeric identifier.
+ *
+ * @param currentIds    - The ids the source currently reports.
+ * @param configuredIds - The ids already configured.
+ *
+ * @returns An object whose `toAdd` holds the current ids that are not configured and whose `toRemove` holds the configured ids that are not current.
+ *
+ * @example
+ *
+ * ```ts
+ * const { toAdd, toRemove } = membershipDelta(devices.map((device) => device.id), [...this.configured.keys()]);
+ *
+ * for(const id of toRemove) {
+ *
+ *   this.retire(id);
+ * }
+ * ```
+ *
+ * @category Utilities
+ */
+export function membershipDelta<T>(currentIds: readonly T[], configuredIds: readonly T[]): { toAdd: T[]; toRemove: T[] } {
+
+  const current = new Set(currentIds);
+  const configured = new Set(configuredIds);
+
+  return { toAdd: currentIds.filter((id) => !configured.has(id)), toRemove: configuredIds.filter((id) => !current.has(id)) };
+}
+
+/**
  * A utility type that recursively makes all properties of an object, including nested objects, optional.
  *
  * This should only be used on JSON objects. If used on classes, class methods will also be marked as optional.

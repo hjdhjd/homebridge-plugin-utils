@@ -1,13 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, onAbort, waitWithSignal,
- * markHandled, sameEntries, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream, loopFaultReporter, guardedDispatch,
- * Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds, formatPercent, formatErrorMessage,
- * defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
+ * markHandled, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
+ * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
+ * formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, debugGatedLog, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent,
-  formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, onAbort, prefixedLog, retry, runWithAbort,
-  sameEntries, sanitizeName, superviseLoop, superviseStream,
+  formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, membershipDelta, onAbort, prefixedLog,
+  retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing/index.ts";
@@ -666,6 +666,88 @@ describe("sameEntries", () => {
 
     assert.equal(sameEntries<undefined>([undefined], [undefined], never), true, "two absent entries are not a difference");
     assert.equal(invoked, 0, "the comparator is not asked about a pair with nothing in it");
+  });
+});
+
+describe("membershipDelta", () => {
+
+  test("two empty inputs leave both sides empty", () => {
+
+    const delta = membershipDelta<string>([], []);
+
+    assert.deepEqual(delta.toAdd, []);
+    assert.deepEqual(delta.toRemove, []);
+  });
+
+  test("everything the source reports against nothing configured is an arrival", () => {
+
+    const delta = membershipDelta([ "a", "b" ], []);
+
+    assert.deepEqual(delta.toAdd, [ "a", "b" ]);
+    assert.deepEqual(delta.toRemove, []);
+  });
+
+  test("everything configured against a source reporting nothing is a departure", () => {
+
+    const delta = membershipDelta<string>([], [ "a", "b" ]);
+
+    assert.deepEqual(delta.toAdd, []);
+    assert.deepEqual(delta.toRemove, [ "a", "b" ]);
+  });
+
+  test("ids on both sides are reported as neither arrival nor departure", () => {
+
+    const delta = membershipDelta([ "arrived", "kept", "also-kept" ], [ "kept", "also-kept", "departed" ]);
+
+    assert.deepEqual(delta.toAdd, ["arrived"], "the shared middle is not an arrival");
+    assert.deepEqual(delta.toRemove, ["departed"], "the shared middle is not a departure");
+  });
+
+  test("each side keeps the order of the input it came from", () => {
+
+    const delta = membershipDelta([ "c", "a", "b" ], [ "z", "y" ]);
+
+    assert.deepEqual(delta.toAdd, [ "c", "a", "b" ], "arrivals stay in the order the source reported them rather than being sorted");
+    assert.deepEqual(delta.toRemove, [ "z", "y" ], "departures stay in the order they were configured in rather than being sorted");
+  });
+
+  test("an id repeated within an input is repeated in that input's output", () => {
+
+    const delta = membershipDelta([ "a", "a", "b" ], [ "c", "c" ]);
+
+    assert.deepEqual(delta.toAdd, [ "a", "a", "b" ], "filtering the array rather than a set of it is what keeps the repeat");
+    assert.deepEqual(delta.toRemove, [ "c", "c" ]);
+  });
+
+  test("numeric ids diff exactly as string ids do", () => {
+
+    const delta = membershipDelta([ 3, 1, 4 ], [ 1, 5 ]);
+
+    assert.deepEqual(delta.toAdd, [ 3, 4 ]);
+    assert.deepEqual(delta.toRemove, [5]);
+  });
+
+  // Identity is `Set`'s own comparison, SameValueZero, which parts from strict equality at NaN - it finds itself here, so a reported NaN counts as already
+  // configured rather than as an arrival - and from Object.is at -0, which it holds to be the same id as 0.
+  test("identity is SameValueZero rather than strict equality", () => {
+
+    const delta = membershipDelta([ NaN, -0 ], [ NaN, 0 ]);
+
+    assert.deepEqual(delta.toAdd, [], "NaN matches NaN and -0 matches 0, so neither reported id counts as new");
+    assert.deepEqual(delta.toRemove, [], "the same identity rule in the other direction leaves nothing configured to drop");
+  });
+
+  test("neither input is mutated", () => {
+
+    const currentIds = [ "a", "b" ];
+    const configuredIds = [ "b", "c" ];
+    const currentBefore = [...currentIds];
+    const configuredBefore = [...configuredIds];
+
+    membershipDelta(currentIds, configuredIds);
+
+    assert.deepEqual(currentIds, currentBefore, "the reported ids come back untouched");
+    assert.deepEqual(configuredIds, configuredBefore, "the configured ids come back untouched");
   });
 });
 

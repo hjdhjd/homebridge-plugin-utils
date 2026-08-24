@@ -13,18 +13,20 @@
  * The double records, it does not simulate a broker. There is no connection, no topic prefixing (a topic is recorded as the caller's tail, verbatim), and nothing on
  * the wire...those are the real client's own contract, covered by the library's suite against a real broker, and a plugin's suite needs the plugin's side of the
  * interface rather than the transport's. What the double does mirror is the client's observable behavior, because that is what a consumer's code branches on: the
- * composed-signal check every publish opens with, `publishGuarded` routing a cancellation to debug and a genuine failure to error in the client's own wording, the
- * pre-aborted early return that registers nothing, the release of a registration when its per-subscription signal aborts, and the post-abort no-op posture of every
- * method.
+ * composed-signal check every publish opens with, the connection state a publish is refused on when it reads false, the pre-aborted early return that registers
+ * nothing, the release of a registration when its per-subscription signal aborts, and the post-abort no-op posture of every method. The guarded path routes through
+ * the client's own {@link mqtt-publish!routeGuardedPublishFailure | routeGuardedPublishFailure}, so a cancellation, an offline refusal, and a genuine failure reach
+ * the same lines here that they reach on the client.
  *
  * Signatures come from the client's own exported types - {@link MqttHandler}, {@link MqttGetHandler}, {@link MqttSetHandler}, and the init types - so a method here
  * cannot drift from the method it stands in for without the compiler saying so.
  *
  * @module
  */
-import { HbpuAbortError, composeSignals, formatErrorMessage, isHbpuAbortError, markHandled, noOpLog, onAbort } from "./util.ts";
+import { HbpuAbortError, composeSignals, markHandled, noOpLog, onAbort } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
 import type { MqttGetHandler, MqttHandler, MqttPublishInit, MqttSetHandler, MqttSubscribeInit, MqttSubscribeSetInit } from "./mqttClient.ts";
+import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
 
 // The suffixes the client appends to a get and a set registration's topic. Named here because both sides of this module spell them: the registration side appends one,
 // and the get driver strips it back off to recover the parent topic a republish goes to.
@@ -118,8 +120,9 @@ export class TestMqttClient implements AsyncDisposable {
   public readonly unsubscribes: { id: string; topic: string }[] = [];
 
   /**
-   * How many publishes the refusal lever rejected, counting the ones {@link TestMqttClient.publishGuarded} absorbed and the republish {@link TestMqttClient.invokeGet}
-   * issues, so a test can assert a refusal happened without having to observe the rejection itself.
+   * How many publishes the double refused - through the refusal lever, or because {@link TestMqttClient.connected} was false - counting the ones
+   * {@link TestMqttClient.publishGuarded} absorbs and the republish {@link TestMqttClient.invokeGet} issues, so a test can assert a refusal happened without having
+   * to observe the rejection itself.
    */
   public rejectedPublishes = 0;
 
@@ -131,6 +134,9 @@ export class TestMqttClient implements AsyncDisposable {
 
   // The controller whose signal is this double's lifetime. Owned privately so `abort()` is the only way to fire it, exactly as the client owns its own.
   readonly #controller = new AbortController();
+
+  // Backing state for the connection lever. A test writes it; the getter composes it with the lifetime signal, as the client composes mqtt.js's flag with its own.
+  #connected = true;
 
   // Where the guarded publish path reports.
   readonly #log: HomebridgePluginLogging;
@@ -158,19 +164,32 @@ export class TestMqttClient implements AsyncDisposable {
 
   /**
    * Record a publish of `payload` to `topic`, mirroring {@link mqttClient!MqttClient.publish | MqttClient.publish}. The composed signal is read first, so a publish
-   * issued after teardown rejects with the abort reason rather than recording, and the refusal lever - when armed - rejects in place of recording.
+   * issued after teardown rejects with the abort reason rather than recording. {@link TestMqttClient.connected} is read next: while it is false the publish is
+   * refused with {@link MqttOfflineError}, exactly as the client refuses a publish it has no broker session for. The refusal lever - when armed - rejects last, in
+   * place of recording.
    *
    * @param topic   - The relative topic (tail) to publish to. Recorded verbatim; the double expands nothing.
    * @param payload - The payload to publish. Buffers and strings are recorded unchanged.
    * @param init    - Optional per-publish options. See {@link MqttPublishInit}.
    *
-   * @returns A promise that resolves once the publish is recorded, or rejects with the composed signal's reason or with the armed refusal.
+   * @returns A promise that resolves once the publish is recorded, or rejects with the composed signal's reason, with {@link MqttOfflineError}, or with the armed
+   *          refusal.
    */
   public async publish(topic: string, payload: Buffer | string, init: MqttPublishInit = {}): Promise<void> {
 
     // The client composes its lifetime signal with the caller's and short-circuits a pre-aborted publish before anything reaches the wire. Composing the same way here
     // is what makes a consumer's per-publish cancellation observable against the double.
     composeSignals(this.signal, init.signal).throwIfAborted();
+
+    // The client refuses a publish it has no session for before it consults anything else, so the double reads its own connection state before the lever. A test
+    // that arms both gets the offline refusal, which is the client's order: an arbitrary refusal a test arms stands for a broker that took the message and said
+    // no, and there is no broker to say anything while the double is disconnected. Nothing is recorded either way, and the counter is what a test reads instead.
+    if(!this.connected) {
+
+      this.rejectedPublishes++;
+
+      throw new MqttOfflineError();
+    }
 
     if(this.publishRejection !== null) {
 
@@ -186,9 +205,11 @@ export class TestMqttClient implements AsyncDisposable {
    * The fire-and-forget counterpart to {@link TestMqttClient.publish}, mirroring {@link mqttClient!MqttClient.publishGuarded | MqttClient.publishGuarded}: it returns
    * nothing, never throws, and never rejects...an outcome the caller has no use for lands in the log instead.
    *
-   * Cancellation is read from the signals first and from the thrown value second, the client's own ordering: a publish cancelled by this double's abort or by the
-   * caller's own signal drops to the debug line, and so does a rejection carrying either cancellation shape - an {@link HbpuAbortError}, or a platform error named
-   * `"AbortError"`. Anything else is a genuine failure and lands on the error line. Both lines name the topic tail, since the double expands nothing.
+   * The rejection and the signals that govern it go to the client's own {@link mqtt-publish!routeGuardedPublishFailure | routeGuardedPublishFailure}, so the double
+   * and the client cannot classify the same outcome differently. Each outcome resolves to one line: a publish cancelled by this double's abort, by the caller's
+   * own signal, or by a rejection carrying either cancellation shape reaches the aborted line at debug; a publish refused through
+   * {@link TestMqttClient.connected} reaches the dropped line at debug; anything else is a genuine failure and lands on the error line. The router owns the
+   * reasoning behind that order. Every line names the topic tail, since the double expands nothing.
    *
    * @param topic   - The relative topic (tail) to publish to.
    * @param payload - The payload to publish.
@@ -200,14 +221,7 @@ export class TestMqttClient implements AsyncDisposable {
     // own guarded path the same way.
     void markHandled(this.publish(topic, payload, init).catch((error: unknown) => {
 
-      if(this.aborted || (init.signal?.aborted === true) || isHbpuAbortError(error) || ((error instanceof Error) && (error.name === "AbortError"))) {
-
-        this.#log.debug("MQTT publish aborted: %s.", topic);
-
-        return;
-      }
-
-      this.#log.error("Unable to publish to the MQTT topic %s: %s.", topic, formatErrorMessage(error));
+      routeGuardedPublishFailure({ clientSignal: this.signal, error, log: this.#log, publishSignal: init.signal, topic });
     }));
   }
 
@@ -311,6 +325,23 @@ export class TestMqttClient implements AsyncDisposable {
   public get aborted(): boolean {
 
     return this.signal.aborted;
+  }
+
+  /**
+   * The connection lever, mirroring {@link mqttClient!MqttClient.connected | MqttClient.connected}. It reads `true` on a fresh double and `false` once the double
+   * aborts, whatever the lever itself holds, which is the composition the client makes between mqtt.js's flag and its own lifetime.
+   *
+   * Setting it to `false` stands in for a broker the client holds no session with: every {@link TestMqttClient.publish} is then refused with
+   * {@link MqttOfflineError} and counted, which is the outage a consumer's own code has to survive. Set it back to `true` to resume recording.
+   */
+  public get connected(): boolean {
+
+    return !this.aborted && this.#connected;
+  }
+
+  public set connected(value: boolean) {
+
+    this.#connected = value;
   }
 
   /**

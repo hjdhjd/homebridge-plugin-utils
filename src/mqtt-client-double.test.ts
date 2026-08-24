@@ -6,9 +6,11 @@
  *
  * - Publishing: a string and a Buffer payload recorded verbatim on the topic tail; the refusal lever rejecting and counting in place of recording; a publish rejected
  *   by the double's own signal and by a per-publish signal.
- * - The guarded path: a successful publish that says nothing, a genuine failure on the error line, and each cancellation term - the double aborted, the per-publish
- *   signal aborted, an HbpuAbortError refusal, an "AbortError"-named refusal - reaching the debug line. The signal terms are exercised with a plain error as the abort
- *   reason, so nothing about the rejection's shape can route them and only the signal read can.
+ * - The guarded path: a successful publish that says nothing, a genuine failure on the error line, each cancellation term - the double aborted, the per-publish
+ *   signal aborted, an HbpuAbortError refusal, an "AbortError"-named refusal - reaching the debug line, and an offline refusal reaching the dropped line. The signal
+ *   terms are exercised with a plain error as the abort reason, so nothing about the rejection's shape can route them and only the signal read can.
+ * - Connection state: `connected` true on a fresh double, a publish refused and counted while it is false, the refusal answering ahead of the arbitrary refusal
+ *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts.
  * - Registration: raw, get, and set entries carrying the appended suffix, the label, and the caller's init verbatim; a pre-aborted signal registering nothing; a
  *   signal aborting after registration releasing its own entry and no other.
  * - Teardown: aborting releasing every registration and turning every later call into a no-op, the recorded history surviving, and scope exit disposing through abort.
@@ -20,6 +22,7 @@ import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing/i
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
 import { HbpuAbortError } from "./util.ts";
+import { MqttOfflineError } from "./mqtt-publish.ts";
 import { TestMqttClient } from "./mqtt-client-double.ts";
 import assert from "node:assert/strict";
 import { format } from "node:util";
@@ -165,6 +168,24 @@ describe("TestMqttClient - publishGuarded", () => {
     });
   });
 
+  test("a refusal carrying an MqttOfflineError drops to the dropped line", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      mqtt.publishRejection = new MqttOfflineError();
+      mqtt.publishGuarded("device1/status", "on");
+
+      await tick();
+
+      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
+      assert.deepEqual(linesAt(log, "error"), []);
+      assert.equal(mqtt.rejectedPublishes, 1);
+    });
+  });
+
   test("an aborted per-publish signal drops to the debug line whatever the rejection looks like", async () => {
 
     await assertNoUnhandledRejections(async () => {
@@ -202,6 +223,74 @@ describe("TestMqttClient - publishGuarded", () => {
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
     });
+  });
+});
+
+describe("TestMqttClient - connection state", () => {
+
+  test("connected defaults to true, and setting it false makes the double refuse exactly as the client does", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      assert.equal(mqtt.connected, true, "a fresh double stands in for a client that holds a session");
+
+      mqtt.connected = false;
+
+      await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error instanceof MqttOfflineError);
+
+      assert.deepEqual(mqtt.published, [], "a refused publish records nothing");
+      assert.equal(mqtt.rejectedPublishes, 1);
+
+      // The client reads its session state before anything else, so the double does too: with both refusals armed the offline one is what a caller sees.
+      mqtt.publishRejection = new Error("broker refused the message");
+
+      await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error instanceof MqttOfflineError);
+
+      assert.equal(mqtt.rejectedPublishes, 2);
+
+      mqtt.publishRejection = null;
+      mqtt.publishGuarded("device1/status", "on");
+
+      await tick();
+
+      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
+      assert.deepEqual(linesAt(log, "error"), []);
+
+      mqtt.connected = true;
+
+      await mqtt.publish("device1/status", "on");
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", topic: "device1/status" }], "a session restored records again");
+    });
+  });
+
+  test("invokeGet's republish while connected is false is refused, counted, and still answers the getter's value", async () => {
+
+    // The get driver absorbs a refused republish rather than answering it, which is the client's own posture: the get path reports a failed republish in its log and
+    // hands the caller the value it asked for either way. The counter is what a test reads to prove the refusal happened at all.
+    const mqtt = new TestMqttClient();
+
+    mqtt.subscribeGet("device1/status", "Status", () => "42");
+    mqtt.connected = false;
+
+    assert.equal(await mqtt.invokeGet("device1/status/get"), "42");
+    assert.deepEqual(mqtt.published, []);
+    assert.equal(mqtt.rejectedPublishes, 1);
+  });
+
+  test("connected reads false once the double aborts, whatever the lever holds", async () => {
+
+    // The composition the client makes between mqtt.js's flag and its own lifetime, mirrored: the lever is left true and the abort is what answers, so a consumer
+    // reading `connected` on a torn-down double is told the truth without the test having to reset anything.
+    const mqtt = new TestMqttClient();
+
+    mqtt.abort();
+
+    assert.equal(mqtt.connected, false);
+    assert.equal(mqtt.aborted, true);
   });
 });
 

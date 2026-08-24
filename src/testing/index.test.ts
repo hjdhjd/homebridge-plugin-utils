@@ -1,11 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, silentLog, capturingLog, formatLogEntry, loggedAt, logCount,
- * assertNoUnhandledRejections. Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every error path,
- * every async outcome - because a bug in a shared helper cascades into every test that consumes it.
+ * assertNoUnhandledRejections, waitUntil. Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every
+ * error path, every async outcome - because a bug in a shared helper cascades into every test that consumes it.
  */
 import type { CapturingLog, TestLogEntry } from "./index.ts";
-import { assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, logCount, loggedAt, silentLog } from "./index.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, logCount, loggedAt, silentLog, waitUntil } from "./index.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -269,5 +269,49 @@ describe("assertNoUnhandledRejections", () => {
     const after = process.listenerCount("unhandledRejection");
 
     assert.equal(after, before, "the unhandledRejection listener must be removed in the finally clause regardless of how the body settled");
+  });
+});
+
+describe("waitUntil", () => {
+
+  test("resolves on the first read when the predicate already holds", async () => {
+
+    // The helper reads the predicate before it ever sleeps, so a state that has already settled costs no wait at all. Counting the reads is what pins that: a helper
+    // that slept first would still resolve, just a poll interval later than it needed to, and no assertion on the outcome alone would notice.
+    let reads = 0;
+
+    await waitUntil(() => {
+
+      reads++;
+
+      return true;
+    }, { description: "a condition that already holds" });
+
+    assert.equal(reads, 1, "a settled predicate must be read once and answered without a wait");
+  });
+
+  test("keeps polling until the predicate turns true", async () => {
+
+    // The case the helper exists for: a state that settles later than the read that first asked about it. Counting the reads keeps the row deterministic - it pins
+    // the loop rather than a duration, so nothing here depends on how a loaded CI runner schedules the sleeps.
+    let reads = 0;
+
+    await waitUntil(() => {
+
+      reads++;
+
+      return reads >= 3;
+    }, { description: "the third read to come back true", pollMs: 1 });
+
+    assert.equal(reads, 3, "the helper must keep polling until the predicate answers true");
+  });
+
+  test("throws naming the description and the deadline when the predicate never holds", async () => {
+
+    // The whole point of a deadline over a fixed sleep: it fails loudly, and the message names the state the caller was waiting for rather than the shape of the
+    // wait. A reader meeting this line in a CI log should know what did not happen without opening the test.
+    await assert.rejects(async () => waitUntil(() => false, { description: "a condition that never holds", pollMs: 1, timeoutMs: 20 }),
+      { message: "waitUntil: a condition that never holds did not hold within 20 ms." },
+      "an expired deadline must throw with the caller's description and the deadline it was given");
   });
 });

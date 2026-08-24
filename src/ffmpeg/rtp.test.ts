@@ -12,6 +12,7 @@ import type { PortReservation } from "./rtp.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { waitUntil } from "../testing/index.ts";
 
 // Build a minimal RTP-shaped datagram. The parser reads the second byte's low seven bits for payload type - values above 90 and the distinguished 0 are RTP,
 // everything else is RTCP. We pick 96 (a typical dynamic media payload type) for the "is this RTP?" assertions and 72 (a sender report identifier) for RTCP coverage.
@@ -19,25 +20,6 @@ import { setTimeout as delay } from "node:timers/promises";
 function makeRtpDatagram(payloadType = 96, suffix: Buffer = Buffer.alloc(10)): Buffer {
 
   return Buffer.concat([ Buffer.from([ 0x80, payloadType & 0x7F ]), suffix ]);
-}
-
-// Poll until `predicate()` returns true or the deadline elapses. The receiver pattern in udp.helpers.ts accumulates messages on an array - tests that send and then
-// assert "did the forward land?" need a brief async wait because the kernel delivers loopback datagrams on a later tick. Polling at 10 ms is more than fine-grained
-// enough for loopback; the deadline is the upper bound on how long the test will tolerate before declaring the predicate broken.
-async function waitUntil(predicate: () => boolean, timeoutMs: number, context: string): Promise<void> {
-
-  const deadline = Date.now() + timeoutMs;
-
-  while(!predicate()) {
-
-    if(Date.now() > deadline) {
-
-      throw new Error("waitUntil exceeded " + timeoutMs.toString() + " ms waiting for " + context + ".");
-    }
-
-    // eslint-disable-next-line no-await-in-loop
-    await delay(10);
-  }
 }
 
 describe("RtpDemuxer - construction and bind", () => {
@@ -146,7 +128,7 @@ describe("RtpDemuxer - forwarding and source-port symmetry", () => {
     const datagram = makeRtpDatagram(96, Buffer.from("rtp-payload"));
 
     await sendDatagram(demuxer.inputPort, datagram);
-    await waitUntil(() => rtpReceiver.received.length >= 1, 1000, "RTP forward to arrive at rtpPort receiver");
+    await waitUntil(() => rtpReceiver.received.length >= 1, { description: "RTP forward to arrive at rtpPort receiver" });
 
     assert.equal(rtcpReceiver.received.length, 0, "RTP-classified traffic must not arrive at the RTCP destination");
     assert.equal(rtpReceiver.received.length, 1);
@@ -168,7 +150,7 @@ describe("RtpDemuxer - forwarding and source-port symmetry", () => {
     const datagram = makeRtpDatagram(72, Buffer.from("rtcp-payload"));
 
     await sendDatagram(demuxer.inputPort, datagram);
-    await waitUntil(() => rtcpReceiver.received.length >= 1, 1000, "RTCP forward to arrive at rtcpPort receiver");
+    await waitUntil(() => rtcpReceiver.received.length >= 1, { description: "RTCP forward to arrive at rtcpPort receiver" });
 
     assert.equal(rtcpReceiver.received.length, 1);
 
@@ -191,7 +173,7 @@ describe("RtpDemuxer - forwarding and source-port symmetry", () => {
     await demuxer.ready;
 
     await sendDatagram(demuxer.inputPort, makeRtpDatagram());
-    await waitUntil(() => rtpReceiver.received.length >= 1, 1000, "RTP forward to arrive");
+    await waitUntil(() => rtpReceiver.received.length >= 1, { description: "RTP forward to arrive" });
 
     const [forwarded] = rtpReceiver.received;
 
@@ -223,7 +205,7 @@ describe("RtpDemuxer - forwarding and source-port symmetry", () => {
     await sendDatagram(demuxer.inputPort, rtcp2);
     await sendDatagram(demuxer.inputPort, rtp3);
 
-    await waitUntil(() => (rtpReceiver.received.length >= 3) && (rtcpReceiver.received.length >= 2), 1000, "all five forwards to land on the right ports");
+    await waitUntil(() => (rtpReceiver.received.length >= 3) && (rtcpReceiver.received.length >= 2), { description: "all five forwards to land on the right ports" });
 
     assert.equal(rtpReceiver.received.length, 3);
     assert.equal(rtcpReceiver.received.length, 2);
@@ -253,7 +235,7 @@ describe("RtpDemuxer - mediaReady milestone", () => {
 
     // RTCP first - mediaReady should remain pending. We race a small timeout against mediaReady to confirm it did not resolve on the RTCP arrival.
     await sendDatagram(demuxer.inputPort, makeRtpDatagram(72, Buffer.from("rtcp-only")));
-    await waitUntil(() => rtcpReceiver.received.length >= 1, 1000, "RTCP forward to land");
+    await waitUntil(() => rtcpReceiver.received.length >= 1, { description: "RTCP forward to land" });
 
     let resolvedEarly = false;
 

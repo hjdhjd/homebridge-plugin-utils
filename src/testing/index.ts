@@ -7,7 +7,8 @@
  * Every piece of shipped test-support surface the library offers, reachable at one entry point.
  *
  * The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
- * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below, the runtime-floor guard machinery in
+ * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
+ * finders, the unhandled-rejection assertion, and the shared poll-with-deadline - the runtime-floor guard machinery in
  * `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
  *
  * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
@@ -21,9 +22,9 @@
  *
  * @module
  */
+import { setTimeout as delay, setImmediate as flushImmediate } from "node:timers/promises";
 import type { HomebridgePluginLogging } from "../util.ts";
 import assert from "node:assert/strict";
-import { setImmediate as flushImmediate } from "node:timers/promises";
 import { format } from "node:util";
 import { noOpLog } from "../util.ts";
 
@@ -305,5 +306,50 @@ export async function assertNoUnhandledRejections<T>(body: () => Promise<T>): Pr
   } finally {
 
     process.off("unhandledRejection", onUnhandled);
+  }
+}
+
+/**
+ * Resolve as soon as `predicate()` reads `true`, polling every `pollMs` milliseconds until a deadline `timeoutMs` out, and throw when the deadline passes with the
+ * predicate still false.
+ *
+ * This is the one poll-with-deadline the test suites share, for the waits whose subject is a state that settles on a later tick rather than on an event a test can
+ * await directly: a datagram the kernel delivers on the loopback interface, a log line a handler emits, a client's connection flag flipping once its CONNACK is
+ * parsed. A deadline that fails loudly is what makes those waits honest...a fixed sleep passes on the absence of evidence, and it pays its full duration on every
+ * run whether or not the state settled in the first millisecond.
+ *
+ * @param predicate           - The condition to poll. Called immediately and then once per interval, so a state that is already settled costs no wait at all.
+ * @param options             - Wait options.
+ * @param options.description - What the wait is for, in the grammar of "waiting for _____". It is the whole of the failure message, so name the state rather than
+ *                              the assertion.
+ * @param options.pollMs      - Milliseconds between polls. Defaults to 5.
+ * @param options.timeoutMs   - Maximum total wait, in milliseconds. Defaults to 1000 - a comfortable margin for localhost timing on a slow CI runner.
+ *
+ * @throws `Error` when `timeoutMs` elapses with the predicate still false.
+ *
+ * @example
+ *
+ * ```ts
+ * await waitUntil(() => receiver.received.length >= 1, { description: "the forwarded datagram to arrive" });
+ * ```
+ *
+ * @category Testing
+ */
+export async function waitUntil(predicate: () => boolean, { description, pollMs = 5, timeoutMs = 1000 }: { description: string; pollMs?: number;
+  timeoutMs?: number; }): Promise<void> {
+
+  const deadline = Date.now() + timeoutMs;
+
+  while(!predicate()) {
+
+    if(Date.now() >= deadline) {
+
+      throw new Error("waitUntil: " + description + " did not hold within " + timeoutMs.toString() + " ms.");
+    }
+
+    // The poll-with-deadline pattern is intentionally sequential - we cannot batch parallel awaits when each iteration's check depends on real-elapsed time. The
+    // standard ESLint guidance against `await` in loops applies to throughput-sensitive batches; this is an upper-bounded synchronization helper, not a workload.
+    // eslint-disable-next-line no-await-in-loop
+    await delay(pollMs);
   }
 }

@@ -80,4 +80,25 @@ describe("startTestBroker", () => {
 
     assert.notEqual(a.url, b.url, "concurrent brokers must each bind a distinct ephemeral port");
   });
+
+  test("a named port is bound exactly, and a broker started with no options still gets a distinct ephemeral one", async () => {
+
+    // The recovery scenario the option exists for: a client is left reconnecting to an address, and the test brings a broker back on it. Reusing the port a just-
+    // disposed broker released is how the row gets an address that is known to be free, and the bare start beside it proves the option changed nothing for the callers
+    // that pass none.
+    let releasedPort: number;
+
+    {
+
+      await using released = await startTestBroker();
+
+      releasedPort = Number.parseInt(new URL(released.url).port, 10);
+    }
+
+    await using rebound = await startTestBroker({ port: releasedPort });
+    await using ephemeral = await startTestBroker();
+
+    assert.equal(new URL(rebound.url).port, releasedPort.toString(), "a broker given a port must listen on exactly it");
+    assert.notEqual(new URL(ephemeral.url).port, releasedPort.toString(), "a broker given no port must still receive an ephemeral one of its own");
+  });
 });

@@ -14,6 +14,10 @@
  * further notice." Calling `abort()` (or letting a parent signal fire) ends the connection permanently via `mqtt.end(true)`, rejects any pending publishes with the
  * signal's reason, clears all subscription state, and makes every subsequent call a no-op.
  *
+ * A publish issued while the client is not connected to the broker rejects at once with {@link MqttOfflineError} and is never queued, so nothing is retained during
+ * an outage and nothing replays after it, and {@link MqttClient.connected} answers the same question a consumer can ask for itself before it publishes. See
+ * {@link MqttConfig.reconnectInterval} for the setting that leaves automatic reconnection disabled entirely.
+ *
  * The module offers two construction postures. Direct construction fails loudly on an invalid broker URL: the constructor throws with the underlying mqtt.js error
  * attached as `cause`, so a misconfigured plugin cannot silently sit in a zombie state where every call either pretends to succeed or throws an unrelated abort
  * error. {@link createMqttClient} is the graceful path, answering `null` for an unconfigured broker and for a construction failure alike, so a mistyped MQTT entry
@@ -22,8 +26,9 @@
  * @module
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
-import { HbpuAbortError, composeSignals, formatErrorMessage, isHbpuAbortError, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
+import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
+import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
 import util from "node:util";
@@ -182,7 +187,9 @@ export function mqttFeatureOptions<TMeta = unknown>({ defaultTopic, scopes = ["g
  *
  * @property brokerUrl         - The MQTT broker URL (for example, `"mqtt://localhost:1883"`).
  * @property log               - Logger used for connection and publish/subscribe tracing.
- * @property reconnectInterval - Seconds to wait between transient reconnect attempts. Defaults to 60.
+ * @property reconnectInterval - Seconds to wait between transient reconnect attempts. Defaults to 60. Automatic reconnection is armed only for a positive value: 0,
+ *                               a negative value, or a value that is not a number leaves it disabled, and the client then stays disconnected after its first
+ *                               transport failure until it is aborted, refusing every publish with {@link MqttOfflineError}.
  * @property topicPrefix       - Prefix prepended to every topic the client publishes or subscribes to. The caller is responsible for the remaining path structure;
  *                               this class never reinterprets the topic beyond concatenation.
  *
@@ -224,7 +231,8 @@ export interface MqttClientInit {
  *
  * @param error             - The error event payload from the underlying mqtt.js client.
  * @param log               - Logger used to emit the routed message.
- * @param reconnectInterval - Configured reconnect interval (in seconds) used to format the retry-cadence suffix.
+ * @param reconnectInterval - Configured reconnect interval (in seconds) used to render the cadence sentence. See {@link MqttConfig.reconnectInterval} for the
+ *                            values that leave automatic reconnection disabled.
  *
  * @category Utilities
  */
@@ -259,7 +267,15 @@ export function routeMqttBrokerError(error: NodeJS.ErrnoException, log: Homebrid
       break;
   }
 
-  log.error("MQTT Broker: %s. Will retry again in %s second%s.", message, reconnectInterval, (reconnectInterval === 1) ? "" : "s");
+  /* mqtt.js arms its reconnect timer only for a positive period, a comparison that is false for zero, for a negative value, and for a value that is not a number
+   * alike. Choosing the cadence sentence off that same comparison is what keeps the line honest across all of them: promising a retry the library will never
+   * attempt sends a reader hunting for a network fault that is not there. The whole sentence is settled in a local first so there is one `log.error` call, which
+   * is what keeps the two cases from drifting apart in wording or in level.
+   */
+  const plural = (reconnectInterval === 1) ? "" : "s";
+  const cadence = (reconnectInterval > 0) ? "Will retry again in " + reconnectInterval.toString() + " second" + plural + "." : "Automatic reconnection is disabled.";
+
+  log.error("MQTT Broker: %s. %s", message, cadence);
 }
 
 /**
@@ -399,17 +415,6 @@ export interface MqttPublishInit {
   signal?: AbortSignal;
 }
 
-// Tell a cancelled publish apart from a failed one by the shape of the thrown value, as the fallback behind the signal-state read in `publishGuarded`. The signals
-// are what actually say whether a publish was cancelled, so they answer first; this covers the rejection they leave ambiguous, where a genuine failure and a teardown
-// race and only the thrown value carries the answer. Both cancellation shapes a caller can produce are covered: HBPU's own lifecycles reject with an
-// `HbpuAbortError`, while a consumer that hands `publish` a raw `AbortController` signal gets the platform's `DOMException`, whose `name` is "AbortError". Neither is
-// a delivery fault. The check stays local to this module on purpose - it answers one question for one method, and the broader transport-failure taxonomy already has
-// its own home in `routeMqttBrokerError`.
-function isPublishCancellation(error: unknown): boolean {
-
-  return isHbpuAbortError(error) || ((error instanceof Error) && (error.name === "AbortError"));
-}
-
 /**
  * Signal-driven MQTT client with automatic topic-prefix management, composed connection lifetime, and per-operation signal support.
  *
@@ -445,6 +450,9 @@ export class MqttClient implements AsyncDisposable {
   readonly #reconnectInterval: number;
   readonly #subscriptions: Map<string, Set<MqttHandler>>;
   readonly #topicPrefix: string;
+
+  // The close-line edge flag, answering "were we connected before this close?" - the one question mqtt.js's own flag cannot answer, since it already reads false by
+  // the time the close listener runs. It is not the live session state, which `connected` answers.
   #isConnected: boolean;
 
   /**
@@ -499,15 +507,20 @@ export class MqttClient implements AsyncDisposable {
   }
 
   /**
-   * Publish `payload` to `topic`, returning a promise that resolves when the broker acknowledges the publish, or rejects on failure or abort.
+   * Publish `payload` to `topic`, returning a promise that resolves when the broker acknowledges the publish, or rejects on failure, on abort, or because there is
+   * no broker session to carry it.
    *
    * The topic is prefixed with the configured {@link MqttConfig.topicPrefix} before being sent; callers supply the topic tail (for example, `"device1/status"`).
+   *
+   * A publish issued while {@link MqttClient.connected} reads `false` is refused on the spot rather than held for delivery once the broker returns, so nothing is
+   * retained during an outage and nothing replays after it. See {@link MqttOfflineError} for the reasoning.
    *
    * @param topic   - The relative topic (tail) to publish to.
    * @param payload - The payload to publish. Buffers and strings are passed through unchanged.
    * @param init    - Optional per-publish options. See {@link MqttPublishInit}.
    *
-   * @returns A promise that resolves once the broker acknowledges, or rejects on error or abort.
+   * @returns A promise that resolves once the broker acknowledges, rejects with {@link MqttOfflineError} when the client is not connected to the broker, and
+   *          otherwise rejects with the abort reason or the underlying error.
    */
   public async publish(topic: string, payload: Buffer | string, init: MqttPublishInit = {}): Promise<void> {
 
@@ -520,6 +533,18 @@ export class MqttClient implements AsyncDisposable {
     const full = this.#expandTopic(topic);
 
     this.#log.debug("MQTT publish: %s.", full);
+
+    /* Refuse the publish the moment there is no session to carry it. `connected` is this class's one derivation of session state, and taking that reading here -
+     * in the same synchronous chain mqtt.js's own send path would consult its flag in - means the class and the library cannot disagree about whether a session
+     * exists, so mqtt.js's offline queue is never reached and the caller learns at once rather than holding a promise for the length of an outage.
+     *
+     * The ordering around it is deliberate. The abort check answers first, so a client that has been torn down keeps rejecting with its own abort reason instead
+     * of an offline error. The trace precedes the refusal, so every publish call leaves its one line in the debug stream whatever becomes of it.
+     */
+    if(!this.connected) {
+
+      throw new MqttOfflineError();
+    }
 
     // Wrap mqtt.js's callback-style publish in a promise, then race it against the composed signal through `waitWithSignal` - the canonical primitive every other
     // signal-aware wait in this library uses. `Promise.withResolvers` is the codebase-wide pattern for callback-bridged deferreds; using it here keeps the hop from
@@ -546,12 +571,10 @@ export class MqttClient implements AsyncDisposable {
    * to do with an acknowledgement and no way to answer a failure: it returns nothing, never throws, and never rejects, so a delivery failure lands in the client's
    * log instead of floating as an unhandled rejection.
    *
-   * A genuine failure is reported at error level, naming the expanded topic and the underlying reason. An abort is not a failure and does not appear there: a
-   * cancelled publish - the client tearing down, or a device-scoped signal firing as its accessory is disposed - is the lifecycle working as intended, so it drops
-   * to a debug line naming the same expanded topic, which is what keeps a cancelled attempt visible in the debug stream. Cancellation is read from the signals
-   * themselves, so an abort stays quiet whatever reason the caller aborted with. When both are true at once - a delivery error surfacing while the client or the
-   * per-publish signal has already aborted - the publish counts as cancelled and the line stays at debug, since a caller that has torn this publish down has nothing
-   * left to do with the failure.
+   * Every outcome resolves to exactly one line, all of them naming the expanded topic. A genuine failure is reported at error level with the underlying reason. A
+   * cancellation - the client tearing down, or a device-scoped signal firing as its accessory is disposed - is the lifecycle working as intended and drops to a
+   * debug line. A publish refused because the client holds no broker session drops to a debug line of its own, since the outage behind it is already reported at
+   * error level by the broker error line. {@link routeGuardedPublishFailure} owns the classification and the reasoning behind the order it reads those terms in.
    *
    * `init` passes through to {@link publish} unchanged, which is what lets a per-publish signal cancel this one publish quietly while the connection carries on.
    *
@@ -569,19 +592,7 @@ export class MqttClient implements AsyncDisposable {
     // where the handler itself throws - a logger that faults would otherwise turn a reported failure into an unhandled rejection.
     void markHandled(this.publish(topic, payload, init).catch((error: unknown) => {
 
-      // Cancellation is a property of the signals rather than of the thrown value: `publish` rejects with `signal.reason`, and a caller may abort with any reason it
-      // likes - a bare string, a custom error, nothing at all. Reading the signals that govern this publish, the client's lifetime and the caller's own, classifies
-      // every abort correctly whatever vocabulary the caller aborts with, and the thrown-shape check sits behind them for the rejection that arrives with neither
-      // signal reading aborted. A genuine failure that loses a race with an abort lands on the quiet path, which is the intent: once teardown is under way, a string of
-      // delivery failures on the way out tells a reader nothing they can act on.
-      if(this.aborted || (init.signal?.aborted === true) || isPublishCancellation(error)) {
-
-        this.#log.debug("MQTT publish aborted: %s.", full);
-
-        return;
-      }
-
-      this.#log.error("Unable to publish to the MQTT topic %s: %s.", full, formatErrorMessage(error));
+      routeGuardedPublishFailure({ clientSignal: this.signal, error, log: this.#log, publishSignal: init.signal, topic: full });
     }));
   }
 
@@ -773,6 +784,20 @@ export class MqttClient implements AsyncDisposable {
   public get aborted(): boolean {
 
     return this.signal.aborted;
+  }
+
+  /**
+   * `true` while the client holds a live session with the broker. Two readings compose into it: mqtt.js's own `connected` flag - set when the broker's CONNACK
+   * arrives, cleared when the connection closes, and the same flag its send path consults - and this client's lifetime signal, which is what makes the answer
+   * `false` from the instant {@link MqttClient.abort} runs even though mqtt.js clears its flag only when the socket's close event lands a turn or two later.
+   * Composing them keeps this getter and {@link MqttClient.aborted} in agreement at every instant. Derived from both; no field of its own.
+   *
+   * This is the reading {@link MqttClient.publish} takes before it hands anything to mqtt.js, so a consumer that would rather not attempt a publish it knows will
+   * be refused asks the same question here first.
+   */
+  public get connected(): boolean {
+
+    return !this.signal.aborted && this.#mqtt.connected;
   }
 
   // Wire up the MQTT.js event handlers that drive message dispatch, connection lifecycle logging, and error escalation. Extracted into a helper so the constructor

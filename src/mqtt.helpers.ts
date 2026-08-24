@@ -27,10 +27,11 @@
 import type { AddressInfo, Server } from "node:net";
 import type { CapturingLog, TestLogEntry } from "./testing/index.ts";
 import { Aedes } from "aedes";
+import type { MqttClient } from "./mqttClient.ts";
 import { createServer } from "node:net";
-import { setTimeout as delay } from "node:timers/promises";
 import { format } from "node:util";
 import { once } from "node:events";
+import { waitUntil } from "./testing/index.ts";
 
 /**
  * Handle returned by {@link startTestBroker}. Implements `AsyncDisposable` so test sites can use the canonical `await using broker = await startTestBroker()` idiom for
@@ -48,12 +49,18 @@ export interface TestBroker extends AsyncDisposable {
 }
 
 /**
- * Start an in-process MQTT broker on an ephemeral localhost port and return a {@link TestBroker} handle. The broker accepts the real MQTT v3.1.1 wire protocol;
- * `MqttClient` instances constructed against the returned URL communicate with it through real `mqtt.connect()` over real TCP.
+ * Start an in-process MQTT broker on a localhost port - ephemeral unless the caller names one - and return a {@link TestBroker} handle. The broker accepts the real
+ * MQTT v3.1.1 wire protocol; `MqttClient` instances constructed against the returned URL communicate with it through real `mqtt.connect()` over real TCP.
  *
- * The broker binds to `127.0.0.1:0` so the OS assigns an unused port - no port conflicts across parallel test files, no manual port management. Each test should start
- * its own broker (the `await using` scope makes this trivial) so subscription state is isolated per test; the cost of broker startup on localhost is sub-millisecond
- * and dominated by the kernel's TCP-listen path.
+ * The broker binds to `127.0.0.1:0` by default so the OS assigns an unused port - no port conflicts across parallel test files, no manual port management. Each test
+ * should start its own broker (the `await using` scope makes this trivial) so subscription state is isolated per test; the cost of broker startup on localhost is
+ * sub-millisecond and dominated by the kernel's TCP-listen path.
+ *
+ * Passing a fixed `port` is what lets a test bring a broker back on the address a client is already reconnecting to, which is the only way to observe a recovery
+ * end to end: the client is holding that address, so a fresh ephemeral port would leave it reconnecting to nothing.
+ *
+ * @param options      - Optional broker options.
+ * @param options.port - The port to listen on. Defaults to `0`, which asks the kernel for an unused one.
  *
  * @returns A {@link TestBroker} ready to accept connections. Disposal closes the aedes broker (which disconnects all live clients), then closes the underlying TCP
  *          server.
@@ -70,17 +77,17 @@ export interface TestBroker extends AsyncDisposable {
  * broker.aedes.publish({ cmd: "publish", dup: false, qos: 0, retain: false, topic: "test/device1/status", payload: Buffer.from("on") }, () => { });
  * ```
  */
-export async function startTestBroker(): Promise<TestBroker> {
+export async function startTestBroker(options: { port?: number } = {}): Promise<TestBroker> {
 
   const aedes = await Aedes.createBroker();
   const server: Server = createServer(aedes.handle);
 
-  // Bind to an OS-assigned ephemeral port on the loopback interface. `0` lets the kernel pick an unused port, avoiding cross-file collisions when test runners
-  // parallelize. We resolve only after `listen` reports success so the `url` field below is guaranteed to reflect a bound port.
+  // Bind on the loopback interface, at the port the caller named or - by default - at `0`, which lets the kernel pick an unused one and avoids cross-file collisions
+  // when test runners parallelize. We resolve only after `listen` reports success so the `url` field below is guaranteed to reflect a bound port.
   await new Promise<void>((resolve, reject) => {
 
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(options.port ?? 0, "127.0.0.1", () => {
 
       server.removeListener("error", reject);
       resolve();
@@ -124,6 +131,24 @@ export interface PublishRecord {
 export async function awaitConnect(broker: TestBroker): Promise<void> {
 
   await once(broker.aedes, "clientReady");
+}
+
+/**
+ * Wait until `client` reports that it holds a broker session, or fail with a timeout error.
+ *
+ * This is the client-side counterpart to {@link awaitConnect}, and the two are not interchangeable. `awaitConnect` resolves on aedes's `clientReady`, which the
+ * broker emits while it is still handling the CONNECT - before the client has parsed the CONNACK back off the socket and set its own flag. A test that publishes
+ * immediately after it therefore reaches the client's offline pre-check while the client still reports no session, and the publish is refused. Waiting on the
+ * client's own getter waits on exactly the reading the pre-check consults, so a publish that follows it is issued against a live session.
+ *
+ * @param client    - The client under test.
+ * @param timeoutMs - Maximum total wait time, in milliseconds. Defaults to 1000.
+ *
+ * @throws `Error` if the client does not report a session within `timeoutMs`.
+ */
+export async function awaitClientConnected(client: MqttClient, timeoutMs = 1000): Promise<void> {
+
+  return waitUntil(() => client.connected, { description: "the client to hold a broker session", timeoutMs });
 }
 
 /**
@@ -223,9 +248,8 @@ export function recordClientPublishes(broker: TestBroker): ClientPublishRecorder
 }
 
 /**
- * Wait until `log` contains an entry matching `predicate`, or fail with a timeout error. Replaces blind `await delay(N)` patterns where the test is genuinely
- * waiting for an async log line to materialize - polling-with-deadline is honest about what's being awaited (a specific log entry) and fails loudly when the
- * expectation is not met within `timeoutMs` instead of silently passing on the absence of evidence.
+ * Wait until `log` contains an entry matching `predicate`, or fail with a timeout error. The log-scoped face of {@link waitUntil}: all it adds over the shared poll
+ * is the scan across the captured entries, which is what lets a test name the line it is waiting for rather than the shape of the wait.
  *
  * @param log       - Capturing logger to scan.
  * @param predicate - Predicate that selects the entry the test is waiting for.
@@ -235,23 +259,7 @@ export function recordClientPublishes(broker: TestBroker): ClientPublishRecorder
  */
 export async function waitForLog(log: CapturingLog, predicate: (entry: TestLogEntry) => boolean, timeoutMs = 1000): Promise<void> {
 
-  const POLL_INTERVAL_MS = 5;
-  const deadline = Date.now() + timeoutMs;
-
-  while(Date.now() < deadline) {
-
-    if(log.entries.some(predicate)) {
-
-      return;
-    }
-
-    // The poll-with-deadline pattern is intentionally sequential - we cannot batch parallel awaits when each iteration's check depends on real-elapsed time. The
-    // standard ESLint guidance against `await` in loops applies to throughput-sensitive batches; this is an upper-bounded synchronization helper, not a workload.
-    // eslint-disable-next-line no-await-in-loop
-    await delay(POLL_INTERVAL_MS);
-  }
-
-  throw new Error("waitForLog: no matching log entry observed within " + timeoutMs.toString() + "ms.");
+  return waitUntil(() => log.entries.some(predicate), { description: "a matching log entry", timeoutMs });
 }
 
 /**

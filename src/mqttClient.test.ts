@@ -1,9 +1,9 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * mqttClient.test.ts: Unit tests for the AsyncDisposable MqttClient - composed connection lifetime, signal-driven publish / subscribe semantics, the guarded fire-and-
- * forget publish, subscribeSet handler-timeout, transport-error routing, and AsyncDisposable wiring. Tests run against a real in-process aedes broker on an ephemeral
- * localhost port (the same architectural pattern the rest of HBPU uses for tests of subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP
- * for RtpDemuxer, real DOM for the webUI).
+ * mqttClient.test.ts: Unit tests for the AsyncDisposable MqttClient - composed connection lifetime, signal-driven publish / subscribe semantics, the offline publish
+ * posture and the connection state behind it, the guarded fire-and-forget publish, subscribeSet handler-timeout, transport-error routing, and AsyncDisposable
+ * wiring. Tests run against a real in-process aedes broker on an ephemeral localhost port (the same architectural pattern the rest of HBPU uses for tests of
+ * subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP for RtpDemuxer, real DOM for the webUI).
  * Transport-level errno paths (ECONNREFUSED, ECONNRESET, ENOTFOUND) exercise real network failures; the error-routing switch is covered by direct invocation of the
  * pure {@link routeMqttBrokerError} helper, mirroring how `parseFfmpegCodecs` is tested directly with fixture strings while the spawn-end-to-end path is covered by
  * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
@@ -11,8 +11,10 @@
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
+import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
 import { assertNoUnhandledRejections, capturingLog, formatLogEntry, silentLog } from "./testing/index.ts";
-import { awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
+import { awaitClientConnected, awaitConnect, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes, startTestBroker,
+  waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
 import { FeatureOptions } from "./featureOptions.ts";
@@ -222,35 +224,11 @@ describe("MqttClient - publish signal composition", () => {
     await assert.rejects(client.publish("topic", "msg", { signal: perPublish.signal }), (error: unknown) => error === reason);
   });
 
-  test("connection-level abort rejects in-flight publishes with signal.reason", async () => {
-
-    const client = makeClient();
-
-    // Issue the publish before abort. mqtt.js's internal publish sits queued against a non-connected socket; `waitWithSignal` rejects the returned promise as soon as
-    // the client's signal fires.
-    const pending = client.publish("topic", "msg");
-    const reason = new HbpuAbortError("shutdown");
-
-    client.abort(reason);
-
-    await assert.rejects(pending, (error: unknown) => error === reason);
-  });
-
-  test("per-publish abort rejects the specific publish without killing the client", async () => {
-
-    await using client = makeClient();
-
-    const perPublish = new AbortController();
-    const pending = client.publish("topic", "msg", { signal: perPublish.signal });
-    const reason = new HbpuAbortError("replaced");
-
-    perPublish.abort(reason);
-
-    await assert.rejects(pending, (error: unknown) => error === reason);
-
-    // Connection-level signal remains live - only this specific publish was cancelled.
-    assert.equal(client.aborted, false);
-  });
+  /* This describe covers composition only, and deliberately holds no in-flight row. A publish with no broker session is refused before it ever reaches the wait, so
+   * there is no parked publish on a disconnected client for a signal to interrupt. The during-wait mechanism itself - a signal aborting mid-wait and rejecting the
+   * pending promise with its reason - is pinned in the `waitWithSignal` suite, and the abort-first ordering is pinned in the abort-and-teardown rows above. The one
+   * in-flight window a connected client does have is the socket write's drain wait inside mqtt.js, which a unit test cannot construct deterministically.
+   */
 });
 
 describe("MqttClient - publishGuarded", () => {
@@ -268,7 +246,9 @@ describe("MqttClient - publishGuarded", () => {
 
       const publishes = recordClientPublishes(broker);
 
-      await awaitConnect(broker);
+      // The wait is on the client's own reading rather than the broker's event: aedes fires `clientReady` while it is still handling the CONNECT, before the
+      // client has parsed the CONNACK back off the socket, and a publish issued in that gap has no session to go out on.
+      await awaitClientConnected(client);
 
       client.publishGuarded("device1/status", "on");
 
@@ -302,9 +282,10 @@ describe("MqttClient - publishGuarded", () => {
 
   test("a per-publish abort is reported at debug level only and leaves the client usable", async () => {
 
-    // Cancellation is not a delivery fault. The publish is issued before the CONNACK round trip completes, so the packet is still queued inside mqtt.js when the
-    // per-publish signal fires - and the controller is aborted with no reason at all, which is the platform's own `AbortError` shape rather than HBPU's, proving the
-    // classification covers a consumer that wires a bare `AbortController` into a publish.
+    // Cancellation is not a delivery fault. The publish is issued before the CONNACK round trip completes, so it is refused for want of a session before the
+    // per-publish signal even fires - and the signal reading is what classifies the attempt as cancelled whatever the rejection turns out to be. The controller is
+    // aborted with no reason at all, the platform's own `AbortError` shape rather than HBPU's, proving the classification covers a consumer that wires a bare
+    // `AbortController` into a publish.
     await assertNoUnhandledRejections(async () => {
 
       await using broker = await startTestBroker();
@@ -328,9 +309,9 @@ describe("MqttClient - publishGuarded", () => {
 
   test("a per-publish abort whose reason is a plain string is reported at debug level only", async () => {
 
-    // `AbortController.abort` accepts any value as a reason, and a bare string is a common choice. `publish` rejects with `signal.reason` verbatim, so the rejection
-    // here is the string itself rather than any error object - the shape no thrown-value check can recognize. Reading the per-publish signal is what keeps the
-    // cancellation quiet, and the client is left usable for the next caller.
+    // `AbortController.abort` accepts any value as a reason, and a bare string is a common choice. This publish is refused for want of a session before CONNACK, so
+    // the rejection is the offline error rather than the caller's string, and neither shape says anything about the caller's intent. Reading the per-publish signal
+    // is what keeps the cancellation quiet, and the client is left usable for the next caller.
     await assertNoUnhandledRejections(async () => {
 
       await using broker = await startTestBroker();
@@ -352,8 +333,9 @@ describe("MqttClient - publishGuarded", () => {
 
   test("a per-publish abort whose reason is a custom error is reported at debug level only", async () => {
 
-    // The other end of the same freedom: a caller that aborts with its own `Error` produces a rejection that looks exactly like a delivery failure to any check that
-    // reads the thrown value, since neither HBPU's own abort type nor the platform's "AbortError" name is present. The signal read is what tells the two apart.
+    // The other end of the same freedom: a caller that aborts with its own `Error`. This publish is refused for want of a session before CONNACK, so neither HBPU's
+    // own abort type nor the platform's "AbortError" name appears in the rejection and nothing about its shape says cancellation. The signal read is what tells the
+    // two apart.
     await assertNoUnhandledRejections(async () => {
 
       await using broker = await startTestBroker();
@@ -390,6 +372,142 @@ describe("MqttClient - publishGuarded", () => {
 
       assert.deepEqual(log.entries.filter((entry) => entry.level === "error"), [], "a publish cancelled by teardown must not be reported as a delivery failure");
     });
+  });
+});
+
+describe("MqttClient - offline publish posture", () => {
+
+  // Race a publish's settlement against a short budget, answering the rejection itself when the publish settled and a naming string when it did not. A publish this
+  // posture refuses rejects in the same synchronous chain that issued it, so the budget is only ever spent by a regression: a pre-check that went missing leaves the
+  // publish parked inside mqtt.js's offline queue for the length of the outage, and this race turns that hang into a named failure inside 100 ms.
+  async function settleOrPending(promise: Promise<void>): Promise<unknown> {
+
+    return Promise.race([ promise.then(() => "resolved", (error: unknown) => error), delay(100).then(() => "pending") ]);
+  }
+
+  test("a publish issued while the broker is unreachable rejects at once with MqttOfflineError, at a zero and at a positive reconnect interval", async () => {
+
+    // The refusal does not depend on what mqtt.js is doing underneath it. With reconnection disabled the client will never come back on its own; with it armed the
+    // client is between attempts. Neither state is a session, so both refuse. Each sub-case runs in its own scope with its own capturing log, so the client is
+    // disposed and the lines are read fresh before the next interval is tried.
+    async function refusesAt(reconnectInterval: number): Promise<void> {
+
+      const log = capturingLog();
+
+      await using client = makeClient({ log, reconnectInterval });
+
+      await waitForLog(log, logContains("Connection refused"));
+
+      const outcome = await settleOrPending(client.publish("device1/status", "on"));
+
+      assert.ok((outcome instanceof MqttOfflineError) && (outcome.message === "The MQTT client is not connected to the broker."),
+        "the publish must reject at once with the offline error and its pinned sentence, observed: " + String(outcome));
+      assert.equal(client.connected, false);
+    }
+
+    await refusesAt(0);
+    await refusesAt(1);
+  });
+
+  test("a publish issued before the first CONNACK is refused, and the same client delivers after it", async () => {
+
+    // The refusal window opens at construction: there is no session until the broker's CONNACK has been parsed, and a publish in that window is refused exactly as one
+    // issued mid-outage is. The second half is the rest of the contract - the same client, on the same topic, delivering normally once the session exists - which is
+    // what proves the pre-check gates on the session rather than latching the client off. The recorder is installed before the client so nothing on the wire is missed.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url, reconnectInterval: 1 });
+
+    assert.equal(client.connected, false, "a client reports no session until its CONNACK has been parsed");
+
+    const early = await settleOrPending(client.publish("device1/status", "early"));
+
+    assert.ok(early instanceof MqttOfflineError, "a publish issued before the first CONNACK must be refused, observed: " + String(early));
+
+    await awaitClientConnected(client);
+    await client.publish("device1/status", "on");
+    await publishes.awaitFirst;
+
+    assert.deepEqual(publishes.entries, [{ payload: "on", topic: "test/device1/status" }], "the refused payload must never have reached the broker");
+  });
+
+  test("connected reads false the instant the client aborts, ahead of mqtt.js's own close event", async () => {
+
+    // mqtt.js clears its own flag from the socket's close handler, which runs a turn or two after `end(true)` has requested the teardown. Composing the lifetime signal
+    // into the getter is what closes that window, so there is no instant at which a caller reads `aborted` true and `connected` true at the same time. The reads below
+    // sit on the statement after the abort with nothing awaited in between, which is the only place the window would be observable.
+    await using broker = await startTestBroker();
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+
+    client.abort();
+
+    assert.equal(client.connected, false);
+    assert.equal(client.aborted, true);
+  });
+
+  test("publishGuarded drops a publish while disconnected to one debug line after its trace, and stays silent about it at error", async () => {
+
+    // The guarded path has no caller to answer, so its one line is the whole of what a reader gets - and the outage behind it is already on the error line the broker
+    // error handler emits, which is why the drop itself belongs at debug. Pinning the trace's position ahead of the drop is what keeps the pre-check behind the one
+    // line every publish call leaves whatever becomes of it.
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+
+      await using client = makeClient({ log, reconnectInterval: 1 });
+
+      await waitForLog(log, logContains("Connection refused"));
+
+      client.publishGuarded("device1/status", "on");
+
+      await waitForLog(log, (entry) => (entry.level === "debug") &&
+        logContains("MQTT publish dropped while disconnected from the broker: test/device1/status.")(entry));
+
+      const debugLines = log.entries.filter((entry) => entry.level === "debug").map((entry) => formatLogEntry(entry));
+      const traceIndex = debugLines.indexOf("MQTT publish: test/device1/status.");
+      const dropIndex = debugLines.indexOf("MQTT publish dropped while disconnected from the broker: test/device1/status.");
+
+      assert.equal(debugLines.filter((line) => line === "MQTT publish: test/device1/status.").length, 1, "a refused publish must still leave exactly one pre-send trace");
+      assert.ok((traceIndex >= 0) && (traceIndex < dropIndex), "the pre-send trace must precede the line reporting the drop");
+      assert.deepEqual(log.entries.filter((entry) => (entry.level === "error") && logContains("Unable to publish")(entry)), [],
+        "a publish refused for want of a session must not be reported as a delivery failure");
+    });
+  });
+
+  test("a broker that goes away makes the next publish reject offline, and a broker returning on the same port takes the publish after it", async () => {
+
+    // The whole outage end to end against a real socket: a live session, the broker gone, the refusal, the broker back on the address the client is still reconnecting
+    // to, and the next publish on the wire. The returning broker has to take the same port because the client is holding that address - a fresh ephemeral port would
+    // leave it reconnecting to nothing. Every wait here is on an observed event rather than a sleep, so the row states its own timing rather than assuming one.
+    const log = capturingLog();
+    const broker = await startTestBroker();
+    const port = Number.parseInt(new URL(broker.url).port, 10);
+
+    await using client = makeClient({ brokerUrl: broker.url, log, reconnectInterval: 1 });
+
+    await awaitClientConnected(client);
+    await broker[Symbol.asyncDispose]();
+    await waitForLog(log, logContains("Connection closed"));
+
+    assert.equal(client.connected, false);
+
+    const outcome = await settleOrPending(client.publish("device1/status", "gone"));
+
+    assert.ok(outcome instanceof MqttOfflineError, "a publish issued while the broker is gone must be refused, observed: " + String(outcome));
+
+    await using returned = await startTestBroker({ port });
+
+    const publishes = recordClientPublishes(returned);
+
+    await awaitClientConnected(client);
+    await client.publish("device1/status", "back");
+    await publishes.awaitFirst;
+
+    assert.deepEqual(publishes.entries, [{ payload: "back", topic: "test/device1/status" }], "the publish issued during the outage must not replay on recovery");
   });
 });
 
@@ -1202,6 +1320,116 @@ describe("MqttClient - transport error handler (real network)", () => {
   });
 });
 
+describe("routeGuardedPublishFailure - pure function", () => {
+
+  // The router is where the client and the shipped double meet, so these cases are the contract both of them inherit: which term answers first, and what each outcome
+  // reads as on the line. Every case builds its own controllers so nothing carries between them, and the topic is fixed because the router only ever names it.
+  const TOPIC = "test/device1/status";
+
+  // Route one synthetic outcome and answer the log it wrote, so each case reads as the terms it sets and the single line they produce.
+  function route(options: { clientSignal: AbortSignal; error: unknown; publishSignal?: AbortSignal }): CapturingLog {
+
+    const log = capturingLog();
+
+    routeGuardedPublishFailure({ clientSignal: options.clientSignal, error: options.error, log, publishSignal: options.publishSignal, topic: TOPIC });
+
+    return log;
+  }
+
+  test("an aborted client signal routes a plain error to the aborted line at debug", () => {
+
+    const client = new AbortController();
+    const perPublish = new AbortController();
+
+    client.abort(new Error("going away"));
+
+    const log = route({ clientSignal: client.signal, error: new Error("broker refused the message."), publishSignal: perPublish.signal });
+
+    assert.equal(firstRendered(log), "MQTT publish aborted: test/device1/status.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["debug"]);
+  });
+
+  test("an aborted per-publish signal routes a plain error to the aborted line at debug", () => {
+
+    const client = new AbortController();
+    const perPublish = new AbortController();
+
+    perPublish.abort(new Error("device disposed"));
+
+    const log = route({ clientSignal: client.signal, error: new Error("broker refused the message."), publishSignal: perPublish.signal });
+
+    assert.equal(firstRendered(log), "MQTT publish aborted: test/device1/status.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["debug"]);
+  });
+
+  test("an HbpuAbortError with both signals live routes to the aborted line at debug", () => {
+
+    const client = new AbortController();
+    const perPublish = new AbortController();
+    const log = route({ clientSignal: client.signal, error: new HbpuAbortError("shutdown"), publishSignal: perPublish.signal });
+
+    assert.equal(firstRendered(log), "MQTT publish aborted: test/device1/status.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["debug"]);
+  });
+
+  test("a platform AbortError with both signals live routes to the aborted line at debug", () => {
+
+    const client = new AbortController();
+    const perPublish = new AbortController();
+    const rejection = new Error("The operation was aborted");
+
+    rejection.name = "AbortError";
+
+    const log = route({ clientSignal: client.signal, error: rejection, publishSignal: perPublish.signal });
+
+    assert.equal(firstRendered(log), "MQTT publish aborted: test/device1/status.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["debug"]);
+  });
+
+  test("an MqttOfflineError with both signals live routes to the dropped line at debug", () => {
+
+    const client = new AbortController();
+    const perPublish = new AbortController();
+    const log = route({ clientSignal: client.signal, error: new MqttOfflineError(), publishSignal: perPublish.signal });
+
+    assert.equal(firstRendered(log), "MQTT publish dropped while disconnected from the broker: test/device1/status.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["debug"]);
+  });
+
+  test("a plain error with both signals live routes to the failure line at error", () => {
+
+    const client = new AbortController();
+    const perPublish = new AbortController();
+    const log = route({ clientSignal: client.signal, error: new Error("broker refused the message."), publishSignal: perPublish.signal });
+
+    assert.equal(firstRendered(log), "Unable to publish to the MQTT topic test/device1/status: broker refused the message.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["error"]);
+  });
+
+  test("an aborted client signal outranks an MqttOfflineError", () => {
+
+    // The ordering the router exists to state: a publish the caller has already torn down is cancelled, whatever the rejection that surfaced on the way out says.
+    const client = new AbortController();
+    const perPublish = new AbortController();
+
+    client.abort(new HbpuAbortError("shutdown"));
+
+    const log = route({ clientSignal: client.signal, error: new MqttOfflineError(), publishSignal: perPublish.signal });
+
+    assert.equal(firstRendered(log), "MQTT publish aborted: test/device1/status.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["debug"]);
+  });
+
+  test("a caller that supplies no per-publish signal still reaches the failure line", () => {
+
+    const client = new AbortController();
+    const log = route({ clientSignal: client.signal, error: new Error("broker refused the message.") });
+
+    assert.equal(firstRendered(log), "Unable to publish to the MQTT topic test/device1/status: broker refused the message.");
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["error"]);
+  });
+});
+
 describe("routeMqttBrokerError - pure function", () => {
 
   // The wiring tests above cover the connect-time ECONNREFUSED / ECONNRESET / ENOTFOUND paths through real network failures. The pure function tests below cover
@@ -1279,6 +1507,22 @@ describe("routeMqttBrokerError - pure function", () => {
     const rendered = firstRendered(log);
 
     assert.ok(rendered.includes("Will retry again"));
+  });
+
+  test("a reconnect interval mqtt.js will not arm renders the disabled-reconnection sentence in place of the retry cadence", () => {
+
+    // mqtt.js arms its reconnect timer on `reconnectPeriod > 0`, a comparison that is false for zero, for a negative value, and for a value that is not a number
+    // alike. The line has to say so for all three: a reader told to expect a retry in 0 seconds goes looking for a network fault instead of the configuration that
+    // turned reconnection off. A fresh log per case is what lets each one fail on its own, since `firstRendered` reads only the first entry a log holds.
+    for(const reconnectInterval of [ 0, -1, Number.NaN ]) {
+
+      const log = capturingLog();
+
+      routeMqttBrokerError(syntheticError("ECONNREFUSED"), log, reconnectInterval);
+
+      assert.equal(firstRendered(log), "MQTT Broker: Connection refused. Automatic reconnection is disabled.");
+      assert.equal(log.entries.length, 1, "the router must emit exactly one line whatever the interval");
+    }
   });
 
   test("reconnect interval pluralization: 1 second is singular, others are plural", () => {

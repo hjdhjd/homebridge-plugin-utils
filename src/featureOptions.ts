@@ -366,7 +366,9 @@ export type ConfigIndex = ReadonlyMap<string, Readonly<{ enabled: boolean; value
  * and optional value for value-centric options.
  *
  * @property enabled - True to enable, false to disable.
- * @property id      - Optional device or controller scope identifier. Omit to address the global scope.
+ * @property id      - Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one
+ *                     whose composed address names another catalog option, is refused rather than written - see {@link composeScopeId}, which composes a
+ *                     controller-qualified identifier under the same rule.
  * @property option  - Feature option to set (case-insensitive).
  * @property value   - Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope:
  *                     the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the
@@ -387,7 +389,9 @@ export interface SetOptionArgs {
  * Arguments for {@link applyClearOption} and {@link FeatureOptions.clearOption}. Carries the addressing intent: the option key and optional scope id, with no
  * enabled state or value because the operation forgets every entry addressing the target regardless of what they encoded.
  *
- * @property id     - Optional device or controller scope identifier. Omit to address the global scope.
+ * @property id     - Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one
+ *                    whose composed address names another catalog option, is refused rather than cleared - see {@link composeScopeId}, which composes a
+ *                    controller-qualified identifier under the same rule.
  * @property option - Feature option to clear (case-insensitive).
  */
 export interface ClearOptionArgs {
@@ -455,11 +459,83 @@ export function expandOption(category: FeatureCategoryEntry | string, option: Fe
   return (!optionName.length) ? categoryName : categoryName + "." + optionName;
 }
 
+// The identifier rule stated for a reader, shared by every message that reports a refusal so the wording a caller is shown cannot drift from what the predicate
+// below enforces.
+const SCOPE_ID_RULE = "a scope identifier must be a non-empty string carrying neither a period nor an equals sign";
+
+// The single definition of what a scope identifier may spell. The address grammar spends both characters elsewhere - a dot separates address segments, and the
+// first "=" ends the address - so an identifier holding either names a scope the grammar has no spelling for. Every surface that composes, validates, or matches a
+// scoped address consults this one predicate, which is what keeps the writers and the readers agreeing about which addresses exist at all.
+function isValidScopeId(id: string): boolean {
+
+  return !!id.length && !id.includes(".") && !id.includes("=");
+}
+
+/**
+ * Compose the scope identifier addressing one device of one controller, joining the two parts with a dash.
+ *
+ * A device identifier that is unique only within its controller cannot address a scope on its own: two controllers can each own a device numbered "27", and a bare
+ * "27" would name both of them. Qualifying the device with its controller is the whole answer, and the join lives here so every plugin that needs one spells it the
+ * same way rather than hand-rolling a separator alongside its own rules about what may sit either side of it.
+ *
+ * What comes back is an opaque device identifier as far as the engine is concerned. Nothing decomposes it - resolution matches it whole and the entry grammar
+ * carries it whole - so the dash is a convention for the reader's eyes rather than a delimiter anything parses. Both parts must satisfy the identifier rule the
+ * address grammar imposes, and a part that does not throws rather than composing an address no reader could resolve. Whether the composed value is unique across
+ * the caller's whole identifier space is the caller's own domain knowledge...this guarantees the spelling, not the uniqueness.
+ *
+ * @param controller - The controller's identifier.
+ * @param device     - The device's identifier, unique within that controller.
+ *
+ * @returns The composed scope identifier, ready to serve as the `id` of any scoped read or write.
+ *
+ * @throws `Error` naming the offending part when either part is empty or carries a period or an equals sign.
+ *
+ * @example
+ *
+ * ```ts
+ * // Address one shade of one hub, on a system whose device numbering repeats from hub to hub.
+ * featureOpts.setOption({ enabled: false, id: composeScopeId(hub.serialNumber, shade.id), option: "Shade.Calibrate" });
+ * ```
+ *
+ * @category Feature Options
+ */
+export function composeScopeId(controller: string, device: string): string {
+
+  // Each part is checked in the order it takes in the composed value, so a caller that handed over two unusable parts hears about the first one.
+  for(const [ part, value ] of [ [ "controller", controller ], [ "device", device ] ] as const) {
+
+    if(!isValidScopeId(value)) {
+
+      throw new Error("FeatureOptions: the " + part + " part \"" + value + "\" cannot compose a scope identifier, because " + SCOPE_ID_RULE + ".");
+    }
+  }
+
+  return controller + "-" + device;
+}
+
 // Compose the canonical lookup-index target key for a (option, id) pair. This is the form a setOption({ option, id, ... }) call would resolve to on the index, and
 // is the comparison key the matcher and writers share.
 function targetKey(option: string, id: string | undefined): string {
 
   return id?.length ? option.toLowerCase() + "." + id.toLowerCase() : option.toLowerCase();
+}
+
+// Refuse a mutation whose target the arbitration cannot assign to the option it names, which is what keeps the write path and every reader describing the same set
+// of addresses. Two states fail: an identifier carrying a character the address grammar spends elsewhere, and an identifier whose composed key the catalog claims
+// as an option in its own right - `Motion.Detect` at a scope named "Sensitivity" composes the `Motion.Detect.Sensitivity` option's global address, so a write
+// there would displace that option's setting and a clear would delete it. A global write carries no identifier to check and passes straight through.
+function validateWriteTarget({ catalog, id, option }: { catalog: CatalogIndex; id?: string; option: string }): void {
+
+  if(!id?.length || keyAddressesOption({ catalog, key: targetKey(option, id), optionKey: option.toLowerCase() })) {
+
+    return;
+  }
+
+  // Which of the two refusals this is follows from the same predicate the arbitration consulted: an identifier the rule turns away is the first, and an identifier
+  // the rule accepts can only have failed because the catalog claims the address it composes.
+  const reason = isValidScopeId(id) ? ("\"" + option + "." + id + "\" is a feature option in its own right") : SCOPE_ID_RULE;
+
+  throw new Error("FeatureOptions: \"" + id + "\" cannot address a scope of \"" + option + "\", because " + reason + ".");
 }
 
 /**
@@ -1078,6 +1154,9 @@ export function buildConfigIndex(catalog: CatalogIndex, configuredOptions: reado
 // option name with a dot and ends the address at the first "=", so an id holding either character names a scope nothing can write and nothing can resolve. A key
 // that is itself a catalog option name is that option rather than a scope of a shorter one: `Enable.Motion.Detect` is the `Motion.Detect` option, never `Motion`
 // at a scope named "Detect", and the catalog is what settles it.
+//
+// Every surface that addresses a scope arbitrates here - the enumerator reading entries back, the resolution walk, the existence probe, and the writers before
+// they compose anything - so no two of them can disagree about which option a key belongs to.
 function keyAddressesOption({ catalog, key, optionKey }: { catalog: CatalogIndex; key: string; optionKey: string }): boolean {
 
   if(key === optionKey) {
@@ -1090,9 +1169,7 @@ function keyAddressesOption({ catalog, key, optionKey }: { catalog: CatalogIndex
     return false;
   }
 
-  const id = key.slice(optionKey.length + 1);
-
-  return !!id.length && !id.includes(".") && !id.includes("=");
+  return isValidScopeId(key.slice(optionKey.length + 1));
 }
 
 // Recover a scope identifier in the casing the entry carried. The lookup keys are lowercased slices of the same tail, so the matched key's length is where the
@@ -1255,17 +1332,26 @@ export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOpti
  * turns on the caller supplying the value, not on what the value says: omit `value` and a list behaves like every other option, composing the bare entry
  * globally and reducing to a clear at a scope.
  *
+ * A scoped write whose id cannot address the option is refused outright rather than composed, because the entry it would produce is one the readers would
+ * attribute elsewhere: an id carrying a period or an equals sign has no spelling in the address grammar, and an id whose composed address is itself a catalog
+ * option would write that option's own entry under another option's name. A global write has no id to check, and a legal scoped write is unaffected.
+ *
  * @param options
  * @param options.args              - The mutation intent: option key, optional scope id, enabled state, optional value. See {@link SetOptionArgs}.
- * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which determines whether to emit a value at all).
+ * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which determines whether to emit a value at all), and
+ *                                    which settles whether a scoped target belongs to this option or to another one.
  * @param options.configuredOptions - The current configured-options array.
  *
  * @returns The new configured-options array - a fresh allocation whenever an entry was written or removed, or the input array reference itself when a scoped
  *          enable that reduced to a clear found nothing to drop, mirroring {@link applyClearOption}'s reference-stable no-op.
+ *
+ * @throws `Error` naming the id and the option when a present id cannot address a scope of that option.
  */
 export function applySetOption(
   { args, catalog, configuredOptions }: { args: SetOptionArgs; catalog: CatalogIndex; configuredOptions: readonly string[] }
 ): readonly string[] {
+
+  validateWriteTarget({ catalog, id: args.id, option: args.option });
 
   // A value is meaningful only on an Enable of a value-centric option, and only when it carries content; everything else composes the bare address.
   const valued = args.enabled && isValueOption(catalog, args.option);
@@ -1304,16 +1390,25 @@ export function applySetOption(
  * reference-equality consumers can detect a no-op without a contents comparison. Surviving entries are normalized on the way through, so a clear carries the same
  * upgrade-on-save behavior a set does. See {@link normalizeConfiguredOptions}.
  *
+ * A scoped clear whose id cannot address the option is refused on the same terms {@link applySetOption} refuses a write, and for a sharper reason: an id whose
+ * composed address is itself a catalog option would delete that option's own entry in the name of clearing a scope of a shorter one. A global clear has no id to
+ * check, and a legal scoped clear is unaffected.
+ *
  * @param options
  * @param options.args              - The addressing intent: option key, optional scope id. See {@link ClearOptionArgs}.
- * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which the matcher consults via the shared parser).
+ * @param options.catalog           - The catalog index that defines what counts as a value-centric option (which the matcher consults via the shared parser), and
+ *                                    which settles whether a scoped target belongs to this option or to another one.
  * @param options.configuredOptions - The current configured-options array.
  *
  * @returns The new configured-options array, or the input array reference itself when nothing matched and nothing needed rewriting.
+ *
+ * @throws `Error` naming the id and the option when a present id cannot address a scope of that option.
  */
 export function applyClearOption(
   { args, catalog, configuredOptions }: { args: ClearOptionArgs; catalog: CatalogIndex; configuredOptions: readonly string[] }
 ): readonly string[] {
+
+  validateWriteTarget({ catalog, id: args.id, option: args.option });
 
   const target = targetKey(args.option, args.id);
   const filtered = configuredOptions.filter((entry) => !entryAddressesScope({ catalog, rawEntry: entry, target }));
@@ -1321,6 +1416,19 @@ export function applyClearOption(
 
   // Reference-stable no-op: nothing matched the target and no survivor needed rewriting, so callers comparing references see no change without inspecting contents.
   return ((normalized === filtered) && (filtered.length === configuredOptions.length)) ? configuredOptions : normalized;
+}
+
+// Read one scoped entry from the lookup index, and only when the arbitration assigns the composed key to the option being asked about. A key the catalog claims as
+// an option in its own right carries that option's own global entry, never a scope of a shorter name, so a scoped read passes over it and the caller's walk
+// continues to the next level: a read answers a question rather than enforcing a write, so an address that cannot mean what was asked simply does not match. An
+// option the catalog does not declare claims no key at all, which is what lets an entry left behind by a removed option go on resolving as it always has.
+function scopedEntry(
+  { catalog, configIndex, id, optionKey }: { catalog: CatalogIndex; configIndex: ConfigIndex; id: string; optionKey: string }
+): ReturnType<ConfigIndex["get"]> {
+
+  const key = optionKey + "." + id.toLowerCase();
+
+  return keyAddressesOption({ catalog, key, optionKey }) ? configIndex.get(key) : undefined;
 }
 
 /**
@@ -1365,7 +1473,7 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
   // Check to see if we have a device-level option first.
   if(device && (!declaredScopes || declaredScopes.includes("device"))) {
 
-    const deviceEntry = configIndex.get(normalizedOption + "." + device.toLowerCase());
+    const deviceEntry = scopedEntry({ catalog, configIndex, id: device, optionKey: normalizedOption });
 
     if(deviceEntry) {
 
@@ -1376,7 +1484,7 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
   // Now check to see if we have a controller-level option.
   if(controller && (!declaredScopes || declaredScopes.includes("controller"))) {
 
-    const controllerEntry = configIndex.get(normalizedOption + "." + controller.toLowerCase());
+    const controllerEntry = scopedEntry({ catalog, configIndex, id: controller, optionKey: normalizedOption });
 
     if(controllerEntry) {
 
@@ -1384,7 +1492,8 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
     }
   }
 
-  // Finally, we check for a global-level value.
+  // Finally, we check for a global-level value. The key at this level is the option's own name, which the arbitration assigns to that option by rule, so there is
+  // nothing here for a scoped read's guard to decide.
   if(!declaredScopes || declaredScopes.includes("global")) {
 
     const globalEntry = configIndex.get(normalizedOption);
@@ -1443,16 +1552,23 @@ export function isValueOption(catalog: CatalogIndex, option: string): boolean {
  * and an entry written at a level the option does not declare is still an entry the user typed. Ask {@link resolveScope} when the question is whether the option
  * takes effect.
  *
+ * A scoped question goes through the same arbitration every other reader and every writer consults, so an address the catalog claims for another option reads
+ * false here: an entry at `Motion.Detect.Sensitivity` is the `Motion.Detect.Sensitivity` option's own entry, not the `Motion.Detect` option configured at a scope
+ * named "Sensitivity".
+ *
  * @param args
+ * @param args.catalog     - The catalog index, which settles whether a scoped address belongs to this option or to another one.
  * @param args.configIndex - The configured-options lookup index.
  * @param args.id          - Optional scope identifier (device or controller). Omit to address the global scope.
  * @param args.option      - The option key (case-insensitive).
  *
  * @returns True when an explicit entry addresses this option-at-scope.
  */
-export function optionExists({ configIndex, id, option }: { configIndex: ConfigIndex; id?: string; option: string }): boolean {
+export function optionExists({ catalog, configIndex, id, option }: { catalog: CatalogIndex; configIndex: ConfigIndex; id?: string; option: string }): boolean {
 
-  return configIndex.has(option.toLowerCase() + (id ? "." + id.toLowerCase() : ""));
+  const optionKey = option.toLowerCase();
+
+  return id?.length ? (scopedEntry({ catalog, configIndex, id, optionKey }) !== undefined) : configIndex.has(optionKey);
 }
 
 /**
@@ -1609,6 +1725,9 @@ export class FeatureOptions {
    * This reads the configured entries alone and is blind to {@link FeatureOptionEntry.scopes}: it reports what the user configured, not what takes effect. Ask
    * {@link FeatureOptions.test} when the question is whether the option applies at a given scope.
    *
+   * A scoped question is arbitrated against the catalog, so an id whose composed address belongs to another option reads false - see {@link optionExists}, which
+   * this delegates to.
+   *
    * @param option        - Feature option to check.
    * @param id            - Optional device or controller scope identifier to check.
    *
@@ -1616,7 +1735,7 @@ export class FeatureOptions {
    */
   public exists(option: string, id?: string): boolean {
 
-    return optionExists({ configIndex: this.#configIndex, id, option });
+    return optionExists({ catalog: this.#catalog, configIndex: this.#configIndex, id, option });
   }
 
   /**
@@ -1857,7 +1976,13 @@ export class FeatureOptions {
    * value-centric options it covers the bare scoped entry and any entry carrying a value, in either the canonical or the legacy form, so a subsequent
    * {@link setOption} cleanly replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
    *
+   * A scoped clear whose id cannot address the option is refused rather than performed: an id carrying a period or an equals sign has no spelling in the address
+   * grammar, and an id whose composed address is itself a catalog option would delete that option's own entry in the name of clearing a scope of a shorter one. A
+   * global clear has no id to check, and a legal scoped clear is unaffected.
+   *
    * @param args - The addressing intent: option key and optional scope id. See {@link ClearOptionArgs}.
+   *
+   * @throws `Error` naming the id and the option when a present id cannot address a scope of that option.
    *
    * @example
    *
@@ -1900,7 +2025,13 @@ export class FeatureOptions {
    * Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See
    * {@link normalizeConfiguredOptions} for what that does and does not touch.
    *
+   * A scoped write whose id cannot address the option is refused rather than composed: an id carrying a period or an equals sign has no spelling in the address
+   * grammar, and an id whose composed address is itself a catalog option would write that option's own entry under another option's name. A global write has no id
+   * to check, and a legal scoped write is unaffected.
+   *
    * @param args - The mutation intent: option key, optional scope id, enabled state, and optional value. See {@link SetOptionArgs}.
+   *
+   * @throws `Error` naming the id and the option when a present id cannot address a scope of that option.
    *
    * @example
    *

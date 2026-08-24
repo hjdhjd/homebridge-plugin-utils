@@ -338,6 +338,22 @@ export const initialState = () => {
   };
 };
 
+/* Answer a write the engine refused by leaving the configuration exactly as it was. The engine turns away an address it cannot assign to the option asked for -
+ * a device identifier carrying a period or an equals sign, or one whose composed address is another catalog option in its own right - and the page's identifiers
+ * come from the plugin's own device records, so either refusal means a plugin handed the page an identifier it cannot address a scope with. That is worth a loud
+ * console entry and worth nothing else: the gesture writes nothing, the state reference is returned untouched so every subscriber sees a no-op, and the page
+ * stays alive under the user's hands rather than tearing down mid-click.
+ */
+const refuseWrite = (state, error) => {
+
+  // console is the page's diagnostic transport, and a refused address is a plugin defect the person seeing it can only report, so it goes where a browser defect
+  // report is already assembled.
+  // eslint-disable-next-line no-console
+  console.error("A feature option could not be written because its address does not name a scope of that option.", error);
+
+  return state;
+};
+
 /**
  * The pure reducer. Applies an action to the current state and returns the new state. Structural sharing: unchanged slices retain their reference across the
  * transition, so memoized selectors that depend on those slices return cached results.
@@ -481,12 +497,18 @@ export const reducer = (state, action) => {
       // unchanged, which subscribers reading reference equality see as a no-op. The catalog reference is unchanged either way, so selectors that depend only on
       // the catalog continue to hit their caches. Any configuration mutation disarms an armed row: the armed row's own commit is this very action, and a mutation
       // elsewhere means the user moved on.
-      return {
+      try {
 
-        ...state,
-        armedOption: null,
-        configuredOptions: applySetOption({ args: action.args, catalog: state.catalog, configuredOptions: state.configuredOptions })
-      };
+        return {
+
+          ...state,
+          armedOption: null,
+          configuredOptions: applySetOption({ args: action.args, catalog: state.catalog, configuredOptions: state.configuredOptions })
+        };
+      } catch(error) {
+
+        return refuseWrite(state, error);
+      }
     }
 
     case "option:cleared": {
@@ -494,12 +516,18 @@ export const reducer = (state, action) => {
       // The pure transform returns the input reference unchanged when nothing matched, so the reducer's `...state, configuredOptions: ...` spread also yields a
       // state value whose configuredOptions reference equals the prior one. Subscribers reading reference equality see a no-op and skip recomputation. The
       // armed-row clear follows the same mutation-disarms rule option:set applies.
-      return {
+      try {
 
-        ...state,
-        armedOption: null,
-        configuredOptions: applyClearOption({ args: action.args, catalog: state.catalog, configuredOptions: state.configuredOptions })
-      };
+        return {
+
+          ...state,
+          armedOption: null,
+          configuredOptions: applyClearOption({ args: action.args, catalog: state.catalog, configuredOptions: state.configuredOptions })
+        };
+      } catch(error) {
+
+        return refuseWrite(state, error);
+      }
     }
 
     case "option:armed": {

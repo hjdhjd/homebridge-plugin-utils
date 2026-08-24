@@ -7,9 +7,9 @@
  * first-write-wins rule for duplicate entries in configuredOptions, the scope hierarchy's "device overrides controller overrides global overrides default" contract,
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
-import { ALL_CHOICES, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, enumerateConfiguredEntries, expandOption, formatValueList,
-  getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList, resolveScope,
-  selectValues } from "./featureOptions.ts";
+import { ALL_CHOICES, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId, enumerateConfiguredEntries, expandOption,
+  formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList,
+  resolveScope, selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
@@ -2273,9 +2273,9 @@ describe("FeatureOptions - pure functional core", () => {
       const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
       const configIndex = buildConfigIndex(catalog, ["Enable.Motion.Detect.dev1"]);
 
-      assert.equal(optionExists({ configIndex, id: "dev1", option: "Motion.Detect" }), true);
-      assert.equal(optionExists({ configIndex, option: "Motion.Detect" }), false, "device-scoped entry does not satisfy global-scope existence");
-      assert.equal(optionExists({ configIndex, id: "dev2", option: "Motion.Detect" }), false);
+      assert.equal(optionExists({ catalog, configIndex, id: "dev1", option: "Motion.Detect" }), true);
+      assert.equal(optionExists({ catalog, configIndex, option: "Motion.Detect" }), false, "device-scoped entry does not satisfy global-scope existence");
+      assert.equal(optionExists({ catalog, configIndex, id: "dev2", option: "Motion.Detect" }), false);
     });
 
     test("isDependencyMet returns true for ungrouped options and resolves the parent's state for grouped options", () => {
@@ -2595,5 +2595,150 @@ describe("FeatureOptions - enumerateConfiguredEntries", () => {
       { enabled: false, id: "" },
       { enabled: true, id: "" }
     ], "both entries the user wrote are reported; the first-write-wins rule belongs to the lookup index");
+  });
+});
+
+/* One question settles every scoped address the engine handles: does this key name a scope of this option, or does it name a different option outright? The rows
+ * below put that question to every side of it - the composer that builds an address, the writers that refuse one they cannot assign, and the readers that
+ * pass over one belonging elsewhere - because any two of them answering differently is the state the arbitration exists to rule out.
+ */
+describe("FeatureOptions - scope addressing", () => {
+
+  // A catalog whose shorter option name prefixes a longer one, which is the shape a plugin lands on whenever it hangs a sub-option off a parent toggle. Neither
+  // entry declares scopes, so every level is reachable and what the rows exercise is the arbitration itself rather than a scope restriction standing in for it.
+  const COLLIDING_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+
+  const COLLIDING_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+    Motion: [
+
+      { default: true, description: "Enable motion detection.", name: "Detect" },
+      { default: false, description: "Detection sensitivity.", name: "Detect.Sensitivity" }
+    ]
+  };
+
+  const COLLISION_REFUSAL = /"Sensitivity" cannot address a scope of "Motion\.Detect", because "Motion\.Detect\.Sensitivity" is a feature option in its own right/;
+
+  describe("composeScopeId", () => {
+
+    test("joins a controller and a device into the identifier a hand-rolled join composes byte for byte", () => {
+
+      // The literal a consuming plugin already composes by hand for a hub-scoped device. The composer has to answer with exactly this string, or adopting it
+      // re-scopes every option that plugin's users have configured.
+      assert.equal(composeScopeId("home-263d11d4", "27"), "home-263d11d4-27");
+    });
+
+    test("refuses either part when it cannot serve as an identifier segment, naming the part it turned away", () => {
+
+      assert.throws(() => composeScopeId("home.263d11d4", "27"), /controller part "home\.263d11d4"/, "a period in the controller part");
+      assert.throws(() => composeScopeId("home-263d11d4", "2.7"), /device part "2\.7"/, "a period in the device part");
+      assert.throws(() => composeScopeId("home-263d11d4", "a=b"), /device part "a=b"/, "the payload delimiter in the device part");
+      assert.throws(() => composeScopeId("", "27"), /controller part ""/, "an empty controller part");
+    });
+
+    test("names the controller when neither part is usable, the order the parts take in the composed value", () => {
+
+      // Both parts are unusable here, so the row pins which one the single message names. A composer that checked the device first would answer with the device
+      // part instead, which is the reading this rules out.
+      assert.throws(() => composeScopeId("", "a=b"), /controller part ""/, "the part that comes first in the composed value is the part the caller hears about");
+    });
+  });
+
+  test("a composed identifier round-trips through the writer, the resolver, and the enumerator alike", () => {
+
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const id = composeScopeId("home-263d11d4", "27");
+    const configuredOptions = applySetOption({ args: { enabled: true, id, option: "Motion.Detect" }, catalog, configuredOptions: [] });
+
+    assert.deepEqual(configuredOptions, ["Enable.Motion.Detect.home-263d11d4-27"]);
+    assert.equal(resolveScope({ catalog, configIndex: buildConfigIndex(catalog, configuredOptions), device: id, option: "Motion.Detect" }).scope, "device");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Motion.Detect" })], [{ enabled: true, id }],
+      "the enumerator reports the same address the writer composed and the resolver matched");
+  });
+
+  test("a present id carrying a reserved character is refused by both writers", () => {
+
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const configuredOptions = ["Enable.Motion.Detect"];
+    const dotted = /"foo\.bar" cannot address a scope of "Motion\.Detect", because a scope identifier must be a non-empty string/;
+    const delimited = /"a=b" cannot address a scope of "Motion\.Detect", because a scope identifier must be a non-empty string/;
+
+    assert.throws(() => applySetOption({ args: { enabled: true, id: "foo.bar", option: "Motion.Detect" }, catalog, configuredOptions }), dotted);
+    assert.throws(() => applySetOption({ args: { enabled: true, id: "a=b", option: "Motion.Detect" }, catalog, configuredOptions }), delimited);
+    assert.throws(() => applyClearOption({ args: { id: "foo.bar", option: "Motion.Detect" }, catalog, configuredOptions }), dotted);
+    assert.throws(() => applyClearOption({ args: { id: "a=b", option: "Motion.Detect" }, catalog, configuredOptions }), delimited);
+    assert.deepEqual(configuredOptions, ["Enable.Motion.Detect"], "a refused write leaves the array it was handed exactly as it found it");
+  });
+
+  test("a write whose id composes another catalog option's own address is refused, and that option's entry survives", () => {
+
+    const catalog = buildCatalogIndex(COLLIDING_CATEGORIES, COLLIDING_OPTIONS);
+    const configuredOptions = ["Enable.Motion.Detect.Sensitivity"];
+
+    assert.throws(() => applySetOption({ args: { enabled: false, id: "Sensitivity", option: "Motion.Detect" }, catalog, configuredOptions }), COLLISION_REFUSAL);
+    assert.deepEqual(configuredOptions, ["Enable.Motion.Detect.Sensitivity"], "the longer option's own global entry is untouched");
+  });
+
+  test("a clear whose id composes another catalog option's own address is refused rather than deleting that option's entry", () => {
+
+    // The data-loss shape this rules out: taken literally, clearing "Motion.Detect at a scope named Sensitivity" filters out the entry that IS the
+    // Motion.Detect.Sensitivity option, so a gesture aimed at one option erases another one's setting with nothing on screen to show for it.
+    const catalog = buildCatalogIndex(COLLIDING_CATEGORIES, COLLIDING_OPTIONS);
+    const configuredOptions = ["Enable.Motion.Detect.Sensitivity"];
+
+    assert.throws(() => applyClearOption({ args: { id: "Sensitivity", option: "Motion.Detect" }, catalog, configuredOptions }), COLLISION_REFUSAL);
+    assert.deepEqual(configuredOptions, ["Enable.Motion.Detect.Sensitivity"], "the entry the clear would have deleted is still there");
+  });
+
+  test("a key the catalog claims for another option is not readable as a scope of the shorter one", () => {
+
+    const catalog = buildCatalogIndex(COLLIDING_CATEGORIES, COLLIDING_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, ["Enable.Motion.Detect.Sensitivity"]);
+
+    assert.equal(resolveScope({ catalog, configIndex, device: "Sensitivity", option: "Motion.Detect" }).scope, "none",
+      "the device lookup passes over a key belonging to the longer option, and the walk lands on the catalog default");
+    assert.equal(resolveScope({ catalog, configIndex, option: "Motion.Detect.Sensitivity" }).scope, "global", "the entry is the longer option's global setting");
+    assert.equal(optionExists({ catalog, configIndex, id: "Sensitivity", option: "Motion.Detect" }), false, "the existence probe agrees with the resolver");
+    assert.equal(optionExists({ catalog, configIndex, option: "Motion.Detect.Sensitivity" }), true, "while the longer option reads configured at global scope");
+  });
+
+  test("the controller lookup arbitrates on the same terms the device lookup does", () => {
+
+    const catalog = buildCatalogIndex(COLLIDING_CATEGORIES, COLLIDING_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, ["Enable.Motion.Detect.Sensitivity"]);
+
+    assert.equal(resolveScope({ catalog, configIndex, controller: "Sensitivity", option: "Motion.Detect" }).scope, "none",
+      "a controller id spelling the longer option's trailing segment reads no differently than a device id does");
+  });
+
+  test("an ordinary id under the colliding catalog writes, resolves, and clears for both options", () => {
+
+    // The control an over-broad check fails: the catalog shape that makes the collision expressible is common and deliberate, so every ordinary device id under
+    // it has to keep working for the parent option and the child alike.
+    const catalog = buildCatalogIndex(COLLIDING_CATEGORIES, COLLIDING_OPTIONS);
+
+    for(const option of [ "Motion.Detect", "Motion.Detect.Sensitivity" ]) {
+
+      const written = applySetOption({ args: { enabled: true, id: "dev1", option }, catalog, configuredOptions: [] });
+      const configIndex = buildConfigIndex(catalog, written);
+
+      assert.deepEqual(written, ["Enable." + option + ".dev1"], option + " writes its scoped entry");
+      assert.equal(resolveScope({ catalog, configIndex, device: "dev1", option }).scope, "device", option + " resolves at device scope");
+      assert.equal(optionExists({ catalog, configIndex, id: "dev1", option }), true, option + " reads as configured there");
+      assert.deepEqual(applyClearOption({ args: { id: "dev1", option }, catalog, configuredOptions: written }), [], option + " clears cleanly");
+    }
+  });
+
+  test("an entry left behind by an option the catalog no longer declares still resolves at its scope", () => {
+
+    // Written as a raw entry rather than through the writer, because what this pins is a configuration that outlived its option: nothing in the catalog claims
+    // the key, so the arbitration has nothing to assign it elsewhere and the read lands exactly where it always did.
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const configIndex = buildConfigIndex(catalog, ["Enable.Retired.Feature.dev1"]);
+    const resolved = resolveScope({ catalog, configIndex, device: "dev1", option: "Retired.Feature" });
+
+    assert.equal(resolved.scope, "device", "a stale option's scoped entry resolves as it always has");
+    assert.equal(resolved.enabled, true);
+    assert.equal(optionExists({ catalog, configIndex, id: "dev1", option: "Retired.Feature" }), true, "and the existence probe reads it too");
   });
 });

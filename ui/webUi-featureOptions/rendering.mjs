@@ -368,7 +368,7 @@ export const valueCommitTransition = ({ catalog, configIndex, control, controlle
 
   // A row is explicitly enabled at this scope when its own entry - not an inherited one - resolves it enabled: an entry exists at exactly this scope and the
   // resolved state is enabled, which a local disable would have overruled.
-  const locallyEnabled = entry.enabled && optionExists({ configIndex, id: deviceId ?? undefined, option: expandedName });
+  const locallyEnabled = entry.enabled && optionExists({ catalog, configIndex, id: deviceId ?? undefined, option: expandedName });
   const emptyCommit = !hasValueContent(controlValueText(control));
 
   // An empty commit means two different things depending on what the row edits. On a list it is the explicit empty selection, a state the grammar spells, so it
@@ -1062,12 +1062,12 @@ const hasUpstreamOption = ({ catalog, configIndex, controllerId, deviceId, expan
   const declaredScopes = catalog.scopes[expandedName.toLowerCase()];
   const controllerIsUpstream = (controllerId !== null) && (deviceId !== controllerId) && (!declaredScopes || declaredScopes.includes("controller"));
 
-  if(controllerIsUpstream && optionExists({ configIndex, id: controllerId, option: expandedName })) {
+  if(controllerIsUpstream && optionExists({ catalog, configIndex, id: controllerId, option: expandedName })) {
 
     return true;
   }
 
-  return (!declaredScopes || declaredScopes.includes("global")) && optionExists({ configIndex, option: expandedName });
+  return (!declaredScopes || declaredScopes.includes("global")) && optionExists({ catalog, configIndex, option: expandedName });
 };
 
 /* Whether the committed value differs from what the option would resolve to on its own. The comparison is by what the value MEANS, which is not the same question

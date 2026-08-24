@@ -757,3 +757,53 @@ describe("reducer - error handling", () => {
     assert.throws(() => reducer(initialState(), { type: "bogus:action" }), /unknown action type "bogus:action"/);
   });
 });
+
+/* The engine refuses an address it cannot assign to the option asked for, and the page's device identifiers come from the plugin rather than from anything the
+ * user typed. Both arms therefore have to survive a plugin that hands over an unusable one: the gesture writes nothing, the state reference comes back untouched
+ * so every subscriber reads a no-op, and the page stays under the user's hands. Each row drives one of the refusals the engine tells apart.
+ */
+describe("reducer - a write the engine refuses", () => {
+
+  // The catalog whose shorter option name prefixes a longer one, which is what lets an ordinary-looking device identifier compose another option's own address.
+  const COLLIDING_CATALOG = {
+
+    ...buildCatalogIndex([{ description: "Motion Options", name: "Motion" }], {
+
+      Motion: [
+
+        { default: true, description: "Enable motion detection.", name: "Detect" },
+        { default: false, description: "Detection sensitivity.", name: "Detect.Sensitivity" }
+      ]
+    }),
+
+    validators: { isController: () => false, validOption: () => true, validOptionCategory: () => true }
+  };
+
+  test("option:set with a reserved-character id writes nothing and reports the refusal", (t) => {
+
+    // The observation mechanism is a mock over console.error: it captures the report and keeps the deliberate refusal out of the suite's own output.
+    const reported = t.mock.method(console, "error", () => {});
+    const loaded = reducer(initialState(), {
+
+      catalog: CATALOG, configuredOptions: ["Enable.Motion.Detect"], controllers: [], mode: "device-only", type: "model:loaded"
+    });
+    const next = reducer(loaded, { args: { enabled: true, id: "a=b", option: "Motion.Detect" }, type: "option:set" });
+
+    assert.equal(next, loaded, "the state object itself comes back, so the dispatch reads as a no-op everywhere downstream");
+    assert.equal(reported.mock.callCount(), 1, "the refusal is reported once");
+  });
+
+  test("option:cleared with an id naming another catalog option deletes nothing and reports the refusal", (t) => {
+
+    const reported = t.mock.method(console, "error", () => {});
+    const loaded = reducer(initialState(), {
+
+      catalog: COLLIDING_CATALOG, configuredOptions: ["Enable.Motion.Detect.Sensitivity"], controllers: [], mode: "device-only", type: "model:loaded"
+    });
+    const next = reducer(loaded, { args: { id: "Sensitivity", option: "Motion.Detect" }, type: "option:cleared" });
+
+    assert.equal(next, loaded, "the clear is a no-op rather than a state transition");
+    assert.deepEqual(next.configuredOptions, ["Enable.Motion.Detect.Sensitivity"], "the entry the clear would have deleted is still there");
+    assert.equal(reported.mock.callCount(), 1, "the refusal is reported once");
+  });
+});

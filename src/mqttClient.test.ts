@@ -1180,16 +1180,25 @@ describe("MqttClient - transport error handler (real network)", () => {
     await waitForLog(log, logContains("Connection reset"));
   });
 
-  test("ENOTFOUND logs \"Hostname or IP address not found\" (real DNS failure)", async () => {
+  test("ENOTFOUND logs \"Hostname or IP address not found\" and mqtt.js keeps retrying the lookup (real DNS failure)", async () => {
 
-    // The `.invalid` TLD is reserved by RFC 2606 for unresolvable names; DNS lookups against it always fail with ENOTFOUND. mqtt.js sees the lookup error, emits an
-    // error event, HBPU routes it to the standalone "Hostname or IP address not found" line and ends the transport (this is the one error code that is
-    // non-recoverable through reconnect).
+    // The `.invalid` TLD is reserved by RFC 2606 for unresolvable names; DNS lookups against it always fail with ENOTFOUND. mqtt.js sees the lookup error and emits an
+    // error event, HBPU routes it to a log line carrying the retry cadence, and mqtt.js retries the lookup at the configured interval exactly as it does for every
+    // other transport error.
     const log = capturingLog();
+    const isHostnameLine = logContains("Hostname or IP address not found");
 
     await using _client = makeClient({ brokerUrl: "mqtt://does-not-exist.invalid:1883", log, reconnectInterval: 1 });
 
-    await waitForLog(log, logContains("Hostname or IP address not found"));
+    await waitForLog(log, isHostnameLine);
+
+    assert.ok(firstRendered(log).includes("Will retry again in 1 second"), "the hostname line must carry the retry cadence at reconnectInterval 1");
+
+    // `waitForLog` resolves on `entries.some(predicate)` over every entry captured so far, so waiting for a SECOND attempt means excluding the entries already seen
+    // by identity. A substring alone would be satisfied instantly by the first line and prove nothing about the retry loop.
+    const seen = new Set(log.entries);
+
+    await waitForLog(log, (entry) => !seen.has(entry) && isHostnameLine(entry), 5000);
   });
 });
 
@@ -1197,7 +1206,7 @@ describe("routeMqttBrokerError - pure function", () => {
 
   // The wiring tests above cover the connect-time ECONNREFUSED / ECONNRESET / ENOTFOUND paths through real network failures. The pure function tests below cover
   // the routing logic itself - including the `default` branch, which has no natural real-network analogue (no transport error in node:net produces an error without
-  // an errno code). The function takes a synthetic error and returns the routing decision; tests assert against the captured log entries and the returned flag.
+  // an errno code). The function takes a synthetic error and emits one log line; tests assert against the captured log entries.
 
   function syntheticError(code?: string, message = "synthetic"): NodeJS.ErrnoException {
 
@@ -1211,12 +1220,11 @@ describe("routeMqttBrokerError - pure function", () => {
     return error;
   }
 
-  test("ECONNREFUSED returns endTransport: false and logs \"Connection refused\" with the retry cadence", () => {
+  test("ECONNREFUSED logs \"Connection refused\" with the retry cadence", () => {
 
     const log = capturingLog();
-    const result = routeMqttBrokerError(syntheticError("ECONNREFUSED"), log, 60);
 
-    assert.equal(result.endTransport, false);
+    routeMqttBrokerError(syntheticError("ECONNREFUSED"), log, 60);
 
     const rendered = firstRendered(log);
 
@@ -1224,38 +1232,35 @@ describe("routeMqttBrokerError - pure function", () => {
     assert.ok(rendered.includes("60"), "log line must include the configured reconnect interval");
   });
 
-  test("ECONNRESET returns endTransport: false and logs \"Connection reset\"", () => {
+  test("ECONNRESET logs \"Connection reset\"", () => {
 
     const log = capturingLog();
-    const result = routeMqttBrokerError(syntheticError("ECONNRESET"), log, 60);
 
-    assert.equal(result.endTransport, false);
+    routeMqttBrokerError(syntheticError("ECONNRESET"), log, 60);
 
     const rendered = firstRendered(log);
 
     assert.ok(rendered.includes("Connection reset"));
   });
 
-  test("ENOTFOUND returns endTransport: true and logs the standalone hostname-not-found line", () => {
+  test("ENOTFOUND logs the hostname-not-found line through the retry-cadence formatter", () => {
 
     const log = capturingLog();
-    const result = routeMqttBrokerError(syntheticError("ENOTFOUND"), log, 60);
 
-    assert.equal(result.endTransport, true);
+    routeMqttBrokerError(syntheticError("ENOTFOUND"), log, 60);
 
     const rendered = firstRendered(log);
 
     assert.ok(rendered.includes("Hostname or IP address not found"));
-    // The ENOTFOUND log line is standalone - no retry-cadence suffix - because reconnect cannot recover a bad hostname.
-    assert.ok(!rendered.includes("Will retry again"), "ENOTFOUND must not include the retry-cadence suffix");
+    // A DNS answer is not proof the hostname is wrong, so an unresolvable name is retried on the same cadence as every other transport error and says so.
+    assert.ok(rendered.includes("Will retry again"), "ENOTFOUND must carry the retry-cadence suffix");
   });
 
   test("unknown error codes fall through to the default branch with util.inspect output", () => {
 
     const log = capturingLog();
-    const result = routeMqttBrokerError(syntheticError("EWEIRD", "unfamiliar error"), log, 30);
 
-    assert.equal(result.endTransport, false, "unknown errors do not imply end-permanently semantics - mqtt.js's reconnect retains control");
+    routeMqttBrokerError(syntheticError("EWEIRD", "unfamiliar error"), log, 30);
 
     const rendered = firstRendered(log);
 
@@ -1268,9 +1273,8 @@ describe("routeMqttBrokerError - pure function", () => {
     // A bare Error without an errno code is shape-equivalent to "future mqtt.js error we did not anticipate." The default branch must still log it through the
     // retry-cadence formatter rather than silently swallowing or crashing.
     const log = capturingLog();
-    const result = routeMqttBrokerError(syntheticError(undefined, "no code at all"), log, 60);
 
-    assert.equal(result.endTransport, false);
+    routeMqttBrokerError(syntheticError(undefined, "no code at all"), log, 60);
 
     const rendered = firstRendered(log);
 

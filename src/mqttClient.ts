@@ -209,75 +209,57 @@ export interface MqttClientInit {
 }
 
 /**
- * Result of routing a transport-level MQTT error through {@link routeMqttBrokerError}. Returned to the caller so the wiring layer (the `client.on("error", ...)`
- * handler in {@link MqttClient}) can apply the side effect on its own state. Keeping the routing pure - logging plus a flag - lets the routing logic be tested in
- * isolation against synthetic error inputs, without standing up a broker or injecting events into the underlying mqtt.js client.
- *
- * @property endTransport - `true` when the error code requires forcibly ending the underlying transport (the mqtt.js client should not attempt reconnect). Mirrors
- *                          the architectural rule that ENOTFOUND is the one transport error reconnect cannot recover from.
- *
- * @category Utilities
- */
-export interface MqttBrokerErrorResult {
-
-  endTransport: boolean;
-}
-
-/**
- * Route a transport-level MQTT error to the appropriate log line and signal whether the underlying transport should be ended. Pure function: no class state, no
- * mqtt.js handles, no closure over the live client. The wiring layer in {@link MqttClient} forwards every `client.on("error", ...)` invocation through here and acts
- * on the returned `endTransport` flag.
+ * Route a transport-level MQTT error to the appropriate log line. Pure function: no class state, no mqtt.js handles, no closure over the live client. The wiring layer
+ * in {@link MqttClient} forwards every `client.on("error", ...)` invocation through here, and mqtt.js's own reconnect policy keeps control of the transport, so every
+ * error resolves to a log line and nothing else.
  *
  * The routing paths mirror the transport-error categories HBPU distinguishes:
  *
- * - `ECONNREFUSED` - the broker host is up but no listener accepts the connection. Recoverable; auto-reconnect handles it.
- * - `ECONNRESET`   - the broker accepted then dropped the connection. Recoverable; auto-reconnect handles it.
- * - `ENOTFOUND`    - DNS could not resolve the broker hostname. Non-recoverable - retrying the same hostname will keep failing - so we end the transport permanently
- *                    and emit a standalone log line without the retry-cadence suffix.
- * - default        - any other error code (or none). Logged through the retry-cadence formatter with `util.inspect` of the error, so a future mqtt.js error code we
- *                    did not anticipate still surfaces in the log stream rather than being silently swallowed.
+ * - `ECONNREFUSED` - the broker host is up but no listener accepts the connection. Auto-reconnect handles it.
+ * - `ECONNRESET`   - the broker accepted then dropped the connection. Auto-reconnect handles it.
+ * - `ENOTFOUND`    - DNS could not resolve the broker hostname. Retried like every other transport error, because a lookup fails for reasons that clear on their own:
+ *                    a resolver that is not up yet at boot, or a name that resolves only once the device answering to it appears.
+ * - default        - any other error code (or none). Logged with `util.inspect` of the error, so a future mqtt.js error code we did not anticipate still surfaces in
+ *                    the log stream rather than being silently swallowed.
  *
  * @param error             - The error event payload from the underlying mqtt.js client.
  * @param log               - Logger used to emit the routed message.
  * @param reconnectInterval - Configured reconnect interval (in seconds) used to format the retry-cadence suffix.
  *
- * @returns A {@link MqttBrokerErrorResult} indicating whether the wiring layer should end the transport.
- *
  * @category Utilities
  */
-export function routeMqttBrokerError(error: NodeJS.ErrnoException, log: HomebridgePluginLogging, reconnectInterval: number): MqttBrokerErrorResult {
+export function routeMqttBrokerError(error: NodeJS.ErrnoException, log: HomebridgePluginLogging, reconnectInterval: number): void {
 
-  const logError = (message: string): void => {
-
-    log.error("MQTT Broker: %s. Will retry again in %s second%s.", message, reconnectInterval, (reconnectInterval === 1) ? "" : "s");
-  };
+  let message: string;
 
   switch(error.code) {
 
     case "ECONNREFUSED":
 
-      logError("Connection refused");
+      message = "Connection refused";
 
-      return { endTransport: false };
+      break;
 
     case "ECONNRESET":
 
-      logError("Connection reset");
+      message = "Connection reset";
 
-      return { endTransport: false };
+      break;
 
     case "ENOTFOUND":
 
-      log.error("MQTT Broker: Hostname or IP address not found.");
+      message = "Hostname or IP address not found";
 
-      return { endTransport: true };
+      break;
 
     default:
 
-      logError(util.inspect(error, { sorted: true }));
+      message = util.inspect(error, { sorted: true });
 
-      return { endTransport: false };
+      break;
   }
+
+  log.error("MQTT Broker: %s. Will retry again in %s second%s.", message, reconnectInterval, (reconnectInterval === 1) ? "" : "s");
 }
 
 /**
@@ -860,16 +842,10 @@ export class MqttClient implements AsyncDisposable {
 
     client.on("error", (error: Error) => {
 
-      // Route the error through the pure {@link routeMqttBrokerError} helper, which selects the right log line for each known errno code (and the default branch for
-      // unknown codes). The wiring layer's only side-effect responsibility is acting on the returned `endTransport` flag - the routing logic is testable in isolation
-      // through direct invocation against synthetic errors, so this `client.on("error", ...)` callback stays a thin adapter from the mqtt.js event surface to the
-      // pure routing function.
-      const result = routeMqttBrokerError(error, this.#log, this.#reconnectInterval);
-
-      if(result.endTransport) {
-
-        this.#mqtt.end(true);
-      }
+      // Forward the event to the pure {@link routeMqttBrokerError} router, which selects the right log line for each known errno code (and the default branch for
+      // unknown codes). mqtt.js's own reconnect policy stays in control of the transport for every error, so this callback is a thin adapter from the mqtt.js event
+      // surface to the routing function and holds no side effect of its own - `abort()` is the only way the client ends.
+      routeMqttBrokerError(error, this.#log, this.#reconnectInterval);
     });
   }
 

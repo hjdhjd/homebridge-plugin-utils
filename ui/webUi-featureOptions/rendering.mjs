@@ -454,8 +454,7 @@ const createCheckbox = ({ deviceId, expandedName, option }) => {
     "data-device-serial": deviceId ?? "",
     id: expandedName,
     name: expandedName,
-    type: "checkbox",
-    value: expandedName + (deviceId ? ("." + deviceId) : "")
+    type: "checkbox"
   });
 
   // Record the option's default-on/off as the checkbox's default state, kept separate from the live `.checked` tri-state that applyRowState owns. Nothing reads this

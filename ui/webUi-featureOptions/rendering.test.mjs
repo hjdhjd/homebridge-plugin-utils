@@ -201,6 +201,22 @@ describe("optionRow - basic structure", () => {
 
     assert.equal(checkbox?.getAttribute("data-device-serial"), "dev-a");
   });
+
+  test("checkbox carries no value attribute - the scope it belongs to is read from state, never from the element", () => {
+
+    using _dom = createTestDom();
+
+    const state = loadedState({
+
+      devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }],
+      scope: { controllerId: null, deviceId: "dev-a", kind: "device" }
+    });
+    const entry = findEntry(state, "Motion", "Detect");
+    const row = optionRow({ deviceId: "dev-a", entry, scopeKind: "device" });
+    const checkbox = row.querySelector("input[type='checkbox']");
+
+    assert.equal(checkbox?.getAttribute("value"), null, "a checkbox composes no address of its own - the engine owns every spelling of a scoped address");
+  });
 });
 
 describe("optionRow - initial tri-state", () => {

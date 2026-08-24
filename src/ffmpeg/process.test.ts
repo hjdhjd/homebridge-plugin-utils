@@ -127,6 +127,7 @@ describe("FfmpegProcess - construction and readiness", () => {
 
     const logger = capturingLog();
     const args = [ "-e", "process.stderr.write(\"x\\n\"); setTimeout(() => process.exit(1), 20);" ];
+    const expected = [...args];
 
     await using proc = new FfmpegProcess(makeOptions(logger), { args });
 
@@ -135,9 +136,13 @@ describe("FfmpegProcess - construction and readiness", () => {
 
     await proc.exited;
 
-    const commandLine = logger.entries.flatMap((entry) => entry.params).filter((param) => typeof param === "string").join(" ");
+    // Pin the stored vector positively as well: a view answering with an empty array would satisfy the negative log assertion below while telling a caller nothing
+    // true about what the process was spawned with.
+    assert.deepEqual([...proc.commandLine], expected, "the exposed command line must be the vector supplied at construction, untouched by the caller's later push");
 
-    assert.ok(!commandLine.includes("SHOULD-NEVER-APPEAR"), "caller-side args mutation must not leak into any log line");
+    const loggedCommand = logger.entries.flatMap((entry) => entry.params).filter((param) => typeof param === "string").join(" ");
+
+    assert.ok(!loggedCommand.includes("SHOULD-NEVER-APPEAR"), "caller-side args mutation must not leak into any log line");
   });
 });
 

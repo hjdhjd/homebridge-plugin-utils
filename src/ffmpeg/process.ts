@@ -289,7 +289,7 @@ export class FfmpegProcess implements AsyncDisposable {
     this.signal = composeSignals(parentSignal, this.#controller.signal);
 
     // Log the command once at construction. The policy: verbose/debug/loglevel-in-args configurations surface the command at info; every other configuration logs it
-    // at debug. Consumers that need this in structured form read `args` directly. We select the level dynamically so there is a single format string to maintain -
+    // at debug. Consumers that need this in structured form read `commandLine` directly. We select the level dynamically so there is a single format string to maintain -
     // parallel if/else branches drift as they age.
     const commandLogLevel: "debug" | "info" = this.#liveLog ? "info" : "debug";
 
@@ -395,6 +395,15 @@ export class FfmpegProcess implements AsyncDisposable {
   public get aborted(): boolean {
 
     return this.signal.aborted;
+  }
+
+  /**
+   * The composed FFmpeg argument vector this process was spawned with, readable from construction onward. The array is the frozen copy the class itself holds, returned
+   * as a readonly view: callers read the exact vector the child received rather than recovering it from the construction log line.
+   */
+  public get commandLine(): readonly string[] {
+
+    return this.args;
   }
 
   /**

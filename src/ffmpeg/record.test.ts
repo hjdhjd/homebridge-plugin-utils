@@ -668,7 +668,7 @@ describe("FfmpegRecordingProcess - caller video filters ride the encoder chain",
   // builds a REAL FfmpegOptions rather than the stand-in the rest of the file uses, because that stand-in answers `recordEncoder` with a fixed two-token vector that
   // can never emit a filter chain - the composition under test is the encoder's own, so the encoder has to be the real one. Hardware decoding and transcoding are both
   // off, which selects the software handler deterministically on every platform.
-  async function recordingArgsWithRealEncoder(recording: Partial<FMp4RecordingOptions>): Promise<string> {
+  async function recordingArgsWithRealEncoder(recording: Partial<FMp4RecordingOptions>): Promise<readonly string[]> {
 
     const logger = capturingLog();
 
@@ -683,9 +683,9 @@ describe("FfmpegRecordingProcess - caller video filters ride the encoder chain",
 
     await using proc = new FfmpegRecordingProcess(options, { recording, recordingConfig: makeRecordingConfig() });
 
-    await proc.exited.catch(() => { /* The stand-in binary exits on seeing ffmpeg args - we are inspecting the construction-time command log, not the process. */ });
+    await proc.exited.catch(() => { /* The stand-in binary exits on seeing ffmpeg args - we are inspecting the composed command vector, not the process. */ });
 
-    return commandLineArgs(logger);
+    return proc.commandLine;
   }
 
   test("a caller filter joins the encoder's own chain rather than replacing it", async () => {
@@ -693,11 +693,10 @@ describe("FfmpegRecordingProcess - caller video filters ride the encoder chain",
     const args = await recordingArgsWithRealEncoder({ videoFilters: ["hflip"] });
 
     // FFmpeg honors the last occurrence of a repeated per-stream option, so a second `-filter:v` would silently discard the encoder's scale and pixel-format work.
-    assert.equal(args.split("-filter:v").length - 1, 1, "a recording command line must carry exactly one -filter:v option");
+    assert.equal(args.filter((arg) => arg === "-filter:v").length, 1, "a recording command line must carry exactly one -filter:v option");
 
-    // The chain is one argument whose own commas separate its filters, so it reads from just past the option name to the next option token.
-    const filterValue = args.slice(args.indexOf("-filter:v") + "-filter:v".length + 1);
-    const chain = filterValue.slice(0, filterValue.indexOf(" -"));
+    // The chain is the single argument following the option name, its own commas separating the filters within it.
+    const chain = args[args.indexOf("-filter:v") + 1] ?? "";
 
     assert.ok(chain.includes("scale="), "the encoder's own scaler must survive in the composed chain");
     assert.ok(chain.indexOf("scale=") < chain.indexOf("hflip"), "the encoder's scaler must precede the caller's filters");
@@ -713,7 +712,8 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
   // map itself is mutated in place by the spy, so callers always see the most recent invocation.
   type SpyRecordEncoderOptions = Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "videoFilters">;
 
-  function makeSpyingOptions(ffmpegVersion: string, hardwareDecoding: boolean): { captures: SpyRecordEncoderOptions[]; options: FfmpegOptions } {
+  function makeSpyingOptions(ffmpegVersion: string, hardwareDecoding: boolean,
+    hardwareTranscoding = false): { captures: SpyRecordEncoderOptions[]; options: FfmpegOptions } {
 
     const captures: SpyRecordEncoderOptions[] = [];
 
@@ -724,7 +724,7 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
 
         codecSupport: makeCodecs({ ffmpegExec: process.execPath, ffmpegVersion }),
         hardwareDecoding,
-        hardwareTranscoding: false
+        hardwareTranscoding
       },
       debug: false,
       log: capturingLog(),
@@ -829,6 +829,31 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
     await bare.exited.catch(() => { /* ignore. */ });
 
     assert.deepEqual(firstCapture(withoutFilters.captures).videoFilters, [], "an omitted videoFilters must resolve to an empty list");
+  });
+
+  test("an explicit recording.hardwareTranscoding wins, and an omitted one takes the configured value", async () => {
+
+    // The resolver defaults `hardwareTranscoding` from the options configuration and the assembler hands whatever it resolved to the encoder. The configured-true half
+    // is what tells that pass-through apart from a hardcoded false, which an override-only assertion would accept either way.
+    const overridden = makeSpyingOptions("8.0", false, false);
+
+    await using explicit = new FfmpegRecordingProcess(overridden.options, {
+
+      recording: { hardwareTranscoding: true },
+      recordingConfig: makeRecordingConfig()
+    });
+
+    await explicit.exited.catch(() => { /* ignore. */ });
+
+    assert.equal(firstCapture(overridden.captures).hardwareTranscoding, true, "caller-supplied recording.hardwareTranscoding must win over the options configuration");
+
+    const configured = makeSpyingOptions("8.0", false, true);
+
+    await using inherited = new FfmpegRecordingProcess(configured.options, { recordingConfig: makeRecordingConfig() });
+
+    await inherited.exited.catch(() => { /* ignore. */ });
+
+    assert.equal(firstCapture(configured.captures).hardwareTranscoding, true, "an omitted recording.hardwareTranscoding must resolve to the configured value");
   });
 });
 

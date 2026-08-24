@@ -9,10 +9,9 @@
  * infrastructure is out of scope for this file and covered separately by `codecs.test.ts` plus the integration suite at the bottom of this file, which auto-enables
  * when an FFmpeg binary is discoverable on PATH. See `integration.helpers.ts` for the full gate semantics.
  */
+import { AudioRecordingCodecType, H264Level, H264Profile } from "./hap-enums.ts";
 import type { FfmpegOptionsConfig, VideoEncoderOptions } from "./options.ts";
-import type { H264Level as H264LevelEnum, H264Profile as H264ProfileEnum } from "homebridge";
 import { before, describe, test } from "node:test";
-import { AudioRecordingCodecType } from "./hap-enums.ts";
 import type { CodecsInit } from "./codecs.helpers.ts";
 import { FfmpegCodecs } from "./codecs.ts";
 import { FfmpegOptions } from "./options.ts";
@@ -25,13 +24,6 @@ import { promisify } from "node:util";
 import { silentLog } from "../testing/index.ts";
 
 const execFileAsync = promisify(execFile);
-
-// Mirror the H264 const enum values locally. `verbatimModuleSyntax` disallows value imports of ambient const enums, and options.ts itself uses this same mirror pattern
-// for `H264Level` / `H264Profile` (single-consumer mirrors stay co-located with their sole production consumer); we replicate the shape here so tests read in the
-// canonical HAP-style names rather than bare numbers. `AudioRecordingCodecType` is hoisted to `hap-enums.ts` because it has multiple consumers, so we import that one
-// directly from the shared SSOT module.
-const H264Level = { LEVEL3_1: 0 as H264LevelEnum.LEVEL3_1, LEVEL3_2: 1 as H264LevelEnum.LEVEL3_2, LEVEL4_0: 2 as H264LevelEnum.LEVEL4_0 };
-const H264Profile = { BASELINE: 0 as H264ProfileEnum.BASELINE, HIGH: 2 as H264ProfileEnum.HIGH, MAIN: 1 as H264ProfileEnum.MAIN };
 
 // Shape of the hardware-mode argument to makeOptions. Kept as its own type so the named MODE presets below can be typed against it without importing from the
 // function signature.

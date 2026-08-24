@@ -22,23 +22,10 @@
  *
  * @module
  */
-import type { H264Level as H264LevelEnum, H264Profile as H264ProfileEnum } from "homebridge";
+import { AudioRecordingCodecType, H264Level, H264Profile } from "./hap-enums.ts";
 import { HOMEKIT_STREAMING_HEADROOM, RPI4_GPU_MINIMUM, RPI4_HW_TRANSCODE_MAX_PIXELS } from "./settings.ts";
-import { AudioRecordingCodecType } from "./hap-enums.ts";
 import type { FfmpegCodecs } from "./codecs.ts";
 import type { Logger } from "../util.ts";
-
-// HAP protocol const enum values mirrored locally for the H264 enums that are unique to this module. `verbatimModuleSyntax` disallows value imports of ambient const
-// enums, so we preserve the canonical names in code by mirroring the numeric contract from hap-nodejs. Values MUST stay in lockstep with the upstream definitions in
-// `hap-nodejs/.../RTPStreamManagement.d.ts`. `AudioRecordingCodecType` is hoisted to `hap-enums.ts` so this module and `record.ts` share one mirror.
-const H264Level: { readonly LEVEL3_1: H264LevelEnum.LEVEL3_1; readonly LEVEL3_2: H264LevelEnum.LEVEL3_2; readonly LEVEL4_0: H264LevelEnum.LEVEL4_0 } =
-  { LEVEL3_1: 0, LEVEL3_2: 1, LEVEL4_0: 2 };
-const H264Profile: { readonly BASELINE: H264ProfileEnum.BASELINE; readonly HIGH: H264ProfileEnum.HIGH; readonly MAIN: H264ProfileEnum.MAIN } =
-  { BASELINE: 0, HIGH: 2, MAIN: 1 };
-
-// Re-expose the H264 enum types under their canonical names so existing annotations (`level: H264Level`, `profile: H264Profile`) continue to resolve without churn.
-type H264Level = H264LevelEnum;
-type H264Profile = H264ProfileEnum;
 
 // Translation tables for the H264 enum values that shape FFmpeg's `-level:v` and `-profile:v` arguments. `as const satisfies Record<...>` pins each map to exhaustively
 // cover every enum member at compile time - a new enum value added upstream forces the build to fail until the table is updated, so encoder-argument emission cannot

@@ -3,7 +3,7 @@
  * ffmpeg/record.test.ts: Unit tests for FfmpegRecordingProcess and FfmpegLivestreamProcess - composed Mp4SegmentAssembler, init / segment delegation, abort propagation
  * between the process and the assembler, known-HKSV-error friendly teardown message, and livestream segmentLength wiring.
  */
-import { AudioRecordingCodecType, AudioRecordingSamplerate } from "./hap-enums.ts";
+import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profile } from "./hap-enums.ts";
 import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit } from "./record.ts";
 import { FfmpegLivestreamProcess, FfmpegRecordingProcess } from "./record.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
@@ -65,10 +65,8 @@ function makeRecordingConfig(): CameraRecordingConfiguration {
 
         bitRate: 2000,
         iFrameInterval: 4000,
-        // Literal mirrors of hap-nodejs's H264Level.LEVEL3_1 and H264Profile.MAIN. `verbatimModuleSyntax` disallows value imports of ambient const enums, so the
-        // numeric contract is preserved inline to match the subclass's handling of the same enums.
-        level: 0,
-        profile: 1
+        level: H264Level.LEVEL3_1,
+        profile: H264Profile.MAIN
       },
       resolution: [ 1920, 1080, 30 ],
       type: 0

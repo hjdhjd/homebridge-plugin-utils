@@ -32,7 +32,7 @@
  * | `audioInputIndex`        | `0`                                        | `0` or `1` (if separate audio)          |
  * | `audioTarget`            | `recordingConfig.audioCodec` (transcoding) | `init.audio` when provided              |
  * | `videoEncoderArgs`       | `options.recordEncoder(...)`               | `-codec:v copy`                         |
- * | `postFilterArgs`         | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
+ * | `fragmentArgs`           | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
  * | `metadataLabel`          | `"HKSV Event"`                             | `"Livestream Buffer"`                   |
  *
  * The shared pipeline primitive ({@link Mp4SegmentAssembler}) also means this module avoids template-method coupling between
@@ -91,32 +91,19 @@ const RTSP_TRANSPORT_PATTERNS = [ "rtsp://", "rtsps://" ];
 /**
  * Base options shared by both fMP4 recording and livestream sessions.
  *
- * @property audioFilters        - Audio filters for FFmpeg to process. These are passed as an array of filters. Recording-only: the livestream builder ignores this
- *                                 field, driving its audio-filter decision from the `audio` target instead.
  * @property audioStream         - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
  * @property codec               - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`).
  *                                 Defaults to `h264`.
  * @property enableAudio         - Indicates whether to enable audio or not.
- * @property hardwareDecoding    - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least
- *                                 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies.
- * @property hardwareTranscoding - Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`.
- * @property transcodeAudio      - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. Recording-only: the
- *                                 livestream builder ignores this field, driving its transcode decision from the `audio` target instead.
- * @property videoFilters        - Video filters for FFmpeg to process. These are passed as an array of filters.
  * @property videoStream         - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
  *
  * @category FFmpeg
  */
 export interface FMp4BaseOptions {
 
-  audioFilters: string[];
   audioStream: number;
   codec: string;
   enableAudio: boolean;
-  hardwareDecoding: boolean;
-  hardwareTranscoding: boolean;
-  transcodeAudio: boolean;
-  videoFilters: string[];
   videoStream: number;
 }
 
@@ -167,19 +154,33 @@ export interface FMp4AudioTarget {
 }
 
 /**
- * Options for configuring an fMP4 HKSV recording session.
+ * Options for configuring an fMP4 HKSV recording session. Recording is the fMP4 mode that transcodes, so every option describing the transcode - the audio and video
+ * filters, the hardware-acceleration flags, and the audio transcode decision - lives here rather than on the shared base a livestream also carries.
  *
- * @property fps             - The video frames per second for the session. Defaults to 30.
- * @property probesize       - Number of bytes to analyze for stream information. Defaults to 5,000,000 bytes (mirrors FFmpeg's own default probesize).
- * @property timeshift       - Timeshift offset for event-based recording (in milliseconds). Defaults to 0.
+ * @property audioFilters        - Audio filters for FFmpeg to process. These are passed as an array of filters, and they ride inside the audio target, so supplying one
+ *                                 forces a transcode. Defaults to none.
+ * @property fps                 - The video frames per second for the session. Defaults to 30.
+ * @property hardwareDecoding    - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least
+ *                                 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies.
+ * @property hardwareTranscoding - Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`.
+ * @property probesize           - Number of bytes to analyze for stream information. Defaults to 5,000,000 bytes (mirrors FFmpeg's own default probesize).
+ * @property timeshift           - Timeshift offset for event-based recording (in milliseconds). Defaults to 0.
+ * @property transcodeAudio      - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
+ * @property videoFilters        - Video filters for FFmpeg to process. These are passed as an array of filters and appended, in caller order, after the encoder's own
+ *                                 scale and pixel-format chain. Defaults to none.
  *
  * @category FFmpeg
  */
 export interface FMp4RecordingOptions extends FMp4BaseOptions {
 
+  audioFilters: string[];
   fps: number;
+  hardwareDecoding: boolean;
+  hardwareTranscoding: boolean;
   probesize: number;
   timeshift: number;
+  transcodeAudio: boolean;
+  videoFilters: string[];
 }
 
 /**
@@ -259,30 +260,45 @@ interface FMp4CommandLineInput {
   audioInputIndex: number;
   audioTarget?: FMp4AudioTarget;
   fMp4Options: Required<FMp4BaseOptions>;
+  fragmentArgs: string[];
   inputArgs: string[];
   metadataLabel: string;
   options: FfmpegOptions;
-  postFilterArgs: string[];
   separateAudioInputArgs: string[];
   verbose: boolean;
   videoEncoderArgs: string[];
 }
 
-// Apply defaults to a partial base options object. Hardware decoding defaults vary with FFmpeg version (only the 8.x line supports it stably); hardware transcoding
-// follows the caller's resolved config.
+// Apply defaults to a partial base options object, describing which streams to read and how to decode them. Both fMP4 modes resolve through here.
 function resolveBaseOptions(options: FfmpegOptions, partial: Partial<FMp4BaseOptions>): Required<FMp4BaseOptions> {
 
   return {
 
-    audioFilters: partial.audioFilters ?? [],
     audioStream: partial.audioStream ?? 0,
     codec: partial.codec ?? "h264",
     enableAudio: partial.enableAudio ?? true,
+    videoStream: partial.videoStream ?? 0
+  };
+}
+
+// Apply defaults to a partial recording options object: the input description the base resolver supplies, plus every field describing the transcode a recording
+// performs. Hardware decoding defaults vary with FFmpeg version (only the 8.x line supports it stably); hardware transcoding follows the caller's resolved config.
+// One resolver per mode, each answering a `Required<>` shape, so the compiler keeps proving a definite value for every field its assembler reads.
+function resolveRecordingOptions(options: FfmpegOptions, partial: Partial<FMp4RecordingOptions>): Required<FMp4RecordingOptions> {
+
+  return {
+
+    ...resolveBaseOptions(options, partial),
+    audioFilters: partial.audioFilters ?? [],
+    fps: partial.fps ?? 30,
     hardwareDecoding: partial.hardwareDecoding ?? (options.config.codecSupport.ffmpegAtLeast(8) ? options.config.hardwareDecoding : false),
     hardwareTranscoding: partial.hardwareTranscoding ?? options.config.hardwareTranscoding,
+
+    // The default mirrors FFmpeg's own default probesize and is sufficient to discover the fMP4 stream's parameters before decoding begins.
+    probesize: partial.probesize ?? 5000000,
+    timeshift: partial.timeshift ?? 0,
     transcodeAudio: partial.transcodeAudio ?? true,
-    videoFilters: partial.videoFilters ?? [],
-    videoStream: partial.videoStream ?? 0
+    videoFilters: partial.videoFilters ?? []
   };
 }
 
@@ -290,7 +306,7 @@ function resolveBaseOptions(options: FfmpegOptions, partial: Partial<FMp4BaseOpt
 // hooks inline against their own init and FfmpegOptions, then invoke this function once to produce the final arg vector.
 function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
 
-  const { audioInputIndex, audioTarget, fMp4Options, inputArgs, metadataLabel, options, postFilterArgs, separateAudioInputArgs, verbose, videoEncoderArgs } = input;
+  const { audioInputIndex, audioTarget, fMp4Options, fragmentArgs, inputArgs, metadataLabel, options, separateAudioInputArgs, verbose, videoEncoderArgs } = input;
 
   // Configure our video parameters for our input:
   //
@@ -319,14 +335,8 @@ function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
     ...videoEncoderArgs
   ];
 
-  // Configure our video filters, if we have them.
-  if(fMp4Options.videoFilters.length) {
-
-    args.push("-filter:v", fMp4Options.videoFilters.join(", "));
-  }
-
-  // Mode-specific post-filter arguments (frag_duration for livestream, empty for recording).
-  args.push(...postFilterArgs);
+  // Mode-specific fragment-cadence arguments (`-frag_duration` for livestream, empty for recording).
+  args.push(...fragmentArgs);
 
   // -movflags flags               In the generated fMP4 stream: set the default-base-is-moof flag in the header, write an initial empty MOOV box, start a new fragment
   //                               at each keyframe, skip creating a segment index (SIDX) box in fragments, and skip writing the final MOOV trailer since it is unneeded.
@@ -443,24 +453,18 @@ function buildLivestreamAudioInputArgs(livestream: PartialWithId<FMp4LivestreamO
 // Compose the command line for a recording session. Extracted so the subclass constructor can compute its full arg vector ahead of the super() call.
 function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecordingInit): string[] {
 
-  const recording = init.recording ?? {};
-  const fMp4Options = resolveBaseOptions(options, recording);
+  const recording = resolveRecordingOptions(options, init.recording ?? {});
   const { recordingConfig } = init;
-  const fps = recording.fps ?? 30;
 
   // Recording transcodes audio to the HKSV-selected codec whenever transcoding is requested or an audio filter forces it; otherwise the already-encoded audio is copied
   // through untouched. The filters ride inside the target, so the filters-require-transcoding rule is expressed by the target's presence rather than a runtime override.
-  const audioTarget: FMp4AudioTarget | undefined = (fMp4Options.transcodeAudio || (fMp4Options.audioFilters.length > 0)) ? {
+  const audioTarget: FMp4AudioTarget | undefined = (recording.transcodeAudio || (recording.audioFilters.length > 0)) ? {
 
     channels: recordingConfig.audioCodec.audioChannels,
     codec: recordingConfig.audioCodec.type,
-    filters: fMp4Options.audioFilters,
+    filters: recording.audioFilters,
     samplerate: recordingConfig.audioCodec.samplerate
   } : undefined;
-
-  // The default mirrors FFmpeg's own default probesize and is sufficient to discover the fMP4 stream's parameters before decoding begins.
-  const probesize = recording.probesize ?? 5000000;
-  const timeshift = recording.timeshift ?? 0;
 
   // Recording input: read fMP4 data from standard input with low-delay optimizations and an optional timeshift for HKSV event alignment.
   //
@@ -472,10 +476,10 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
   const inputArgs: string[] = [
 
     "-flags", "low_delay",
-    "-probesize", probesize.toString(),
+    "-probesize", recording.probesize.toString(),
     "-f", "mp4",
     "-i", "pipe:0",
-    "-ss", timeshift.toString() + "ms"
+    "-ss", recording.timeshift.toString() + "ms"
   ];
 
   // Recordings transcode video using the platform-appropriate encoder for HKSV.
@@ -483,13 +487,14 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
 
     bitrate: recordingConfig.videoCodec.parameters.bitRate,
     fps: recordingConfig.videoCodec.resolution[2],
-    hardwareDecoding: fMp4Options.hardwareDecoding,
-    hardwareTranscoding: fMp4Options.hardwareTranscoding,
+    hardwareDecoding: recording.hardwareDecoding,
+    hardwareTranscoding: recording.hardwareTranscoding,
     height: recordingConfig.videoCodec.resolution[1],
     idrInterval: HKSV_IDR_INTERVAL,
-    inputFps: fps,
+    inputFps: recording.fps,
     level: recordingConfig.videoCodec.parameters.level,
     profile: recordingConfig.videoCodec.parameters.profile,
+    videoFilters: recording.videoFilters,
     width: recordingConfig.videoCodec.resolution[0]
   });
 
@@ -497,11 +502,11 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
 
     audioInputIndex: 0,
     audioTarget,
-    fMp4Options,
+    fMp4Options: recording,
+    fragmentArgs: [],
     inputArgs,
     metadataLabel: "HKSV Event",
     options,
-    postFilterArgs: [],
     separateAudioInputArgs: [],
     verbose: init.verbose ?? false,
     videoEncoderArgs
@@ -536,17 +541,17 @@ function buildLivestreamCommandLine(options: FfmpegOptions, init: FfmpegLivestre
   // Livestreams emit fMP4 fragments at the configured cadence. `segmentLength` is expressed in milliseconds; FFmpeg wants microseconds. Default to one second when the
   // caller does not specify an override, since one-second fragments match HomeKit's expected fMP4 fragment cadence for livestreaming consumers.
   const segmentLengthMs = init.segmentLength ?? 1000;
-  const postFilterArgs = [ "-frag_duration", (segmentLengthMs * 1000).toString() ];
+  const fragmentArgs = [ "-frag_duration", (segmentLengthMs * 1000).toString() ];
 
   return buildFMp4CommandLine({
 
     audioInputIndex: separateAudio.hasSeparateInput ? 1 : 0,
     audioTarget: audio,
     fMp4Options,
+    fragmentArgs,
     inputArgs,
     metadataLabel: "Livestream Buffer",
     options,
-    postFilterArgs,
     separateAudioInputArgs: separateAudio.args,
     verbose: init.verbose ?? false,
     videoEncoderArgs

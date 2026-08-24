@@ -4,13 +4,15 @@
  * between the process and the assembler, known-HKSV-error friendly teardown message, and livestream segmentLength wiring.
  */
 import { AudioRecordingCodecType, AudioRecordingSamplerate } from "./hap-enums.ts";
+import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit } from "./record.ts";
 import { FfmpegLivestreamProcess, FfmpegRecordingProcess } from "./record.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
 import type { CapturingLog } from "../testing/index.ts";
-import type { FfmpegOptions } from "./options.ts";
+import { FfmpegOptions } from "./options.ts";
 import type { Readable } from "node:stream";
+import type { VideoEncoderOptions } from "./options.ts";
 import assert from "node:assert/strict";
 import { capturingLog } from "../testing/index.ts";
 import { makeBox } from "./fmp4-builders.ts";
@@ -73,6 +75,51 @@ function makeRecordingConfig(): CameraRecordingConfiguration {
     }
   } as CameraRecordingConfiguration;
 }
+
+/* Compile-time shape exercises for the two fMP4 init literals. These never run - the function is voided at module scope rather than called - so they add nothing to the
+ * runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming
+ * plugin. The negative cases use `@ts-expect-error`, which fails the build if the error it expects ever stops occurring. Every negative literal supplies `url` so the
+ * excess-property rejection is the only error on its line.
+ */
+const livestreamInitShapeExercises = (): void => {
+
+  // Recording is the fMP4 mode that transcodes, so a recording literal carries every field describing the transcode.
+  const recordingCarriesTranscodeFields: FfmpegRecordingInit = {
+
+    recording: {
+
+      audioFilters: ["highpass=f=200"],
+      hardwareDecoding: true,
+      hardwareTranscoding: true,
+      transcodeAudio: false,
+      videoFilters: ["hflip"]
+    },
+    recordingConfig: makeRecordingConfig()
+  };
+
+  // A livestream copies both streams through, so its literal describes the input and nothing about transcoding.
+  const livestreamCarriesSourceOnly: FfmpegLivestreamInit = { livestream: { url: "rtsp://test/stream" } };
+
+  // @ts-expect-error - audioFilters describes a transcode, which a livestream does not perform.
+  const livestreamAudioFilters: FfmpegLivestreamInit = { livestream: { audioFilters: ["highpass=f=200"], url: "rtsp://test/stream" } };
+
+  // @ts-expect-error - hardwareDecoding describes a transcode, which a livestream does not perform.
+  const livestreamHardwareDecoding: FfmpegLivestreamInit = { livestream: { hardwareDecoding: true, url: "rtsp://test/stream" } };
+
+  // @ts-expect-error - hardwareTranscoding describes a transcode, which a livestream does not perform.
+  const livestreamHardwareTranscoding: FfmpegLivestreamInit = { livestream: { hardwareTranscoding: true, url: "rtsp://test/stream" } };
+
+  // @ts-expect-error - transcodeAudio describes a transcode, which a livestream does not perform.
+  const livestreamTranscodeAudio: FfmpegLivestreamInit = { livestream: { transcodeAudio: false, url: "rtsp://test/stream" } };
+
+  // @ts-expect-error - videoFilters describes a transcode, which a livestream does not perform.
+  const livestreamVideoFilters: FfmpegLivestreamInit = { livestream: { url: "rtsp://test/stream", videoFilters: ["hflip"] } };
+
+  void [ recordingCarriesTranscodeFields, livestreamCarriesSourceOnly, livestreamAudioFilters, livestreamHardwareDecoding, livestreamHardwareTranscoding,
+    livestreamTranscodeAudio, livestreamVideoFilters ];
+};
+
+void livestreamInitShapeExercises;
 
 // String-to-box adapter over the shared `makeBox` fixture. The emission-script builders below construct their boxes from ASCII-string payloads (easier to read
 // inline in test source) whereas `makeBox` takes a `Buffer`; this thin wrapper does the conversion so call sites stay readable as `box("ftyp", "isomavc1")` without
@@ -567,26 +614,6 @@ describe("FfmpegLivestreamProcess - audio target", () => {
     assert.ok(args.includes("-codec:a copy"), "an absent target copies the audio stream");
     assert.ok(!args.includes("-profile:a"), "an absent target must not invoke the audio encoder");
   });
-
-  test("a base-option audioFilters knob without an audio target cannot force a transcode - the audio is copied and the filter is inexpressible", async () => {
-
-    // The livestream path takes its audio filters ONLY from the audio target, so a filter supplied through the base options has no target to ride inside. There is no
-    // runtime force that promotes it to a transcode, so the audio is copied and the filter is silently unrepresentable - a single source of truth with no contradictory
-    // state.
-    const logger = capturingLog();
-
-    await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
-
-      livestream: { audioFilters: ["highpass=f=200"], url: "rtsp://test/stream" }
-    });
-
-    await proc.exited.catch(() => { /* Inspecting the construction-time command log, not the process. */ });
-
-    const args = commandLineArgs(logger);
-
-    assert.ok(args.includes("-codec:a copy"), "without a target the audio is copied");
-    assert.ok(!args.includes("-filter:a"), "a base-option filter is not applied on the livestream path - filters come only from the audio target");
-  });
 });
 
 describe("FfmpegRecordingProcess - audio target parity", () => {
@@ -596,7 +623,7 @@ describe("FfmpegRecordingProcess - audio target parity", () => {
   // whose audio is already AAC), the filter-forces-transcode case, and the default-transcode case.
 
   // Construct a recording process without an `args` override so the command line is built, await its exit, and return the captured arg vector string.
-  async function recordingArgs(recording: Record<string, unknown>): Promise<string> {
+  async function recordingArgs(recording: Partial<FMp4RecordingOptions>): Promise<string> {
 
     const logger = capturingLog();
 
@@ -637,17 +664,56 @@ describe("FfmpegRecordingProcess - audio target parity", () => {
   });
 });
 
-describe("FfmpegRecordingProcess - resolveBaseOptions hardware-decoding gate", () => {
+describe("FfmpegRecordingProcess - caller video filters ride the encoder chain", () => {
 
-  // Build an FfmpegOptions stand-in whose FFmpeg version is configurable, plus a live capture of every `recordEncoder` invocation's arguments. `resolveBaseOptions`
+  // The encoder composes the one `-filter:v` chain a recording carries: its own scale and pixel-format work first, then the caller's filters at the tail. This block
+  // builds a REAL FfmpegOptions rather than the stand-in the rest of the file uses, because that stand-in answers `recordEncoder` with a fixed two-token vector that
+  // can never emit a filter chain - the composition under test is the encoder's own, so the encoder has to be the real one. Hardware decoding and transcoding are both
+  // off, which selects the software handler deterministically on every platform.
+  async function recordingArgsWithRealEncoder(recording: Partial<FMp4RecordingOptions>): Promise<string> {
+
+    const logger = capturingLog();
+
+    const options = new FfmpegOptions({
+
+      codecSupport: makeCodecs({ ffmpegExec: process.execPath, ffmpegVersion: "7.0" }),
+      hardwareDecoding: false,
+      hardwareTranscoding: false,
+      log: logger,
+      name: (): string => "test-camera"
+    });
+
+    await using proc = new FfmpegRecordingProcess(options, { recording, recordingConfig: makeRecordingConfig() });
+
+    await proc.exited.catch(() => { /* The stand-in binary exits on seeing ffmpeg args - we are inspecting the construction-time command log, not the process. */ });
+
+    return commandLineArgs(logger);
+  }
+
+  test("a caller filter joins the encoder's own chain rather than replacing it", async () => {
+
+    const args = await recordingArgsWithRealEncoder({ videoFilters: ["hflip"] });
+
+    // FFmpeg honors the last occurrence of a repeated per-stream option, so a second `-filter:v` would silently discard the encoder's scale and pixel-format work.
+    assert.equal(args.split("-filter:v").length - 1, 1, "a recording command line must carry exactly one -filter:v option");
+
+    // The chain is one argument whose own commas separate its filters, so it reads from just past the option name to the next option token.
+    const filterValue = args.slice(args.indexOf("-filter:v") + "-filter:v".length + 1);
+    const chain = filterValue.slice(0, filterValue.indexOf(" -"));
+
+    assert.ok(chain.includes("scale="), "the encoder's own scaler must survive in the composed chain");
+    assert.ok(chain.indexOf("scale=") < chain.indexOf("hflip"), "the encoder's scaler must precede the caller's filters");
+    assert.ok(chain.endsWith("hflip"), "the caller's filters must sit at the tail of the chain");
+  });
+});
+
+describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gate", () => {
+
+  // Build an FfmpegOptions stand-in whose FFmpeg version is configurable, plus a live capture of every `recordEncoder` invocation's arguments. `resolveRecordingOptions`
   // uses `options.config.codecSupport.ffmpegAtLeast(8)` to gate the default hardware-decoding value, so this helper is the single point where FFmpeg version and
   // hardware flags flow into record.ts's defaulting logic. The capture is returned as a live Map the tests read after each process construction has completed - the
   // map itself is mutated in place by the spy, so callers always see the most recent invocation.
-  interface SpyRecordEncoderOptions {
-
-    hardwareDecoding?: boolean;
-    hardwareTranscoding?: boolean;
-  }
+  type SpyRecordEncoderOptions = Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "videoFilters">;
 
   function makeSpyingOptions(ffmpegVersion: string, hardwareDecoding: boolean): { captures: SpyRecordEncoderOptions[]; options: FfmpegOptions } {
 
@@ -688,7 +754,7 @@ describe("FfmpegRecordingProcess - resolveBaseOptions hardware-decoding gate", (
 
   test("FFmpeg 7.x clamps a caller-requested hardwareDecoding=true back to false", async () => {
 
-    // Regression guard for the 7.x hardware-decoding workaround. `resolveBaseOptions` returns `ffmpegAtLeast(8) ? hardwareDecoding : false` when the caller omits
+    // Regression guard for the 7.x hardware-decoding workaround. `resolveRecordingOptions` returns `ffmpegAtLeast(8) ? hardwareDecoding : false` when the caller omits
     // `recording.hardwareDecoding`. A 7.x FFmpeg must resolve to false regardless of what the options config requested.
     const spy = makeSpyingOptions("7.0", true);
 
@@ -740,6 +806,31 @@ describe("FfmpegRecordingProcess - resolveBaseOptions hardware-decoding gate", (
     await proc.exited.catch(() => { /* ignore. */ });
 
     assert.equal(firstCapture(spy.captures).hardwareDecoding, true, "caller-supplied recording.hardwareDecoding must win over the FFmpeg 7.x default gate");
+  });
+
+  test("caller video filters reach the encoder, and an omitted list resolves to empty", async () => {
+
+    // The recording assembler is the in-repo caller of the encoder's `videoFilters` input, so this pins the hand-off itself rather than the composed chain the
+    // encoder builds from it.
+    const withFilters = makeSpyingOptions("8.0", false);
+
+    await using filtered = new FfmpegRecordingProcess(withFilters.options, {
+
+      recording: { videoFilters: ["hflip"] },
+      recordingConfig: makeRecordingConfig()
+    });
+
+    await filtered.exited.catch(() => { /* ignore. */ });
+
+    assert.deepEqual(firstCapture(withFilters.captures).videoFilters, ["hflip"], "the recording's caller filters must reach the encoder verbatim");
+
+    const withoutFilters = makeSpyingOptions("8.0", false);
+
+    await using bare = new FfmpegRecordingProcess(withoutFilters.options, { recordingConfig: makeRecordingConfig() });
+
+    await bare.exited.catch(() => { /* ignore. */ });
+
+    assert.deepEqual(firstCapture(withoutFilters.captures).videoFilters, [], "an omitted videoFilters must resolve to an empty list");
   });
 });
 

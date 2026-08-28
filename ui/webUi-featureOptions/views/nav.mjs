@@ -19,8 +19,9 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  *   - **Device links** (one per device, in the devices container, when devices for the active controller are loaded): `data-navigation="device"` +
  *     `data-device-serial=<serial>`. Clicked -> dispatch `scope:changed` with `kind: "device"`.
  *
- * Devices group themselves by an optional `sidebarGroup` property: ungrouped devices appear first under the device-label header, then groups appear with their
- * own headers in alphabetical order. The reserved group name "hidden" excludes devices from the sidebar entirely.
+ * Devices group themselves by an optional `sidebarGroup` property: ungrouped devices appear first under the device-label header, then groups appear with their own
+ * headers, in the order the plugin's `groupOrder` comparator decides where it supplies one and in plain string order where it does not. The reserved group name
+ * "hidden" excludes devices from the sidebar entirely.
  *
  * Subscribes to:
  *
@@ -53,6 +54,8 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * @param {((controller: import("../state.mjs").Controller | null) =>
  *           Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>) | undefined} args.getDevices
  *        - Plugin-provided fetcher resolving a controller's DeviceListResult. Called on controller-link click.
+ * @param {((a: string, b: string) => number) | undefined} args.groupOrder - Plugin-provided comparator deciding the order of the grouped sections, in
+ *        `Array#sort`'s own terms. It receives only the names that render as sections, and an absent comparator leaves the sections in plain string order.
  * @param {string} args.labelControllers - Section header label for the controllers list.
  * @param {string} args.labelDevices - Section header label for the devices list.
  * @param {(() => Promise<void>) | undefined} args.onReenter - The orchestrator's view re-entry, run after a successful refresh so the sidebar rebuilds against the
@@ -65,8 +68,8 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  * @param {AbortSignal} args.signal - Lifecycle signal.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store.
  */
-export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, globalGlyph = undefined, labelControllers, labelDevices,
-  onReenter = undefined, refresh = undefined, rootControllers, rootDevices, signal, store }) => {
+export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, globalGlyph = undefined, groupOrder = undefined,
+  labelControllers, labelDevices, onReenter = undefined, refresh = undefined, rootControllers, rootDevices, signal, store }) => {
 
   // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - the facade's controllers-only refresh path.
   effect({
@@ -114,6 +117,7 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
         deviceContent,
         deviceLabel: labelDevices,
         devices: store.state.devices,
+        groupOrder,
         mode: store.state.mode,
         onReenter,
         refresh,
@@ -362,11 +366,11 @@ const buildControllersList = ({ controllerLabel, globalGlyph, mode, onReenter, r
   });
 };
 
-// Build the devices container. The ungrouped devices form the top-level section under the device label; each sidebarGroup forms its own section in alphabetical order.
-// Because the device-label header renders only when there is at least one ungrouped device (the appendSection rule), a fully-grouped device set - every device
-// carrying a sidebarGroup - shows its group headers alone, with no orphan top-level device header. Controllers are excluded from group derivation (their link lives in
-// the controllers container above); the reserved "hidden" group excludes devices from the sidebar entirely.
-const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, mode, onReenter, refresh, root, signal }) => {
+// Build the devices container. The ungrouped devices form the top-level section under the device label; each sidebarGroup forms its own section, ordered by the
+// plugin's groupOrder comparator where it supplies one. Because the device-label header renders only when there is at least one ungrouped device (the appendSection
+// rule), a fully-grouped device set - every device carrying a sidebarGroup - shows its group headers alone, with no orphan top-level device header. Controllers are
+// excluded from group derivation (their link lives in the controllers container above); the reserved "hidden" group excludes devices from the sidebar entirely.
+const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, groupOrder, mode, onReenter, refresh, root, signal }) => {
 
   root.textContent = "";
 
@@ -393,11 +397,14 @@ const buildDevicesList = ({ catalog, deviceContent, deviceLabel, devices, mode, 
     root
   });
 
-  // Grouped devices, each group its own section in alphabetical order. Group derivation excludes controllers and the reserved "hidden" group.
+  /* Grouped devices, each group its own section. The plugin's comparator decides that order, and an absent one reaches Array#sort as undefined, which is the plain
+   * string sort a sidebar without a comparator renders. Derivation runs first and drops controllers and the reserved "hidden" group, so the comparator sees only the
+   * names that become section headers.
+   */
   const groups = [...new Set(devices
 
     .filter((device) => !isController(device) && device.sidebarGroup && (device.sidebarGroup !== "hidden"))
-    .map((device) => device.sidebarGroup))].sort();
+    .map((device) => device.sidebarGroup))].sort(groupOrder);
 
   for(const group of groups) {
 

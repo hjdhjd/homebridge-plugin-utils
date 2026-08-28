@@ -33,8 +33,8 @@ const DEVICES = [
 
 // The deadline the view applies to a click's device fetch. The orchestrator owns the value in production; the suite supplies its own so a hang test can name a bound it
 // can advance a mock clock past without the other tests waiting on a production-sized one.
-const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], failureGuidance, getDevices, globalGlyph, mode = "controller-based",
-  onReenter, refresh } = {}) => {
+const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], failureGuidance, getDevices, globalGlyph, groupOrder,
+  isController = () => false, mode = "controller-based", onReenter, refresh } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const rootControllers = document.createElement("div");
@@ -42,7 +42,7 @@ const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent,
   const controller = new AbortController();
 
   document.body.append(rootControllers, rootDevices);
-  store.dispatch({ catalog: CATALOG(), configuredOptions: [], controllers, mode, type: "model:loaded" });
+  store.dispatch({ catalog: CATALOG(isController), configuredOptions: [], controllers, mode, type: "model:loaded" });
 
   if(devices.length > 0) {
 
@@ -58,6 +58,7 @@ const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent,
     failureGuidance,
     getDevices,
     globalGlyph,
+    groupOrder,
     labelControllers: "Controllers",
     labelDevices: "Devices",
     onReenter,
@@ -231,6 +232,110 @@ describe("mountNavView - devices container", () => {
     const { rootDevices } = setup({ devices });
 
     assert.doesNotMatch(rootDevices.textContent, /Hidden/);
+  });
+
+  test("orders the grouped sections by the plugin's groupOrder comparator", () => {
+
+    using _dom = createTestDom();
+
+    // The group names are chosen so the comparator and the plain sort disagree: "attic" is lowercase, which code-unit order places after both capitalized names,
+    // and "Scenes" is pinned last against an alphabetical reading that would place it in the middle. A sidebar ignoring the comparator renders
+    // [ "Kitchen", "Scenes", "attic" ], so this row fails on any implementation that does not consult it.
+    const devices = [
+
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device K", serialNumber: "dev-k", sidebarGroup: "Kitchen" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device S", serialNumber: "dev-s", sidebarGroup: "Scenes" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-at", sidebarGroup: "attic" }
+    ];
+
+    // The shape a plugin with one section that belongs at the end writes: everything else by locale, the pinned name answered last whichever side it lands on.
+    const groupOrder = (a, b) => {
+
+      if(a === "Scenes") {
+
+        return (b === "Scenes") ? 0 : 1;
+      }
+
+      if(b === "Scenes") {
+
+        return -1;
+      }
+
+      return a.toLowerCase().localeCompare(b.toLowerCase());
+    };
+
+    const { rootDevices } = setup({ devices, groupOrder });
+    const headers = [...rootDevices.querySelectorAll("h6")].map((header) => header.textContent);
+
+    assert.deepEqual(headers, [ "attic", "Kitchen", "Scenes" ], "the comparator decides the order of the grouped sections");
+  });
+
+  test("leaves the grouped sections in plain string order when no comparator is supplied", () => {
+
+    using _dom = createTestDom();
+
+    // A lowercase name among capitalized ones is what tells the candidate defaults apart: code-unit order places "cameras" last, and a locale sort would place
+    // it between "Bridges" and "Doors". The absent comparator must reach Array#sort as undefined and leave the code-unit reading intact.
+    const names = [ "Bridges", "cameras", "Doors" ];
+    const devices = names.map((name, index) => ({
+
+      firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device " + index, serialNumber: "dev-" + index, sidebarGroup: name
+    }));
+
+    const { rootDevices } = setup({ devices });
+    const headers = [...rootDevices.querySelectorAll("h6")].map((header) => header.textContent);
+
+    assert.deepEqual(headers, [ "Bridges", "Doors", "cameras" ], "the default order is the plain string sort");
+    assert.deepEqual(headers, [...names].sort((a, b) => (a < b) ? -1 : ((a > b) ? 1 : 0)), "the default agrees with an explicit code-unit comparator");
+  });
+
+  test("hands the comparator only the group names that render as sections", () => {
+
+    using _dom = createTestDom();
+
+    // A comparator sitting above the derivation filter would receive the reserved "hidden" group and the group the controller device carries alongside the real
+    // ones. Only the real groups may arrive, which is what pins the sort downstream of the filter.
+    const devices = [
+
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device C", serialNumber: "dev-c", sidebarGroup: "Cameras" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device B", serialNumber: "dev-b2", sidebarGroup: "Bridges" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Hidden", serialNumber: "hidden-1", sidebarGroup: "hidden" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Controller A", serialNumber: "ctrl-a", sidebarGroup: "Ctl" }
+    ];
+
+    const seen = new Set();
+    const groupOrder = (a, b) => {
+
+      seen.add(a);
+      seen.add(b);
+
+      return (a < b) ? -1 : ((a > b) ? 1 : 0);
+    };
+
+    const { rootDevices } = setup({ devices, groupOrder, isController: (device) => device.serialNumber === "ctrl-a" });
+
+    assert.deepEqual([...seen].sort(), [ "Bridges", "Cameras" ], "neither the reserved group nor a controller's group reaches the comparator");
+    assert.deepEqual([...rootDevices.querySelectorAll("h6")].map((header) => header.textContent), [ "Bridges", "Cameras" ],
+      "the same two names are the only sections rendered");
+  });
+
+  test("keeps the ungrouped section ahead of every group when a comparator is supplied", () => {
+
+    using _dom = createTestDom();
+
+    const devices = [
+
+      { ...DEVICES[0], sidebarGroup: undefined },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device B", serialNumber: "dev-b2", sidebarGroup: "Bridges" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device C", serialNumber: "dev-c", sidebarGroup: "Cameras" }
+    ];
+
+    // A comparator reversing the plain order moves the groups among themselves and nothing else: the ungrouped section under the device label is placed by the
+    // build's own sequence, which no comparator reaches.
+    const { rootDevices } = setup({ devices, groupOrder: (a, b) => ((a < b) ? 1 : ((a > b) ? -1 : 0)) });
+    const headers = [...rootDevices.querySelectorAll("h6")].map((header) => header.textContent);
+
+    assert.deepEqual(headers, [ "Devices", "Cameras", "Bridges" ], "the device label heads the list whatever order the comparator gives the groups");
   });
 });
 

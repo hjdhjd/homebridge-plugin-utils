@@ -163,6 +163,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   per sidebar build, so a plugin returns a fresh node each time rather than handing over one stored node - a node kept in this slot would be adopted into the page
  *   by the first build and missing from the next. Null or undefined falls through to the framework's own globe. The glyph marks Global Options as a scope rather than
  *   a device, which is the one categorical difference in the list; a plugin swapping it is changing that mark, not the row's behavior.
+ * @property {Function} [sidebar.groupOrder] - Comparator over two group names deciding the order of the grouped sidebar sections: `(a, b) => number`, in
+ *   `Array#sort`'s own terms. It is called only with the names that render as sections, so neither the reserved `hidden` group nor a controller's own group reaches
+ *   it, and the ungrouped section holds its place ahead of every group whatever the comparator answers. Absent, the sections fall in plain string order, which is what
+ *   a plugin supplying nothing gets. A plugin pinning one group to the end sorts the rest by locale and answers the pinned name last.
  * @property {Object} [sidebar.refresh] - A refresh action docked inline on the sidebar's primary list heading, rendered as an icon-only button in the framework's
  *   quiet action treatment. Which heading is primary follows the mode: the controllers heading where the plugin has controllers, the top-level devices heading where
  *   it does not. Where that heading does not exist, neither does the action - global-only mode mounts no navigation at all, and a device list whose every entry
@@ -423,6 +427,7 @@ export class webUiFeatureOptions {
       // (the #devicesFor contract guard trips on it), which is why this is an explicit undefined test and deliberately not `??`.
       getDevices: (getDevices === undefined) ? this.getHomebridgeDevices : getDevices,
       globalOnly,
+      groupOrder: sidebar.groupOrder,
       infoPanel,
       labelControllers: sidebar.controllerLabel ?? "Controllers",
       labelDevices: sidebar.deviceLabel ?? "Devices",
@@ -1421,6 +1426,7 @@ export class webUiFeatureOptions {
         failureGuidance: this.#config.controllerFailureGuidance,
         getDevices: (controller) => this.#devicesFor(controller),
         globalGlyph: this.#config.renderGlobalGlyph,
+        groupOrder: this.#config.groupOrder,
         labelControllers: this.#config.labelControllers,
         labelDevices: this.#config.labelDevices,
 

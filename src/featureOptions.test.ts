@@ -8,8 +8,8 @@
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
 import { ALL_CHOICES, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId, enumerateConfiguredEntries, expandOption,
-  formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList,
-  resolveScope, selectValues } from "./featureOptions.ts";
+  formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists,
+  parseValueList, resolveScope, selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
@@ -2618,6 +2618,31 @@ describe("FeatureOptions - scope addressing", () => {
   };
 
   const COLLISION_REFUSAL = /"Sensitivity" cannot address a scope of "Motion\.Detect", because "Motion\.Detect\.Sensitivity" is a feature option in its own right/;
+
+  describe("isValidScopeId", () => {
+
+    test("answers the identifier rule: non-empty, and carrying neither a period nor an equals sign", () => {
+
+      assert.equal(isValidScopeId("home-263d11d4"), true, "a dash-joined hex identifier");
+      assert.equal(isValidScopeId("27"), true, "a bare device number");
+      assert.equal(isValidScopeId(""), false, "an empty string names no scope at all");
+      assert.equal(isValidScopeId("home.263d11d4"), false, "a period separates address segments");
+      assert.equal(isValidScopeId("a=b"), false, "the first equals sign ends the address");
+    });
+
+    test("answers false for every part the composer turns away, and accepts the pair it composes", () => {
+
+      // The screen a consumer runs and the throw the composer raises have to read the same string the same way, or a plugin that screens first still meets the
+      // throw it screened to avoid. Every part the composer's own rows reject is asserted here against the predicate directly.
+      for(const part of [ "home.263d11d4", "2.7", "a=b", "" ]) {
+
+        assert.equal(isValidScopeId(part), false, "the composer rejects \"" + part + "\", so the screen must too");
+      }
+
+      assert.equal(isValidScopeId("home-263d11d4") && isValidScopeId("27"), true, "the pair the composer accepts passes the screen");
+      assert.doesNotThrow(() => composeScopeId("home-263d11d4", "27"), "a pair the screen accepts composes without throwing");
+    });
+  });
 
   describe("composeScopeId", () => {
 

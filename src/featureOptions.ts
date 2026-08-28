@@ -463,10 +463,39 @@ export function expandOption(category: FeatureCategoryEntry | string, option: Fe
 // below enforces.
 const SCOPE_ID_RULE = "a scope identifier must be a non-empty string carrying neither a period nor an equals sign";
 
-// The single definition of what a scope identifier may spell. The address grammar spends both characters elsewhere - a dot separates address segments, and the
-// first "=" ends the address - so an identifier holding either names a scope the grammar has no spelling for. Every surface that composes, validates, or matches a
-// scoped address consults this one predicate, which is what keeps the writers and the readers agreeing about which addresses exist at all.
-function isValidScopeId(id: string): boolean {
+/**
+ * Return whether a string may serve as a scope identifier: non-empty, and carrying neither a period nor an equals sign.
+ *
+ * This is the single definition of what a scope identifier may spell. The address grammar spends both characters elsewhere - a dot separates address segments, and
+ * the first "=" ends the address - so an identifier holding either names a scope the grammar has no spelling for. Every surface that composes, validates, or matches
+ * a scoped address consults this one predicate, which is what keeps the writers and the readers agreeing about which addresses exist at all.
+ *
+ * A plugin whose identifiers come from a source it does not shape - a cloud-issued home id, a serial a controller hands over - screens each part once, at the
+ * boundary where it learns the identifier, and decides there what an unusable one means in its own terms: warn and keep serving without per-device options, fall
+ * back to a coarser scope, or refuse the device outright. The parts it then hands {@link composeScopeId} are parts it trusts, which leaves that composer's throw
+ * what it is meant to be...the signal of a programming error, rather than a runtime posture a supervised loop has to catch.
+ *
+ * @param id - The candidate identifier.
+ *
+ * @returns `true` when the string may serve as a scope identifier, `false` when it may not.
+ *
+ * @example
+ *
+ * ```ts
+ * // Screen the cloud-issued identifier where it is learned, once, and keep the composer for the parts that survive the screen.
+ * if(!isValidScopeId(home.cloudId)) {
+ *
+ *   log.warn("This home reports the identifier %s, which cannot address per-shade feature options.", home.cloudId);
+ *
+ *   return;
+ * }
+ *
+ * featureOpts.setOption({ enabled: false, id: composeScopeId(home.cloudId, shade.id), option: "Shade.Calibrate" });
+ * ```
+ *
+ * @category Feature Options
+ */
+export function isValidScopeId(id: string): boolean {
 
   return !!id.length && !id.includes(".") && !id.includes("=");
 }
@@ -480,8 +509,9 @@ function isValidScopeId(id: string): boolean {
  *
  * What comes back is an opaque device identifier as far as the engine is concerned. Nothing decomposes it - resolution matches it whole and the entry grammar
  * carries it whole - so the dash is a convention for the reader's eyes rather than a delimiter anything parses. Both parts must satisfy the identifier rule the
- * address grammar imposes, and a part that does not throws rather than composing an address no reader could resolve. Whether the composed value is unique across
- * the caller's whole identifier space is the caller's own domain knowledge...this guarantees the spelling, not the uniqueness.
+ * address grammar imposes, and a part that does not throws rather than composing an address no reader could resolve. A caller holding parts it does not shape asks
+ * {@link isValidScopeId} about each one first and decides there what an unusable part means, so this throw stays the signal of a programming error. Whether the
+ * composed value is unique across the caller's whole identifier space is the caller's own domain knowledge...this guarantees the spelling, not the uniqueness.
  *
  * @param controller - The controller's identifier.
  * @param device     - The device's identifier, unique within that controller.

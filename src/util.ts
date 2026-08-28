@@ -599,6 +599,43 @@ export const noOpLog: HomebridgePluginLogging = {
 };
 
 /**
+ * A shippable console-backed {@link HomebridgePluginLogging} for a plugin's Homebridge custom-UI server: `error`, `info`, and `warn` reach the console, and
+ * `debug` discards its arguments.
+ *
+ * A custom-UI server runs as a child process, and Config UI X captures that process's console output into the Homebridge UI log prefixed by the plugin's name, so a
+ * line written here lands where the plugin's own lines land. `HomebridgePluginUiServer` hands the server no logger of its own, which makes the console the
+ * sanctioned transport at that boundary and this constant the one place that shape is spelled.
+ *
+ * The debug channel is silent by design. That child process carries no debug switch to gate on, and the wire-level detail a client narrates at debug would fill every
+ * user's UI log for as long as the settings panel sits open...so what reaches the log is what a user acts on: failures at `error` and `warn`, lifecycle at `info`.
+ * A server that does have a switch composes one rather than reaching for a variant of this - `debugGatedLog(consoleLog, isEnabled)` gates the debug channel and
+ * leaves the other three alone.
+ *
+ * A module-scope singleton for the reason {@link noOpLog} is one: the methods are stateless, so a single shared instance serves every caller.
+ *
+ * @example
+ *
+ * ```ts
+ * // Inside a plugin's homebridge-ui/server.js, where the console reaches the Homebridge UI log.
+ * const feed = new StatusFeed({ controller, log: consoleLog });
+ *
+ * consoleLog.info("Watching %s for status updates.", controller.name);
+ * ```
+ *
+ * @category Utilities
+ */
+export const consoleLog: HomebridgePluginLogging = {
+
+  debug: (): void => { /* Intentionally empty - the debug channel is silent at this boundary. */ },
+  // eslint-disable-next-line no-console
+  error: (message: string, ...parameters: unknown[]): void => console.error(message, ...parameters),
+  // eslint-disable-next-line no-console
+  info: (message: string, ...parameters: unknown[]): void => console.info(message, ...parameters),
+  // eslint-disable-next-line no-console
+  warn: (message: string, ...parameters: unknown[]): void => console.warn(message, ...parameters)
+};
+
+/**
  * Logger union accepted by FFmpeg subsystem APIs that interoperate with both Homebridge's built-in logger and the plugin-side {@link HomebridgePluginLogging} interface.
  * Provides one alias for sites that need this union, keeping the SSOT discipline applied elsewhere in the package consistent for the logger surface.
  *

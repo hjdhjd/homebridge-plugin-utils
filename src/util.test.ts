@@ -5,7 +5,7 @@
  * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
  * formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
-import { HbpuAbortError, Watchdog, composeSignals, debugGatedLog, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent,
+import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent,
   formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, membershipDelta, onAbort, prefixedLog,
   retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
@@ -2109,6 +2109,54 @@ describe("Watchdog - dispose (permanently inert)", () => {
     watchdog[Symbol.dispose]();
 
     assert.equal(controller.signal.aborted, false, "disposing a Watchdog must not abort the signal it observed");
+  });
+});
+
+describe("consoleLog", () => {
+
+  test("routes error, info, and warn to the matching console method, message and parameters intact", (t) => {
+
+    // The console methods are mocked through the test context so restoration is the runner's job rather than a teardown this row could forget. Each channel has to
+    // reach its own console method and no other, carrying the caller's format string and parameters through untouched, because Config UI X reads the level from
+    // which console method wrote the line.
+    const errorSpy = t.mock.method(console, "error", () => undefined);
+    const infoSpy = t.mock.method(console, "info", () => undefined);
+    const warnSpy = t.mock.method(console, "warn", () => undefined);
+
+    consoleLog.error("Failed: %s", "x");
+    consoleLog.info("Started: %s", "y");
+    consoleLog.warn("Degraded: %s", "z");
+
+    assert.equal(errorSpy.mock.callCount(), 1, "error reaches console.error exactly once");
+    assert.equal(infoSpy.mock.callCount(), 1, "info reaches console.info exactly once");
+    assert.equal(warnSpy.mock.callCount(), 1, "warn reaches console.warn exactly once");
+    assert.deepEqual(expectAt(errorSpy.mock.calls, 0, "the console.error call").arguments, [ "Failed: %s", "x" ]);
+    assert.deepEqual(expectAt(infoSpy.mock.calls, 0, "the console.info call").arguments, [ "Started: %s", "y" ]);
+    assert.deepEqual(expectAt(warnSpy.mock.calls, 0, "the console.warn call").arguments, [ "Degraded: %s", "z" ]);
+  });
+
+  test("drops a debug line without touching any console method", (t) => {
+
+    // The silent debug channel is the whole reason this constant exists rather than a bare console alias, so the row mocks every console method a forwarded debug
+    // line could plausibly reach and asserts none of them was called.
+    const spies = [ "debug", "error", "info", "log", "warn" ].map((level) => [ level, t.mock.method(console, level as "debug" | "error" | "info" | "log" | "warn",
+      () => undefined) ] as const);
+
+    consoleLog.debug("noisy %d", 1);
+
+    for(const [ level, spy ] of spies) {
+
+      assert.equal(spy.mock.callCount(), 0, "a debug line must not reach console." + level);
+    }
+  });
+
+  test("is one module-scope object carrying exactly the channels the logging interface declares", async () => {
+
+    // One shared instance rather than a factory's output, for the reason noOpLog is one: the methods are stateless, so every importer may hold the same reference.
+    const reimported = await import("./util.ts");
+
+    assert.equal(reimported.consoleLog, consoleLog, "a second import reads the same reference");
+    assert.deepEqual(Object.keys(consoleLog).sort(), [ "debug", "error", "info", "warn" ], "the member set is exactly the channels the interface declares");
   });
 });
 

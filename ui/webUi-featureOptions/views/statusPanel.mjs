@@ -33,7 +33,7 @@ import { selectedDevice } from "../selectors.mjs";
  * The classified feed-failure reasons. Mirrors `StatusErrorReason` from `src/webui-status.ts`; the component owns default copy for each and merges per-plugin
  * overrides on top.
  *
- * @typedef {"auth-invalid" | "auth-missing" | "not-found" | "timeout" | "unreachable"} StatusErrorReason
+ * @typedef {"auth-invalid" | "auth-missing" | "misconfigured" | "not-found" | "not-ready" | "throttled" | "timeout" | "unreachable" | "unsupported"} StatusErrorReason
  */
 
 /**
@@ -104,15 +104,20 @@ import { selectedDevice } from "../selectors.mjs";
 const connectedLabel = (encrypted) => encrypted ? "\u{1F512}\u{FE0E} Connected" : "Connected";
 
 // The component's default error copy, one entry per classified reason. Deliberately credential-neutral - auth-invalid / auth-missing describe a rejected or absent
-// credential without naming a PSK, password, or token, and not-found says "on the network" rather than naming any one discovery mechanism - so the copy serves every
-// adapter, and a plugin overrides any field it wants to specialize.
+// credential without naming a PSK, password, or token, and not-found says "on the network" rather than naming any one discovery mechanism - and equally neutral for a
+// device that answered but cannot be served, where misconfigured, not-ready, throttled, and unsupported name what that device is doing without naming the app, the
+// model, or the quota behind it, so the copy serves every adapter, and a plugin overrides any field it wants to specialize.
 const DEFAULT_ERROR_COPY = {
 
   "auth-invalid": { label: "Auth failed", message: "This device rejected the configured credentials." },
   "auth-missing": { label: "Auth required", message: "This device requires credentials that are not configured." },
+  "misconfigured": { label: "Attention", message: "This device needs attention in its own app before it can be used." },
   "not-found": { label: "Not found", message: "This device was not discovered on the network." },
+  "not-ready": { label: "Not ready", message: "This device is starting up and is not ready yet." },
+  "throttled": { label: "Throttled", message: "This device is limiting requests and will be retried." },
   "timeout": { label: "No state", message: "This device connected but did not push its state." },
-  "unreachable": { label: "Unreachable", message: "This device could not be reached." }
+  "unreachable": { label: "Unreachable", message: "This device could not be reached." },
+  "unsupported": { label: "Unsupported", message: "This device is not one this plugin can work with." }
 };
 
 // The copy for a reason the table does not recognize, so an unknown reason still renders a definite short label and message rather than empty cells.
@@ -152,11 +157,16 @@ const resolveLinkLostSeconds = (configured) => (Number.isFinite(configured) && (
 // thing after a selection and another after a recovery.
 const CONNECTING_STATUS_TEXT = "Connecting...";
 
-// The widest candidates for the Status cell's column, living beside the vocabulary they measure. "Disconnected", the encrypted "Connected" label, and the link-lost
-// label are within a few pixels of each other depending on the platform font stack, so the column reserves every candidate through the phantom sizer and takes their
-// maximum rather than deciding a font-metrics question in code; the Status column then never shifts as its text changes. A plugin that overrides the link-lost label
-// owns its width consequence - the sizer reserves the default label, the same open-set posture the identity fields carry.
-const STATUS_SIZER = [ "Disconnected", connectedLabel(true), DEFAULT_LINK_LOST_COPY.label ];
+// The Status cell's text for a device the feed reports offline, named so every path that states the offline condition agrees on it: the availability render writes it
+// and the column's width reservation measures it, so the reservation can never measure a string the cell does not render.
+const DISCONNECTED_STATUS_TEXT = "Disconnected";
+
+// The Status column's width reservation, derived from the copy this component can render in that cell rather than hand-picked from it. The phantom sizer reserves
+// every one of those texts and the column takes their maximum, so the column never shifts as its text changes and a word added to the vocabulary arrives already
+// reserved rather than waiting on a font-metrics judgment made in code. A plugin that overrides a label owns its width consequence - the reservation measures the
+// component's own defaults, the same open-set posture the identity fields carry.
+const STATUS_SIZER = [ CONNECTING_STATUS_TEXT, DISCONNECTED_STATUS_TEXT, connectedLabel(false), connectedLabel(true), DEFAULT_LINK_LOST_COPY.label,
+  FALLBACK_ERROR_COPY.label, ...Object.values(DEFAULT_ERROR_COPY).map((copy) => copy.label) ];
 
 // Render a state-row value for display: a blank or empty value shows as a placeholder dash, so an unpopulated cell reads as "no data yet" rather than a rendering gap.
 const displayValue = (value) => ((typeof value === "string") && (value.length > 0)) ? value : "-";
@@ -809,7 +819,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
         const entry = entryFor(serialNumber);
 
-        entry.statusText = payload.online ? connectedLabel(payload.encrypted) : "Disconnected";
+        entry.statusText = payload.online ? connectedLabel(payload.encrypted) : DISCONNECTED_STATUS_TEXT;
 
         if(viewed) {
 

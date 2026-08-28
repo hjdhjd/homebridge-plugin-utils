@@ -652,6 +652,64 @@ describe("statusPanel - error copy", () => {
     assert.equal(valueFor(root, "Status"), "Custom label");
     assert.equal(messageText(root), "Custom message.");
   });
+
+  test("every classified reason renders its own default label and message", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // The vocabulary paired with the copy the component owns for it, so a mistyped label or message fails on its own reason rather than somewhere downstream.
+    const vocabulary = [
+
+      [ "auth-invalid", "Auth failed", "This device rejected the configured credentials." ],
+      [ "auth-missing", "Auth required", "This device requires credentials that are not configured." ],
+      [ "misconfigured", "Attention", "This device needs attention in its own app before it can be used." ],
+      [ "not-found", "Not found", "This device was not discovered on the network." ],
+      [ "not-ready", "Not ready", "This device is starting up and is not ready yet." ],
+      [ "throttled", "Throttled", "This device is limiting requests and will be retried." ],
+      [ "timeout", "No state", "This device connected but did not push its state." ],
+      [ "unreachable", "Unreachable", "This device could not be reached." ],
+      [ "unsupported", "Unsupported", "This device is not one this plugin can work with." ]
+    ];
+
+    let session = 0;
+
+    // Each push carries a higher session than the last, so the per-device guard admits every one of them and the cell reads the reason under test.
+    for(const [ reason, label, message ] of vocabulary) {
+
+      fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", ++session, reason));
+      assert.equal(valueFor(root, "Status"), label, reason + " renders its own label");
+      assert.equal(messageText(root), message, reason + " renders its own message");
+    }
+  });
+
+  test("a per-field override applies to any reason in the vocabulary, keeping the field it does not name", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+
+    // The override table is keyed by the same vocabulary the defaults are, so a label-only override on throttled behaves exactly as one on timeout does.
+    const { root } = mountPanel({ errorMessages: { throttled: { label: "Backing off" } }, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 1, "throttled"));
+    assert.equal(valueFor(root, "Status"), "Backing off", "the label override applies");
+    assert.equal(messageText(root), "This device is limiting requests and will be retried.", "the untouched message keeps the default");
+  });
 });
 
 describe("statusPanel - the stale-push guard", () => {
@@ -749,9 +807,11 @@ describe("statusPanel - phantom reservations", () => {
       assert.equal(phantom.getAttribute("aria-hidden"), "true", "the phantom is out of the accessibility tree");
     }
 
-    // The component-owned Status cell reserves every one of its candidates - Disconnected, the encrypted Connected label, and the link-lost label.
-    assert.deepEqual(phantomsFor(root, "Status").map((el) => el.textContent), [ "Disconnected", LOCKED_CONNECTED, "Link lost" ],
-      "the Status cell reserves every candidate");
+    // The component-owned Status cell reserves every text it can render there - its waiting, offline, and connected texts, the link-lost label, the
+    // unrecognized-reason fallback, and each default error label - because the reservation is derived from the copy tables rather than hand-kept beside them.
+    assert.deepEqual(phantomsFor(root, "Status").map((el) => el.textContent),
+      [ "Connecting...", "Disconnected", "Connected", LOCKED_CONNECTED, "Link lost", "Unavailable", "Auth failed", "Auth required", "Attention", "Not found",
+        "Not ready", "Throttled", "No state", "Unreachable", "Unsupported" ], "the Status cell reserves every candidate");
   });
 });
 

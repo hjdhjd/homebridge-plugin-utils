@@ -134,6 +134,164 @@ describe("webUiFeatureOptions.constructor", () => {
   });
 });
 
+describe("webUiFeatureOptions - sidebar hook threading", () => {
+
+  /* The nav view's own tests prove what each plugin hook renders. These rows prove the orchestrator hands the hook over at all: the threading runs from the
+   * constructor's merged config through the mount call into the view, and a line missing anywhere along it leaves the hook inert while every view-level test still
+   * passes. Each row supplies one hook through the public constructor, drives a real show(), and reads the single observable that hook produces.
+   */
+  const ONE_DEVICE = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+
+  // Stand the page up with one controller and the supplied sidebar config, then show it. show() auto-selects a lone controller and awaits that controller's device
+  // fetch before it returns, so the sidebar every row reads is fully built once this settles and no row has to poll for its subject.
+  const showWithSidebar = async ({ devices = ONE_DEVICE, sidebar }) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+      getDevices: async () => ({ devices, error: "" }),
+      sidebar
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    return { homebridgeGuard, orchestrator, skeleton };
+  };
+
+  test("the groupOrder comparator reaches the view and orders the grouped sections", async () => {
+
+    using _dom = createTestDom();
+
+    // The group names make the comparator and the plain sort disagree: "attic" is lowercase, which code-unit order places after both capitalized names, and "Scenes"
+    // is pinned last against an alphabetical reading that would seat it in the middle. A sidebar that never receives the comparator renders
+    // [ "Kitchen", "Scenes", "attic" ], so the ordering read below is what tells the two apart.
+    const groupOrder = (a, b) => {
+
+      if(a === "Scenes") {
+
+        return (b === "Scenes") ? 0 : 1;
+      }
+
+      if(b === "Scenes") {
+
+        return -1;
+      }
+
+      return a.toLowerCase().localeCompare(b.toLowerCase());
+    };
+
+    // Every device carries a sidebarGroup, so the ungrouped section is empty and the device-label header it would have carried is suppressed. That leaves the devices
+    // container's h6 set as exactly the group headers, in section order, with no heading of another kind to filter out.
+    const devices = [
+
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device K", serialNumber: "dev-k", sidebarGroup: "Kitchen" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device S", serialNumber: "dev-s", sidebarGroup: "Scenes" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-at", sidebarGroup: "attic" }
+    ];
+
+    const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ devices, sidebar: { groupOrder } });
+
+    using _homebridge = homebridgeGuard;
+
+    const headers = [...skeleton.devicesContainer.querySelectorAll("h6")].map((header) => header.textContent);
+
+    assert.deepEqual(headers, [ "attic", "Kitchen", "Scenes" ], "the constructor's groupOrder is what ordered the rendered sections");
+
+    orchestrator.cleanup();
+  });
+
+  test("the deviceContent hook reaches the view and composes a device link's content", async () => {
+
+    using _dom = createTestDom();
+
+    // The hook adorns one device and declines the other, which puts both halves of the contract in one build: the adorned link proves the hook ran, and the declined
+    // link's plain name proves a null return still falls through to the framework's own rendering.
+    const deviceContent = (device) => {
+
+      if(device.serialNumber !== "dev-a") {
+
+        return null;
+      }
+
+      const content = document.createElement("span");
+
+      content.className = "adorned";
+      content.textContent = "custom " + device.name;
+
+      return content;
+    };
+
+    const devices = [
+
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" },
+      { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device B", serialNumber: "dev-b" }
+    ];
+
+    const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ devices, sidebar: { deviceContent } });
+
+    using _homebridge = homebridgeGuard;
+
+    const links = [...skeleton.devicesContainer.querySelectorAll(".nav-link[data-navigation='device']")];
+
+    assert.equal(links[0].querySelector(".adorned")?.textContent, "custom Device A", "the constructor's deviceContent is what composed the adorned link");
+    assert.equal(links[1].textContent, "Device B", "and the device it declined carries the framework's plain name");
+
+    orchestrator.cleanup();
+  });
+
+  test("the globalGlyph hook reaches the view and replaces the Global Options glyph", async () => {
+
+    using _dom = createTestDom();
+
+    // A fresh node per call is the hook's contract, so a plugin writes it as a factory rather than handing over one stored node.
+    const globalGlyph = () => {
+
+      const glyph = document.createElement("i");
+
+      glyph.className = "plugin-glyph";
+
+      return glyph;
+    };
+
+    const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ sidebar: { globalGlyph } });
+
+    using _homebridge = homebridgeGuard;
+
+    const globalRow = skeleton.controllersContainer.querySelector(".nav-link[data-navigation='global']");
+
+    assert.ok(globalRow.querySelector("i.plugin-glyph"), "the constructor's globalGlyph is what the row leads with");
+    assert.ok(globalRow.querySelector("svg") === null,
+      "and the framework's own globe gave way entirely, which is the half a row reading only for the plugin's node would miss");
+
+    orchestrator.cleanup();
+  });
+
+  test("the refresh action reaches the view and docks on the controllers heading", async () => {
+
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ sidebar: { refresh: { label: "Refresh controllers", onRefresh: () => {} } } });
+
+    using _homebridge = homebridgeGuard;
+
+    const action = skeleton.controllersContainer.querySelector("h6.nav-header button.fo-action");
+
+    // The label is the part of the refresh object only the plugin can have supplied, so reading it off the rendered button is what proves the object itself crossed
+    // rather than a default the framework could have produced on its own.
+    assert.ok(action, "the constructor's refresh action is docked on the controllers heading");
+    assert.equal(action.getAttribute("aria-label"), "Refresh controllers", "carrying the plugin's own label as its accessible name");
+
+    orchestrator.cleanup();
+  });
+});
+
 describe("webUiFeatureOptions.editedConfig", () => {
 
   test("a session held whose store has not loaded its model reports the session's SAVED options, not the store's placeholder", async () => {

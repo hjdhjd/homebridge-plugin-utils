@@ -459,6 +459,14 @@ export function expandOption(category: FeatureCategoryEntry | string, option: Fe
   return (!optionName.length) ? categoryName : categoryName + "." + optionName;
 }
 
+// The characters the address grammar spends elsewhere, and so the characters an identifier may not carry: the predicate below screens for them and the sanitizer
+// replaces them, so every surface that enforces or repairs the rule reads one spelling of it.
+const SCOPE_RESERVED_CHARACTERS = [ ".", "=" ];
+
+// The separator the composer joins its two parts with, and the character the sanitizer substitutes for each reserved one. Stating it once is what keeps a repaired
+// identifier spelled the way the composer would have spelled it.
+const SCOPE_ID_SEPARATOR = "-";
+
 // The identifier rule stated for a reader, shared by every message that reports a refusal so the wording a caller is shown cannot drift from what the predicate
 // below enforces.
 const SCOPE_ID_RULE = "a scope identifier must be a non-empty string carrying neither a period nor an equals sign";
@@ -473,7 +481,8 @@ const SCOPE_ID_RULE = "a scope identifier must be a non-empty string carrying ne
  * A plugin whose identifiers come from a source it does not shape - a cloud-issued home id, a serial a controller hands over - screens each part once, at the
  * boundary where it learns the identifier, and decides there what an unusable one means in its own terms: warn and keep serving without per-device options, fall
  * back to a coarser scope, or refuse the device outright. The parts it then hands {@link composeScopeId} are parts it trusts, which leaves that composer's throw
- * what it is meant to be...the signal of a programming error, rather than a runtime posture a supervised loop has to catch.
+ * what it is meant to be...the signal of a programming error, rather than a runtime posture a supervised loop has to catch. A plugin that repairs an unusable
+ * identifier rather than refusing it reaches for {@link scopeSafeId}, whose substitutions follow this same rule.
  *
  * @param id - The candidate identifier.
  *
@@ -497,7 +506,40 @@ const SCOPE_ID_RULE = "a scope identifier must be a non-empty string carrying ne
  */
 export function isValidScopeId(id: string): boolean {
 
-  return !!id.length && !id.includes(".") && !id.includes("=");
+  return !!id.length && !SCOPE_RESERVED_CHARACTERS.some((character) => id.includes(character));
+}
+
+/**
+ * Repair a string into one that may serve as a scope identifier, replacing every character the address grammar reserves with the separator the composer joins with.
+ *
+ * A plugin whose identifiers come from a source it does not shape - a cloud-issued home id, a serial a controller hands over - has two honest answers to an
+ * identifier the rule turns away: refuse it, which {@link isValidScopeId} is the screen for, or repair it and keep serving. This is the repair, and what it answers
+ * becomes that plugin's identity for the thing everywhere - its accessory UUIDs, its option addresses, the context they are read back through - rather than a
+ * display alias sitting over a raw identifier the addressing still uses. Choosing one or the other is the plugin's call; spelling the repair is not, which is why it
+ * lives beside the rule it repairs against rather than in each consumer.
+ *
+ * An identifier the rule already accepts answers character-identical, so adopting this cannot move an address the field has already produced. An empty identifier
+ * answers empty, because no substitution can invent one...{@link isValidScopeId} therefore remains the usability check after this, rather than being made redundant
+ * by it.
+ *
+ * @param id - The candidate identifier, from a source the caller does not shape.
+ *
+ * @returns The identifier with every reserved character replaced, ready for {@link isValidScopeId} to have the final word on.
+ *
+ * @example
+ *
+ * ```ts
+ * // Repair the cloud-issued identifier where it is learned, once, and address every per-device scope of that home by what comes back.
+ * const homeId = scopeSafeId(home.cloudId);
+ *
+ * featureOpts.setOption({ enabled: false, id: composeScopeId(homeId, shade.id), option: "Shade.Calibrate" });
+ * ```
+ *
+ * @category Feature Options
+ */
+export function scopeSafeId(id: string): string {
+
+  return SCOPE_RESERVED_CHARACTERS.reduce((result, character) => result.replaceAll(character, SCOPE_ID_SEPARATOR), id);
 }
 
 /**
@@ -540,7 +582,7 @@ export function composeScopeId(controller: string, device: string): string {
     }
   }
 
-  return controller + "-" + device;
+  return controller + SCOPE_ID_SEPARATOR + device;
 }
 
 // Compose the canonical lookup-index target key for a (option, id) pair. This is the form a setOption({ option, id, ... }) call would resolve to on the index, and

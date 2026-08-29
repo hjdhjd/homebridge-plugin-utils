@@ -9,7 +9,7 @@
  */
 import { ALL_CHOICES, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId, enumerateConfiguredEntries, expandOption,
   formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists,
-  parseValueList, resolveScope, selectValues } from "./featureOptions.ts";
+  parseValueList, resolveScope, scopeSafeId, selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
@@ -2641,6 +2641,36 @@ describe("FeatureOptions - scope addressing", () => {
 
       assert.equal(isValidScopeId("home-263d11d4") && isValidScopeId("27"), true, "the pair the composer accepts passes the screen");
       assert.doesNotThrow(() => composeScopeId("home-263d11d4", "27"), "a pair the screen accepts composes without throwing");
+    });
+  });
+
+  describe("scopeSafeId", () => {
+
+    test("replaces each reserved character wherever it appears", () => {
+
+      assert.equal(scopeSafeId("home.263d"), "home-263d", "a period is what the address grammar reads as its own segment separator");
+      assert.equal(scopeSafeId("a=b.c"), "a-b-c", "an equals sign ends an address, so both reserved characters are replaced");
+      assert.equal(scopeSafeId("a..b==c"), "a--b--c", "every occurrence is replaced, not merely the first of each");
+    });
+
+    test("passes an already-usable identifier through unchanged, and cannot invent one from empty", () => {
+
+      // Answering an already-usable identifier byte-identical is what lets a plugin adopt the repair without moving a single address its users have configured.
+      assert.equal(scopeSafeId("home-263d11d4"), "home-263d11d4", "an identifier the rule already accepts is answered character for character");
+      assert.equal(scopeSafeId(""), "", "no substitution can invent an identifier from an empty string");
+      assert.equal(isValidScopeId(scopeSafeId("")), false, "so the predicate stays the usability check after the repair, rather than being made redundant by it");
+    });
+
+    test("a sanitized identifier satisfies the predicate and composes", () => {
+
+      // The repair and the rule it repairs against read one statement of the reserved set, so anything the repair answers has to pass the screen. A repair that
+      // left a reserved character behind would fail here, and would compose nothing at all below - the composer throws rather than answering a value.
+      for(const input of [ "home.263d", "a=b.c", "...=" ]) {
+
+        assert.equal(isValidScopeId(scopeSafeId(input)), true, "the repair of \"" + input + "\" has to satisfy the screen");
+      }
+
+      assert.equal(composeScopeId(scopeSafeId("home.263d"), "27"), "home-263d-27", "the repaired part leads, then the device, joined by the composer's own separator");
     });
   });
 

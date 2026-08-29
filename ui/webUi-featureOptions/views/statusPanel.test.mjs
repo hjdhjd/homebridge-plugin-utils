@@ -239,6 +239,37 @@ describe("statusPanel - selection and the view request", () => {
     assert.equal(phantomsFor(root, "Door")[0].textContent, "Stopped (100%)");
   });
 
+  test("the identity cells and Status share one row container, and the state rows are the grid's own cells", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // The structure the skin's shrink-to-fit rules address. Happy-DOM computes no layout, so this pins the shape the CSS relies on rather than the rendered line
+    // breaking itself, which only a live panel can show.
+    const grid = root.querySelector(".device-stats-grid.fo-status-grid");
+    const identityRows = grid.querySelectorAll(".fo-status-identity");
+
+    assert.equal(identityRows.length, 1, "one row container holds the whole identity line");
+    assert.deepEqual([...identityRows[0].querySelectorAll(".stat-item .stat-label")].map((el) => el.textContent),
+      [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status" ], "the identity quartet and the component-owned Status cell ride that row together");
+
+    // A state cell hangs off the grid itself, so the identity row's full width is what starts it on a line of its own.
+    for(const label of [ "Door", "Motion" ]) {
+
+      assert.ok(itemFor(root, label).parentElement === grid, "the " + label + " cell is the grid's own child rather than the identity row's");
+    }
+
+    assert.equal(root.querySelector(".fo-row-break"), null, "the identity row's width is the one mechanism splitting the rows, so no spacer element joins it");
+  });
+
   test("P2: the view request fires exactly once per genuinely-new selection; a same-device re-fire sends nothing and rebuilds from the device's own state", () => {
 
     using _dom = createTestDom();

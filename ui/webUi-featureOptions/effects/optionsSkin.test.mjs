@@ -153,14 +153,18 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     assert.match(skinCss(), /\.fo-phantom\s*\{[^}]*visibility:\s*hidden/);
   });
 
-  test("the row-break rule is a full-width zero-height spacer", () => {
+  test("the identity row is a full-width flex line that spreads its cells", () => {
 
     using _dom = createTestDom();
 
     const text = skinCss();
 
-    assert.match(text, /\.fo-row-break\s*\{[^}]*flex-basis:\s*100%/);
-    assert.match(text, /\.fo-row-break\s*\{[^}]*height:\s*0/);
+    // The full width is what starts the state rows on the line beneath, and the flex context is what lets the identity cells shrink against each other instead of
+    // one of them breaking onto a line of its own.
+    assert.match(text, /\.fo-status-identity\s*\{[^}]*display:\s*flex/);
+    assert.match(text, /\.fo-status-identity\s*\{[^}]*flex-basis:\s*100%/);
+    assert.match(text, /\.fo-status-identity\s*\{[^}]*gap:\s*var\(--fo-space-md\)/);
+    assert.match(text, /\.fo-status-identity\s*\{[^}]*justify-content:\s*space-between/);
   });
 
   test("the status message spans the full width and wraps", () => {

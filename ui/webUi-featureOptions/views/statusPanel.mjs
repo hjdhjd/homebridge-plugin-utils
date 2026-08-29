@@ -388,10 +388,12 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     }
   };
 
-  /* Build the panel: ONE bordered grid whose cells wrap into two rows - the identity cells with the live "Status" cell closing the top row, then one cell per state
-   * row - inside a single box. The `.fo-status-grid` theme variant owns the wrap, the row gap, and the per-cell flex; the row break is a full-width zero-height
-   * spacer at the semantic boundary. A classified message, when present, renders as a full-width wrapping line inside the same box; in the link-lost state that message
-   * line takes a prominence modifier and a second full-width line below it carries the reload action.
+  /* Build the panel: ONE bordered grid inside a single box. The identity cells and the live "Status" cell ride a full-width non-wrapping row of their own at the top,
+   * so a panel narrower than their combined natural widths shrinks them against each other and each trims with the ellipsis its value span already carries, rather
+   * than dropping the last cell onto a line by itself. That row's full width is also what starts the state rows beneath it, one grid cell per state row, wrapping as
+   * the `.fo-status-grid` theme variant directs...the variant owns the wrap, the row gap, and the per-cell flex both rows share. A classified message, when present,
+   * renders as a full-width wrapping line inside the same box; in the link-lost state that message line takes a prominence modifier and a second full-width line
+   * below it carries the reload action.
    *
    * Everything rendered is derived here from three things and nothing else: the device, its entry in the state map, and the link-lost marker. A device the panel has
    * heard nothing from has no entry, and the defaults below are what a first selection deserves - the placeholder skeleton under the connecting label. The marker is
@@ -408,6 +410,10 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
     grid.className = "device-stats-grid fo-status-grid";
 
+    const identityRow = document.createElement("div");
+
+    identityRow.className = "fo-status-identity";
+
     for(const field of identity(device)) {
 
       const { item, valueSpan } = buildStatRow(field.label, field.value, "stat-value");
@@ -418,18 +424,15 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
         valueSpan.style.fontFamily = "var(--fo-font-monospace)";
       }
 
-      grid.append(item);
+      identityRow.append(item);
     }
 
     const { item: statusItem, valueSpan: statusValueSpan } = buildStatRow("Status", statusText, "stat-value", STATUS_SIZER);
 
     statusValueEl = statusValueSpan;
 
-    const rowBreak = document.createElement("div");
-
-    rowBreak.className = "fo-row-break";
-
-    grid.append(statusItem, rowBreak);
+    identityRow.append(statusItem);
+    grid.append(identityRow);
 
     rowValueEls.clear();
 

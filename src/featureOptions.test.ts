@@ -1737,6 +1737,154 @@ describe("FeatureOptions - the value payload delimiter", () => {
   });
 });
 
+/* The legacy dot form's single trailing segment spells two things at once: this option's global value, and an enable at a scope carrying that same name. The
+ * option's own declaration is what settles which of them an entry meant - a segment naming one of the members the catalog declares inline is the value, a segment
+ * naming none of them but spelling a legal identifier is the scope, and a segment that is neither keeps both readings live. The rows below walk all three, the
+ * case fold the membership test matches on, and the forms beside them the reading must leave untouched.
+ */
+describe("FeatureOptions - the legacy dot form's trailing segment", () => {
+
+  const PIN_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
+
+  const PIN_CHOICES = [ { label: "High", value: "High" }, { label: "Medium", value: "Medium" }, { label: "Low", value: "Low" } ];
+
+  const PIN_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+    Video: [
+
+      { choices: PIN_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality pin.", name: "Only" },
+      { choices: "streams", default: false, defaultValue: "Medium", description: "A pin whose choices a webUI source derives.", name: "Sourced" },
+      { default: false, defaultValue: 50, description: "A value option declaring no choices at all.", name: "Bitrate" }
+    ]
+  };
+
+  const pinnedWith = (configured: string[]): FeatureOptions => new FeatureOptions(PIN_CATEGORIES, structuredClone(PIN_OPTIONS), configured);
+
+  test("a segment naming a declared member is the option's value, and no enable at a scope spelling it", () => {
+
+    // The pin a configuration authored by hand carries: the segment is the domain's own text, so the entry says what the option is set to and nothing about any
+    // device. Reading it as a scope as well would invent a device out of the value.
+    const fo = pinnedWith(["Enable.Video.Only.High"]);
+
+    assert.equal(fo.value("Video.Only"), "High", "the segment reads as the global value");
+    assert.equal(fo.scope("Video.Only", "High"), "global", "a device named like the member resolves against that global entry rather than one of its own");
+    assert.equal(fo.value("Video.Only", "High"), "High", "so it reads the pinned value, not the absence a bare scoped enable reports");
+
+    const catalog = buildCatalogIndex(PIN_CATEGORIES, PIN_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, ["Enable.Video.Only.High"]);
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: ["Enable.Video.Only.High"], option: "Video.Only" })],
+      [{ enabled: true, id: "", value: "High" }], "the enumeration reports the value reading alone");
+    assert.equal(optionExists({ catalog, configIndex, id: "High", option: "Video.Only" }), false, "and nothing is configured at a scope named like the member");
+  });
+
+  test("a scoped write at a name the member spells lands beside the pin rather than replacing it", () => {
+
+    // The matcher decodes an entry through the same parse the index does, so an entry carrying no scope reading is not an entry a scoped write can claim.
+    const fo = pinnedWith(["Enable.Video.Only.High"]);
+
+    fo.setOption({ enabled: true, id: "High", option: "Video.Only", value: "Low" });
+
+    assert.deepEqual(fo.configuredOptions, [ "Enable.Video.Only.High", "Enable.Video.Only.High=Low" ], "the pin survives the write verbatim");
+    assert.equal(fo.value("Video.Only"), "High", "and still answers globally");
+    assert.equal(fo.value("Video.Only", "High"), "Low", "while the device that spells the member now carries a value of its own");
+  });
+
+  test("membership folds case, so a member named in any casing reads as the value", () => {
+
+    // The fold is the engine's one matching policy for values, and the reading follows it rather than the spelling the catalog happens to declare.
+    const fo = pinnedWith(["Enable.Video.Only.hIgH"]);
+
+    assert.equal(fo.value("Video.Only"), "hIgH", "the value comes back in the casing the entry was written in");
+    assert.equal(fo.scope("Video.Only", "hIgH"), "global", "and the case variant loses its scope reading exactly as the declared spelling does");
+  });
+
+  test("a segment naming no member but spelling a legal identifier is the scope, and registers no value", () => {
+
+    // What its author meant: the option turned on for one device. Reading the identifier as a value as well would set the option to that device's serial for
+    // every device that inherits from the global scope.
+    const fo = pinnedWith(["Enable.Video.Only.ABCD1234"]);
+
+    assert.equal(fo.scope("Video.Only", "ABCD1234"), "device", "the entry enables the option at the scope it names");
+    assert.equal(fo.value("Video.Only", "ABCD1234"), undefined, "enabled there with nothing stored");
+    assert.equal(fo.value("Video.Only"), null, "and no global value is registered - the option is default-off and unset at the global scope");
+  });
+
+  test("an option whose domain a source derives, and one declaring no domain, keep both readings", () => {
+
+    // Neither offers members this side can compare against - a source's list lives on the page holding the device record - so the segment stays the ambiguity the
+    // "=" form exists to spell away, and the index goes on registering it as a value and as a scope alike.
+    const sourced = pinnedWith(["Enable.Video.Sourced.High"]);
+
+    assert.equal(sourced.value("Video.Sourced"), "High", "the value reading is live");
+    assert.equal(sourced.scope("Video.Sourced", "High"), "device", "and so is the scope reading");
+
+    const undeclared = pinnedWith(["Enable.Video.Bitrate.High"]);
+
+    assert.equal(undeclared.value("Video.Bitrate"), "High", "an option declaring no choices reads the same way");
+    assert.equal(undeclared.scope("Video.Bitrate", "High"), "device", "with both readings live there too");
+  });
+
+  test("a segment the identifier rule turns away keeps both readings as well", () => {
+
+    // A base64 value's padding is the field case: it carries the delimiter, so no composer could address a scope spelling it. The catalog has nothing to say
+    // about this one - the grammar is what leaves the scope reading unwritable - so both keys stay on the index.
+    const catalog = buildCatalogIndex(PIN_CATEGORIES, PIN_OPTIONS);
+    const configIndex = buildConfigIndex(catalog, ["Enable.Video.Only.ABC123=="]);
+
+    assert.deepEqual(configIndex.get("video.only"), { enabled: true, value: "ABC123==" }, "the value reading");
+    assert.deepEqual(configIndex.get("video.only.abc123=="), { enabled: true }, "and the scope reading beside it");
+  });
+
+  test("the delimiter form and a multi-segment tail read exactly as they always have", () => {
+
+    // The reading reaches one shape and no other. A canonical scoped entry whose id spells a declared member is still that scope's entry, because the "=" says so
+    // outright, and a dotted tail is still an id followed by a value.
+    const canonical = pinnedWith(["Enable.Video.Only.High=Low"]);
+
+    assert.equal(canonical.value("Video.Only", "High"), "Low", "the delimiter form addresses the scope its id names, member or not");
+    assert.equal(canonical.value("Video.Only"), null, "and claims no global value");
+
+    const legacy = pinnedWith(["Enable.Video.Only.High.Low"]);
+
+    assert.equal(legacy.value("Video.Only", "High"), "Low", "a multi-segment tail is an id followed by a value");
+    assert.equal(legacy.value("Video.Only"), null, "with nothing registered globally");
+
+    const global = pinnedWith(["Enable.Video.Only=High"]);
+
+    assert.equal(global.value("Video.Only"), "High", "and the global delimiter form is the unambiguous spelling of the pin");
+    assert.equal(global.scope("Video.Only", "High"), "global", "which addresses no scope at all");
+  });
+
+  test("an option the catalog names exactly like the narrowed tail reads the same way to the index and to the enumeration", () => {
+
+    /* The catalog a plugin holds while it converts a set of boolean pins into one value option and carries both through a deprecation window: the tail of a
+     * legacy entry spells both a declared member of the value option and the name of the boolean beside it. The value-option walk never considers that boolean,
+     * so the tail narrows to the value, and what this pins is that every reader says so. A reader that went on reporting the boolean as enabled would have the
+     * engine contradicting itself about one entry, which is the whole reason the parse result is shared.
+     */
+    const categories: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Video: [
+
+        { choices: PIN_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality pin.", name: "Stream" },
+        { default: false, description: "The boolean pin whose name a declared member also spells.", name: "Stream.High" }
+      ]
+    };
+    const configured = ["Enable.Video.Stream.High"];
+    const catalog = buildCatalogIndex(categories, options);
+    const fo = new FeatureOptions(categories, structuredClone(options), [...configured]);
+
+    assert.equal(fo.value("Video.Stream"), "High", "the segment is the value option's value");
+    assert.equal(fo.test("Video.Stream.High"), false, "so the boolean of that name is not what the entry enables");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream.High" })], [],
+      "and the enumeration reports nothing for it either, which is what agreeing with the index means here");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream" })],
+      [{ enabled: true, id: "", value: "High" }], "the one record the entry yields is the value reading");
+  });
+});
+
 // Saving a configuration also modernizes it. The mutation transforms run their results through the normalizer, so entries still in the legacy form are rewritten
 // into the canonical one as part of a save the user already asked for - and never merely because something read the configuration.
 describe("FeatureOptions - normalization on save", () => {
@@ -2390,12 +2538,16 @@ describe("FeatureOptions - pure functional core", () => {
   });
 });
 
-/* A picker's `choices` and `style` declarations are editor data. Nothing in the engine - the entry grammar, storage, scope resolution, value() - is allowed to
- * read either, which is the property that lets a plugin attach a picker to an existing option, or restyle one it already has, while every configuration already
- * written goes on resolving to what it always did. The `multiple` declaration beside them is the one that does reach the engine, at the empty selection alone:
- * "on, with nothing selected" is a state a list can be in, so the grammar gives it the bare-delimiter spelling a scoped entry stores and a read answers as the
- * empty list. Away from that one point a list resolves like any other value option, which is the ground the rows below stand on - every value they store or
- * read carries content.
+/* A picker's `choices` and `style` declarations are editor data, with the one exception stated below. Storage, scope resolution, and value() read neither, which
+ * is the property that lets a plugin attach a picker to an existing option, or restyle one it already has, while every configuration already written goes on
+ * resolving to what it always did. The `multiple` declaration beside them is the one that does reach the engine, at the empty selection alone: "on, with nothing
+ * selected" is a state a list can be in, so the grammar gives it the bare-delimiter spelling a scoped entry stores and a read answers as the empty list. Away
+ * from that one point a list resolves like any other value option, which is the ground the rows below stand on - every value they store or read carries content.
+ *
+ * The exception is the legacy dot form's single trailing segment, which consults the declared members to settle whether it names this option's value or a scope
+ * of it. It is confined to the one shape that has nothing else to settle it, and what it trades away is bounded: a hand-authored legacy entry whose segment a
+ * declaration claims reads one way against the catalog that declares it and another against one that does not. The engine owes such an entry graceful degradation
+ * and no more - one sensible reading, with the "=" form as the spelling that states either reading outright - and a row below pins that difference as designed.
  *
  * The guard proves it by building the same catalog twice, once with the declarations and once without, and comparing every DERIVED map. The three members that
  * are not derived are excluded by construction rather than by exception: `categories` and `options` are the raw inputs preserved verbatim, and `optionsByName`
@@ -2457,6 +2609,20 @@ describe("FeatureOptions - the choices declarations are inert to the engine", ()
     plain.setOption({ enabled: true, id: "dev2", option: "Motion.Tier", value: "high,low" });
 
     assert.deepEqual(pickers.configuredOptions, plain.configuredOptions, "the composed entries are identical");
+  });
+
+  test("the legacy dot form's trailing segment is the one reading a declaration settles", () => {
+
+    // The stated exception, pinned as a design fact rather than left to contradict the rows above. The same entry resolves one way against a catalog that
+    // declares the member and another against one that does not, which is what a plugin accepts when it attaches a picker to an option its users configured by
+    // hand under the legacy grammar.
+    const configured = ["Enable.Motion.Quality.high"];
+    const plain = new FeatureOptions(MOTION_CATEGORY, structuredClone(PLAIN), [...configured]);
+    const pickers = new FeatureOptions(MOTION_CATEGORY, structuredClone(PICKERS), [...configured]);
+
+    assert.equal(pickers.scope("Motion.Quality", "high"), "global", "with the declaration the segment is the value, so a device spelling it has no entry of its own");
+    assert.equal(plain.scope("Motion.Quality", "high"), "device", "without one the same entry goes on doing double duty");
+    assert.equal(pickers.value("Motion.Quality"), plain.value("Motion.Quality"), "the value reading is the half the two catalogs agree on");
   });
 });
 

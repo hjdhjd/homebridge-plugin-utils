@@ -433,12 +433,15 @@ export interface ValueListArgs {
   option: string;
 }
 
-// Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail (always registered on the index). `valueKey` and `value`
-// appear only when the tail decomposes as a known value-centric option plus a value - they tell the index where to also register the extracted value for O(1)
-// lookups, and `canonicalEntry` carries the same decoding re-composed in the canonical form. `tailOriginal` is that same tail with the casing the entry was
-// written in, which is what lets a reader hand back an identifier as the user typed it: the lookup keys are lowercased slices of this string, so a key's length
-// is an offset into it. Shared between buildConfigIndex (writer), entryAddressesScope (reader), enumerateConfiguredEntries (reader), and
-// normalizeConfiguredOptions (rewriter) so none of them can disagree on what any given entry "means" under the storage format.
+// Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail, the address the entry spells, and every reader of it -
+// the index registration, the scope matcher, and the enumerator alike - passes over it when `valueOnly` says this entry has no scope reading to offer: a legacy
+// trailing segment naming one of the option's declared choices is that option's value, not an enable at a scope the value happens to spell. Honoring the mark at
+// each of them rather than at the one that writes the index is what keeps the readers from disagreeing about an entry whose tail also names an option outright.
+// `valueKey` and `value` appear only when the tail decomposes as a known value-centric option plus a value - they tell the index where to also register the
+// extracted value for O(1) lookups, and `canonicalEntry` carries the same decoding re-composed in the canonical form. `tailOriginal` is that same tail with the
+// casing the entry was written in, which is what lets a reader hand back an identifier as the user typed it: the lookup keys are lowercased slices of this
+// string, so a key's length is an offset into it. Shared between buildConfigIndex (writer), entryAddressesScope (reader), enumerateConfiguredEntries (reader),
+// and normalizeConfiguredOptions (rewriter) so none of them can disagree on what any given entry "means" under the storage format.
 interface ParsedConfigEntry {
 
   canonicalEntry?: string;
@@ -447,6 +450,7 @@ interface ParsedConfigEntry {
   tailOriginal: string;
   value?: string;
   valueKey?: string;
+  valueOnly?: boolean;
 }
 
 /**
@@ -652,6 +656,17 @@ export function hasValueContent(value: string): boolean {
 function isMultipleOption(entry: FeatureOptionEntry | undefined): boolean {
 
   return entry?.multiple === true;
+}
+
+// The choices a catalog entry declares inline, and undefined when it declares none this side can read. A declaration is one of three things - absent, the name of
+// a webUI source, or the list itself - and only the list is an object, which is how this tells them apart: `Array.isArray` widens a readonly array to `any[]` and
+// would take the choices out of the type system at exactly the point they are being read. A source name answers undefined rather than the members it stands for,
+// because the domain a source derives lives on the page holding the device record and nothing here can enumerate it.
+function inlineChoices(entry: FeatureOptionEntry | undefined): readonly FeatureOptionChoice[] | undefined {
+
+  const choices = entry?.choices;
+
+  return (typeof choices === "object") ? choices : undefined;
 }
 
 // The single character separating one entry from the next inside a list-valued option's stored string. The grammar pair below is what reads and writes it, and
@@ -861,7 +876,8 @@ function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: s
 // empty payload on an option declaring a list, which is how the empty selection is spelled at a scope. Anything else containing "=" reads under the legacy dot
 // grammar with the delimiter as ordinary value text,
 // keeping such an entry on the reading it was authored under. The legacy form, accepted for configurations hand-authored before the payload delimiter existed,
-// reads a single trailing segment as a global value and a multi-segment tail as an id followed by a value.
+// reads a multi-segment tail as an id followed by a value, and a single trailing segment as whatever the option's declared choices settle it to be - the global
+// value, the scope it names, or both at once where nothing settles it.
 //
 // Greedy longest-prefix matching against the value-option registry handles the case where a shorter value-centric option name is a prefix of a longer option in
 // the catalog - the longer match wins, so an entry like `Enable.Audio.Volume.50` (when both `Audio` and `Audio.Volume` are value-centric) is unambiguously parsed
@@ -977,16 +993,41 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
     const extraOriginal = remainderOriginal.slice(1);
     const separatorIndex = extra.indexOf(".");
 
-    // The legacy dot form, accepted for configurations hand-authored before the payload delimiter existed. A single trailing segment is the global value; a
-    // multi-segment tail reads as an id followed by a free-form value. The legacy global form has to stay single-segment, because with no id to anchor on a
-    // dotted tail cannot be told apart from an id-and-value pair - expressing that unambiguously is exactly what the "=" form is for.
+    // The legacy dot form, accepted for configurations hand-authored before the payload delimiter existed. A single trailing segment reads against the option's
+    // own declaration, below; a multi-segment tail reads as an id followed by a free-form value. The legacy global form has to stay single-segment, because with
+    // no id to anchor on a dotted tail cannot be told apart from an id-and-value pair - expressing that unambiguously is exactly what the "=" form is for.
     if(separatorIndex === -1) {
 
-      // A single trailing segment usually does double duty: the index registers it as this option's global value AND, through the primary key, as an enable at a
-      // scope named by that same segment. Both readings are live at once, no canonical entry can carry both, and rewriting would settle an ambiguity in the
-      // user's file that only the user can settle - so the entry stays exactly as written. A segment containing "=" is the exception: the composer cannot
-      // address a scope whose id carries the delimiter, so the scope reading is unwritable, the global-value reading is the only live one, and the entry can
-      // modernize into the form that states it outright.
+      /* A single trailing segment reads as what it names, and the option's own declaration is what settles which of two things that is. Only a value-centric
+       * option name brings the walk here, so a value reading is always available to weigh against the scope reading the same segment spells.
+       *
+       * A segment naming one of the members the option declares inline is that value: it is the domain's own text, so reading it as a scope would address a
+       * device the value merely happens to spell. Matching folds case, the one policy the engine matches values by everywhere. A segment naming no member but
+       * spelling a legal scope identifier is the scope its author addressed, and the option carries no global value at all - the reading dies by absence,
+       * through the value key this leaves unset.
+       *
+       * Anything else keeps both readings live at once: the index registers the segment as this option's global value AND, through the primary key, as an enable
+       * at a scope carrying that same name. That is where a segment the identifier rule turns away lands, and where every option whose domain a webUI source
+       * derives or that declares none at all lands, since neither offers members to compare against. No canonical entry can carry both readings, and rewriting
+       * would settle an ambiguity in the user's file that only the user can settle, so such an entry stays exactly as written and the "=" form remains the
+       * spelling that states one reading outright.
+       *
+       * A segment containing "=" is the one shape no ambiguity survives: the composer cannot address a scope whose id carries the delimiter, so the scope
+       * reading is unwritable, the global-value reading is the only live one, and the entry can modernize into the form that states it outright.
+       */
+      const declared = inlineChoices(catalog.optionsByName[optName]);
+
+      if(declared !== undefined) {
+
+        if(declared.some((choice) => choice.value.toLowerCase() === extra)) {
+
+          parsed.valueOnly = true;
+        } else if(isValidScopeId(extra)) {
+
+          break;
+        }
+      }
+
       if(extra.includes("=")) {
 
         parsed.canonicalEntry = composeEntry({ enabled, option: optionOriginal, value: extraOriginal });
@@ -1035,7 +1076,8 @@ function entryAddressesScope({ catalog, rawEntry, target }: { catalog: CatalogIn
     return false;
   }
 
-  return (parsed.primaryKey === target) || (parsed.valueKey === target);
+  // An entry whose segment its option's choices claim as a value addresses that option and no scope, so its primary key is not an address a target can match.
+  return (!parsed.valueOnly && (parsed.primaryKey === target)) || (parsed.valueKey === target);
 }
 
 // Compose the one error shape this module raises when a catalog entry declares something the engine cannot honor. Every such throw names its own detail and the
@@ -1246,7 +1288,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
 
 /**
  * Build the configured-options lookup index from a catalog index + the configured-options array. Each entry contributes one or two lookup keys via the shared
- * `parseEntry`: the raw tail (always) and an extracted value key (for value-centric Enable entries). First-write-wins on collision so the earliest entry in
+ * `parseEntry`: the raw tail and an extracted value key (for value-centric Enable entries). First-write-wins on collision so the earliest entry in
  * the array takes precedence over later duplicates - users hand-editing config and accidentally listing an option twice get the natural "first one is canonical"
  * semantic.
  *
@@ -1270,7 +1312,9 @@ export function buildConfigIndex(catalog: CatalogIndex, configuredOptions: reado
       continue;
     }
 
-    if(!lookup.has(parsed.primaryKey)) {
+    // The raw tail records the address the entry spells, except where the parse read that tail's last segment as this option's own value: there is no scope there
+    // to register, and the value key below is the entry's whole contribution.
+    if(!parsed.valueOnly && !lookup.has(parsed.primaryKey)) {
 
       lookup.set(parsed.primaryKey, { enabled: parsed.enabled });
     }
@@ -1389,7 +1433,10 @@ export function *enumerateConfiguredEntries({ catalog, category, configuredOptio
       continue;
     }
 
-    if(!keyAddressesOption({ catalog, key: primaryKey, optionKey })) {
+    // A narrowed entry has no scope reading to report at all, so the primary key is not an address this yields against. The key can still name an option
+    // outright - a boolean option the catalog carries beside the value option it narrows, which the value-option walk never considers - and honoring the mark
+    // here is what keeps this reader and the lookup index saying the same thing about one entry.
+    if(parsed.valueOnly || !keyAddressesOption({ catalog, key: primaryKey, optionKey })) {
 
       continue;
     }
@@ -1409,9 +1456,10 @@ export function *enumerateConfiguredEntries({ catalog, category, configuredOptio
  *
  * The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) is deliberately left alone for the same reason. That segment does double duty - the lookup
  * index registers it as the option's global value and, through the primary key, as an enable at a scope carrying that same name - and no single canonical entry
- * expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written. A segment containing "=" is the
- * exception: the composer cannot address a scope whose id carries the delimiter, so only the global-value reading is live there, and the entry modernizes like
- * any other unambiguous legacy form.
+ * expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written. A segment the option's declared
+ * choices settle one way or the other stays as written too, since what settles it is a catalog declaration a plugin can revise rather than the grammar itself. A
+ * segment containing "=" is the exception: the composer cannot address a scope whose id carries the delimiter, so only the global-value reading is live there,
+ * and the entry modernizes like any other unambiguous legacy form.
  *
  * {@link applySetOption} and {@link applyClearOption} run their results through this, which is the whole of the upgrade path: a stored configuration modernizes as
  * part of a save the user already asked for, and never merely because something read it. One consequence is worth stating plainly, since it becomes visible in the
@@ -2356,11 +2404,7 @@ export class FeatureOptions {
 
     // The caller's domain wins, then the inline list the catalog already holds - restating a static list at the call site would give the same option two
     // declarations of what it offers. A source-backed option has neither, since the domain it draws on lives on the page.
-    //
-    // The inline list is recognized by what it is not, because `Array.isArray` widens a readonly array to `any[]` and would take the choices out of the type
-    // system at exactly the point they are being read. A declaration is one of three things - absent, a source name, or the list itself - and only the list is an
-    // object.
-    const resolvedDomain = domain ?? ((typeof entry.choices === "object") ? entry.choices.map((choice) => choice.value) : undefined);
+    const resolvedDomain = domain ?? inlineChoices(entry)?.map((choice) => choice.value);
 
     if(resolvedDomain) {
 

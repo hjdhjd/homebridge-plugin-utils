@@ -211,6 +211,11 @@ export const ALL_CHOICES = "*";
  *                             scope resolution, and the documentation renderer treat a secret option exactly like any other value option, and its value lands in
  *                             `config.json` as plain text like every other value. What the masking buys is protection from someone reading the settings page over
  *                             the user's shoulder; it is not secrecy at rest, and a plugin handling real credentials should say so in the option's description.
+ * @property style           - Optional. How a single choice offers its list on the settings page - `"dropdown"` for a select, `"radio"` for a group of radio
+ *                             buttons - overriding the presentation the editor picks on its own: a short inline list reads as a radio group, while a longer one
+ *                             or a list a source derives per device reads as a dropdown. Presentation only, exactly as `secret` is: neither the declaration nor
+ *                             the automatic pick changes what is stored, the entry grammar, or anything the engine resolves. Declared without `choices`, or on a
+ *                             `multiple` option, it is a catalog error - the first has no list to present and the second has a presentation of its own.
  *
  * @typeParam TMeta - The concrete type of the opaque {@link FeatureOptionEntry.meta} annotation. Defaults to `unknown`, so a bare `FeatureOptionEntry` (the form every
  *                    existing core consumer uses) resolves to `FeatureOptionEntry<unknown>` and stays assignable to the parameterized form, keeping the core non-generic.
@@ -244,6 +249,7 @@ export interface FeatureOptionEntry<TMeta = unknown> {
   render?: FeatureOptionFormatter | ((value: string) => string);
   scopes?: readonly [FeatureOptionScope, ...FeatureOptionScope[]];
   secret?: boolean;
+  style?: "dropdown" | "radio";
 }
 
 /**
@@ -1003,10 +1009,10 @@ function catalogError(detail: string, entry: string): Error {
   return new Error("FeatureOptions: " + detail + " declared on option \"" + entry + "\".");
 }
 
-// Validate a catalog entry's picker declarations, throwing on any combination the engine cannot honor. `choices` is editor vocabulary the engine reads straight
-// past, and `multiple` reaches the engine at one point only - the empty selection the grammar spells and value() answers - so what the two declarations mostly
-// need is catalog integrity, which has one home: they are checked here beside the renderer declaration, and a plugin learns about a malformed catalog when it
-// builds one rather than when a user opens the settings page.
+// Validate a catalog entry's picker declarations, throwing on any combination the engine cannot honor. `choices` and `style` are editor vocabulary the engine
+// reads straight past, and `multiple` reaches the engine at one point only - the empty selection the grammar spells and value() answers - so what these
+// declarations mostly need is catalog integrity, which has one home: they are checked here beside the renderer declaration, and a plugin learns about a
+// malformed catalog when it builds one rather than when a user opens the settings page.
 //
 // A source-backed list is the one declaration this cannot fully check. The domain a source derives exists only on the page holding the device record, so neither
 // its members nor whether the default names one of them is knowable here; the webUI checks what it can see in turn, rejecting a source name no resolver answers to.
@@ -1020,6 +1026,20 @@ function validateChoiceDeclaration(option: FeatureOptionEntry, entry: string): v
   if((option.defaultValue === ALL_CHOICES) && (!isMultiple || (choices === undefined))) {
 
     throw catalogError("an all-choices default outside a multiple choice", entry);
+  }
+
+  /* A presentation style says how ONE choice is offered, so it needs a list to offer and a single value to offer it for. Both checks sit ahead of the early
+   * return below rather than among the siblings after it, because an option declaring a style and no list at all takes that return - the most direct way to get
+   * this wrong is the shape a later check could never see.
+   */
+  if((option.style !== undefined) && (choices === undefined)) {
+
+    throw catalogError("a presentation style without choices", entry);
+  }
+
+  if((option.style !== undefined) && isMultiple) {
+
+    throw catalogError("a presentation style on a multiple choice", entry);
   }
 
   if((choices === undefined) && !isMultiple) {

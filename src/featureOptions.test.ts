@@ -2007,6 +2007,16 @@ describe("FeatureOptions - pure functional core", () => {
         /a default outside the declared choices declared on option "Motion\.Tier"/);
       });
 
+      test("rejects a presentation style with nothing to present", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { default: false, defaultValue: "high", description: "A style with no list behind it.", name: "Tier", style: "radio" })),
+        /a presentation style without choices declared on option "Motion\.Tier"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: CHOICE_LIST, default: false, defaultValue: "high,low", description: "A styled list.", multiple: true, name: "Tier", style: "radio" })),
+        /a presentation style on a multiple choice declared on option "Motion\.Tier"/);
+      });
+
       test("accepts every legal declaration, including the ones the checks above come closest to catching", () => {
 
         const legal: Record<string, FeatureOptionEntry[]> = {
@@ -2015,6 +2025,8 @@ describe("FeatureOptions - pure functional core", () => {
 
             { choices: CHOICE_LIST, default: false, defaultValue: "high", description: "A single picker.", name: "Tier" },
             { choices: CHOICE_LIST, default: false, defaultValue: "", description: "A picker starting with no value.", name: "TierUnset" },
+            { choices: CHOICE_LIST, default: false, defaultValue: "high", description: "A picker held to a dropdown.", name: "TierDropdown", style: "dropdown" },
+            { choices: CHOICE_LIST, default: false, defaultValue: "high", description: "A picker held to a radio group.", name: "TierRadio", style: "radio" },
             { choices: CHOICE_LIST, default: false, defaultValue: ALL_CHOICES, description: "Everything by default.", multiple: true, name: "Tiers" },
             { choices: CHOICE_LIST, default: false, defaultValue: "high,low", description: "An explicit list default.", multiple: true, name: "TierList" },
             { choices: "smartDetectTypes", default: false, defaultValue: "person", description: "A source-backed picker.", multiple: true, name: "Detected" },
@@ -2027,6 +2039,7 @@ describe("FeatureOptions - pure functional core", () => {
         const catalog = buildCatalogIndex(CATEGORIES, legal);
 
         assert.equal(catalog.optionsByName["motion.detected"]?.choices, "smartDetectTypes", "a source name passes through as declared");
+        assert.equal(catalog.optionsByName["motion.tierradio"]?.style, "radio", "a declared style passes through as the editor vocabulary it is");
         assert.equal(catalog.valueOptions["motion.tiers"], ALL_CHOICES, "an all-choices default is registered like any other value default");
       });
     });
@@ -2334,11 +2347,12 @@ describe("FeatureOptions - pure functional core", () => {
   });
 });
 
-/* A picker's `choices` declaration is editor data. Nothing in the engine - the entry grammar, storage, scope resolution, value() - is allowed to read it, which
- * is the property that lets a plugin attach a picker to an existing option while every configuration already written goes on resolving to what it always did.
- * The `multiple` declaration beside it is the one that does reach the engine, at the empty selection alone: "on, with nothing selected" is a state a list can be
- * in, so the grammar gives it the bare-delimiter spelling a scoped entry stores and a read answers as the empty list. Away from that one point a list resolves
- * like any other value option, which is the ground the rows below stand on - every value they store or read carries content.
+/* A picker's `choices` and `style` declarations are editor data. Nothing in the engine - the entry grammar, storage, scope resolution, value() - is allowed to
+ * read either, which is the property that lets a plugin attach a picker to an existing option, or restyle one it already has, while every configuration already
+ * written goes on resolving to what it always did. The `multiple` declaration beside them is the one that does reach the engine, at the empty selection alone:
+ * "on, with nothing selected" is a state a list can be in, so the grammar gives it the bare-delimiter spelling a scoped entry stores and a read answers as the
+ * empty list. Away from that one point a list resolves like any other value option, which is the ground the rows below stand on - every value they store or
+ * read carries content.
  *
  * The guard proves it by building the same catalog twice, once with the declarations and once without, and comparing every DERIVED map. The three members that
  * are not derived are excluded by construction rather than by exception: `categories` and `options` are the raw inputs preserved verbatim, and `optionsByName`
@@ -2351,7 +2365,8 @@ describe("FeatureOptions - the choices declarations are inert to the engine", ()
     Motion: [
 
       { default: true, description: "Enable motion detection.", name: "Detect" },
-      { default: false, defaultValue: "high", description: "Detection tier.", group: "Detect", name: "Tier" }
+      { default: false, defaultValue: "high", description: "Detection tier.", group: "Detect", name: "Tier" },
+      { default: false, defaultValue: "high", description: "Detection quality.", name: "Quality" }
     ]
   };
 
@@ -2361,7 +2376,9 @@ describe("FeatureOptions - the choices declarations are inert to the engine", ()
 
       { default: true, description: "Enable motion detection.", name: "Detect" },
       { choices: [ { label: "High", value: "high" }, { label: "Low", value: "low" } ], default: false, defaultValue: "high", description: "Detection tier.",
-        group: "Detect", multiple: true, name: "Tier" }
+        group: "Detect", multiple: true, name: "Tier" },
+      { choices: [ { label: "High", value: "high" }, { label: "Low", value: "low" } ], default: false, defaultValue: "high", description: "Detection quality.",
+        name: "Quality", style: "radio" }
     ]
   };
 

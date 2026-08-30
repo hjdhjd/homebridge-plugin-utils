@@ -178,7 +178,9 @@ export const ALL_CHOICES = "*";
  * @property defaultValue    - Optional. Default value for value-based feature options.
  * @property description     - Description of the feature option for display or documentation.
  * @property group           - Optional. Grouping/category for the feature option.
- * @property inputSize       - Optional. Width of the input field for a value-based feature option. Defaults to 5 characters.
+ * @property inputSize       - Optional. Width, in characters, of a field the user TYPES a value into. Defaults to 5. Every such field reads it - the free-text
+ *                             field, the masked field a `secret` declares, and the field a list editor takes its next entry in - while a control that OFFERS a
+ *                             list sizes itself to the members it holds and reads nothing here.
  * @property meta            - Optional. An opaque, plugin-private annotation channel the core never interprets. HBPU's types deliberately cannot see inside `TMeta`;
  *                             the value is carried verbatim through the catalog and forwarded to the documentation renderer's closures (the only surface that knows its
  *                             concrete shape). This mirrors the OpenAPI `x-*` extension discipline, made type-safe: a plugin parameterizes the entry with its own

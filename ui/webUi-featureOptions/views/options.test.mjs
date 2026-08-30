@@ -1634,9 +1634,17 @@ const PICKER_OPTIONS = {
   Pick: [
 
     { choices: [ { label: "High", value: "high" }, { label: "Low", value: "low" } ], default: true, defaultValue: "high", description: "Stream tier.",
-      name: "Tier" },
+      name: "Tier", style: "dropdown" },
     { choices: [ { label: "High", value: "high" }, { label: "Low", value: "low" } ], default: false, defaultValue: "", description: "Stream tier, no default.",
-      name: "TierUnset" },
+      name: "TierUnset", style: "dropdown" },
+
+    // The radio pair declares no style, so what settles them as radios is the autoselection reading a short inline list. Their default is deliberately not the
+    // first member, which is what lets a group resting on the declared default be told apart from one that fell back to whichever member comes first.
+    { choices: [ { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" } ], default: true,
+      defaultValue: "medium", description: "Capture quality.", name: "Quality" },
+    { choices: [ { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" } ], default: false, defaultValue: "",
+      description: "Capture quality, no default.", name: "QualityUnset" },
+
     { choices: "types", default: true, defaultValue: "a,b", description: "Detected types.", multiple: true, name: "Types" },
     { choices: "types", default: false, defaultValue: "", description: "Detected types, no default.", multiple: true, name: "TypesUnset" },
     { choices: "types", default: true, defaultValue: "", description: "A single choice drawn from the same source.", name: "Named" },
@@ -1703,6 +1711,38 @@ describe("mountOptionsView - picker delegation", () => {
 
     assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Types=a"], "the member change committed the list");
     assert.equal(configTable.querySelector("[id='row-Pick.Types'] .fo-option-checkbox").checked, true, "and left the option enabled");
+  });
+
+  test("a radio member click commits the picked value and never touches the option's enabled state", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = pickerSetup();
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.Quality'] .fo-option-checkbox");
+
+    assert.equal(rowCheckbox.checked, true, "precondition: the row is enabled by its catalog default");
+
+    // A radio member is an input inside the row exactly as a group's checkbox is, so it asks the delegation the same question: the gesture is the option's value,
+    // and routing it to the tri-state machine would have a pick answer for the option itself.
+    pickerControl(configTable, "Quality").querySelector(".fo-choice-checkbox[value='high']").click();
+
+    assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Quality=high"], "the pick committed as the option's value");
+    assert.equal(configTable.querySelector("[id='row-Pick.Quality'] .fo-option-checkbox").checked, true, "and left the option enabled, with no tri-state gesture taken");
+  });
+
+  test("a default-matching radio pick clears the option, and the re-derived group rests on the default", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = pickerSetup({ configuredOptions: ["Enable.Pick.Quality=high"] });
+
+    // Picking the member the catalog already defaults to says nothing the default does not, so the commit normalizes to a clear rather than storing what
+    // resolution would answer anyway. The declared default is not the first member, so where the group rests afterwards names the value the projection resolved.
+    pickerControl(configTable, "Quality").querySelector(".fo-choice-checkbox[value='medium']").click();
+
+    assert.deepEqual(store.state.configuredOptions, [], "the default-matching pick cleared the stored deviation");
+    assert.deepEqual([...pickerControl(configTable, "Quality").querySelectorAll(".fo-choice-checkbox")].map((b) => b.checked), [ false, true, false ],
+      "and the group rests on the declared default");
   });
 
   test("a dropdown change commits the picked value", () => {
@@ -1827,6 +1867,27 @@ describe("mountOptionsView - picker arming and abandonment", () => {
       assert.equal(store.state.armedOption, null, optionName + " stands down when focus leaves with nothing chosen");
       assert.equal(configTable.querySelector("[id='row-Pick." + optionName + "'] .fo-option-checkbox").checked, false, optionName + " unchecks with it");
     }
+  });
+
+  test("abandoning an armed radio row stands it down", () => {
+
+    using _dom = createTestDom();
+
+    const { configTable, store } = scopedPickerSetup();
+    const rowCheckbox = configTable.querySelector("[id='row-Pick.QualityUnset'] .fo-option-checkbox");
+
+    rowCheckbox.checked = true;
+    rowCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, "Pick.QualityUnset", "precondition: the row armed rather than writing");
+
+    // An untouched radio group holds nothing, since focus alone selects no member, so the departure carries no value and is the abandonment gesture. What leaves
+    // is the member box the arming handed focus to, which reaches the rule through the group it sits in.
+    document.activeElement.dispatchEvent(new Event("focusout", { bubbles: true }));
+
+    assert.equal(store.state.armedOption, null, "the row stands down when focus leaves with no member picked");
+    assert.deepEqual(store.state.configuredOptions, [], "and nothing was written on the way out");
+    assert.equal(configTable.querySelector("[id='row-Pick.QualityUnset'] .fo-option-checkbox").checked, false, "the row unchecks with it");
   });
 
   test("an armed picker row that HAS a selection survives the focus departure", () => {

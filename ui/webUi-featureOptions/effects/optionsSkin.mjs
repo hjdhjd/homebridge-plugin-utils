@@ -277,12 +277,21 @@ const buildOptionsSkinCss = () => [
   ":root.fo-dark .fo-option-value:focus { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-focus-border); " +
     "box-shadow: var(--fo-focus-ring); color: var(--fo-text-on-elevated); }",
 
-  /* A multiple-choice option's group. The members lay out as a wrapping row so a long list reads across the content cell rather than down it, and each member's
-   * box sits beside its own text. The fieldset surrenders the browser's default margin and padding, which exist for a bordered fieldset and read as stray
-   * indentation on one that carries no border.
+  /* A single choice's dropdown, sized by what it holds. `width: auto` hands the width back to the browser's own intrinsic sizing, which settles on one stable
+   * width taken from the widest member - Bootstrap's `.form-control` would otherwise stretch it to the full width of the content cell, and a dropdown that wide
+   * to show a two-word label reads as a mistake. The cap is what keeps a genuinely long member from pushing the control past the cell on a narrow panel.
+   *
+   * The rule is layout rather than theme, so it is deliberately not dark-qualified the way the treatment above is: a control has one width in both themes, and
+   * qualifying the width per theme would say the sizing was a dark-mode opinion.
+   */
+  "select.fo-option-value { max-width: 100%; width: auto; }",
+
+  /* A picker group, which is what a multiple choice always renders as and what a single choice renders as when it reads as radio buttons. The members lay out as
+   * a wrapping row so a long list reads across the content cell rather than down it, and each member's input sits beside its own text. The fieldset surrenders
+   * the browser's default margin and padding, which exist for a bordered fieldset and read as stray indentation on one that carries no border.
    *
    * A member the option no longer offers reads in the attention color, which is the page's existing vocabulary for "this is here but is not ordinary." Nothing
-   * else is needed: the boxes are native checkboxes and follow `color-scheme` in both themes, and the group's own dark-mode surface comes from the
+   * else is needed: the members are native inputs and follow `color-scheme` in both themes, and the group's own dark-mode surface comes from the
    * `.fo-option-value` rules above, which the fieldset carries.
    */
   ".fo-choice-group { display: flex; flex-wrap: wrap; gap: var(--fo-space-xs) var(--fo-space-md); border: 0; margin: 0; padding: 0; min-width: 0; }",

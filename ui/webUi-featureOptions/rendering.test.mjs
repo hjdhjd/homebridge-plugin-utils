@@ -1245,17 +1245,36 @@ describe("applyRowState - re-derivation on the update path", () => {
 /* The picker controls. A choice option's row is the same row every other option gets - one checkbox, one stacked content cell - with a control that offers a list
  * instead of a field that takes text. What these tests hold to is that the list on screen is the projection's, that operating the control commits what it means,
  * and that a re-derivation which changes nothing leaves the DOM the user is working in exactly where it was.
+ *
+ * A single choice offers itself two ways, and which one it takes is settled by the declaration alone. The fixtures below therefore come in pairs where the pair
+ * is the point: two lists differing only in length, a short list declared into a dropdown against a source-backed list declared into a radio group, and a radio
+ * list whose default is not its first member.
  */
 const PICKER_CATEGORIES = [{ description: "Picker Options", name: "Pick" }];
 
 const TIER_CHOICES = [ { label: "High", value: "high" }, { label: "Low", value: "low" } ];
 
+// A list whose declared default is its LAST member. The position matters: a row that previewed the first member instead of the declared one would
+// be indistinguishable from a correct preview on a list defaulting to its head, so the fixture puts the two answers in different places.
+const QUALITY_CHOICES = [ { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" } ];
+
+// Inline lists built to a named size, for the rows that sit either side of the presentation threshold. Six members is the largest list still offered as a radio
+// group and seven is the first offered as a dropdown, so the two fixtures differ in nothing but their length.
+const memberList = (count) => Array.from({ length: count }, (_, index) => ({ label: "Member " + (index + 1), value: "m" + (index + 1) }));
+
 const PICKER_OPTIONS = {
 
   Pick: [
 
-    { choices: TIER_CHOICES, default: true, defaultValue: "high", description: "Stream tier.", inputSize: 12, name: "Tier" },
-    { choices: TIER_CHOICES, default: true, defaultValue: "", description: "Stream tier, no default.", name: "TierUnset" },
+    { choices: TIER_CHOICES, default: true, defaultValue: "high", description: "Stream tier.", inputSize: 12, name: "Tier", style: "dropdown" },
+    { choices: TIER_CHOICES, default: true, defaultValue: "", description: "Stream tier, no default.", name: "TierUnset", style: "dropdown" },
+    { choices: QUALITY_CHOICES, default: true, defaultValue: "high", description: "Capture quality.", name: "Quality" },
+    { choices: QUALITY_CHOICES, default: true, defaultValue: "", description: "Capture quality, no default.", name: "QualityUnset" },
+    { choices: memberList(6), default: true, defaultValue: "m1", description: "Six choices, the largest list a radio group takes.", name: "Six" },
+    { choices: memberList(7), default: true, defaultValue: "m1", description: "Seven choices, one member past that.", name: "Seven" },
+    { choices: "types", default: true, defaultValue: "", description: "A single choice the source derives.", name: "Sourced" },
+    { choices: "types", default: true, defaultValue: "", description: "A single choice the source derives, held to a radio group.", name: "SourcedRadio",
+      style: "radio" },
     { choices: "types", default: true, defaultValue: ALL_CHOICES, description: "Detected types.", multiple: true, name: "Types" },
     { choices: "types", default: true, defaultValue: "", description: "Detected types, no default.", multiple: true, name: "TypesUnset" },
     { default: true, defaultValue: "a,b", description: "Licence plates.", multiple: true, name: "Plates" },
@@ -1267,6 +1286,11 @@ const PICKER_OPTIONS = {
 // The default source: three members, freshly allocated on every call, which is exactly the shape that would rebuild the DOM on every recompute if the renderer
 // compared by reference.
 const abcSource = () => [ { label: "A", value: "a" }, { label: "B", value: "b" }, { label: "C", value: "c" } ];
+
+// The device and the scope the scoped rows below are exercised at. A scoped row is where arming, the per-scope write, and the fall-back to inheritance all live,
+// so the rows that walk those gestures need a page with a device selected on it.
+const PICKER_DEVICES = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+const DEVICE_SCOPE = { controllerId: null, deviceId: "dev-a", kind: "device" };
 
 const pickerState = ({ configuredOptions = [], devices = [], scope, types = abcSource } = {}) => {
 
@@ -1307,29 +1331,55 @@ const checkboxStub = (checked, { readOnly = false } = {}) => {
   return checkbox;
 };
 
+// Run the tri-state machine against a scoped picker row the way the view runs it: the row's own control, the config index built from the state in hand, and the
+// device currently in view. One caller for the gesture rows keeps them about the answer the machine gives rather than about the plumbing that reaches it.
+const scopedTriState = ({ armed = false, checked, optionName, state }) => {
+
+  const control = pickerRow(state, optionName, { armed, deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+
+  return triStateTransition({ armed, catalog: state.catalog, checkbox: checkboxStub(checked), configIndex: buildConfigIndex(state.catalog,
+    state.configuredOptions), control, controllerId: null, deviceId: "dev-a", entry: pickerEntry(state, optionName) });
+};
+
 describe("the choice controls - construction", () => {
 
-  test("a single-choice option builds a select carrying the shared value class, sized by inputSize, in the body font", () => {
+  test("a single-choice option builds a select carrying the shared value class, declaring no width of its own, in the body font", () => {
 
     using _dom = createTestDom();
 
+    // The fixture declares an inputSize, which a select does not read: sizing belongs to the skin, where `width: auto` takes the control's width from its own
+    // widest member. An inline width here would outrank that rule and pin every dropdown to the same arbitrary ch count whatever it holds.
     const control = pickerRow(pickerState(), "Tier").querySelector(".fo-option-value");
 
     assert.equal(control.tagName, "SELECT", "one choice is a dropdown");
     assert.equal(control.classList.contains("fo-option-value"), true, "the class the view, the theme, and the busy lock all address it by");
     assert.equal(control.classList.contains("form-control"), true, "dressed as a form control like the text field beside it");
-    assert.equal(control.style.width, "12ch", "sized by the option's inputSize declaration");
+    assert.equal(control.style.width, "", "no inline width, whatever inputSize the option happens to declare");
+    assert.equal(control.style.maxWidth, "", "and no inline cap, since the skin's rule carries the narrow-panel guard with it");
+    assert.equal(control.style.boxSizing, "", "nor the box-sizing that a ch-width declaration needed to measure from");
     assert.equal(control.style.fontFamily, "", "a label is prose and reads in the inherited body font - monospace belongs to raw-value fields");
   });
 
-  test("a select's first option is always the empty one, which is how the row expresses no value at all", () => {
+  test("a select's first option is a placeholder the user can never choose, which is how the row expresses no value at all", () => {
 
     using _dom = createTestDom();
 
-    const control = pickerRow(pickerState(), "TierUnset").querySelector(".fo-option-value");
+    const row = pickerRow(pickerState(), "TierUnset");
+    const control = row.querySelector(".fo-option-value");
 
     assert.equal(control.options[0].value, "", "the leading option stores nothing");
     assert.equal(control.options[0].textContent, "", "and shows nothing");
+    assert.equal(control.options[0].disabled, true, "it is a rest state the row lands on, never an offer - so it cannot be picked");
+    assert.equal(control.options[0].hidden, true, "and it is kept out of the list the user reads at all");
+
+    // The rebuild is where a placeholder recreated bare would slip past a construction-only check: a stored value the list does not offer arrives, every member
+    // node is replaced, and what has to come through intact is the placeholder's unpickability rather than merely its presence.
+    applyRowState({ entry: pickerEntry(pickerState({ configuredOptions: ["Enable.Pick.TierUnset=gone"] }), "TierUnset"), row, scopeKind: "global" });
+
+    assert.deepEqual([...control.options].map((option) => option.value), [ "", "high", "low", "gone" ], "precondition: the member list genuinely rebuilt");
+    assert.equal(control.options[0].value, "", "the placeholder is still index 0 afterwards");
+    assert.equal(control.options[0].disabled, true, "still unpickable");
+    assert.equal(control.options[0].hidden, true, "and still hidden");
   });
 
   test("a multiple-choice option builds a checkbox group carrying the shared value class, in the body font", () => {
@@ -1342,6 +1392,200 @@ describe("the choice controls - construction", () => {
     assert.equal(control.classList.contains("fo-option-value"), true, "the group is the control, so the class sits on it");
     assert.equal(control.classList.contains("fo-choice-group"), true);
     assert.equal(control.style.fontFamily, "", "member labels read in the inherited body font");
+  });
+});
+
+/* Which face a single choice wears. The rule reads the catalog declaration and nothing else: a declared style wins, a source-backed list is always a dropdown,
+ * and an inline list is measured by its own length. The rows below pin each of those answers, and the boundary is pinned from both sides rather than from
+ * the radio side alone, since a threshold is only held by the pair of rows that straddle it.
+ */
+describe("the choice presentation - what a declaration renders as", () => {
+
+  test("an inline list of six offers a radio group, and one of seven a dropdown", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState();
+    const six = pickerRow(state, "Six").querySelector(".fo-option-value");
+    const seven = pickerRow(state, "Seven").querySelector(".fo-option-value");
+    const sixMembers = [...six.querySelectorAll(".fo-choice-checkbox")];
+
+    assert.equal(six.tagName, "FIELDSET", "six members still read at once, which is what a radio group is for");
+    assert.equal(sixMembers.length, 6, "and all six are there");
+    assert.ok(sixMembers.every((input) => input.type === "radio"), "as radios, since one of them is all the row can hold");
+    assert.equal(seven.tagName, "SELECT", "the seventh member is where the dropdown's one-line face wins");
+  });
+
+  test("a declared style overrides the automatic answer in both directions", () => {
+
+    using _dom = createTestDom();
+
+    // A short inline list would read as a radio group on its own, and a source-backed list would never read as one. Each fixture declares the opposite of what it
+    // would otherwise get, so a rule that quietly ignored the declaration would fail on one side or the other whichever way it leaned.
+    const state = pickerState();
+
+    assert.equal(pickerRow(state, "Tier").querySelector(".fo-option-value").tagName, "SELECT", "a short list declared a dropdown stays a dropdown");
+    assert.equal(pickerRow(state, "SourcedRadio").querySelector(".fo-option-value").tagName, "FIELDSET",
+      "and a source-backed list declared a radio group becomes one");
+  });
+
+  test("a source-backed single choice is a dropdown however short the device's own list turns out to be", () => {
+
+    using _dom = createTestDom();
+
+    // The source resolves three members here, comfortably inside the length an inline list would be measured by. Reading the RESOLVED list rather than the
+    // declaration would make this row a radio group on this device and a dropdown on the next, moving the control family under the user between pages.
+    const state = pickerState();
+
+    assert.equal(pickerEntry(state, "Sourced").choices.length, 3, "precondition: the resolved list is short enough to tempt a radio group");
+    assert.equal(pickerRow(state, "Sourced").querySelector(".fo-option-value").tagName, "SELECT", "the declaration decides, and a source-backed one says dropdown");
+  });
+});
+
+/* The radio group. It is the checkbox group's own fieldset family wearing a different input, which is what lets the value read, the lock, the focus hand-off,
+ * and the theme reach it without knowing which flavor they have. What these rows hold to is that the members carry the row's identity, that the row rests where
+ * the projection says, and that a multiple choice beside it is untouched by any of it.
+ */
+describe("the radio group - construction and rest state", () => {
+
+  test("builds the projection's members as radios sharing the row's name, resting on the declared default", () => {
+
+    using _dom = createTestDom();
+
+    const control = pickerRow(pickerState(), "Quality").querySelector(".fo-option-value");
+    const inputs = [...control.querySelectorAll(".fo-choice-checkbox")];
+
+    assert.equal(control.tagName, "FIELDSET", "the same control a multiple choice builds");
+    assert.equal(control.classList.contains("fo-choice-group"), true, "in the same family, so the lock and the theme reach it unchanged");
+    assert.deepEqual(inputs.map((input) => input.value), [ "low", "medium", "high" ], "the declared list, in the order it was declared");
+    assert.deepEqual(inputs.map((input) => input.type), [ "radio", "radio", "radio" ]);
+    assert.deepEqual(inputs.map((input) => input.name), [ "Pick.Quality", "Pick.Quality", "Pick.Quality" ], "one name per row is what makes exclusivity bind");
+    assert.deepEqual(inputs.map((input) => input.checked), [ false, false, true ], "and the row previews its declared default, which is not the first member");
+  });
+
+  test("a multiple choice beside it still builds unnamed checkboxes", () => {
+
+    using _dom = createTestDom();
+
+    // The negative control for the flavor threading: one builder serves both, so a change that named every member or made every member a radio would show up
+    // here rather than only in production.
+    const inputs = [...pickerRow(pickerState(), "Types").querySelectorAll(".fo-choice-checkbox")];
+
+    assert.deepEqual(inputs.map((input) => input.type), [ "checkbox", "checkbox", "checkbox" ], "several choices are still checkboxes");
+    assert.deepEqual(inputs.map((input) => input.name), [ "", "", "" ], "and carry no group name, since a checkbox expresses no exclusivity to bind");
+  });
+
+  test("shows the stored selection over the default, and marks a value the list no longer offers", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ configuredOptions: ["Enable.Pick.Quality=gone"] });
+    const control = pickerRow(state, "Quality").querySelector(".fo-option-value");
+    const inputs = [...control.querySelectorAll(".fo-choice-checkbox")];
+    const labels = [...control.querySelectorAll(".fo-choice")];
+
+    assert.deepEqual(inputs.map((input) => input.value), [ "low", "medium", "high", "gone" ], "the stored value is appended rather than dropped");
+    assert.deepEqual(inputs.map((input) => input.checked), [ false, false, false, true ], "and stays picked, since the user chose it");
+    assert.equal(labels[3].classList.contains("fo-choice-unknown"), true, "marked as something this device does not offer, exactly as a dropdown marks it");
+    assert.equal(labels[3].title, "Not offered for this device.", "and says so on hover");
+    assert.equal(labels[0].classList.contains("fo-choice-unknown"), false, "an offered member carries no mark");
+  });
+
+  test("an armed radio group picks nothing at all", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState({ devices: PICKER_DEVICES, scope: DEVICE_SCOPE });
+    const control = pickerRow(state, "Quality", { armed: true, deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
+
+    assert.deepEqual([...control.querySelectorAll(".fo-choice-checkbox")].map((input) => input.checked), [ false, false, false ],
+      "arming asks for the option's first value, so the declared default is not previewed as a pick");
+  });
+
+  test("a locked row disables every member of a radio group", () => {
+
+    using _dom = createTestDom();
+
+    const control = pickerRow(pickerState({ configuredOptions: ["Disable.Pick.Quality"] }), "Quality").querySelector(".fo-option-value");
+
+    assert.deepEqual([...control.querySelectorAll(".fo-choice-checkbox")].map((input) => input.disabled), [ true, true, true ],
+      "each member is what a user would click, so each one locks");
+    assert.equal(control.getAttribute("aria-disabled"), "true", "and the group as a whole says it is unavailable");
+  });
+
+  test("a row enabled here with no value of its own still previews its default", () => {
+
+    using _dom = createTestDom();
+
+    // A bare enable carries no value, so resolution answers with an explicit scope and no value rather than with "none" - a different input reaching the same
+    // substitution the unset row reaches. What the user sees is the same either way: the option's declared default, shown by the control they would change.
+    const state = pickerState({ configuredOptions: ["Enable.Pick.Quality"] });
+    const control = pickerRow(state, "Quality").querySelector(".fo-option-value");
+
+    assert.equal(pickerEntry(state, "Quality").scope, "global", "precondition: the row resolves at an explicit scope rather than at none");
+    assert.deepEqual([...control.querySelectorAll(".fo-choice-checkbox")].map((input) => input.checked), [ false, false, true ],
+      "and the declared default is what the group previews");
+  });
+});
+
+/* The radio group's gestures, driven by real clicks rather than by a synthesized event, because exclusivity is the platform's own behavior and a test that set
+ * `.checked` by hand would prove nothing about it. The per-row name is what binds it, so the independence of two rows on one page is pinned beside it.
+ */
+describe("the radio group - clicking a member", () => {
+
+  test("picking a member releases the one picked before it, announcing each pick to the row", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState();
+    const row = pickerRow(state, "Quality");
+
+    document.body.appendChild(row);
+
+    const control = row.querySelector(".fo-option-value");
+    const inputs = [...control.querySelectorAll(".fo-choice-checkbox")];
+    const announced = [];
+
+    control.addEventListener("change", () => announced.push(controlValueText(control)));
+
+    inputs[0].click();
+
+    assert.deepEqual(inputs.map((input) => input.checked), [ true, false, false ], "the member clicked is the member picked");
+
+    inputs[1].click();
+
+    assert.deepEqual(inputs.map((input) => input.checked), [ false, true, false ], "and picking a sibling releases it - exactly one member is ever picked");
+    assert.deepEqual(announced, [ "low", "medium" ], "each click announces the pick the way a dropdown announces a selection");
+
+    const result = valueCommitTransition({ catalog: state.catalog, configIndex: buildConfigIndex(state.catalog, state.configuredOptions), control,
+      controllerId: null, deviceId: null, entry: pickerEntry(state, "Quality") });
+
+    assert.equal(result.action.type, "option:set", "and what the last click left on screen is what a commit stores");
+    assert.equal(result.action.args.value, "medium");
+  });
+
+  test("two radio rows on one page pick independently, since each row's members carry its own name", () => {
+
+    using _dom = createTestDom();
+
+    const state = pickerState();
+    const table = document.createElement("div");
+    const qualityRow = pickerRow(state, "Quality");
+    const sixRow = pickerRow(state, "Six");
+
+    table.append(qualityRow, sixRow);
+    document.body.appendChild(table);
+
+    const quality = [...qualityRow.querySelectorAll(".fo-choice-checkbox")];
+    const six = [...sixRow.querySelectorAll(".fo-choice-checkbox")];
+
+    assert.notEqual(quality[0].name, six[0].name, "precondition: the two rows name their groups differently");
+
+    quality[0].click();
+    six[1].click();
+
+    assert.deepEqual(quality.map((input) => input.checked), [ true, false, false ], "a pick in the row below leaves the row above exactly as it was");
+    assert.deepEqual(six.map((input) => input.checked), [ false, true, false, false, false, false ], "and the second row picked on its own account");
   });
 });
 
@@ -1947,6 +2191,71 @@ describe("the picker transitions", () => {
     const stored = reducer(state, result.action);
 
     assert.deepEqual(stored.configuredOptions, ["Enable.Pick.TypesOff"], "the bare enable, with no payload delimiter in sight");
+  });
+
+  test("a scoped radio row walks the same tri-state gestures every other value row walks", () => {
+
+    using _dom = createTestDom();
+
+    /* The answers the machine gives a scoped row, asked of a radio group: an empty picker arms rather than writing, the armed row stands back down when it
+     * is unchecked, a row with an entry above it clears back to inheritance, and a row with nothing above it records the explicit disable. None of these answers
+     * is radio-specific, which is exactly why they are asked here - a family split anywhere in the machine would show up as a different one.
+     */
+    const empty = pickerState({ devices: PICKER_DEVICES, scope: DEVICE_SCOPE });
+
+    assert.equal(scopedTriState({ checked: true, optionName: "QualityUnset", state: empty }).action.type, "option:armed",
+      "nothing is picked yet, so checking the box opens the control rather than writing through it");
+    assert.equal(scopedTriState({ armed: true, checked: false, optionName: "QualityUnset", state: empty }).action.type, "option:disarmed",
+      "and unchecking the armed row stands it down, since nothing was ever persisted to undo");
+
+    const upstream = pickerState({ configuredOptions: ["Enable.Pick.Quality=low"], devices: PICKER_DEVICES, scope: DEVICE_SCOPE });
+
+    assert.equal(scopedTriState({ checked: false, optionName: "Quality", state: upstream }).action.type, "option:cleared",
+      "with an entry above it, unchecking hands the row back to inheritance");
+
+    const disable = scopedTriState({ checked: false, optionName: "Quality", state: empty }).action;
+
+    assert.equal(disable.type, "option:set", "with nothing above it, the explicit disable is what the row has to record");
+    assert.equal(disable.args.enabled, false);
+    assert.equal(disable.args.id, "dev-a", "at the scope the gesture was made from");
+  });
+
+  test("committing the declared default through a picker clears the entry, in both styles", () => {
+
+    using _dom = createTestDom();
+
+    /* The gesture no picker row has driven before: a row carrying a value that deviates, brought back through its own control to what the catalog already says.
+     * The write rule normalizes that to a clear, since the entry-less resolution yields exactly what the user just asked for - the same answer the checkbox
+     * gesture gets on a default-matching row, reached here from the value side and through both control families.
+     */
+    const state = pickerState({ configuredOptions: [ "Enable.Pick.Tier=low", "Enable.Pick.Quality=low" ] });
+    const configIndex = buildConfigIndex(state.catalog, state.configuredOptions);
+    const select = pickerRow(state, "Tier").querySelector(".fo-option-value");
+
+    assert.equal(select.value, "low", "precondition: the dropdown rests on the stored deviation");
+
+    select.value = "high";
+
+    const dropdown = valueCommitTransition({ catalog: state.catalog, configIndex, control: select, controllerId: null, deviceId: null,
+      entry: pickerEntry(state, "Tier") });
+
+    assert.equal(dropdown.action.type, "option:cleared", "picking the declared default needs no entry to say what the default already says");
+
+    const row = pickerRow(state, "Quality");
+
+    document.body.appendChild(row);
+
+    const group = row.querySelector(".fo-option-value");
+    const inputs = [...group.querySelectorAll(".fo-choice-checkbox")];
+
+    assert.deepEqual(inputs.map((input) => input.checked), [ true, false, false ], "precondition: the radio group rests on the stored deviation");
+
+    inputs[2].click();
+
+    const radio = valueCommitTransition({ catalog: state.catalog, configIndex, control: group, controllerId: null, deviceId: null,
+      entry: pickerEntry(state, "Quality") });
+
+    assert.equal(radio.action.type, "option:cleared", "and the radio group reaches the same rule through the same writer");
   });
 });
 

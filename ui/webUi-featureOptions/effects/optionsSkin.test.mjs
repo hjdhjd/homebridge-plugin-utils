@@ -246,16 +246,36 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     assert.match(text, /:root\.fo-dark \.fo-option-value:focus\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)/);
   });
 
-  test("the value-field treatment is dark-only - light mode is left to Bootstrap", () => {
+  test("a dropdown takes its width from its own widest member rather than from the container", () => {
 
     using _dom = createTestDom();
 
-    // The scope is a ruling rather than an oversight, so it is pinned rather than left to the comment beside the rules: every rule reaching a value field is
-    // dark-qualified, which is also what keeps the search field's light accent styling from spreading here by a later well-meant edit.
+    // Bootstrap's `.form-control` stretches a control to the full width of what holds it, which on a dropdown offering two short labels reads as a mistake.
+    // Handing the width back to the browser's intrinsic sizing is what makes the control as wide as its widest member, and the cap beside it is what keeps a
+    // long member from pushing the control past the content cell on a narrow panel.
+    const text = skinCss();
+
+    assert.match(text, /select\.fo-option-value\s*\{[^}]*width:\s*auto/);
+    assert.match(text, /select\.fo-option-value\s*\{[^}]*max-width:\s*100%/);
+  });
+
+  test("the value-field THEME treatment is dark-only - light mode is left to Bootstrap", () => {
+
+    using _dom = createTestDom();
+
+    /* The scope is a ruling rather than an oversight, so it is pinned rather than left to the comment beside the rules: every rule that DRESSES a value field is
+     * dark-qualified, which is also what keeps the search field's light accent styling from spreading here by a later well-meant edit.
+     *
+     * The dropdown's sizing rule is the stated exception, and it is stated rather than dodged: a control has one width in both themes, so qualifying that rule
+     * per theme to satisfy the sweep would have said the width was a dark-mode opinion. What the population asserts is therefore theme treatment, not every line
+     * that happens to name the class.
+     */
     const valueRules = skinCss().match(/^.*\.fo-option-value.*$/gm) ?? [];
+    const isSizingRule = (rule) => rule.startsWith("select.fo-option-value");
 
     assert.ok(valueRules.length > 0, "precondition: the skin does declare value-field rules");
-    assert.ok(valueRules.every((rule) => rule.startsWith(":root.fo-dark ")), "and every one of them is dark-qualified");
+    assert.equal(valueRules.filter(isSizingRule).length, 1, "precondition: the sizing rule is among them, exactly once");
+    assert.ok(valueRules.every((rule) => rule.startsWith(":root.fo-dark ") || isSizingRule(rule)), "and every rule that dresses one is dark-qualified");
   });
 });
 

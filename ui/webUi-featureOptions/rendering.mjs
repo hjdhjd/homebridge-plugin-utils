@@ -83,8 +83,9 @@ export const categoryShell = ({ category, scopeKind }) => {
  *     crush its own label or widen sibling rows. `inputSize` controls only the field's declared width.
  *   - **Secret value options**: the same stack, with the masked field and its reveal toggle sharing a horizontal wrapper so the control sits beside the field rather
  *     than beneath it. An option that declares no secret gets neither the wrapper nor the toggle, so the unflagged row's shape is exactly the one described above.
- *   - **Choice options**: the same stack with a `<select>` in place of the field, sized by the same `inputSize` declaration. Its members come from the projection,
- *     which resolves whatever the catalog declared - an inline list, or a list a plugin's source derives from the device in view.
+ *   - **Choice options**: the same stack with a picker in place of the field - either a `<select>` that takes its width from its own widest member, or a
+ *     `<fieldset>` of radio buttons, whichever the option's declaration settles on. Its members come from the projection, which resolves whatever the catalog
+ *     declared - an inline list, or a list a plugin's source derives from the device in view.
  *   - **Multiple-choice options**: the same stack with a `<fieldset>` of checkboxes, one per member, laid out as a wrapping row.
  *   - **Free-form list options**: the same stack with an editor holding one removable entry per value plus the field the next one is typed into. It edits itself
  *     through its own gestures and reports the result the way a text field does, with one `change` event carrying the whole value.
@@ -545,14 +546,19 @@ const createValueInput = ({ option }) => createElement("input", {
 // The title an unknown member carries, naming why it reads differently from the rest of the list.
 const UNKNOWN_CHOICE_TITLE = "Not offered for this device.";
 
-// Build the control a value-centric option is edited through, chosen by what the option declares. A picker offers a list - a dropdown for one choice, a group of
-// checkboxes for several - and an option declaring no list keeps the free-text field, masked when it holds a secret. Every branch returns an element carrying
-// `fo-option-value`, which is the one class the view, the theme, and the busy lock all address the control by.
+// The longest inline list a single choice still offers as a radio group. Up to this many members the whole list reads at once, which is the affordance a radio
+// group buys; past it the group outgrows the row it sits in and the dropdown's one-line face is the better trade.
+const RADIO_AUTOSELECT_MAX = 6;
+
+// Build the control a value-centric option is edited through, chosen by what the option declares. A picker offers a list - a group of checkboxes for several
+// choices, and for one choice whichever face {@link choicePresentation} settles on - and an option declaring no list keeps the free-text field, masked when it
+// holds a secret. Every branch returns an element carrying `fo-option-value`, which is the one class the view, the theme, and the busy lock all address the
+// control by.
 const createValueControl = ({ option }) => {
 
   if(option.choices !== undefined) {
 
-    return option.multiple ? createChoiceGroup() : createChoiceSelect({ option });
+    return (option.multiple || (choicePresentation(option) === "radio")) ? createChoiceGroup() : createChoiceSelect();
   }
 
   if(option.multiple) {
@@ -563,32 +569,48 @@ const createValueControl = ({ option }) => {
   return option.secret ? createSecretField({ option }) : createValueInput({ option });
 };
 
-// Build a single-choice option's dropdown. Pure: the bare element carrying only the leading empty option, since the members themselves come from the projection
-// and are written by {@link applyRowState}. It is sized by `inputSize` exactly as the text field is, and it carries no inline font - a label is prose and reads in
-// the body font by inheritance, while the monospace token belongs to a field where the user types a raw value.
+/* How a single choice offers its list. The declared style wins outright and in both directions, which is the escape hatch a plugin reaches for when it knows
+ * something the length alone does not say. Absent a declaration, a source-backed list is always a dropdown: its members are derived per device, so a list that
+ * happened to be short on one page would otherwise change control family on the next and move the user's target under them. An inline list is settled by its own
+ * length against {@link RADIO_AUTOSELECT_MAX}.
+ *
+ * The read is of the CATALOG declaration alone and never of the resolved per-device domain, which is what makes an option's presentation the same wherever it
+ * renders - a pure function of what the plugin wrote rather than of what a device happens to report.
+ */
+const choicePresentation = (option) => {
+
+  if(option.style !== undefined) {
+
+    return option.style;
+  }
+
+  if(typeof option.choices === "string") {
+
+    return "dropdown";
+  }
+
+  return (option.choices.length <= RADIO_AUTOSELECT_MAX) ? "radio" : "dropdown";
+};
+
+// Build a single-choice option's dropdown. Pure: the bare element carrying only the leading placeholder option, since the members themselves come from the
+// projection and are written by {@link applyRowState}. It declares no width of its own, so the browser sizes it to its widest member under the skin's rule, and it
+// carries no inline font - a label is prose and reads in the body font by inheritance, while the monospace token belongs to a field where the user types a raw value.
 //
-// The empty first option is structural rather than decoration. It is the spelling of "no value" that a scoped row arms through, that an empty commit reads as a
-// clear-to-fall-back, and that a row whose stored value the list does not offer rests at.
-const createChoiceSelect = ({ option }) => {
+// The empty first option is structure rather than a member. It is the spelling of "no value" that a scoped row arms through, that an empty commit reads as a
+// clear-to-fall-back, and that a row whose stored value the list does not offer rests at. Disabled and hidden, it is a rest state the row lands on
+// programmatically - neither of those attributes binds a scripted selection - and never a row the user can pick, so the dropdown offers no blank choice at all.
+const createChoiceSelect = () => {
 
-  const select = createElement("select", {
+  const select = createElement("select", { classList: [ "form-control", "shadow-none", "fo-option-value" ] });
 
-    classList: [ "form-control", "shadow-none", "fo-option-value" ],
-    style: {
-
-      boxSizing: "content-box",
-      maxWidth: "100%",
-      width: (option.inputSize ?? 5) + "ch"
-    }
-  });
-
-  select.appendChild(createElement("option", { value: "" }));
+  select.appendChild(createElement("option", { disabled: true, hidden: true, value: "" }));
 
   return select;
 };
 
-// Build a multiple-choice option's checkbox group. Pure and empty: every box comes from the projection's resolved list, written by {@link applyRowState}. The
-// fieldset is what makes the boxes one control rather than several - the class the view finds, the lock addresses, and the theme lays out as a wrapping row.
+// Build a picker group's fieldset. Pure and empty: every member comes from the projection's resolved list, written by {@link applyRowState}, which is also where
+// the members take their flavor - checkboxes for a multiple choice, radio buttons for a single one that reads as a group. The fieldset is what makes them one
+// control rather than several - the class the view finds, the lock addresses, and the theme lays out as a wrapping row.
 const createChoiceGroup = () => createElement("fieldset", { classList: [ "fo-option-value", "fo-choice-group" ] });
 
 // Build one member of a dropdown. An unknown member - a stored value the list no longer offers - carries its own class and a title saying so, since it is on
@@ -731,13 +753,20 @@ const createRemoveGlyph = () => {
   return glyph;
 };
 
-// Build one member of a checkbox group: a label wrapping its own box, so the text is part of the control's hit area without needing an id to pair them. Unknown
-// members are marked exactly as they are in a dropdown.
-const createChoiceLabel = (member) => createElement("label", {
+/* Build one member of a picker group: a label wrapping its own input, so the text is part of the control's hit area without needing an id to pair them. Unknown
+ * members are marked exactly as they are in a dropdown.
+ *
+ * One builder serves both flavors, since a member of a multiple choice and a member of a single one differ only in the input they wear and in the group name that
+ * binds them. The name is what makes native exclusivity reach: the radios of one row share the option's expanded name, the radios of the row beneath carry their
+ * own, and picking a member releases the one that was picked before. A checkbox expresses no such grouping and takes no name. The row's own
+ * enable checkbox already answers to that same name, which costs nothing - exclusivity reaches same-type inputs alone, so a member can never release the box that
+ * enabled the row. The member class sits on both flavors, since it is how the value read, the focus hand-off, and the lock all find what a group is made of.
+ */
+const createChoiceLabel = ({ member, name, type }) => createElement("label", {
 
   classList: [ "fo-choice", ...(member.unknown ? ["fo-choice-unknown"] : []) ],
   ...(member.unknown ? { title: UNKNOWN_CHOICE_TITLE } : {})
-}, [ createElement("input", { classList: ["fo-choice-checkbox"], type: "checkbox", value: member.value }), member.label ]);
+}, [ createElement("input", { classList: ["fo-choice-checkbox"], ...((type === "radio") ? { name } : {}), type, value: member.value }), member.label ]);
 
 /**
  * Read the value a control currently holds, in the storage grammar. One of the three places the control kinds are told apart, and the single answer to "what would
@@ -818,7 +847,9 @@ const writeControlValue = ({ armed, control, entry }) => {
 
 /**
  * Hand focus to whatever part of a control the user would act in. The third kind-aware function, called when an arming gesture opens a row and owes the user
- * somewhere to go next. A group's focus belongs on its first box, since the fieldset itself is not focusable, and a row with no control at all is a quiet no-op.
+ * somewhere to go next. A group's focus belongs on its first member, since the fieldset itself is not focusable, and a row with no control at all is a quiet
+ * no-op. The first member serves both flavors: an armed group has nothing checked, so there is no picked member for focus to prefer over it, and taking focus
+ * is not taking a choice - a radio is selected by being operated, never by being focused.
  *
  * @param {HTMLElement | null} control - The row's value control, or null when the row has none.
  */
@@ -876,8 +907,9 @@ const writeChoiceSelect = ({ armed, control, entry }) => {
   control.value = (armed ? undefined : members.find((member) => member.selected)?.value) ?? "";
 };
 
-// Write a checkbox group from the projection under the same rules as a dropdown: rebuild the labels only when the list has changed, then check each box from its
-// own member. The projection decided the selection - including which stored values the list no longer offers - so this only shows it.
+// Write a picker group from the projection under the same rules as a dropdown: rebuild the members only when the list has changed, then check each one from its
+// own member. The projection decided the selection - including which stored values the list no longer offers - so this only shows it. The rebuild is where the
+// members take their flavor, which the entry answers on its own: a multiple choice builds checkboxes, a single one builds radios sharing the row's name.
 const writeChoiceGroup = ({ armed, control, entry }) => {
 
   const members = entry.choices;
@@ -893,7 +925,7 @@ const writeChoiceGroup = ({ armed, control, entry }) => {
 
     for(const member of members) {
 
-      control.appendChild(createChoiceLabel(member));
+      control.appendChild(createChoiceLabel({ member, name: entry.expandedName, type: entry.option.multiple ? "checkbox" : "radio" }));
     }
   }
 

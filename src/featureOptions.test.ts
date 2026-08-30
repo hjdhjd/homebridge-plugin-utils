@@ -929,6 +929,49 @@ describe("FeatureOptions - value resolution", () => {
   });
 });
 
+/* The accessor reports a declaration rather than resolving one, which is the whole distinction from `value()` beside it. The rows walk what that means where a
+ * caller might expect the resolving to have already happened - the wildcard and the declared-empty default - and where the honest answer is an absence.
+ */
+describe("FeatureOptions - valueDefault", () => {
+
+  const PICKER_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Picker Options", name: "Pick" }];
+
+  const PICKER_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+    Pick: [
+
+      { choices: [ { label: "A", value: "a" }, { label: "B", value: "b" } ], default: true, defaultValue: ALL_CHOICES, description: "Everything by default.",
+        multiple: true, name: "Everything" },
+      { choices: "sourced", default: true, defaultValue: "", description: "Nothing by default.", multiple: true, name: "Nothing" }
+    ]
+  };
+
+  test("answers the registered default, with a numeric declaration in its string form and the lookup folding case", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(fo.valueDefault("Network.Mtu"), "1500", "a string declaration answers itself");
+    assert.equal(fo.valueDefault("Audio.Volume"), "50", "a numeric declaration answers the string form the value axis works in");
+    assert.equal(fo.valueDefault("nEtWoRk.mTu"), "1500", "the lookup folds case exactly as every other option lookup does");
+  });
+
+  test("reports the wildcard and the declared-empty default verbatim rather than resolving either", () => {
+
+    const fo = new FeatureOptions(PICKER_CATEGORIES, PICKER_OPTIONS);
+
+    assert.equal(fo.valueDefault("Pick.Everything"), ALL_CHOICES, "the wildcard comes back as declared, since expanding it against a domain is valueList's job");
+    assert.equal(fo.valueDefault("Pick.Nothing"), "", "a declared-empty default is the declaration as written, and not the absence of one");
+  });
+
+  test("answers undefined for an option that is not value-centric and for one the catalog does not carry", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(fo.valueDefault("Motion.Detect"), undefined, "a boolean option registers no value-centric default");
+    assert.equal(fo.valueDefault("Motion.Nonexistent"), undefined, "an option name the catalog does not carry");
+  });
+});
+
 describe("FeatureOptions - getInteger and getFloat", () => {
 
   test("getInteger parses integer values and returns the number", () => {
@@ -2376,7 +2419,16 @@ describe("FeatureOptions - valueList", () => {
       { choices: INLINE_CHOICES, default: true, defaultValue: "", description: "An inline multi-select.", multiple: true, name: "Inline" },
       { choices: INLINE_CHOICES, default: true, defaultValue: "", description: "An inline single choice.", name: "Single" },
       { choices: INLINE_CHOICES, default: true, defaultValue: ALL_CHOICES, description: "Everything by default.", multiple: true, name: "Everything" },
-      { default: false, description: "An ordinary boolean.", name: "Toggle" }
+      { default: false, description: "An ordinary boolean.", name: "Toggle" },
+
+      /* The substitution rows need a default that is neither empty nor the wildcard, since either of those reads the same whether the substitution happened or
+       * not. The entries below declare a concrete one - a member of the inline list, a single choice, and a free-form comma list - so each row's expected value
+       * could only have come from the default being substituted.
+       */
+      { choices: INLINE_CHOICES, default: true, defaultValue: "b", description: "An inline multi-select defaulting to one member.", multiple: true,
+        name: "InlineDefault" },
+      { choices: INLINE_CHOICES, default: true, defaultValue: "c", description: "An inline single choice with a default.", name: "SingleDefault" },
+      { default: true, defaultValue: "x,y", description: "A free-form list with a default.", multiple: true, name: "FreeDefault" }
     ]
   };
 
@@ -2427,6 +2479,51 @@ describe("FeatureOptions - valueList", () => {
 
     assert.deepEqual(options.valueList({ device: "dev1", option: "Pick.Sourced" }), [ "b", "a" ], "stored order, since nothing here can reorder it");
     assert.deepEqual(options.valueList({ device: "dev1", option: "Pick.SourcedSingle" }), ["b"], "a single choice is the one value it stores");
+  });
+
+  test("substitutes the registered default for an option enabled with nothing stored, and only when the caller asks for it", () => {
+
+    const options = featureOptionsWith([ "Enable.Pick.InlineDefault.dev1", "Enable.Pick.SingleDefault.dev1" ]);
+
+    assert.deepEqual(options.valueList({ defaultWhenUnset: true, device: "dev1", option: "Pick.InlineDefault" }), ["b"],
+      "the substituted default reads against the inline list exactly as a stored value would");
+    assert.deepEqual(options.valueList({ defaultWhenUnset: true, device: "dev1", option: "Pick.SingleDefault" }), ["c"],
+      "a single-valued option answers its default as the one member it names");
+    assert.deepEqual(options.valueList({ device: "dev1", option: "Pick.InlineDefault" }), [],
+      "the same read without the flag is the empty list, which is what every caller that does not ask still gets");
+  });
+
+  test("expands a substituted all-choices default against the supplied domain", () => {
+
+    const options = featureOptionsWith(["Enable.Pick.Everything.dev1"]);
+
+    assert.deepEqual(options.valueList({ defaultWhenUnset: true, device: "dev1", domain: DOMAIN, option: "Pick.Everything" }), DOMAIN,
+      "a substituted wildcard runs the same expansion a stored one would");
+    assert.deepEqual(options.valueList({ device: "dev1", domain: DOMAIN, option: "Pick.Everything" }), [],
+      "and without the flag the scope's silence still names nothing");
+  });
+
+  test("the substitution reaches neither an emptied selection nor a disabled option", () => {
+
+    // The resolutions that are not "enabled here, nothing given". An emptied list is a selection the user made rather than a value they omitted, so handing it
+    // the default would hand back the one thing they said they did not want; a disabled option has no value to substitute for at all.
+    const emptied = featureOptionsWith(["Enable.Pick.InlineDefault.dev1="]);
+
+    assert.deepEqual(emptied.valueList({ defaultWhenUnset: true, device: "dev1", option: "Pick.InlineDefault" }), [],
+      "an emptied selection stays empty with the flag set");
+
+    const disabled = featureOptionsWith(["Disable.Pick.InlineDefault.dev1"]);
+
+    assert.deepEqual(disabled.valueList({ defaultWhenUnset: true, device: "dev1", option: "Pick.InlineDefault" }), [],
+      "a disabled option reads as nothing selected with the flag set");
+  });
+
+  test("substitutes a free-form list default and reads it through the list grammar", () => {
+
+    const options = featureOptionsWith(["Enable.Pick.FreeDefault.dev1"]);
+
+    assert.deepEqual(options.valueList({ defaultWhenUnset: true, device: "dev1", option: "Pick.FreeDefault" }), [ "x", "y" ],
+      "with no domain to read it against, the substituted default parses as the list it is written as");
   });
 });
 

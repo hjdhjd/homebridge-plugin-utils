@@ -404,16 +404,22 @@ export interface ClearOptionArgs {
  * Arguments for {@link FeatureOptions.valueList}. Carries the addressing intent - the option and the scope to resolve it at - plus the domain the caller wants the
  * stored value read against.
  *
- * @property controller - Optional controller scope identifier.
- * @property device     - Optional device scope identifier.
- * @property domain     - Optional. The values the option offers in this context, which a plugin derives from whatever the device reported. Supplying it is what
- *                        lets the read drop a stored value the device no longer offers and expand an {@link ALL_CHOICES} default. Omit it for an option whose
- *                        catalog entry declares its choices inline, since the entry already holds them, and for a raw read of what the user stored.
- * @property option     - Feature option to read (case-insensitive).
+ * @property controller       - Optional controller scope identifier.
+ * @property defaultWhenUnset - Optional. Read an option that is enabled at an explicit scope with nothing stored as its registered default rather than as the
+ *                              empty list. It reaches that one state and no other: a disabled option, an option the catalog does not carry, and one that is not
+ *                              value-centric all still read empty, and a `multiple` option whose selection the user emptied stays empty, since emptying it was
+ *                              a choice the user made rather than a value they omitted.
+ * @property device           - Optional device scope identifier.
+ * @property domain           - Optional. The values the option offers in this context, which a plugin derives from whatever the device reported. Supplying it is
+ *                              what lets the read drop a stored value the device no longer offers and expand an {@link ALL_CHOICES} default. Omit it for an
+ *                              option whose catalog entry declares its choices inline, since the entry already holds them, and for a raw read of what the user
+ *                              stored.
+ * @property option           - Feature option to read (case-insensitive).
  */
 export interface ValueListArgs {
 
   controller?: string;
+  defaultWhenUnset?: boolean;
   device?: string;
   domain?: readonly string[];
   option: string;
@@ -1792,6 +1798,25 @@ export class FeatureOptions {
   }
 
   /**
+   * Return the value-centric default an option's catalog declaration registers, rendered as a string.
+   *
+   * The value-axis companion to {@link FeatureOptions.defaultValue | defaultValue}, which answers the boolean axis. This reports the declaration alone - no scope
+   * resolution, no expansion - so an {@link ALL_CHOICES} default comes back as the wildcard itself and reading it against a domain stays
+   * {@link FeatureOptions.valueList | valueList}'s job. A declared-empty default answers the empty string, which is the declaration as written and a different
+   * answer from the `undefined` that says there is no value-centric default here at all.
+   *
+   * @param option        - Feature option to check (case-insensitive).
+   *
+   * @returns Returns the registered default rendered as a string, or `undefined` for an option that is not value-centric and for one the catalog does not carry.
+   */
+  public valueDefault(option: string): string | undefined {
+
+    // A key in `valueOptions` exists exactly when the declaration carried a `defaultValue`, so that one lookup answers both "not value-centric" and "no such
+    // option" with undefined, and a numeric declaration comes back in the string form every value-axis reader works in.
+    return this.#catalog.valueOptions[option.toLowerCase()]?.toString();
+  }
+
+  /**
    * Return whether the option explicitly exists in the list of configured options.
    *
    * This reads the configured entries alone and is blind to {@link FeatureOptionEntry.scopes}: it reports what the user configured, not what takes effect. Ask
@@ -1998,7 +2023,7 @@ export class FeatureOptions {
     // Enabled, value-centric option. Resolve the effective value (an explicit user value when set, otherwise the registered catalog default) and compare against the
     // declared default to detect value-axis deviation. We compare normalized strings because the registry stores stringified user input while the catalog's defaultValue
     // is typed as `number | string`; coercing both to string is the one normalization that makes the comparison total.
-    const declaredDefault = this.#catalog.valueOptions[option.toLowerCase()]?.toString();
+    const declaredDefault = this.valueDefault(option);
     const effectiveValue = this.value(option, device, controller) ?? declaredDefault;
     const valueDeviates = (effectiveValue !== undefined) && (effectiveValue !== declaredDefault);
 
@@ -2208,7 +2233,7 @@ export class FeatureOptions {
     // The option is enabled but has no explicit value. If it wasn't configured at any scope (scope is "none"), fall back to the registered default value.
     if(resolved.scope === "none") {
 
-      return this.#catalog.valueOptions[option.toLowerCase()]?.toString() ?? null;
+      return this.valueDefault(option) ?? null;
     }
 
     // The option is enabled at an explicit scope but no value was provided...return undefined to indicate "enabled, no value."
@@ -2228,11 +2253,16 @@ export class FeatureOptions {
    * An option that resolves to nothing reads as the empty list - disabled at some scope, enabled with no value, emptied on purpose, unknown to the catalog, or
    * not value-centric at all. There is no separate "nothing here" answer to check for, so a caller iterates the result and is done.
    *
+   * Asking for `defaultWhenUnset` changes exactly one of those readings: an option enabled at an explicit scope with nothing stored answers its registered
+   * default, read against the same domain and expanded the same way a stored value would be. The others hold - an emptied selection is a choice the user made
+   * and stays empty, and a disabled option has no value to substitute for.
+   *
    * @param args
-   * @param args.controller - Optional controller scope identifier.
-   * @param args.device     - Optional device scope identifier.
-   * @param args.domain     - Optional values available in this context.
-   * @param args.option     - Feature option to read.
+   * @param args.controller       - Optional controller scope identifier.
+   * @param args.defaultWhenUnset - Optional. Read an option enabled with nothing stored as its registered default. See {@link ValueListArgs}.
+   * @param args.device           - Optional device scope identifier.
+   * @param args.domain           - Optional values available in this context.
+   * @param args.option           - Feature option to read.
    *
    * @returns The selected values, or an empty list when the option resolves to none.
    *
@@ -2246,7 +2276,7 @@ export class FeatureOptions {
    * const plates = featureOpts.valueList({ device: camera.mac, option: "Motion.Plates" });
    * ```
    */
-  public valueList({ controller, device, domain, option }: ValueListArgs): readonly string[] {
+  public valueList({ controller, defaultWhenUnset, device, domain, option }: ValueListArgs): readonly string[] {
 
     const entry = this.#catalog.optionsByName[option.toLowerCase()];
 
@@ -2255,7 +2285,12 @@ export class FeatureOptions {
       return [];
     }
 
-    const value = this.value(option, device, controller);
+    const resolvedValue = this.value(option, device, controller);
+
+    // The substitution keys on the one resolution that means "enabled here, nothing given" and on no other. `null` is disabled or not value-centric, where there
+    // is nothing to default to, and the empty string is a list the user emptied on purpose, where the default is precisely what they said they did not want. An
+    // option carrying no registered default substitutes undefined and falls through to the empty list below, exactly as it reads without the flag.
+    const value = (defaultWhenUnset && (resolvedValue === undefined)) ? this.valueDefault(option) : resolvedValue;
 
     if((value === null) || (value === undefined)) {
 

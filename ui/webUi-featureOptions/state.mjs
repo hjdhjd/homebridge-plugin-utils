@@ -132,9 +132,11 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *
  * @typedef {Object} FeatureOptionsState
  * @property {string | null} armedOption - The expanded name of the value option whose row is armed - checked with a live input, awaiting the first value that
- *   will actually enable it - or null when no row is. A scoped value entry always carries a value, so the checked-but-empty state has no persistable spelling;
- *   arming is how the checkbox-first gesture works anyway: the row LOOKS enabled and takes typing, while the configuration remains untouched until a value
- *   commits. Transient by construction - any configuration mutation, scope change, or model reload clears it.
+ *   will actually enable it - or null when no row is. A scoped entry storing a single value always carries one, so its checked-but-empty state has no persistable
+ *   spelling; a list's empty selection does have one, but it is a choice made on the control rather than the not-yet-chosen state a freshly checked row is in, so
+ *   a list arms on that gesture too and reaches its empty selection through a commit. Arming is how the checkbox-first gesture works anyway: the row LOOKS enabled
+ *   and takes typing, while the configuration remains untouched until a value commits. Transient by construction - any configuration mutation, scope change, or
+ *   model reload clears it.
  * @property {Catalog} catalog - Plugin-provided immutable configuration: catalog index + validators.
  * @property {readonly string[]} configuredOptions - The canonical user-state array. Mutations replace it via the pure transforms from featureOptions.ts.
  * @property {readonly Controller[]} controllers - Controllers list (empty in device-only mode or before resolution).
@@ -493,10 +495,11 @@ export const reducer = (state, action) => {
     case "option:set": {
 
       // Compute the new configuredOptions via the pure transform. The transform returns a fresh array whenever it writes or drops an entry, so reference equality
-      // on configuredOptions detects the change; a scoped enable of a value option without value content reduces to a clear and can return the input reference
-      // unchanged, which subscribers reading reference equality see as a no-op. The catalog reference is unchanged either way, so selectors that depend only on
-      // the catalog continue to hit their caches. Any configuration mutation disarms an armed row: the armed row's own commit is this very action, and a mutation
-      // elsewhere means the user moved on.
+      // on configuredOptions detects the change; a scoped enable of a single-valued option without value content reduces to a clear and can return the input
+      // reference unchanged, which subscribers reading reference equality see as a no-op. A list is where that reduction stops: an empty value the dispatcher
+      // supplied is its explicit empty selection, a state the grammar spells at either scope, so the transform composes an entry and the fresh array comes with
+      // it. The catalog reference is unchanged either way, so selectors that depend only on the catalog continue to hit their caches. Any configuration mutation
+      // disarms an armed row: the armed row's own commit is this very action, and a mutation elsewhere means the user moved on.
       try {
 
         return {

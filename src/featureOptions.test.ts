@@ -2291,14 +2291,17 @@ describe("FeatureOptions - pure functional core", () => {
   });
 });
 
-/* The picker declarations are editor data. Nothing in the engine - the entry grammar, storage, scope resolution, value() - is allowed to read them, which is the
- * property that lets a plugin add a picker to an existing option without changing what any existing configuration resolves to.
+/* A picker's `choices` declaration is editor data. Nothing in the engine - the entry grammar, storage, scope resolution, value() - is allowed to read it, which
+ * is the property that lets a plugin attach a picker to an existing option while every configuration already written goes on resolving to what it always did.
+ * The `multiple` declaration beside it is the one that does reach the engine, at the empty selection alone: "on, with nothing selected" is a state a list can be
+ * in, so the grammar gives it the bare-delimiter spelling a scoped entry stores and a read answers as the empty list. Away from that one point a list resolves
+ * like any other value option, which is the ground the rows below stand on - every value they store or read carries content.
  *
  * The guard proves it by building the same catalog twice, once with the declarations and once without, and comparing every DERIVED map. The three members that
  * are not derived are excluded by construction rather than by exception: `categories` and `options` are the raw inputs preserved verbatim, and `optionsByName`
  * holds those same raw entries, so all three necessarily carry whatever the plugin declared.
  */
-describe("FeatureOptions - the picker declarations are inert to the engine", () => {
+describe("FeatureOptions - the choices declarations are inert to the engine", () => {
 
   const PLAIN: Record<string, FeatureOptionEntry[]> = {
 

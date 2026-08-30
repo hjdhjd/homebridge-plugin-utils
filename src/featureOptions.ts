@@ -739,9 +739,9 @@ export interface SelectValuesArgs {
 /**
  * What a stored value selects out of a domain, as {@link selectValues} reads it.
  *
- * @property selected - The members of the domain the stored value selects, in domain order and de-duplicated.
- * @property unknown  - The entries the stored value names that the domain does not carry, in the order it named them and de-duplicated. Preserved rather than
- *                      discarded so a choice the device stopped offering stays visible to both the editor and the plugin.
+ * @property selected - The members of the domain the stored value selects, in domain order and de-duplicated, each spelled as the domain spells it.
+ * @property unknown  - The entries the stored value names that the domain does not carry, in the order it named them and de-duplicated, each spelled as it was
+ *                      stored. Preserved rather than discarded so a choice the device stopped offering stays visible to both the editor and the plugin.
  *
  * @category Feature Options
  */
@@ -751,28 +751,59 @@ export interface ValueSelection {
   readonly unknown: readonly string[];
 }
 
+// Index a list of values by their case-folded form, keeping the first spelling of each. Both sides of a selection are read through this one rule: the domain
+// contributes a member once however many casings declare it, and the stored entries collapse the same way, so a value written twice in different casings names
+// one value on either side. The first spelling wins because order is the only authority either side offers - the domain leads with the spelling it wants shown,
+// and a stored list leads with the text the user typed first.
+function firstSpellingByFold(values: readonly string[]): Map<string, string> {
+
+  const folded = new Map<string, string>();
+
+  for(const value of values) {
+
+    const key = value.toLowerCase();
+
+    if(!folded.has(key)) {
+
+      folded.set(key, value);
+    }
+  }
+
+  return folded;
+}
+
 /**
  * Read which members of a domain a stored value selects, and which entries it names that the domain does not carry. The single definition of what a stored value
  * SELECTS, shared by the Node-side read ({@link FeatureOptions.valueList}) and the webUI's projection, so a plugin acting on a selection and the editor showing
  * it can never disagree - including about the {@link ALL_CHOICES} wildcard, which is expanded here and nowhere else.
  *
- * An entry the domain lacks is reported rather than discarded. A device that stops offering a value the user chose earlier - a detection type a firmware update
- * withdrew, a relay output a smaller unit does not have - would otherwise have that choice silently dropped from the configuration the next time anything wrote
- * it, so the editor keeps showing it and the plugin can say what it is looking at.
+ * Matching folds case, and a match answers in the domain's spelling: a stored "medium" selects a domain's "Medium" and reads back as "Medium", because the domain
+ * is the authority on how the values it offers are spelled. The fold is matching-only - nothing stored is rewritten - and it lives at this chokepoint alone,
+ * which is the honest scope to state: {@link FeatureOptions.value} and the readers built on it are handed no domain, so they answer stored or declared text
+ * verbatim.
+ *
+ * An entry no member of the domain folds to is reported rather than discarded, in the text it was stored as, since the domain has no spelling to offer for a
+ * value it does not carry. A device that stops offering a value the user chose earlier - a detection type a firmware update withdrew, a relay output a smaller
+ * unit does not have - would otherwise have that choice silently dropped from the configuration the next time anything wrote it, so the editor keeps showing it
+ * and the plugin can say what it is looking at.
  *
  * @param args
- * @param args.domain   - The values available in this context, in the order they should read. A domain that repeats a value contributes it once.
+ * @param args.domain   - The values available in this context, in the order they should read. A domain that repeats a value under any casing contributes it once,
+ *                        in the first spelling it used.
  * @param args.multiple - Whether the option stores a list. A single-valued option's stored text is one candidate; a list's is parsed by {@link parseValueList}.
  * @param args.value    - The stored text, or undefined when nothing is stored. Undefined and empty alike name no entries.
  *
- * @returns The selected members, in domain order, and the named-but-absent entries, in the order the stored value named them. Both are de-duplicated.
+ * @returns The selected members, spelled as the domain spells them and in domain order, and the named-but-absent entries, spelled as they were stored and in the
+ *          order the stored value named them. Both are de-duplicated on the folded value.
  *
  * @category Feature Options
  */
 export function selectValues({ domain, multiple, value }: SelectValuesArgs): ValueSelection {
 
+  const members = firstSpellingByFold(domain);
+
   // A single-valued option selects at most one member. An empty value selects nothing and reports nothing unknown - the option simply carries no value here -
-  // while a value the domain does not offer is the one unknown entry.
+  // while a value no member of the domain folds to is the one unknown entry.
   if(!multiple) {
 
     if(!value?.length) {
@@ -780,23 +811,27 @@ export function selectValues({ domain, multiple, value }: SelectValuesArgs): Val
       return { selected: [], unknown: [] };
     }
 
-    return domain.includes(value) ? { selected: [value], unknown: [] } : { selected: [], unknown: [value] };
+    const member = members.get(value.toLowerCase());
+
+    return member ? { selected: [member], unknown: [] } : { selected: [], unknown: [value] };
   }
 
   const entries = parseValueList(value ?? "");
 
   // The all-choices default stands for the whole domain, expanded here so that every reader downstream sees a concrete list. The wildcard lives in the catalog
-  // and in this one branch...nothing else in the system has to know the spelling exists.
+  // and in this one branch...nothing else in the system has to know the spelling exists. Its own spelling is exact: "*" is protocol rather than a value, so the
+  // fold reaches the members it expands to and never the wildcard itself.
   if((entries.length === 1) && (entries[0] === ALL_CHOICES)) {
 
-    return { selected: [...new Set(domain)], unknown: [] };
+    return { selected: [...members.values()], unknown: [] };
   }
 
-  const stored = new Set(entries);
+  const stored = firstSpellingByFold(entries);
 
   // Selected members read in DOMAIN order - the order the editor lists them in and the order the plugin declared them in - while unknown entries read in the order
   // the stored value named them, since the domain has nothing to say about where a value it does not carry belongs.
-  return { selected: [...new Set(domain)].filter((member) => stored.has(member)), unknown: [...stored].filter((entry) => !domain.includes(entry)) };
+  return { selected: [...members.values()].filter((member) => stored.has(member.toLowerCase())),
+    unknown: [...stored.values()].filter((entry) => !members.has(entry.toLowerCase())) };
 }
 
 // Compose a configured-options entry from its parts, and the single place in this module that knows how to write one. Everything up to the payload delimiter is

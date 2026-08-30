@@ -2007,6 +2007,18 @@ describe("FeatureOptions - pure functional core", () => {
         /a default outside the declared choices declared on option "Motion\.Tier"/);
       });
 
+      /* The declaration check is deliberately exact where value matching folds case, and this row is what pins that. A case-variant default admitted here would
+       * answer two different strings for the life of a defaults-only install: value() and every reader built on it are handed no domain and answer the declared
+       * casing verbatim, while valueList and the picker read through selectValues and answer the list's spelling. The declaration is the one spelling the engine
+       * can check when the catalog is built, and holding it exact is what keeps every accessor answering one string for a validated catalog.
+       */
+      test("rejects a default the declared choices carry only under another casing", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { choices: CHOICE_LIST, default: false, defaultValue: "High", description: "A case-variant default.", name: "Tier" })),
+        /a default outside the declared choices declared on option "Motion\.Tier"/);
+      });
+
       test("rejects a presentation style with nothing to present", () => {
 
         assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
@@ -2232,6 +2244,37 @@ describe("FeatureOptions - pure functional core", () => {
       assert.deepEqual(selectValues({ domain: DOMAIN, multiple: false, value: "" }), { selected: [], unknown: [] }, "an empty value is not an unknown one");
       assert.deepEqual(selectValues({ domain: DOMAIN, multiple: false, value: ALL_CHOICES }), { selected: [], unknown: [ALL_CHOICES] },
         "the wildcard has no meaning off a multiple option and reads as an ordinary unknown value");
+    });
+
+    // The casing rows use a domain that spells its members with capitals, because that is the shape the question actually arises in: a device reports "Medium"
+    // and a configuration written by hand, by an earlier release, or by a user says "medium". Both arms match the same way, and what comes back is the domain's
+    // spelling on the selected side and the stored spelling on the unknown side.
+    const CASED = [ "Medium", "Large" ];
+
+    test("matches a stored value against the domain case-insensitively and answers in the domain's spelling", () => {
+
+      assert.deepEqual(selectValues({ domain: CASED, multiple: false, value: "medium" }), { selected: ["Medium"], unknown: [] },
+        "a single value stored in another casing selects, and reads back as the domain spells it");
+      assert.deepEqual(selectValues({ domain: CASED, multiple: false, value: "LARGE" }), { selected: ["Large"], unknown: [] },
+        "the fold runs on both sides, so a stored value shouted in capitals matches a domain that is not");
+      assert.deepEqual(selectValues({ domain: CASED, multiple: true, value: "LARGE,medium" }), { selected: [ "Medium", "Large" ], unknown: [] },
+        "list entries fold the same way and still read in domain order");
+      assert.deepEqual(selectValues({ domain: CASED, multiple: false, value: "Small" }), { selected: [], unknown: ["Small"] },
+        "a value no member folds to is unknown in the text it was stored as");
+      assert.deepEqual(selectValues({ domain: CASED, multiple: true, value: "zzz,ZZZ" }), { selected: [], unknown: ["zzz"] },
+        "stored casings of one unknown are one unknown, in the first spelling stored");
+    });
+
+    test("keeps the domain's first spelling when a member is declared twice, and leaves the wildcard an exact spelling", () => {
+
+      const DUPLICATED = [ "Medium", "medium", "Large" ];
+
+      assert.deepEqual(selectValues({ domain: DUPLICATED, multiple: true, value: "MEDIUM" }), { selected: ["Medium"], unknown: [] },
+        "a domain declaring one member under two casings answers the first spelling, once");
+      assert.deepEqual(selectValues({ domain: DUPLICATED, multiple: true, value: ALL_CHOICES }), { selected: [ "Medium", "Large" ], unknown: [] },
+        "the wildcard expands through the same folded de-duplication");
+      assert.deepEqual(selectValues({ domain: CASED, multiple: true, value: ALL_CHOICES }), { selected: CASED, unknown: [] },
+        "and expands a cased domain to every member as the domain spells it");
     });
   });
 
@@ -2541,6 +2584,19 @@ describe("FeatureOptions - valueList", () => {
 
     assert.deepEqual(options.valueList({ defaultWhenUnset: true, device: "dev1", option: "Pick.FreeDefault" }), [ "x", "y" ],
       "with no domain to read it against, the substituted default parses as the list it is written as");
+  });
+
+  // The case-insensitive match is defined once, at selectValues, and this read inherits it by delegating there. The row proves the whole path: a value stored in
+  // one casing, a domain reporting another, and the domain's spelling coming back out of the public accessor a plugin actually calls.
+  test("matches a stored value against the supplied domain case-insensitively, answering in the domain's spelling", () => {
+
+    const CASED = [ "Alpha", "Beta" ];
+    const options = featureOptionsWith([ "Enable.Pick.Sourced.dev1=beta,ALPHA", "Enable.Pick.SourcedSingle.dev1=alpha" ]);
+
+    assert.deepEqual(options.valueList({ device: "dev1", domain: CASED, option: "Pick.Sourced" }), [ "Alpha", "Beta" ],
+      "list entries stored in any casing select, and read back as the device spells them");
+    assert.deepEqual(options.valueList({ device: "dev1", domain: CASED, option: "Pick.SourcedSingle" }), ["Alpha"],
+      "and a single choice answers the domain's spelling of the value it names");
   });
 });
 

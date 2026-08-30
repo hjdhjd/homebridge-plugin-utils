@@ -86,8 +86,8 @@ export interface TestMqttPublish {
  * // The plugin registers its subscriptions against the double, cast at its injection site.
  * plugin.configureMqtt(mqtt as unknown as MqttClient);
  *
- * // Run the registered setter by hand: no broker, no wire.
- * await mqtt.invokeSet("device1/power", "TRUE");
+ * // Run the registered setter by hand: no broker, no wire. The tail is the recorded topic, carrying the `/set` suffix the client appends.
+ * await mqtt.invokeSet("device1/power/set", "TRUE");
  *
  * assert.equal(device.power, true);
  * ```
@@ -295,7 +295,8 @@ export class TestMqttClient implements AsyncDisposable {
 
   /**
    * Abort the double, mirroring {@link mqttClient!MqttClient.abort | MqttClient.abort}: it defaults to `HbpuAbortError("shutdown")` when no reason is supplied, and
-   * explicit reasons pass through unchanged. Safe to call more than once. Afterwards every publish, subscribe, and unsubscribe call is a no-op.
+   * explicit reasons pass through unchanged. Safe to call more than once. Afterwards every publish, subscribe, and unsubscribe call is a no-op, and a driver
+   * invocation takes the same quiet posture rather than reporting a miss, since teardown released every registration it could have matched.
    *
    * @param reason - Optional abort reason. See {@link HbpuAbortError}.
    */
@@ -373,17 +374,32 @@ export class TestMqttClient implements AsyncDisposable {
    * Run the getter registered on the topic ending in `topicSuffix` and publish its value on the parent topic - the test's hand on the `"true"` message the client's
    * get pattern waits for. The republish goes through {@link TestMqttClient.publish}, so it lands in `published` and honors the refusal lever.
    *
-   * @param topicSuffix - The tail to match. The first get registration whose recorded topic ends with it is the one that runs.
+   * A suffix that matches no live get registration is a mis-bound driver call rather than a scenario, so it throws with the registered get topics named. A double
+   * that has aborted is the one exception: it released every registration on the way down, and it answers quietly, as every method does after teardown.
    *
-   * @returns The getter's value, or `undefined` when no get registration matches.
+   * @param topicSuffix - The tail to match. The first get registration whose recorded topic ends with it is the one that runs; on a live double, matching none of
+   *                      them throws.
+   *
+   * @returns The getter's value, or `undefined` on a double that has aborted - the one arm that answers without a getter having run.
    */
   public async invokeGet(topicSuffix: string): Promise<string | undefined> {
 
-    const entry = this.subscriptions.find((subscription) => (subscription.kind === "get") && subscription.topic.endsWith(topicSuffix));
-
-    if(!entry) {
+    // Teardown released every registration, so a driver call on an aborted double could only ever miss. Answering quietly is the no-op posture the class documents
+    // for every method after abort, and it keeps a consumer's own shutdown path drivable without a scenario having to know the double is already down.
+    if(this.signal.aborted) {
 
       return undefined;
+    }
+
+    const entry = this.subscriptions.find((subscription) => (subscription.kind === "get") && subscription.topic.endsWith(topicSuffix));
+
+    /* A live double holding no match means the call named a topic nothing was registered on, or the registration's own signal released it before the driver ran.
+     * Either way the scenario is not exercising what it reads as exercising, so the driver fails the test at the call site rather than passing vacuously - a
+     * silent answer here relocates the mistake to whoever reads the result.
+     */
+    if(!entry) {
+
+      throw new Error(this.#missMessage("get", topicSuffix));
     }
 
     const value = (entry.handler as MqttGetHandler)();
@@ -400,16 +416,27 @@ export class TestMqttClient implements AsyncDisposable {
    * Run the setter registered on the topic ending in `topicSuffix` - the test's hand on an inbound set message. The setter receives the arguments the client passes
    * it: the lowercased value, the raw value, and this double's signal.
    *
-   * @param topicSuffix - The tail to match. The first set registration whose recorded topic ends with it is the one that runs.
+   * The miss posture is {@link TestMqttClient.invokeGet}'s: on a live double an unmatched suffix throws with the registered set topics named, and on a double that
+   * has aborted the call returns quietly.
+   *
+   * @param topicSuffix - The tail to match. The first set registration whose recorded topic ends with it is the one that runs; on a live double, matching none of
+   *                      them throws.
    * @param rawValue    - The raw message value, passed through as the setter's second argument and lowercased for its first.
    */
   public async invokeSet(topicSuffix: string, rawValue: string): Promise<void> {
 
-    const entry = this.subscriptions.find((subscription) => (subscription.kind === "set") && subscription.topic.endsWith(topicSuffix));
-
-    if(!entry) {
+    // The get driver's aborted posture, on the set side.
+    if(this.signal.aborted) {
 
       return;
+    }
+
+    const entry = this.subscriptions.find((subscription) => (subscription.kind === "set") && subscription.topic.endsWith(topicSuffix));
+
+    // And its miss posture: an unmatched suffix on a live double is an authoring mistake, and the message hands the author what is registered.
+    if(!entry) {
+
+      throw new Error(this.#missMessage("set", topicSuffix));
     }
 
     // The same `kind`-established assertion the delivery path makes.
@@ -444,5 +471,17 @@ export class TestMqttClient implements AsyncDisposable {
 
       this.subscriptions.splice(index, 1);
     }
+  }
+
+  // The sentence a missed driver invocation carries. It names the suffix that matched nothing and enumerates the live registrations of the kind the driver looked
+  // in, which is the whole correction: reading it tells an author whether the topic was misspelled, whether the suffix was left off the tail, or whether the
+  // registration they expected has been released. A double holding none of that kind gets its own closing phrase, since a list that would be empty says less than
+  // the fact that nothing of the kind is registered at all.
+  #missMessage(kind: "get" | "set", topicSuffix: string): string {
+
+    const registered = this.subscriptions.filter((subscription) => subscription.kind === kind).map((subscription) => "\"" + subscription.topic + "\"");
+
+    return "TestMqttClient: no " + kind + " registration's topic ends with \"" + topicSuffix + "\"; " +
+      ((registered.length > 0) ? "the registered " + kind + " topics are " + registered.join(", ") : "no " + kind + " topics are registered") + ".";
   }
 }

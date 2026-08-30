@@ -13,10 +13,13 @@
  *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts.
  * - Registration: raw, get, and set entries carrying the appended suffix, the label, and the caller's init verbatim; a pre-aborted signal registering nothing; a
  *   signal aborting after registration releasing its own entry and no other.
- * - Teardown: aborting releasing every registration and turning every later call into a no-op, the recorded history surviving, and scope exit disposing through abort.
+ * - Teardown: aborting releasing every registration and turning every later call into a no-op - the drivers' quiet answer among them - the recorded history
+ *   surviving, and scope exit disposing through abort.
  * - Unsubscribe: the tuple recorded and every registration on the reconstructed topic released, with the empty-id guard short-circuiting.
  * - The drivers: deliver running every raw handler on the topic with a Buffer, invokeGet republishing on the parent topic and honoring the lever, and invokeSet
- *   passing the lowercased value, the raw value, and the double's signal.
+ *   passing the lowercased value, the raw value, and the double's signal; a suffix matching no live registration throwing with the registered topics of that kind
+ *   named, whether nothing of the kind was ever registered or the registration was released by its own signal; and the class example's call shape running as
+ *   written.
  */
 import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing/index.ts";
 import { describe, test } from "node:test";
@@ -399,6 +402,34 @@ describe("TestMqttClient - teardown", () => {
     assert.equal(mqtt.published.length, 1);
   });
 
+  test("both drivers answer quietly on an aborted double rather than reporting a miss", async () => {
+
+    const mqtt = new TestMqttClient();
+    let called = false;
+
+    mqtt.subscribeGet("device1/power", "Power", () => {
+
+      called = true;
+
+      return "on";
+    });
+
+    mqtt.subscribeSet("device1/power", "Power", () => {
+
+      called = true;
+    });
+
+    mqtt.abort();
+
+    // Teardown released both registrations, so every driver call after it misses. The quiet answer is the no-op posture the calls above take: a consumer's shutdown
+    // path stays drivable, and a live double is the only place an unmatched suffix is worth reporting.
+    assert.equal(await mqtt.invokeGet("device1/power/get"), undefined);
+    await mqtt.invokeSet("device1/power/set", "TRUE");
+
+    assert.equal(called, false, "neither handler runs on a torn-down double");
+    assert.deepEqual(mqtt.published, [], "and the get driver's republish never happens");
+  });
+
   test("a second abort leaves the first reason standing", () => {
 
     const mqtt = new TestMqttClient();
@@ -527,7 +558,7 @@ describe("TestMqttClient - drivers", () => {
     assert.equal(mqtt.rejectedPublishes, 1);
   });
 
-  test("invokeGet answers undefined when no get registration matches the suffix", async () => {
+  test("invokeGet throws on an unmatched suffix, naming the suffix and the registered get topics", async () => {
 
     const mqtt = new TestMqttClient();
     let called = false;
@@ -539,9 +570,21 @@ describe("TestMqttClient - drivers", () => {
       return "on";
     });
 
-    assert.equal(await mqtt.invokeGet("device2/power/get"), undefined);
-    assert.equal(called, false);
-    assert.deepEqual(mqtt.published, []);
+    // A set registration stands alongside the get one so the enumeration proves it carries the kind the driver looked in...an author who reached for the wrong
+    // driver reads that straight from the failure rather than from a second run.
+    mqtt.subscribeSet("device1/brightness", "Brightness", () => { /* Never run by this scenario. */ });
+
+    await assert.rejects(mqtt.invokeGet("device2/power/get"), (error: Error) => {
+
+      assert.match(error.message, /device2\/power\/get/, "the missed suffix is named");
+      assert.match(error.message, /"device1\/power\/get"/, "the registered get topic is enumerated");
+      assert.equal(error.message.includes("device1/brightness/set"), false, "a get miss enumerates the get topics, not the set topics");
+
+      return true;
+    });
+
+    assert.equal(called, false, "a miss never reaches a getter");
+    assert.deepEqual(mqtt.published, [], "and never republishes");
   });
 
   test("invokeSet passes the lowercased value, the raw value, and the double's signal", async () => {
@@ -563,7 +606,7 @@ describe("TestMqttClient - drivers", () => {
     assert.equal(call.signal, mqtt.signal);
   });
 
-  test("invokeSet leaves an unmatched suffix alone", async () => {
+  test("invokeSet throws on an unmatched suffix, naming the suffix and the registered set topics", async () => {
 
     const mqtt = new TestMqttClient();
     let called = false;
@@ -573,8 +616,70 @@ describe("TestMqttClient - drivers", () => {
       called = true;
     });
 
-    await mqtt.invokeSet("device2/power/set", "true");
+    await assert.rejects(mqtt.invokeSet("device2/power/set", "true"), (error: Error) => {
 
-    assert.equal(called, false);
+      assert.match(error.message, /device2\/power\/set/, "the missed suffix is named");
+      assert.match(error.message, /"device1\/power\/set"/, "the registered set topic is enumerated");
+
+      return true;
+    });
+
+    assert.equal(called, false, "a miss never reaches a setter");
+  });
+
+  test("a miss on a double holding no registrations of that kind reads as its own phrase", async () => {
+
+    // A raw registration is neither kind the drivers look in, so this double holds a registration and still has nothing to enumerate...the phrase is what keeps the
+    // sentence from trailing off into an empty list.
+    const mqtt = new TestMqttClient();
+
+    mqtt.subscribe("device1/status", () => { /* Neither a getter nor a setter. */ });
+
+    await assert.rejects(mqtt.invokeGet("device1/status/get"), (error: Error) => {
+
+      assert.match(error.message, /device1\/status\/get/, "the missed suffix is named");
+      assert.match(error.message, /no get topics are registered/, "and an empty list of that kind reads as a phrase");
+
+      return true;
+    });
+  });
+
+  test("a registration released by its own signal is a miss that throws, since the quiet posture belongs to the double's abort alone", async () => {
+
+    // Driving a topic whose handler the consumer's own lifecycle released is the stale binding worth hearing about, so a live double reports it. The empty
+    // enumeration is what tells the author the registration is gone rather than misnamed.
+    const mqtt = new TestMqttClient();
+    const controller = new AbortController();
+
+    mqtt.subscribeSet("device1/power", "Power", () => { /* Released before the driver runs. */ }, { signal: controller.signal });
+
+    controller.abort();
+
+    await assert.rejects(mqtt.invokeSet("device1/power/set", "TRUE"), (error: Error) => {
+
+      assert.match(error.message, /device1\/power\/set/, "the missed suffix is named");
+      assert.match(error.message, /no set topics are registered/, "and the released registration is gone from the enumeration");
+
+      return true;
+    });
+
+    assert.equal(mqtt.aborted, false, "the double itself never aborted");
+  });
+
+  test("the class example's call shape runs as written: a registration on the parent topic, driven on the suffixed tail", async () => {
+
+    // The example in the class documentation is shipped guidance, so it is pinned executable here...a plugin registers its setter on the parent topic and the test
+    // drives the recorded topic, which carries the suffix the client appends. Drift in either half fails this row rather than a consumer's first attempt.
+    const mqtt = new TestMqttClient();
+    const device = { power: false };
+
+    mqtt.subscribeSet("device1/power", "Power", (value) => {
+
+      device.power = (value === "true");
+    });
+
+    await mqtt.invokeSet("device1/power/set", "TRUE");
+
+    assert.equal(device.power, true);
   });
 });

@@ -138,17 +138,25 @@ const buildOptionsSkinCss = () => [
     "text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--fo-space-xxs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
   ".stat-value { font-size: 0.875rem; color: var(--fo-text-on-elevated); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
 
-  // Live-status panel variant. The status grid holds its cells inside one bordered box and overrides the base grid's nowrap and proportional split: cells size to
-  // their own content, a phantom span per column reserving the column's maximum-ever width. The identity cells and the Status cell ride a full-width non-wrapping row
-  // of their own at the top, whose width is what starts the state rows on the line beneath it, and those state rows wrap under the variant's own wrap. A classified
-  // error renders as a full-width wrapping message line. These rules sit AFTER the base `.device-stats-grid` rules so the `.fo-status-grid` qualifier ties the base
-  // specificity and wins on source order, which is what lets it override the base `:first-child` proportional split too - inside the identity row as well, since the
-  // variant's cell rule is a descendant selector and so reaches the nested cells with the shrink that lets each value's ellipsis engage.
-  ".device-stats-grid.fo-status-grid { flex-wrap: wrap; row-gap: var(--fo-space-xs); }",
-  ".device-stats-grid.fo-status-grid .stat-item { flex: 0 1 auto; min-width: 0; }",
+  /* Live-status panel variant. The whole panel is ONE column grid inside a single bordered box: the identity cells and the Status cell come first and so define the
+   * tracks, and every state cell below them is placed onto those same tracks, which is what makes a state value read in the column its identity label heads rather
+   * than wherever a wrapped line happened to end. How many tracks there are is runtime data - a plugin declares its own identity fields - so the panel states the
+   * count as a custom property on the element and the template formula stays here, where a column template belongs.
+   *
+   * `minmax(0, auto)` is what makes both widths work. Given room, a track takes its column's widest cell, which is what keeps the phantom reservations honest: the
+   * Status cell's phantoms size that whole track, so its column never shifts as the text changes. Squeezed, the tracks compress below their content, and each value
+   * span's own ellipsis engages instead of the box overflowing. The base rule's `justify-content: space-between` spreads the tracks themselves across the box. A
+   * classified message and the reload action beneath it are lines rather than cells, so they span every track.
+   *
+   * These rules sit AFTER the base `.device-stats-grid` rules so the `.fo-status-grid` qualifier ties the base specificity and wins on source order. That is what
+   * lets the cell rule reach the FIRST cell, which the base rules hand a proportional width and no shrink: every status cell needs `min-width: 0` for its value's
+   * ellipsis to engage inside its track.
+   */
+  ".device-stats-grid.fo-status-grid { display: grid; gap: var(--fo-space-xs) var(--fo-space-md); " +
+    "grid-template-columns: repeat(var(--fo-status-tracks, 1), minmax(0, auto)); }",
+  ".device-stats-grid.fo-status-grid .stat-item { min-width: 0; }",
   ".fo-phantom { display: block; height: 0; overflow: hidden; visibility: hidden; }",
-  ".fo-status-identity { display: flex; flex-basis: 100%; gap: var(--fo-space-md); justify-content: space-between; }",
-  ".fo-status-message { flex-basis: 100%; }",
+  ".fo-status-message { grid-column: 1 / -1; }",
   ".fo-status-message .stat-value { white-space: normal; }",
 
   // Link-lost prominence. The message line's modifier centers it and renders its value span semibold in the attention token, so the lost-connection state reads at a
@@ -157,7 +165,7 @@ const buildOptionsSkinCss = () => [
   // `.fo-status-message` rules still supply the message line's width and wrapping; the modifier adds only the centering, weight, and color.
   ".fo-status-message.fo-status-linklost { text-align: center; }",
   ".fo-status-message.fo-status-linklost .stat-value { color: var(--fo-text-attention); font-weight: 600; }",
-  ".fo-status-reload { flex-basis: 100%; text-align: center; }",
+  ".fo-status-reload { grid-column: 1 / -1; text-align: center; }",
 
   // Connection-error failure text. The connection-error view renders its failure message in a `code` element; this rule takes that element's color from the shared
   // attention token rather than Bootstrap's `text-danger`, so the failure emphasis has one definition and dark-mode controller errors carry the softer attention tone the

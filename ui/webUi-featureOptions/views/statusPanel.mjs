@@ -171,6 +171,26 @@ const STATUS_SIZER = [ CONNECTING_STATUS_TEXT, DISCONNECTED_STATUS_TEXT, connect
 // Render a state-row value for display: a blank or empty value shows as a placeholder dash, so an unpopulated cell reads as "no data yet" rather than a rendering gap.
 const displayValue = (value) => ((typeof value === "string") && (value.length > 0)) ? value : "-";
 
+// Map a run of state cells onto the panel's column tracks, returning the track each cell in the run takes. The run's first cell anchors to the first track and its
+// last to the last, with any cells between them distributed evenly across the tracks in between, so a two-cell run reads across the panel's whole width instead of
+// huddling at its left edge, and a run of exactly as many cells as there are tracks lands one cell per track. The spacing between consecutive cells is at least one
+// whole track, so no two cells in a run are ever mapped to the same one. A run carrying MORE cells than there are tracks gets an empty list back: no cell takes an
+// explicit column, and the grid's own auto-flow lays the run along the tracks in order and wraps its remainder onto those same tracks on the line beneath.
+const stateCellTracks = (count, tracks) => {
+
+  if(count > tracks) {
+
+    return [];
+  }
+
+  if(count === 1) {
+
+    return [1];
+  }
+
+  return [...Array(count).keys()].map((index) => 1 + Math.round((index * (tracks - 1)) / (count - 1)));
+};
+
 /**
  * Build one cell of the panel grid. We construct DOM nodes directly via createElement / textContent rather than concatenating into innerHTML so any HTML
  * metacharacter in a device field renders as text instead of being interpreted as markup - the discovery boundary is the trust line, and treating device-advertised
@@ -388,12 +408,12 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     }
   };
 
-  /* Build the panel: ONE bordered grid inside a single box. The identity cells and the live "Status" cell ride a full-width non-wrapping row of their own at the top,
-   * so a panel narrower than their combined natural widths shrinks them against each other and each trims with the ellipsis its value span already carries, rather
-   * than dropping the last cell onto a line by itself. That row's full width is also what starts the state rows beneath it, one grid cell per state row, wrapping as
-   * the `.fo-status-grid` theme variant directs...the variant owns the wrap, the row gap, and the per-cell flex both rows share. A classified message, when present,
-   * renders as a full-width wrapping line inside the same box; in the link-lost state that message line takes a prominence modifier and a second full-width line
-   * below it carries the reload action.
+  /* Build the panel: ONE bordered grid inside a single box, every cell sharing one set of column tracks. The identity cells and the live "Status" cell lead, and how
+   * many of them there are IS the track count - which the build states on the element as the custom property the theme's column template reads, since the count is
+   * data only this pass knows. Each state cell is then placed onto one of those tracks, so a state value reads in the column its identity label heads. A panel
+   * narrower than the cells' combined natural widths compresses the tracks and each value trims with the ellipsis its span already carries, rather than dropping a
+   * cell onto a line by itself. A classified message, when present, renders as a line spanning every track inside the same box; in the link-lost state that message
+   * line takes a prominence modifier and a second full-span line below it carries the reload action.
    *
    * Everything rendered is derived here from three things and nothing else: the device, its entry in the state map, and the link-lost marker. A device the panel has
    * heard nothing from has no entry, and the defaults below are what a first selection deserves - the placeholder skeleton under the connecting label. The marker is
@@ -410,31 +430,53 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
     grid.className = "device-stats-grid fo-status-grid";
 
-    const identityRow = document.createElement("div");
+    // The identity fields are read once and held, because their count is the track count the grid geometry below is built from.
+    const identityFields = identity(device);
 
-    identityRow.className = "fo-status-identity";
-
-    for(const field of identity(device)) {
+    for(const field of identityFields) {
 
       const { item, valueSpan } = buildStatRow(field.label, field.value, "stat-value");
 
-      // The one inline style the panel keeps: the identity cell's optional monospace, expressed through the shared font token rather than a host utility class.
+      // The identity cell's optional monospace, expressed through the shared font token rather than a host utility class. The panel's inline styles are this and the
+      // grid geometry below, and nothing else - both of them values only the build pass knows.
       if(field.mono) {
 
         valueSpan.style.fontFamily = "var(--fo-font-monospace)";
       }
 
-      identityRow.append(item);
+      grid.append(item);
     }
 
     const { item: statusItem, valueSpan: statusValueSpan } = buildStatRow("Status", statusText, "stat-value", STATUS_SIZER);
 
     statusValueEl = statusValueSpan;
 
-    identityRow.append(statusItem);
-    grid.append(identityRow);
+    grid.append(statusItem);
+
+    // The identity cells and the Status cell closing them are the tracks, and the theme's column template reads the count from here.
+    const trackCount = identityFields.length + 1;
+
+    grid.style.setProperty("--fo-status-tracks", String(trackCount));
 
     rowValueEls.clear();
+
+    /* The state cells are placed a RUN at a time, a run being a stretch of consecutive cells with no full-span line breaking it. Placement is per run rather than per
+     * cell because where a cell belongs depends on how many cells share its run - the run's ends anchor to the outermost tracks and the rest spread between them -
+     * so the arithmetic needs the whole run before it can place any of it.
+     */
+    let run = [];
+
+    // Place the cells gathered so far onto their tracks and begin a fresh run. A run the tracks cannot hold is left unplaced for the grid to auto-flow, which the
+    // mapping states by handing back no tracks at all.
+    const placeRun = () => {
+
+      for(const [ index, track ] of stateCellTracks(run.length, trackCount).entries()) {
+
+        run[index].style.gridColumn = String(track);
+      }
+
+      run = [];
+    };
 
     for(const row of rowSet) {
 
@@ -442,7 +484,10 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
       rowValueEls.set(row.id, valueSpan);
       grid.append(item);
+      run.push(item);
     }
+
+    placeRun();
 
     if(message) {
 

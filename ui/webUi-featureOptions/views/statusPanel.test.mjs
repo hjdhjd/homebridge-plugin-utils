@@ -239,7 +239,7 @@ describe("statusPanel - selection and the view request", () => {
     assert.equal(phantomsFor(root, "Door")[0].textContent, "Stopped (100%)");
   });
 
-  test("the identity cells and Status share one row container, and the state rows are the grid's own cells", () => {
+  test("every cell is the grid's own child, and the identity cells' count reaches the theme as the track count", () => {
 
     using _dom = createTestDom();
 
@@ -252,22 +252,55 @@ describe("statusPanel - selection and the view request", () => {
 
     selectDevice(store, "AA");
 
-    // The structure the skin's shrink-to-fit rules address. Happy-DOM computes no layout, so this pins the shape the CSS relies on rather than the rendered line
-    // breaking itself, which only a live panel can show.
+    // The structure the skin's shared-track rules address. Happy-DOM computes no layout, so this holds the shape the CSS relies on fixed rather than the rendered
+    // alignment itself, which only a live panel can show.
     const grid = root.querySelector(".device-stats-grid.fo-status-grid");
-    const identityRows = grid.querySelectorAll(".fo-status-identity");
 
-    assert.equal(identityRows.length, 1, "one row container holds the whole identity line");
-    assert.deepEqual([...identityRows[0].querySelectorAll(".stat-item .stat-label")].map((el) => el.textContent),
-      [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status" ], "the identity quartet and the component-owned Status cell ride that row together");
+    assert.equal(grid.querySelector(".fo-status-identity"), null, "no wrapper element stands between the identity cells and the grid");
 
-    // A state cell hangs off the grid itself, so the identity row's full width is what starts it on a line of its own.
-    for(const label of [ "Door", "Motion" ]) {
+    // Identity and state cells alike hang off the grid itself, which is what puts every one of them on the same set of column tracks.
+    for(const label of [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status", "Door", "Motion" ]) {
 
-      assert.ok(itemFor(root, label).parentElement === grid, "the " + label + " cell is the grid's own child rather than the identity row's");
+      assert.ok(itemFor(root, label).parentElement === grid, "the " + label + " cell is the grid's own child");
     }
 
-    assert.equal(root.querySelector(".fo-row-break"), null, "the identity row's width is the one mechanism splitting the rows, so no spacer element joins it");
+    // The identity cells lead, so their count plus the component-owned Status cell is the track count every later row is placed against.
+    assert.deepEqual([...grid.children].slice(0, 5).map((el) => el.querySelector(".stat-label").textContent),
+      [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status" ], "the identity quartet and the Status cell lead the grid, defining its tracks");
+    assert.equal(grid.style.getPropertyValue("--fo-status-tracks"), "5", "the track count is stated as the identity quartet plus the Status cell");
+
+    assert.equal(root.querySelector(".fo-row-break"), null, "the shared tracks are the one alignment mechanism, so no spacer element joins them");
+  });
+
+  test("a run of state cells anchors its ends to the outermost tracks and spreads the rest between them", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    // The panel renders five tracks here - the default identity quartet plus Status - so each run length below is placed against five. The two-cell run is the case
+    // that separates anchoring the ends from a naive proportional split, which would land the second cell on track 3 rather than on the last track.
+    const placementsFor = (count) => {
+
+      const rows = [...Array(count).keys()].map((index) => ({ id: "row" + index, label: "Row" + index, sizer: "Reserved" }));
+      const store = readyStore([DEVICE_A]);
+      const { root } = mountPanel({ placeholderRows: rows }, store);
+
+      selectDevice(store, "AA");
+
+      return rows.map((row) => itemFor(root, row.label).style.gridColumn);
+    };
+
+    assert.deepEqual(placementsFor(1), ["1"], "a lone cell takes the first track");
+    assert.deepEqual(placementsFor(2), [ "1", "5" ], "two cells take the outermost tracks");
+    assert.deepEqual(placementsFor(3), [ "1", "3", "5" ], "three cells take the ends and the middle");
+    assert.deepEqual(placementsFor(4), [ "1", "2", "4", "5" ], "four cells spread evenly between the ends");
+    assert.deepEqual(placementsFor(5), [ "1", "2", "3", "4", "5" ], "a run as long as the tracks lands one cell per track");
+
+    // A run the tracks cannot hold is left entirely unplaced, so the grid's own auto-flow lays it out and wraps its remainder onto the same tracks beneath.
+    assert.deepEqual(placementsFor(6), [ "", "", "", "", "", "" ], "an overflowing run carries no inline column on any of its cells");
   });
 
   test("P2: the view request fires exactly once per genuinely-new selection; a same-device re-fire sends nothing and rebuilds from the device's own state", () => {

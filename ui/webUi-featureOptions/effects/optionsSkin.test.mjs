@@ -119,19 +119,30 @@ describe("buildOptionsSkinCss - layout rules", () => {
 
 describe("buildOptionsSkinCss - status panel variant rules", () => {
 
-  test("the status-grid variant sets wrap and a row gap", () => {
+  test("the status-grid variant is one column grid whose track count comes from the panel's own custom property", () => {
 
     using _dom = createTestDom();
 
-    assert.match(skinCss(), /\.device-stats-grid\.fo-status-grid\s*\{[^}]*flex-wrap:\s*wrap/);
+    const text = skinCss();
+
+    // The column template is where the shared tracks are declared, and the track count reaches it as a custom property because only the panel knows how many
+    // identity fields a plugin declared. The fallback of one keeps a grid that somehow renders before the property is set to a single sane column.
+    assert.match(text, /\.device-stats-grid\.fo-status-grid\s*\{[^}]*display:\s*grid/);
+    assert.match(text, /\.device-stats-grid\.fo-status-grid\s*\{[^}]*grid-template-columns:\s*repeat\(var\(--fo-status-tracks, 1\), minmax\(0, auto\)\)/);
+    assert.match(text, /\.device-stats-grid\.fo-status-grid\s*\{[^}]*gap:\s*var\(--fo-space-xs\)\s+var\(--fo-space-md\)/);
+    assert.doesNotMatch(text, /\.device-stats-grid\.fo-status-grid\s*\{[^}]*flex/, "a grid container carries no flex declarations for the stylesheet to leave dead");
   });
 
-  test("the status-grid variant sizes cells to their own content", () => {
+  test("the status-grid variant lets every cell shrink inside its track", () => {
 
     using _dom = createTestDom();
 
-    // happy-dom expands the `flex: 0 1 auto` shorthand to longhand, so the content-sized signature is flex-grow 0 with a flex-basis of auto.
-    assert.match(skinCss(), /\.device-stats-grid\.fo-status-grid\s+\.stat-item\s*\{[^}]*flex-grow:\s*0[^}]*flex-basis:\s*auto/);
+    const text = skinCss();
+
+    // The base rules hand the first cell a proportional width and grant the shrink only to the cells after it, so the variant's own rule is what reaches every
+    // cell with the `min-width: 0` each value's ellipsis needs inside its track.
+    assert.match(text, /\.device-stats-grid\.fo-status-grid\s+\.stat-item\s*\{[^}]*min-width:\s*0/);
+    assert.doesNotMatch(text, /\.device-stats-grid\.fo-status-grid\s+\.stat-item\s*\{[^}]*flex/, "and it declares no flex sizing a grid item would ignore");
   });
 
   test("the variant cell rule follows the base grid rules so it wins on source order", () => {
@@ -169,27 +180,22 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     assert.doesNotMatch(text, /\.stat-label\s*\{[^}]*margin-bottom:\s*[0-9.]/, "no literal length survives where the token should be read");
   });
 
-  test("the identity row is a full-width flex line that spreads its cells", () => {
+  test("the identity cells wear no wrapper rule of their own - they are cells on the shared tracks like every other", () => {
 
     using _dom = createTestDom();
 
-    const text = skinCss();
-
-    // The full width is what starts the state rows on the line beneath, and the flex context is what lets the identity cells shrink against each other instead of
-    // one of them breaking onto a line of its own.
-    assert.match(text, /\.fo-status-identity\s*\{[^}]*display:\s*flex/);
-    assert.match(text, /\.fo-status-identity\s*\{[^}]*flex-basis:\s*100%/);
-    assert.match(text, /\.fo-status-identity\s*\{[^}]*gap:\s*var\(--fo-space-md\)/);
-    assert.match(text, /\.fo-status-identity\s*\{[^}]*justify-content:\s*space-between/);
+    // A rule for an identity wrapper would mean a second geometry beside the shared tracks, which is the arrangement the one grid exists to replace, so its
+    // absence is what the panel's alignment rests on rather than an omission.
+    assert.doesNotMatch(skinCss(), /fo-status-identity/, "no rule reaches an identity wrapper");
   });
 
-  test("the status message spans the full width and wraps", () => {
+  test("the status message spans every track and wraps", () => {
 
     using _dom = createTestDom();
 
     const text = skinCss();
 
-    assert.match(text, /\.fo-status-message\s*\{[^}]*flex-basis:\s*100%/);
+    assert.match(text, /\.fo-status-message\s*\{[^}]*grid-column:\s*1 \/ -1/);
     assert.match(text, /\.fo-status-message\s+\.stat-value\s*\{[^}]*white-space:\s*normal/);
   });
 
@@ -199,12 +205,12 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
     const text = skinCss();
 
-    // The message-line modifier centers the line and renders its value span semibold in the attention token; the reload action is a full-width centered line, and the
-    // recovery button on it wears its own Bootstrap styling rather than a theme color rule.
+    // The message-line modifier centers the line and renders its value span semibold in the attention token; the reload action is a centered line spanning every
+    // track, and the recovery button on it wears its own Bootstrap styling rather than a theme color rule.
     assert.match(text, /\.fo-status-message\.fo-status-linklost\s*\{[^}]*text-align:\s*center/);
     assert.match(text, /\.fo-status-message\.fo-status-linklost\s+\.stat-value\s*\{[^}]*color:\s*var\(--fo-text-attention\)/);
     assert.match(text, /\.fo-status-message\.fo-status-linklost\s+\.stat-value\s*\{[^}]*font-weight:\s*600/);
-    assert.match(text, /\.fo-status-reload\s*\{[^}]*flex-basis:\s*100%/);
+    assert.match(text, /\.fo-status-reload\s*\{[^}]*grid-column:\s*1 \/ -1/);
     assert.match(text, /\.fo-status-reload\s*\{[^}]*text-align:\s*center/);
   });
 

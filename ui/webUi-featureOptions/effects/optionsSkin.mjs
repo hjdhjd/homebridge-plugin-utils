@@ -128,9 +128,14 @@ const buildOptionsSkinCss = () => [
     "justify-content: space-between; gap: var(--fo-space-md); margin-bottom: var(--fo-space-sm); padding: 0 var(--fo-space-md); flex-wrap: nowrap; overflow: hidden; }",
   ".device-stats-grid .stat-item:first-child { flex: 0 0 25%; }",
   ".device-stats-grid .stat-item:not(:first-child) { flex-grow: 1; min-width: 0; }",
-  ".stat-item { display: flex; flex-direction: column; gap: var(--fo-space-xxs); }",
+  // The label-to-value spacing sits on the label rather than on a gap across the cell. A status cell appends zero-height phantom width sizers as in-flow flex
+  // children after its value, and a column gap charges its token between every pair of in-flow children - one gap per phantom - which accumulates as invisible height
+  // inside the cell and pushes the rows beneath it down. The label's margin prices the label-to-value join alone and a phantom carries no margin, so a phantom
+  // charges nothing...both renderers build a cell as one label followed by one value, and flex items do not collapse margins, so the pair reads at the same spacing
+  // either way.
+  ".stat-item { display: flex; flex-direction: column; }",
   ".stat-label { font-weight: 600; color: var(--fo-text-muted); font-size: var(--fo-font-size-xs); " +
-    "text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+    "text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--fo-space-xxs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
   ".stat-value { font-size: 0.875rem; color: var(--fo-text-on-elevated); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
 
   // Live-status panel variant. The status grid holds its cells inside one bordered box and overrides the base grid's nowrap and proportional split: cells size to

@@ -153,6 +153,22 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     assert.match(skinCss(), /\.fo-phantom\s*\{[^}]*visibility:\s*hidden/);
   });
 
+  test("a stat cell prices its label-to-value spacing on the label, so a phantom charges no height", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+
+    /* A phantom is an in-flow flex child of the cell, so a gap across the cell would charge its token once per phantom as height nobody can see. The absence of that
+     * gap is the mechanism, which is why it is asserted beside the margin that carries the spacing in its place - and the assertion reads `gap:`, which covers the
+     * row and column longhands too since both end in it. The margin is held to the token: a literal here would be a second definition of a length the tokens module
+     * owns.
+     */
+    assert.doesNotMatch(text, /\.stat-item\s*\{[^}]*gap:/, "no stat cell rule declares a gap between its children, the status-grid variant included");
+    assert.match(text, /\.stat-label\s*\{[^}]*margin-bottom:\s*var\(--fo-space-xxs\)/, "the label carries the label-to-value spacing, read from the xxs token");
+    assert.doesNotMatch(text, /\.stat-label\s*\{[^}]*margin-bottom:\s*[0-9.]/, "no literal length survives where the token should be read");
+  });
+
   test("the identity row is a full-width flex line that spreads its cells", () => {
 
     using _dom = createTestDom();

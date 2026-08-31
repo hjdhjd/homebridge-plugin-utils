@@ -34,8 +34,9 @@ export const STATUS_EVENT = "status";
 export const STATUS_VIEW_ROUTE = "/statusView";
 
 /**
- * A row's momentary-value latch. A rendered value equal to {@link StatusRowLatch.value} clears back to the placeholder dash after {@link StatusRowLatch.seconds}, a
- * positive finite number of seconds; the panel ignores a non-positive latch. Re-arrival of the same value extends the timer, and a different value cancels it.
+ * A text row's momentary-value latch. A rendered value equal to {@link StatusRowLatch.value} clears back to the placeholder dash after {@link StatusRowLatch.seconds},
+ * a positive finite number of seconds; the panel ignores a non-positive latch. Re-arrival of the same value extends the timer, and a different value cancels it. It is
+ * a mechanism of the text form alone - a value is what a latch clears - so the choices form declares none.
  *
  * @category WebUI Status
  */
@@ -53,12 +54,71 @@ export interface StatusRowLatch {
 }
 
 /**
- * A status row's static vocabulary: its identity, its display label, its optional momentary-value latch, and its width reservation. The panel's placeholder
- * configuration speaks templates; the wire speaks full {@link StatusRow}s that add the live value.
+ * One member of a {@link StatusChoicesRow}'s list: what to call it, and whether it is in effect on the device right now. Display-only in both directions - the panel
+ * draws a checked or unchecked box beside the label and offers no way to change it - so `selected` reports the device's state rather than collecting the user's.
  *
  * @category WebUI Status
  */
-export interface StatusRowTemplate {
+export interface StatusChoice {
+
+  /**
+   * The human-readable choice name, rendered beside its checkbox glyph.
+   */
+  label: string;
+
+  /**
+   * Whether this choice is currently enabled on the device.
+   */
+  selected: boolean;
+}
+
+/**
+ * A choices row's static vocabulary: its identity, its tag, and its display label. It declares no width reservation because a choices row already is one - every
+ * choice in the list renders at all times and the checkbox glyph is metrically constant, so the rendered list occupies exactly the width it reserves. Replacing the
+ * list can still move the panel's column widths, so a composer who wants a panel that never shifts holds the list itself steady and moves only
+ * {@link StatusChoice.selected}, the same own-your-width-consequence posture a label override carries.
+ *
+ * @category WebUI Status
+ */
+export interface StatusChoicesRowTemplate {
+
+  /**
+   * The stable row identity a live {@link StatusEvent} of kind `"row"` addresses to replace exactly this row's choices in place.
+   */
+  id: string;
+
+  /**
+   * The tag marking this row as the choices form.
+   */
+  kind: "choices";
+
+  /**
+   * The human-readable row label. The label travels with the snapshot so the panel need not know the row-to-label mapping.
+   */
+  label: string;
+}
+
+/**
+ * One rendered choices row: a {@link StatusChoicesRowTemplate} plus the list it currently shows. Snapshots carry full rows; a subsequent `"row"` event carries this
+ * row's id and a whole replacement list.
+ *
+ * @category WebUI Status
+ */
+export interface StatusChoicesRow extends StatusChoicesRowTemplate {
+
+  /**
+   * The row's current choices, in the order the panel renders them. An empty list renders as the placeholder dash, exactly as an empty text value does.
+   */
+  choices: StatusChoice[];
+}
+
+/**
+ * A text row's static vocabulary: its identity, its optional tag, its display label, its optional momentary-value latch, and its width reservation. The tag is
+ * optional on this form alone, which makes the text row what an untagged composition means.
+ *
+ * @category WebUI Status
+ */
+export interface StatusTextRowTemplate {
 
   /**
    * The stable row identity a live {@link StatusEvent} of kind `"row"` addresses to update exactly this row's value in place.
@@ -66,7 +126,12 @@ export interface StatusRowTemplate {
   id: string;
 
   /**
-   * The human-readable row label. The label rides with the snapshot so the panel need not know the row-to-label mapping.
+   * The optional tag marking this row as the text form. A row that states no kind is a text row.
+   */
+  kind?: "text";
+
+  /**
+   * The human-readable row label. The label travels with the snapshot so the panel need not know the row-to-label mapping.
    */
   label: string;
 
@@ -83,18 +148,52 @@ export interface StatusRowTemplate {
 }
 
 /**
- * One rendered status row: a {@link StatusRowTemplate} plus its current display value. Snapshots carry full rows; subsequent `"row"` events carry only the id and the
- * new value.
+ * One rendered text row: a {@link StatusTextRowTemplate} plus its current display value. Snapshots carry full rows; subsequent `"row"` events carry only the id and
+ * the new value.
  *
  * @category WebUI Status
  */
-export interface StatusRow extends StatusRowTemplate {
+export interface StatusTextRow extends StatusTextRowTemplate {
 
   /**
    * The row's current display value. An empty or blank string renders as the placeholder dash.
    */
   value: string;
 }
+
+/**
+ * A status row's static vocabulary in either form, tagged on `kind`. The panel's placeholder configuration speaks templates; the wire speaks full {@link StatusRow}s
+ * that add the live value or the live list.
+ *
+ * The vocabulary grows additively in this library as new row forms are needed, and the panel's contract for a form it does not recognize is honest degradation: it
+ * renders that row's label over the placeholder dash and leaves every neighboring row working, so a plugin composing a newer form against an older panel loses that
+ * one row's content rather than the panel.
+ *
+ * @category WebUI Status
+ */
+export type StatusRowTemplate = StatusChoicesRowTemplate | StatusTextRowTemplate;
+
+/**
+ * One rendered status row in either form: a text row carrying its display value, or a choices row carrying its list.
+ *
+ * @category WebUI Status
+ */
+export type StatusRow = StatusChoicesRow | StatusTextRow;
+
+/**
+ * The payload a `"row"` event carries: the addressed row's id plus the one thing that changed, stated in that row's own vocabulary - a replacement `value` for a text
+ * row, or a whole replacement `choices` list for a choices row. Either way the panel writes the addressed row in place rather than rebuilding the panel around it.
+ *
+ * The two arms exclude each other through the `never`-typed guards, so a literal carrying both `choices` and `value` fails to compile. That exclusivity is
+ * authoring-side protection for a TypeScript composer and nothing more: the panel's runtime authority for what an update MEANS is the kind of the template the
+ * addressed row was declared with, never the shape of the payload, so a text row addressed with a choices-shaped update degrades to the placeholder dash rather than
+ * changing form.
+ *
+ * @category WebUI Status
+ */
+export type StatusRowUpdate =
+  (Pick<StatusChoicesRow, "choices" | "id"> & { value?: never }) |
+  (Pick<StatusTextRow, "id" | "value"> & { choices?: never });
 
 /**
  * The classified reasons a status feed can fail to render, each mapping to distinct panel copy. Deliberately credential-neutral: `auth-invalid` / `auth-missing`
@@ -122,6 +221,10 @@ export type StatusErrorReason = "auth-invalid" | "auth-missing" | "misconfigured
  * cleared floor; device events carry no generation to attribute them by, the window requires two helper processes' messages to interleave across a handoff, and a
  * per-event generation field remains the additive escape if the field ever reports it.
  *
+ * Two members carry row content. A `snapshot` carries the authoritative `rows` set as full {@link StatusRow}s in either form, and a row absent from it disappears from
+ * the panel. A `row` event carries a {@link StatusRowUpdate}, addressing one row by id and replacing only what that row's own form holds - a text value or a whole
+ * choices list.
+ *
  * The union grows additively in this library, and `hello`'s field set is itself additive.
  *
  * @category WebUI Status
@@ -130,7 +233,7 @@ export type StatusEvent =
   { generation: number; kind: "hello" } |
   { kind: "connecting"; serialNumber: string; session: number } |
   { encrypted: boolean; kind: "snapshot"; online: true; rows: StatusRow[]; serialNumber: string; session: number } |
-  { kind: "row"; row: Pick<StatusRow, "id" | "value">; serialNumber: string; session: number } |
+  { kind: "row"; row: StatusRowUpdate; serialNumber: string; session: number } |
   { encrypted: boolean; kind: "availability"; online: true; serialNumber: string; session: number } |
   { encrypted: false; kind: "availability"; online: false; serialNumber: string; session: number } |
   { kind: "error"; reason: StatusErrorReason; serialNumber: string; session: number };

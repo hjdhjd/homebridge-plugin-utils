@@ -301,6 +301,62 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
   });
 });
 
+describe("buildOptionsSkinCss - the status panel's choices row", () => {
+
+  test("the row takes a full-span line as a plain column, and its inner list flows the choices left, wrapping only when the width runs out", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+
+    /* One full-span cell on the panel grid, shaped as the plain column a stat cell is. The absence of a gap on it is the mechanism rather than an omission: with no
+     * gap, the label's own margin is the whole label-to-content distance here exactly as it is in every identity cell, so the two joins cannot drift apart. The
+     * assertion reads `gap:`, which covers the row and column longhands too since both end in it.
+     */
+    assert.match(text, /\.fo-status-choices\s*\{[^}]*display:\s*flex/);
+    assert.match(text, /\.fo-status-choices\s*\{[^}]*flex-direction:\s*column/);
+    assert.match(text, /\.fo-status-choices\s*\{[^}]*grid-column:\s*1 \/ -1/);
+    assert.doesNotMatch(text, /\.fo-status-choices\s*\{[^}]*gap:/,
+      "the choices row declares no gap between its children, so the join comes from the label's own margin as in every stat cell");
+
+    // The wrapping is the inner list's, and its spacing is the panel's spacing, read from the same token pair the panel grid's own gap declares rather than from a
+    // second vocabulary. Happy-dom serializes the two-value shorthand as written, so the row gap and the column gap are both readable off the adopted sheet.
+    assert.match(text, /\.fo-status-choice-list\s*\{[^}]*flex-wrap:\s*wrap/);
+    assert.match(text, /\.fo-status-choice-list\s*\{[^}]*gap:\s*var\(--fo-space-xs\) var\(--fo-space-md\)/);
+
+    // The row declares no tracks of its own and takes none from the panel, so a choice never joins the parent's track sizing and a wide choice name cannot widen
+    // an identity column beneath it.
+    assert.doesNotMatch(text, /\.fo-status-choices\s*\{[^}]*grid-template-columns:/, "the list never lays itself onto the tracks the identity cells size");
+  });
+
+  test("a choice reads as muted secondary text in a fixed glyph box, and offers no affordance of a control", () => {
+
+    using _dom = createTestDom();
+
+    const text = skinCss();
+
+    assert.match(text, /\.fo-status-choice\s*\{[^}]*color:\s*var\(--fo-text-muted\)/);
+    assert.match(text, /\.fo-status-choice\s*\{[^}]*display:\s*flex/);
+    assert.match(text, /\.fo-status-choice\s*\{[^}]*gap:\s*var\(--fo-space-xs\)/);
+    assert.doesNotMatch(text, /\.fo-status-choice\s*\{[^}]*color:\s+(?!var\()/, "the reduced emphasis is read from the token, so neither mode can drift from the other");
+
+    // happy-dom expands the `flex: none` shorthand to longhand, so the fixed box reads as a no-grow, no-shrink item at its declared width - which is what keeps a
+    // flipped glyph from shifting the name beside it. The name carries the same trim discipline every value span wears.
+    assert.match(text, /\.fo-status-choice-glyph\s*\{[^}]*width:\s*1\.25em/);
+    assert.match(text, /\.fo-status-choice-glyph\s*\{[^}]*flex-grow:\s*0/);
+    assert.match(text, /\.fo-status-choice-glyph\s*\{[^}]*flex-shrink:\s*0/);
+    assert.match(text, /\.fo-status-choice-label\s*\{[^}]*text-overflow:\s*ellipsis/);
+
+    /* Status, never a control. The absence of every interaction affordance is the design rather than an omission, so the whole population of choice rules is swept
+     * for one: a hover treatment, a cursor, or a focus ring on any of them would tell the user this list answers something, and it answers nothing.
+     */
+    const choiceRules = text.match(/^.*\.fo-status-choice.*$/gm) ?? [];
+
+    assert.ok(choiceRules.length > 0, "precondition: the skin does declare choice rules");
+    assert.ok(choiceRules.every((rule) => !/hover|cursor|:focus/.test(rule)), "no choice rule offers a hover, a cursor, or a focus affordance");
+  });
+});
+
 describe("buildOptionsSkinCss - the heading action's glyph", () => {
 
   test("seats the glyph on the button's line box rather than on a font metric", () => {

@@ -167,6 +167,33 @@ const buildOptionsSkinCss = () => [
   ".fo-status-message.fo-status-linklost .stat-value { color: var(--fo-text-attention); font-weight: 600; }",
   ".fo-status-reload { grid-column: 1 / -1; text-align: center; }",
 
+  /* Choices row. A row whose value is a list of what a device currently has enabled takes ONE full-span cell on the panel grid - a line of its own across every
+   * track, the same idiom the classified message line uses - and that cell is the plain flex column a stat cell is, with no gap of its own. The shape is what makes
+   * the join between this row's label and what follows it price identically to an identity cell's label-to-value join: in both places the label's own
+   * `margin-bottom` is the entire distance, so the parity holds by construction rather than by a tuned length, and a gap declared across the cell would charge its
+   * token on top of that margin and open this row's join wider than every cell around it. The label and - for a row with no list to show - the placeholder value
+   * span are plain children of that column, so each takes its own line with no width rule to say so.
+   *
+   * The choices themselves sit in an inner list, and the wrapping is that list's business: a choice takes its content width, the group shares a line for as long as
+   * its members fit, and it wraps onto the next line only when the width genuinely runs out. The list's gap declares the same two tokens the panel grid declares, so
+   * the spacing between wrapped lines and the spacing between items both sit in the panel's rhythm rather than opening a second spacing vocabulary.
+   *
+   * Seating the choices on the panel's own tracks instead would hand their spacing to content that has nothing to do with them: the tracks are sized by the identity
+   * cells above, so whatever width a track has left over past a choice reads as an irregular gap, and a list longer than the track count wraps at that count however
+   * much room remains on the line. Items in a subgridded axis also take part in the parent's track sizing, so a wide choice name could widen an identity column and
+   * reshape the alignment the shared grid exists to protect...a flow of its own keeps the list out of that sizing altogether.
+   *
+   * A choice reads in the muted token at the reduced size every value carries, which is the theme-consistent way to say secondary in both lighting modes, and the
+   * absence of any hover, cursor, or focus rule is deliberate: a choices row reports what the device has enabled and answers nothing, so nothing about it may offer
+   * itself as a control. The glyph sits in a fixed box so the checked and unchecked forms occupy identical width and a choice flipping between them cannot shift the
+   * name beside it.
+   */
+  ".fo-status-choices { display: flex; flex-direction: column; grid-column: 1 / -1; }",
+  ".fo-status-choice-list { display: flex; flex-wrap: wrap; gap: var(--fo-space-xs) var(--fo-space-md); }",
+  ".fo-status-choice { align-items: center; color: var(--fo-text-muted); display: flex; font-size: 0.875rem; gap: var(--fo-space-xs); min-width: 0; }",
+  ".fo-status-choice-glyph { display: inline-block; flex: none; width: 1.25em; }",
+  ".fo-status-choice-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+
   // Connection-error failure text. The connection-error view renders its failure message in a `code` element; this rule takes that element's color from the shared
   // attention token rather than Bootstrap's `text-danger`, so the failure emphasis has one definition and dark-mode controller errors carry the softer attention tone the
   // link-lost message already uses. The class selector outweighs the `code` element's own default color.

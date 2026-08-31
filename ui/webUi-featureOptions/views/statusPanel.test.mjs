@@ -33,6 +33,11 @@ const DEVICE_B = { firmwareRevision: "2.0.0", manufacturer: "Beta", model: "Mode
 // The encrypted "Connected" label: the U+1F512 lock plus U+FE0E text-presentation selector, then " Connected".
 const LOCKED_CONNECTED = "\u{1F512}\u{FE0E} Connected";
 
+// The checkbox glyphs a choice renders with, mirrored from the component so a test asserts the exact rendered text: the U+2611 checked and U+2610 unchecked ballot
+// boxes, each with the U+FE0E text-presentation selector that keeps them monochrome.
+const CHOICE_CHECKED = "\u{2611}\u{FE0E}";
+const CHOICE_UNCHECKED = "\u{2610}\u{FE0E}";
+
 // The component's default link-lost copy, reload-action label, and default deadline, mirrored here so a test can assert the exact rendered strings and tick the real
 // clock past the deadline. The reload button renders this label with the shared "↻ " glyph prepended, so a text assertion composes the two.
 const LINK_LOST_LABEL = "Link lost";
@@ -198,10 +203,21 @@ const messageText = (root) => root.querySelector(".fo-status-message .stat-value
 const reloadLineIn = (root) => root.querySelector(".fo-status-reload");
 const reloadAnchorIn = (root) => root.querySelector(".fo-status-reload button");
 
+// Readers for a choices row, addressed by its label the way every cell reader addresses its cell: the container itself, the rendered glyph-and-name pairs, and the
+// placeholder dash a row with no list to show renders in place of them.
+const choicesRowFor = (root, label) => [...root.querySelectorAll(".fo-status-choices")].find((el) => el.querySelector(".stat-label")?.textContent === label) ?? null;
+const choicesIn = (root, label) => [...(choicesRowFor(root, label)?.querySelectorAll(".fo-status-choice") ?? [])].map((el) => ({
+
+  glyph: el.querySelector(".fo-status-choice-glyph").textContent,
+  label: el.querySelector(".fo-status-choice-label").textContent
+}));
+const choicesDashIn = (root, label) => choicesRowFor(root, label)?.querySelector(".stat-value")?.textContent ?? null;
+
 // Payload builders for each status event kind.
 const connectingEvent = (serialNumber, session) => ({ kind: "connecting", serialNumber, session });
 const snapshotEvent = (serialNumber, session, rows, encrypted = false) => ({ encrypted, kind: "snapshot", online: true, rows, serialNumber, session });
 const rowEvent = (serialNumber, session, id, value) => ({ kind: "row", row: { id, value }, serialNumber, session });
+const choicesEvent = (serialNumber, session, id, choices) => ({ kind: "row", row: { choices, id }, serialNumber, session });
 const availabilityEvent = (serialNumber, session, online, encrypted = false) => ({ encrypted, kind: "availability", online, serialNumber, session });
 const errorEvent = (serialNumber, session, reason) => ({ kind: "error", reason, serialNumber, session });
 
@@ -876,6 +892,243 @@ describe("statusPanel - phantom reservations", () => {
     assert.deepEqual(phantomsFor(root, "Status").map((el) => el.textContent),
       [ "Connecting...", "Disconnected", "Connected", LOCKED_CONNECTED, "Link lost", "Unavailable", "Auth failed", "Auth required", "Attention", "Not found",
         "Not ready", "Throttled", "No state", "Unreachable", "Unsupported" ], "the Status cell reserves every candidate");
+  });
+});
+
+describe("statusPanel - the choices row", () => {
+
+  // A choices row as the wire carries it, and the same row as a placeholder template - the template carries no list, since the list is live state.
+  const modesRow = (choices) => ({ choices, id: "modes", kind: "choices", label: "Modes" });
+  const MODES_TEMPLATE = { id: "modes", kind: "choices", label: "Modes" };
+  const DOOR_ROW = { id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" };
+
+  test("a snapshot's choices row renders its label and one checkbox glyph per choice, checked exactly where selected says", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [ DOOR_ROW,
+      modesRow([ { label: "Away", selected: true }, { label: "Home", selected: false }, { label: "Night", selected: true } ]) ]));
+
+    assert.ok(choicesRowFor(root, "Modes"), "the choices row renders as a container of its own");
+
+    // The container's children are exactly its label and the one list element, so the choices the descendant query below finds can only be inside that list. That
+    // composition is what keeps the row the plain column a stat cell is: the label's own margin prices the join to what follows, and the list carries the wrapping.
+    assert.deepEqual([...choicesRowFor(root, "Modes").children].map((el) => el.className), [ "stat-label", "fo-status-choice-list" ],
+      "the container holds exactly its label and the list element the choices sit in");
+
+    assert.deepEqual(choicesIn(root, "Modes"), [
+
+      { glyph: CHOICE_CHECKED, label: "Away" },
+      { glyph: CHOICE_UNCHECKED, label: "Home" },
+      { glyph: CHOICE_CHECKED, label: "Night" }
+    ], "every choice renders at all times, each name beside the glyph its selected flag calls for");
+
+    assert.equal(choicesDashIn(root, "Modes"), null, "a populated list renders no placeholder dash");
+    assert.equal(itemFor(root, "Modes"), null, "a choices row is a line rather than a stat cell");
+    assert.equal(valueFor(root, "Door"), "Open", "and the text row beside it renders exactly as it always has");
+  });
+
+  test("a row event replaces a choices row's list in place - the container keeps its node identity and a flipped flag moves only its glyph", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [modesRow([ { label: "Away", selected: true }, { label: "Home", selected: false } ])]));
+
+    const containerBefore = choicesRowFor(root, "Modes");
+
+    // A whole replacement list arrives, and the row is written where it stands.
+    fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 2, "modes", [ { label: "Away", selected: false }, { label: "Home", selected: true },
+      { label: "Night", selected: false } ]));
+
+    assert.ok(choicesRowFor(root, "Modes") === containerBefore, "the same container node carries the new list - a full-panel rebuild would fail this");
+    assert.deepEqual(choicesIn(root, "Modes"), [ { glyph: CHOICE_UNCHECKED, label: "Away" }, { glyph: CHOICE_CHECKED, label: "Home" },
+      { glyph: CHOICE_UNCHECKED, label: "Night" } ], "the replacement list renders whole");
+
+    // One flag flipped and nothing else: the names and their order stand, and only that choice's glyph reads differently.
+    fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 3, "modes", [ { label: "Away", selected: false }, { label: "Home", selected: true },
+      { label: "Night", selected: true } ]));
+
+    assert.deepEqual(choicesIn(root, "Modes").map((choice) => choice.label), [ "Away", "Home", "Night" ], "the names are untouched by the flip");
+    assert.deepEqual(choicesIn(root, "Modes").map((choice) => choice.glyph), [ CHOICE_UNCHECKED, CHOICE_CHECKED, CHOICE_CHECKED ], "only the flipped glyph moved");
+    assert.ok(choicesRowFor(root, "Modes") === containerBefore, "and the container is still the one built with the panel");
+  });
+
+  test("a choices row splits the placement runs, so the cells before and after it each spread across the tracks on their own", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // Two cells, then the choices line, then three more, against the five tracks the identity quartet and Status define.
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [
+      { id: "a", label: "A", sizer: "x", value: "1" },
+      { id: "b", label: "B", sizer: "x", value: "2" },
+      modesRow([{ label: "Away", selected: true }]),
+      { id: "c", label: "C", sizer: "x", value: "3" },
+      { id: "d", label: "D", sizer: "x", value: "4" },
+      { id: "e", label: "E", sizer: "x", value: "5" }
+    ]));
+
+    assert.deepEqual([ "A", "B" ].map((label) => itemFor(root, label).style.gridColumn), [ "1", "5" ],
+      "the run before the choices line anchors its two cells to the outermost tracks");
+    assert.deepEqual([ "C", "D", "E" ].map((label) => itemFor(root, label).style.gridColumn), [ "1", "3", "5" ],
+      "and the cells after it are a fresh run, spread across the same tracks rather than continuing the first");
+  });
+
+  test("a row of a form the panel does not know renders its label over the dash, and every neighbor still renders and updates", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // A row form newer than this panel, composed between the two forms it does know.
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [ DOOR_ROW, { id: "future", kind: "gauge", label: "Future", sizer: "888", value: "42" },
+      modesRow([{ label: "Away", selected: true }]) ]));
+
+    assert.equal(valueFor(root, "Future"), "-", "the unknown form renders its label over the placeholder dash");
+    assert.equal(phantomsFor(root, "Future").length, 0, "and reserves no width of its own");
+    assert.equal(valueFor(root, "Door"), "Open", "the text row beside it renders normally");
+    assert.deepEqual(choicesIn(root, "Modes"), [{ glyph: CHOICE_CHECKED, label: "Away" }], "and so does the choices row");
+
+    // Both neighbors still take their own live updates with the unknown row sitting between them.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 2, "door", "Closed"));
+    fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 3, "modes", [{ label: "Away", selected: false }]));
+
+    assert.equal(valueFor(root, "Door"), "Closed", "the text row updates in place");
+    assert.deepEqual(choicesIn(root, "Modes"), [{ glyph: CHOICE_UNCHECKED, label: "Away" }], "the choices row updates in place");
+
+    // An update addressed to the unknown row is stored nowhere, so its cell stands at the dash rather than rendering a value it cannot read.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 4, "future", "99"));
+    assert.equal(valueFor(root, "Future"), "-", "an update addressed to a form the panel cannot render leaves the dash standing");
+  });
+
+  test("a row addressed with the other form's payload degrades to the dash rather than throwing or changing form", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [ DOOR_ROW, modesRow([{ label: "Away", selected: true }]) ]));
+
+    // A choices row handed a text-shaped update. The template says what the update means, so the row stores the list the payload does not carry and falls back to
+    // the dash rather than adopting the string.
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 2, "modes", "Away"));
+
+    assert.deepEqual(choicesIn(root, "Modes"), [], "no choice renders");
+    assert.equal(choicesDashIn(root, "Modes"), "-", "the choices row shows the placeholder dash");
+    assert.ok(choicesRowFor(root, "Modes"), "and it is still a choices row");
+
+    // The converse reads the same way: a text row handed a choices-shaped update keeps its form and shows the dash.
+    fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 3, "door", [{ label: "Away", selected: true }]));
+
+    assert.equal(valueFor(root, "Door"), "-", "the text row shows the placeholder dash");
+    assert.equal(itemFor(root, "Door").querySelector(".fo-status-choice"), null, "and renders no choice of its own");
+  });
+
+  test("an empty choices list renders the placeholder dash, exactly as an empty text value does", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [modesRow([])]));
+
+    assert.deepEqual(choicesIn(root, "Modes"), [], "an empty list renders no choice");
+    assert.equal(choicesDashIn(root, "Modes"), "-", "and reads as the placeholder dash");
+
+    // A list arriving later fills the same row.
+    fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 2, "modes", [{ label: "Away", selected: true }]));
+    assert.deepEqual(choicesIn(root, "Modes"), [{ glyph: CHOICE_CHECKED, label: "Away" }], "and the row fills when a list arrives");
+  });
+
+  test("a choices placeholder renders its label over the dash before any snapshot, and its own template governs the device's first push", () => {
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: [ { id: "door", label: "Door", sizer: "Stopped (100%)" }, MODES_TEMPLATE ] }, store);
+
+    selectDevice(store, "AA");
+
+    assert.equal(choicesDashIn(root, "Modes"), "-", "the skeleton's choices row shows its label over the dash");
+    assert.deepEqual(labelsIn(root), [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status", "Door" ], "and it is not one of the grid's cells");
+
+    // The skeleton template is what tells the panel this id speaks choices, so a list installs on the device's very first push, with no snapshot ahead of it.
+    fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 1, "modes", [ { label: "Away", selected: true }, { label: "Home", selected: false } ]));
+
+    assert.deepEqual(choicesIn(root, "Modes"), [ { glyph: CHOICE_CHECKED, label: "Away" }, { glyph: CHOICE_UNCHECKED, label: "Home" } ],
+      "the first push fills the skeleton's own choices row");
+  });
+
+  test("a text row's latch runs on its own schedule beside a choices row, which the latch never touches", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using _hb = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: [ ...PLACEHOLDER_ROWS, MODES_TEMPLATE ] }, store);
+
+    selectDevice(store, "AA");
+    fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 1, "modes", [{ label: "Away", selected: true }]));
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 2, "motion", "Detected"));
+
+    assert.equal(valueFor(root, "Motion"), "Detected", "the momentary value renders");
+
+    t.mock.timers.tick(5001);
+
+    assert.equal(valueFor(root, "Motion"), "-", "the latch cleared on its own five-second schedule");
+    assert.deepEqual(choicesIn(root, "Modes"), [{ glyph: CHOICE_CHECKED, label: "Away" }], "and the choices row beside it is exactly as it was");
   });
 });
 

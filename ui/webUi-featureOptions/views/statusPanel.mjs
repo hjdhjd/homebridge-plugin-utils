@@ -12,21 +12,68 @@ import { effect } from "../store.mjs";
 import { selectedDevice } from "../selectors.mjs";
 
 /**
- * A status row's static vocabulary. A hand-authored browser-side rendering of `StatusRowTemplate` from `src/webui-status.ts`, the contract owner these typedefs are
- * kept in lockstep with.
+ * One member of a choices row's list. A hand-authored browser-side rendering of `StatusChoice` from `src/webui-status.ts`, the contract owner these typedefs are kept
+ * in lockstep with.
  *
- * @typedef {Object} StatusRowTemplate
+ * @typedef {Object} StatusChoice
+ * @property {string} label - The human-readable choice name, rendered beside its checkbox glyph.
+ * @property {boolean} selected - Whether the choice is currently enabled on the device. Display-only: the panel reports it and offers no way to change it.
+ */
+
+/**
+ * A choices row's static vocabulary. Mirrors `StatusChoicesRowTemplate` from `src/webui-status.ts`. It declares no sizer, because every choice renders at all times
+ * and the checkbox glyph is metrically constant, so the rendered list occupies exactly the width it reserves.
+ *
+ * @typedef {Object} StatusChoicesRowTemplate
+ * @property {string} id - The stable row identity a `"row"` event addresses to replace this row's choices in place.
+ * @property {"choices"} kind - The tag marking this row as the choices form.
+ * @property {string} label - The human-readable row label.
+ */
+
+/**
+ * One rendered choices row: a {@link StatusChoicesRowTemplate} plus its live list. Mirrors `StatusChoicesRow` from `src/webui-status.ts`.
+ *
+ * @typedef {StatusChoicesRowTemplate & { choices: StatusChoice[] }} StatusChoicesRow
+ */
+
+/**
+ * A text row's static vocabulary. Mirrors `StatusTextRowTemplate` from `src/webui-status.ts`. Its tag is optional, which makes the text row what an untagged
+ * composition means.
+ *
+ * @typedef {Object} StatusTextRowTemplate
  * @property {string} id - The stable row identity a `"row"` event addresses to update this row in place.
+ * @property {"text"} [kind] - The optional tag marking this row as the text form. A row that states no kind is a text row.
  * @property {string} label - The human-readable row label.
  * @property {{ seconds: number, value: string }} [latch] - The optional momentary-value latch: a rendered value equal to `latch.value` clears back to the placeholder
- *   after `latch.seconds`.
+ *   after `latch.seconds`. A text-value mechanism, so the choices form declares none.
  * @property {string | string[]} sizer - The widest value the row can produce, as a single string or a non-empty tuple of candidates the panel reserves and maxes.
  */
 
 /**
- * One rendered status row: a {@link StatusRowTemplate} plus its live value. Mirrors `StatusRow` from `src/webui-status.ts`.
+ * One rendered text row: a {@link StatusTextRowTemplate} plus its live value. Mirrors `StatusTextRow` from `src/webui-status.ts`.
  *
- * @typedef {StatusRowTemplate & { value: string }} StatusRow
+ * @typedef {StatusTextRowTemplate & { value: string }} StatusTextRow
+ */
+
+/**
+ * A status row's static vocabulary in either form, tagged on `kind`. Mirrors `StatusRowTemplate` from `src/webui-status.ts`. A template carrying a kind neither of
+ * these declares renders its label over the placeholder dash, so a row form newer than this panel costs that row's content and nothing else.
+ *
+ * @typedef {StatusChoicesRowTemplate | StatusTextRowTemplate} StatusRowTemplate
+ */
+
+/**
+ * One rendered status row in either form. Mirrors `StatusRow` from `src/webui-status.ts`.
+ *
+ * @typedef {StatusChoicesRow | StatusTextRow} StatusRow
+ */
+
+/**
+ * The payload a `"row"` event carries: the addressed row's id plus the one thing that changed, stated in that row's own vocabulary. Mirrors `StatusRowUpdate` from
+ * `src/webui-status.ts`. The panel reads what an update MEANS from the addressed row's template kind rather than from the payload's own shape, so a payload shaped
+ * for the other form leaves the value absent and the row renders the placeholder dash.
+ *
+ * @typedef {{ choices?: StatusChoice[], id: string, value?: string }} StatusRowUpdate
  */
 
 /**
@@ -48,7 +95,7 @@ import { selectedDevice } from "../selectors.mjs";
  * @property {boolean} [encrypted] - The transport's encryption state, on snapshot and online-availability events.
  * @property {boolean} [online] - The reachability flag, on availability events.
  * @property {StatusRow[]} [rows] - The authoritative row set, on a snapshot.
- * @property {{ id: string, value: string }} [row] - The single row update, on a `"row"` event.
+ * @property {StatusRowUpdate} [row] - The single row update, on a `"row"` event.
  * @property {StatusErrorReason} [reason] - The classified failure, on an `"error"` event.
  */
 
@@ -80,7 +127,8 @@ import { selectedDevice } from "../selectors.mjs";
  *   concurrently with the plugin's own elicitation paths - route it through the same chokepoint they use), and own the retry posture (the callback fires once per fresh
  *   generation; a plugin whose re-elicitation resets its own suppression state gets natural retries from its next trigger). The signature may gain arguments additively.
  * @property {StatusRowTemplate[]} [placeholderRows] - The row templates the skeleton renders before the first snapshot. Defaults to `[]`, so an unconfigured
- *   skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot.
+ *   skeleton shows the identity and Status cells only and the state rows arrive with the first snapshot. A choices template in the skeleton renders its label over
+ *   the placeholder dash until the first snapshot brings its list, exactly as a text template renders its label over the dash until the first value.
  */
 
 /**
@@ -94,14 +142,21 @@ import { selectedDevice } from "../selectors.mjs";
  *   view, so a momentary value expires on its own schedule whether or not anyone is watching it.
  * @property {string | null} message - The classified message line, or null when the device has none to show.
  * @property {StatusRowTemplate[]} rowSet - The row templates this device renders: the placeholder skeleton until a snapshot installs the authoritative set.
- * @property {Map<string, string>} rowValues - The raw pushed value per row id, exactly as the wire carried it. The display transform lives at projection, so the
- *   placeholder dash is something the panel renders rather than something the state can store and then transform a second time.
+ * @property {Map<string, string | StatusChoice[]>} rowValues - The live value per row id, in the row's own vocabulary and exactly as the wire carried it: a string
+ *   for a text row, a list of choices for a choices row. The display transform lives at projection, so the placeholder dash is something the panel renders rather
+ *   than something the state can store and then transform a second time.
  * @property {string} statusText - The Status cell's text.
  */
 
 // The "Connected" Status-cell label, prefixed with the lock glyph for an encrypted session so the panel mirrors a plugin's encrypted-connection convention: the
 // U+1F512 lock plus U+FE0E, the text-presentation variation selector that forces a monochrome glyph rather than a color emoji.
 const connectedLabel = (encrypted) => encrypted ? "\u{1F512}\u{FE0E} Connected" : "Connected";
+
+// The checkbox glyphs a choice renders with: the U+2611 ballot box with check for an enabled choice and the U+2610 empty ballot box for one that is not, each
+// followed by U+FE0E on the lock glyph's convention so both render monochrome rather than as color emoji. The pair is drawn from one font family and one code block,
+// so the two occupy the same metrics and a choice that flips between them cannot shift the name beside it.
+const CHOICE_GLYPH_SELECTED = "\u{2611}\u{FE0E}";
+const CHOICE_GLYPH_UNSELECTED = "\u{2610}\u{FE0E}";
 
 // The component's default error copy, one entry per classified reason. Deliberately credential-neutral - auth-invalid / auth-missing describe a rejected or absent
 // credential without naming a PSK, password, or token, and not-found says "on the network" rather than naming any one discovery mechanism - and equally neutral for a
@@ -250,6 +305,92 @@ const buildStatRow = (label, value, valueClassName, sizer) => {
 };
 
 /**
+ * Fill a choices row's container with the row's label and the list beneath it, replacing whatever the container held. Construction goes through createElement /
+ * textContent for the same reason {@link buildStatRow}'s does: a device-advertised choice name is data, and the discovery boundary is the trust line.
+ *
+ * The label wears `.stat-label`, the class every cell label wears, so the peer styling and the label-to-content spacing arrive by construction rather than as a
+ * second definition of either. The choices go into one list element beneath the label rather than straight into the container, which is what lets the container stay
+ * the plain column every cell is while the list carries the wrapping. Each choice is a checkbox glyph beside its name, and `selected` is read for truthiness at the
+ * browser boundary so a wire value of any shape lands on one of the two glyphs rather than reaching the DOM. A value that is absent, not a list, or an empty list
+ * renders one value span holding the placeholder dash, so a row waiting on its first snapshot and a row whose list arrived empty both read exactly like an
+ * unpopulated text cell.
+ *
+ * @param {HTMLElement} container - The row container to fill. Its children are replaced; the container's own identity is untouched.
+ * @param {string} label - The row's label text.
+ * @param {StatusChoice[] | string | undefined} value - The row's stored value, which is a choices list for a row that has one.
+ * @returns {void} Nothing; the container is written in place.
+ */
+const populateChoicesRow = (container, label, value) => {
+
+  const labelSpan = document.createElement("span");
+
+  labelSpan.className = "stat-label";
+  labelSpan.textContent = label;
+
+  const children = [labelSpan];
+
+  if(Array.isArray(value) && (value.length > 0)) {
+
+    const listEl = document.createElement("div");
+
+    listEl.className = "fo-status-choice-list";
+
+    for(const choice of value) {
+
+      const choiceEl = document.createElement("div");
+
+      choiceEl.className = "fo-status-choice";
+
+      const glyphSpan = document.createElement("span");
+      const selected = Boolean(choice.selected);
+
+      glyphSpan.className = "fo-status-choice-glyph";
+      glyphSpan.textContent = selected ? CHOICE_GLYPH_SELECTED : CHOICE_GLYPH_UNSELECTED;
+
+      const nameSpan = document.createElement("span");
+
+      nameSpan.className = "fo-status-choice-label";
+      nameSpan.textContent = choice.label;
+
+      choiceEl.append(glyphSpan, nameSpan);
+      listEl.append(choiceEl);
+    }
+
+    children.push(listEl);
+  } else {
+
+    const valueSpan = document.createElement("span");
+
+    valueSpan.className = "stat-value";
+    valueSpan.textContent = displayValue(undefined);
+
+    children.push(valueSpan);
+  }
+
+  container.replaceChildren(...children);
+};
+
+/**
+ * Build a choices row: the container the panel lays across every track on a line of its own, already filled with its label and its list. The live container is
+ * returned rather than left to be found again later, the same posture {@link buildStatRow}'s `{ item, valueSpan }` takes - an update repopulates this exact node, so
+ * the row holds one identity for the life of the panel it was built into.
+ *
+ * @param {string} label - The row's label text.
+ * @param {StatusChoice[] | string | undefined} value - The row's stored value.
+ * @returns {HTMLElement} The populated row container.
+ */
+const buildChoicesRow = (label, value) => {
+
+  const container = document.createElement("div");
+
+  container.className = "fo-status-choices";
+
+  populateChoicesRow(container, label, value);
+
+  return container;
+};
+
+/**
  * Mount the live device-status panel into the device-stats region.
  *
  * All state is closure-local to this mount, so it is fresh for every showDetails() cycle. At its center is a map of {@link DeviceStateEntry} keyed by serialNumber: the
@@ -293,7 +434,8 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
    * render projects; `viewedDevice` is the single source of the on-screen serialNumber, naming which entry the DOM currently shows; `highestToken` guards pushes per
    * device; `serverGeneration` is the last adapter generation the panel has adopted (null until the first hello), so an unseen one marks a fresh helper process;
    * `linkLost` is the browser-detected link-lost marker, an overlay the watchdog trip sets over whatever the entries hold and every real render clears. The node
-   * references hold the live grid, the Status value span, and one value span per state row. `contentPanelEl` is the plugin's dock, minted on the first render that has
+   * references hold the live grid, the Status value span, and one live node per state row - the value span for a text row, the whole container for a choices row,
+   * each of them the node that row's own updates write. `contentPanelEl` is the plugin's dock, minted on the first render that has
    * a content hook to invoke and held at one identity for the mount's life, so whatever the plugin rendered into it survives every selection change and every rebuild;
    * it stays null for the whole of a mount the plugin configured no hook on.
    *
@@ -480,11 +622,46 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
     for(const row of rowSet) {
 
-      const { item, valueSpan } = buildStatRow(row.label, displayValue(entry?.rowValues.get(row.id)), "stat-value", row.sizer);
+      switch(row.kind) {
 
-      rowValueEls.set(row.id, valueSpan);
-      grid.append(item);
-      run.push(item);
+        case "choices": {
+
+          // A choices row is a line of its own across every track, so it ends the run of cells before it and the next cell starts a fresh one. What registers as the
+          // row's live node is the whole container, because an update rebuilds its contents rather than writing one span inside it.
+          placeRun();
+
+          const container = buildChoicesRow(row.label, entry?.rowValues.get(row.id));
+
+          rowValueEls.set(row.id, container);
+          grid.append(container);
+
+          break;
+        }
+
+        case undefined:
+        case "text": {
+
+          const { item, valueSpan } = buildStatRow(row.label, displayValue(entry?.rowValues.get(row.id)), "stat-value", row.sizer);
+
+          rowValueEls.set(row.id, valueSpan);
+          grid.append(item);
+          run.push(item);
+
+          break;
+        }
+
+        default: {
+
+          // A row form this panel does not know renders as an inert cell - its label over the placeholder dash, holding no value of its own and reserving no width
+          // for one - so a plugin composing a newer form against this panel loses that row's content and nothing else. It takes a track like any other cell.
+          const { item } = buildStatRow(row.label, displayValue(undefined), "stat-value");
+
+          grid.append(item);
+          run.push(item);
+
+          break;
+        }
+      }
     }
 
     placeRun();
@@ -593,7 +770,9 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     }
   };
 
-  // Render one of the viewed device's row values from its entry.
+  // Render one of the viewed device's row values from its entry, in the form the addressed row's own template declares: a choices row rebuilds its container's
+  // contents while a text row writes its value span. Either way the node registered at build time keeps its identity, and a choices row's contents carry no focus for
+  // the rebuild to lose because none of it is interactive.
   const renderRow = (entry, rowId) => {
 
     if(linkLost) {
@@ -603,12 +782,23 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
       return;
     }
 
-    const valueEl = rowValueEls.get(rowId);
+    const rowEl = rowValueEls.get(rowId);
 
-    if(valueEl) {
+    if(!rowEl) {
 
-      valueEl.textContent = displayValue(entry.rowValues.get(rowId));
+      return;
     }
+
+    const template = entry.rowSet.find((row) => row.id === rowId);
+
+    if(template?.kind === "choices") {
+
+      populateChoicesRow(rowEl, template.label, entry.rowValues.get(rowId));
+
+      return;
+    }
+
+    rowEl.textContent = displayValue(entry.rowValues.get(rowId));
   };
 
   // Retire a lost-link presentation on the strength of a fresh server hello. A hello proves the relay and the adapter alive, so a message telling the user the
@@ -829,9 +1019,47 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
         const entry = entryFor(serialNumber);
 
+        /* Read the authoritative rows once, projecting each by its own form into the template the panel keeps and the value it stores against that template's id: a
+         * choices row contributes its list, a text row its display string, and a row of a form this panel does not know contributes a template carrying its identity
+         * and label alone and no value at all, which is what its honest degraded cell renders from. Both the set and the map are replaced wholesale rather than
+         * merged, which is how a row absent from the snapshot disappears.
+         */
+        const rowSet = [];
+        const rowValues = new Map();
+
+        for(const row of payload.rows) {
+
+          switch(row.kind) {
+
+            case "choices": {
+
+              rowSet.push({ id: row.id, kind: row.kind, label: row.label });
+              rowValues.set(row.id, row.choices);
+
+              break;
+            }
+
+            case undefined:
+            case "text": {
+
+              rowSet.push({ id: row.id, kind: row.kind, label: row.label, latch: row.latch, sizer: row.sizer });
+              rowValues.set(row.id, row.value);
+
+              break;
+            }
+
+            default: {
+
+              rowSet.push({ id: row.id, kind: row.kind, label: row.label });
+
+              break;
+            }
+          }
+        }
+
         entry.message = null;
-        entry.rowSet = payload.rows.map((row) => ({ id: row.id, label: row.label, latch: row.latch, sizer: row.sizer }));
-        entry.rowValues = new Map(payload.rows.map((row) => [ row.id, row.value ]));
+        entry.rowSet = rowSet;
+        entry.rowValues = rowValues;
         entry.statusText = connectedLabel(payload.encrypted);
 
         if(viewed) {
@@ -851,7 +1079,35 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
 
         const entry = entryFor(serialNumber);
 
-        entry.rowValues.set(payload.row.id, payload.row.value);
+        /* What an update MEANS comes from the addressed row's own template rather than from the payload's shape, so the wire can neither turn a text row into a
+         * choices row nor hand a choices row a string: each stores only what its own form holds, and a payload shaped for the other form leaves the value absent,
+         * which renders as the placeholder dash. A row the panel holds no template for keeps today's reading and stores the value, since an id the skeleton has not
+         * heard of yet is a text row until a snapshot says otherwise; a template of a form the panel does not know stores nothing, because it has nothing to render.
+         */
+        const template = entry.rowSet.find((row) => row.id === payload.row.id);
+
+        switch(template?.kind) {
+
+          case "choices": {
+
+            entry.rowValues.set(payload.row.id, payload.row.choices);
+
+            break;
+          }
+
+          case undefined:
+          case "text": {
+
+            entry.rowValues.set(payload.row.id, payload.row.value);
+
+            break;
+          }
+
+          default: {
+
+            break;
+          }
+        }
 
         if(viewed) {
 

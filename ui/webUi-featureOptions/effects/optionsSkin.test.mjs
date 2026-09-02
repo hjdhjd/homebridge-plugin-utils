@@ -157,11 +157,22 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     assert.ok((variant >= 0) && (variant > base), "the variant cell rule appears after the base rules, so a specificity tie resolves in its favor");
   });
 
-  test("the phantom rule hides its reservation from paint", () => {
+  test("the phantom rule charges nothing: hidden from paint, zero height, no margin", () => {
 
     using _dom = createTestDom();
 
-    assert.match(skinCss(), /\.fo-phantom\s*\{[^}]*visibility:\s*hidden/);
+    const text = skinCss();
+
+    /* A phantom reserves the width of the widest text its cell will ever show and nothing else, and the declarations asserted below are what hold it to that. The
+     * hidden visibility keeps the reservation off the paint, the zero height keeps it out of the cell's vertical flow and is read with a lookahead that holds it
+     * to zero itself rather than to any length that merely begins with a zero digit, and the absent margin is what the spacing design counts on: the label
+     * carries the label-to-value join precisely so a phantom contributes no spacing of its own, and a rule handing `.fo-phantom` a margin would put the dead band
+     * back between the identity row and the state rows beneath it. The margin assertion bounds the class name so a sibling class that merely starts with it
+     * cannot lend a margin here, reaches across a comma-joined selector list, and reads `margin` alone since the shorthand and every longhand begin with it.
+     */
+    assert.match(text, /\.fo-phantom\s*\{[^}]*visibility:\s*hidden/, "the reservation is hidden from paint");
+    assert.match(text, /\.fo-phantom\s*\{[^}]*height:\s*0(?![.\d])/, "and it takes no height of its own");
+    assert.doesNotMatch(text, /\.fo-phantom(?![\w-])[^{]*\{[^}]*margin/, "and no rule reaching a phantom gives it a margin the cell would charge as height");
   });
 
   test("a stat cell prices its label-to-value spacing on the label, so a phantom charges no height", () => {

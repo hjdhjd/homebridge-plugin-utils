@@ -930,6 +930,135 @@ describe("FeatureOptions - value resolution", () => {
   });
 });
 
+/* The one rule for a setting a user can reach in two places: a configured option answers in every state it can be in, an unconfigured one yields to the
+ * configuration property the plugin still carries, and the catalog's registered default closes the chain. The rows drive a real engine over a real catalog, and each
+ * one builds its own instance, because the reads share a resolution walk with `scope`, `test`, and `value` and a leaked entry would be indistinguishable from a
+ * resolution defect.
+ */
+describe("FeatureOptions - consolidatedValue", () => {
+
+  // The configuration property every row supplies where it wants one. No catalog default in this block equals it, so a row expecting the property cannot pass by
+  // coinciding with a registered default, and a row expecting a default cannot pass by coinciding with the property.
+  const FALLBACK = "2500";
+
+  /* The default-on companion to the shared `Network.Mtu` fixture, which is value-centric but default off. The unconfigured arm answers whatever `value` answers,
+   * and that differs between the two defaults - null for one, the registered default for the other - so the rule needs a fixture of each.
+   */
+  const JUMBO_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Network Options", name: "Network" }];
+
+  const JUMBO_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+    Network: [{ default: true, defaultValue: "9000", description: "Jumbo MTU.", name: "Jumbo" }]
+  };
+
+  test("a configured value answers, and the property does not", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Network.Mtu.1200"]);
+
+    assert.equal(fo.consolidatedValue({ fallback: FALLBACK, option: "Network.Mtu" }), "1200",
+      "a configured entry carrying a value must answer it; reading the property first would let it outrank what the user configured");
+  });
+
+  test("a configured option that is disabled answers null, whatever the property carries", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Network.Mtu"]);
+
+    assert.equal(fo.consolidatedValue({ fallback: FALLBACK, option: "Network.Mtu" }), null,
+      "a configured option rules in every state, so turning it off must turn the setting off rather than fall back to the property");
+  });
+
+  test("a configured option enabled with no value answers undefined, whatever the property carries", () => {
+
+    // A bare enable persists at global scope and reads back as "enabled, no value", which is still the user speaking about the option.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Network.Mtu"]);
+
+    assert.equal(fo.consolidatedValue({ fallback: FALLBACK, option: "Network.Mtu" }), undefined,
+      "an enable carrying nothing is a configured state, so the property must not answer over it");
+  });
+
+  test("an unconfigured option answers the property, whichever way its catalog default runs", () => {
+
+    const off = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(off.consolidatedValue({ fallback: FALLBACK, option: "Network.Mtu" }), FALLBACK,
+      "an option nobody has configured must yield to the property the plugin still carries");
+
+    const on = new FeatureOptions(JUMBO_CATEGORIES, JUMBO_OPTIONS);
+
+    assert.equal(on.consolidatedValue({ fallback: FALLBACK, option: "Network.Jumbo" }), FALLBACK,
+      "a default-on option resolves its registered default through value(), which must not outrank the property here");
+  });
+
+  test("an unconfigured option with no property answers exactly what value() answers", () => {
+
+    const off = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(off.consolidatedValue({ option: "Network.Mtu" }), off.value("Network.Mtu"), "the default-off option must answer value()'s own reading");
+    assert.equal(off.consolidatedValue({ option: "Network.Mtu" }), null, "and that reading is null, because a default-off option resolves to no value");
+
+    const on = new FeatureOptions(JUMBO_CATEGORIES, JUMBO_OPTIONS);
+
+    assert.equal(on.consolidatedValue({ option: "Network.Jumbo" }), on.value("Network.Jumbo"), "the default-on option must answer value()'s own reading");
+    assert.equal(on.consolidatedValue({ option: "Network.Jumbo" }), "9000", "and that reading is the catalog's registered default");
+  });
+
+  test("a supplied empty property passes through as the caller's own statement", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(fo.consolidatedValue({ fallback: "", option: "Network.Mtu" }), "",
+      "what counts as an empty property is the caller's rule, so an empty string must answer rather than fall through to the catalog default");
+  });
+
+  test("configured-ness is read at the identity the option resolves for, and another identity's entry never reaches it", () => {
+
+    const scoped = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Network.Mtu.devA.1200"]);
+
+    assert.equal(scoped.consolidatedValue({ device: "devA", fallback: FALLBACK, option: "Network.Mtu" }), "1200", "the device that carries the entry reads it");
+    assert.equal(scoped.consolidatedValue({ device: "devB", fallback: FALLBACK, option: "Network.Mtu" }), FALLBACK,
+      "another device is unconfigured and must read the property");
+    assert.equal(scoped.consolidatedValue({ fallback: FALLBACK, option: "Network.Mtu" }), FALLBACK, "and so must a read carrying no device at all");
+
+    /* The controller half needs its own fixture: the file's scoped fixtures declare exactly one value-centric option and it is device-scoped, so a
+     * controller-scoped value option is built here. The stored value is one no other fixture in this block spells.
+     */
+    const controllerCategories: FeatureCategoryEntry[] = [{ description: "Scoped Options", name: "Scoped" }];
+    const controllerOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Scoped: [{ default: false, defaultValue: "a", description: "Controller-only value option.", name: "ControllerValue", scopes: ["controller"] }]
+    };
+    const byController = new FeatureOptions(controllerCategories, controllerOptions, ["Enable.Scoped.ControllerValue.ctrlA.7"]);
+
+    assert.equal(byController.consolidatedValue({ controller: "ctrlA", fallback: FALLBACK, option: "Scoped.ControllerValue" }), "7",
+      "the controller that carries the entry reads it");
+    assert.equal(byController.consolidatedValue({ controller: "ctrlB", fallback: FALLBACK, option: "Scoped.ControllerValue" }), FALLBACK,
+      "another controller is unconfigured and must read the property");
+    assert.equal(byController.consolidatedValue({ fallback: FALLBACK, option: "Scoped.ControllerValue" }), FALLBACK,
+      "a controller-scoped option read with no controller resolves nowhere, so it is unconfigured and must read the property too");
+  });
+
+  test("an option that is not value-centric answers null, with a property supplied and without one", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(fo.consolidatedValue({ fallback: FALLBACK, option: "Motion.Detect" }), null,
+      "an option with no value to carry has nothing for a property to stand in for, so the property must not answer");
+    assert.equal(fo.consolidatedValue({ option: "Motion.Detect" }), null, "and the answer is the same with no property supplied");
+  });
+
+  test("the read sees every write to the engine it is asked, with nothing to invalidate", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(fo.consolidatedValue({ fallback: FALLBACK, option: "Network.Mtu" }), FALLBACK, "the option is unconfigured to begin with, so the property answers");
+
+    fo.setOption({ enabled: false, option: "Network.Mtu" });
+
+    assert.equal(fo.consolidatedValue({ fallback: FALLBACK, option: "Network.Mtu" }), null,
+      "the second read must see the write; a cached first answer would still be reporting the property");
+  });
+});
+
 /* The accessor reports a declaration rather than resolving one, which is the whole distinction from `value()` beside it. The rows walk what that means where a
  * caller might expect the resolving to have already happened - the wildcard and the declared-empty default - and where the honest answer is an absence.
  */

@@ -409,6 +409,26 @@ export interface ClearOptionArgs {
 }
 
 /**
+ * Arguments for {@link FeatureOptions.consolidatedValue}. Carries the addressing intent - the option and the identities to resolve it at - plus the configuration
+ * property the caller still offers as that option's transition fallback.
+ *
+ * @property controller - Optional controller scope identifier.
+ * @property device     - Optional device scope identifier.
+ * @property fallback   - Optional. The configuration property the plugin still carries for this option, read exactly as it is supplied. An empty string answers as
+ *                        itself, because what counts as an empty property is the caller's rule rather than the engine's.
+ * @property option     - Feature option to read (case-insensitive).
+ *
+ * @category Feature Options
+ */
+export interface ConsolidatedValueArgs {
+
+  controller?: string;
+  device?: string;
+  fallback?: string;
+  option: string;
+}
+
+/**
  * Arguments for {@link FeatureOptions.valueList}. Carries the addressing intent - the option and the scope to resolve it at - plus the domain the caller wants the
  * stored value read against.
  *
@@ -2283,6 +2303,14 @@ export class FeatureOptions {
     this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
   }
 
+  // The reads that answer what an option resolves to for an identity walk the hierarchy through here, so the arguments the walk takes are stated once rather than
+  // at each reader. That is what keeps `scope`, `test`, `value`, and `consolidatedValue` from coming to disagree about what an option resolves to for a given
+  // identity. `isDependencyMet` is the exception by design: it delegates whole to its pure function, which resolves the parent option through the same core.
+  #resolve(option: string, device?: string, controller?: string): ResolvedOptionEntry {
+
+    return resolveScope({ catalog: this.#catalog, configIndex: this.#configIndex, controller, defaultReturnValue: this.defaultReturnValue, device, option });
+  }
+
   /**
    * Return the scope hierarchy location of an option.
    *
@@ -2294,7 +2322,7 @@ export class FeatureOptions {
    */
   public scope(option: string, device?: string, controller?: string): OptionScope {
 
-    return resolveScope({ catalog: this.#catalog, configIndex: this.#configIndex, controller, defaultReturnValue: this.defaultReturnValue, device, option }).scope;
+    return this.#resolve(option, device, controller).scope;
   }
 
   /**
@@ -2308,31 +2336,12 @@ export class FeatureOptions {
    */
   public test(option: string, device?: string, controller?: string): boolean {
 
-    return resolveScope({ catalog: this.#catalog, configIndex: this.#configIndex, controller, defaultReturnValue: this.defaultReturnValue, device, option }).enabled;
+    return this.#resolve(option, device, controller).enabled;
   }
 
-  /**
-   * Return the value associated with a value-centric feature option, traversing the scope hierarchy.
-   *
-   * @param option        - Feature option to check.
-   * @param device        - Optional device scope identifier.
-   * @param controller    - Optional controller scope identifier.
-   *
-   * @returns Returns the current value associated with `option` if the feature option is enabled, `null` if disabled (or not a value-centric feature option), or
-   *          `undefined` if it's not specified. An option declaring {@link FeatureOptionEntry.multiple} answers the empty string where its stored selection is
-   *          explicitly empty, which is a configured state rather than an unspecified one; for every option storing a single value an empty stored value reads
-   *          as unspecified and resolves onward.
-   */
-  public value(option: string, device?: string, controller?: string): Nullable<string | undefined> {
-
-    // If this isn't a value-centric feature option, we're done.
-    if(!this.isValue(option)) {
-
-      return null;
-    }
-
-    // Resolve the option through the scope hierarchy in a single traversal. This gives us the scope, enabled state, and raw value in one pass.
-    const resolved = resolveScope({ catalog: this.#catalog, configIndex: this.#configIndex, controller, defaultReturnValue: this.defaultReturnValue, device, option });
+  // Render a resolved view into the value vocabulary `value` and `consolidatedValue` both answer in - a string, `null` for a disabled option, `undefined` for one
+  // enabled at an explicit scope with nothing stored. Both reads render through here, so neither can come to read a resolution differently from the other.
+  #valueOf(option: string, resolved: ResolvedOptionEntry): Nullable<string | undefined> {
 
     // If the option has been explicitly disabled at any scope, or wasn't configured and its default is disabled, there's no value.
     if(!resolved.enabled) {
@@ -2363,6 +2372,86 @@ export class FeatureOptions {
 
     // The option is enabled at an explicit scope but no value was provided...return undefined to indicate "enabled, no value."
     return undefined;
+  }
+
+  /**
+   * Return the value associated with a value-centric feature option, traversing the scope hierarchy.
+   *
+   * @param option        - Feature option to check.
+   * @param device        - Optional device scope identifier.
+   * @param controller    - Optional controller scope identifier.
+   *
+   * @returns Returns the current value associated with `option` if the feature option is enabled, `null` if disabled (or not a value-centric feature option), or
+   *          `undefined` if it's not specified. An option declaring {@link FeatureOptionEntry.multiple} answers the empty string where its stored selection is
+   *          explicitly empty, which is a configured state rather than an unspecified one; for every option storing a single value an empty stored value reads
+   *          as unspecified and resolves onward.
+   */
+  public value(option: string, device?: string, controller?: string): Nullable<string | undefined> {
+
+    // If this isn't a value-centric feature option, we're done.
+    if(!this.isValue(option)) {
+
+      return null;
+    }
+
+    return this.#valueOf(option, this.#resolve(option, device, controller));
+  }
+
+  /**
+   * Return the effective value of a value-centric option for a plugin that still carries a configuration property as that option's transition fallback.
+   *
+   * One rule decides it, and it is one rule because a setting a user can reach in two places needs a single statement of which one answers. A configured option
+   * rules in every state it can be in - enabled with a value, disabled, or enabled with no value at all - because configuring an option is the user saying what
+   * they want, so `fallback` never outranks an entry the user wrote. An option nobody has configured yields to the property. The catalog's registered default
+   * closes the chain, so an unconfigured option with no property beside it answers exactly what {@link FeatureOptions.value | value} answers.
+   *
+   * Configured-ness here is the resolution's own scope rather than {@link FeatureOptions.exists | exists}. The walk honors the entry's declared scopes, so an entry
+   * written where the option does not apply cannot make it configured for an identity it never reaches; `exists` reads the configured entries alone and is blind to
+   * those declarations.
+   *
+   * The answer vocabulary is `value`'s: `null` for a disabled option and for one that is not value-centric, `undefined` for one enabled at an explicit scope with
+   * nothing stored, and the string otherwise. A caller that turns its feature off on `null` or `undefined` therefore needs no second read to tell those states
+   * apart. `fallback` is read exactly as it is supplied, an empty string included, because what counts as an empty property is the caller's rule rather than the
+   * engine's.
+   *
+   * @param args
+   * @param args.controller - Optional controller scope identifier.
+   * @param args.device     - Optional device scope identifier.
+   * @param args.fallback   - Optional. The configuration property that answers for an option nobody has configured. See {@link ConsolidatedValueArgs}.
+   * @param args.option     - Feature option to read (case-insensitive).
+   *
+   * @returns The configured entry's value, the fallback, or the registered default, in the vocabulary described above.
+   *
+   * @example
+   *
+   * ```ts
+   * // An API key the plugin still accepts as a configuration property while the option takes the setting over.
+   * const apiKey = featureOpts.consolidatedValue({ fallback: config.apiKey, option: "Api.Key" });
+   *
+   * // The same read for a catalog declaring the option at controller scope, resolved at one controller's identity.
+   * const brokerUrl = featureOpts.consolidatedValue({ controller: mac, fallback: config.mqttUrl, option: "Mqtt.Url" });
+   * ```
+   */
+  public consolidatedValue({ controller, device, fallback, option }: ConsolidatedValueArgs): Nullable<string | undefined> {
+
+    // An option that is not value-centric has no value for a property to stand in for, so the fallback has nothing to answer and `value`'s own null answers here.
+    if(!this.isValue(option)) {
+
+      return null;
+    }
+
+    const resolved = this.#resolve(option, device, controller);
+
+    // The user reached for this option at a scope that answers for this identity, so what they wrote decides - whether that is a value, an off state, or an enable
+    // carrying nothing.
+    if(resolved.scope !== "none") {
+
+      return this.#valueOf(option, resolved);
+    }
+
+    // Nobody configured it, so the property answers if the plugin still carries one. Failing that, the catalog's registered default closes the chain through the
+    // same ladder `value` reads, which is what keeps the two reads from drifting on an option neither the user nor the configuration has spoken about.
+    return fallback ?? this.#valueOf(option, resolved);
   }
 
   /**

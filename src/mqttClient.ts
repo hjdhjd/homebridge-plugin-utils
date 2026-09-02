@@ -25,7 +25,7 @@
  *
  * @module
  */
-import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
+import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptions } from "./featureOptions.ts";
 import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
 import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
@@ -180,6 +180,118 @@ export function mqttFeatureOptions<TMeta = unknown>({ defaultTopic, scopes = ["g
         scopes: [...scopes] }
     ]
   };
+}
+
+/**
+ * The MQTT properties a plugin's own configuration block may carry: the broker URL and the topic prefix, as they were spelled before the feature options took the
+ * settings over. {@link mqttConnectionSettings} reads them as the transition fallback for an identity no configured option answers for, so a configuration nobody
+ * has opened the webUI on keeps resolving exactly what it always resolved. A plugin whose transition has ended carries neither property and omits `config`
+ * altogether; a plugin that still declares one documents its own sunset, since when the property stops being read is the plugin's decision rather than this
+ * library's.
+ *
+ * @property mqttTopic - Optional. The topic prefix the plugin's configuration block carries. An empty string is read as no topic at all.
+ * @property mqttUrl   - Optional. The broker URL the plugin's configuration block carries.
+ *
+ * @category Feature Options
+ */
+export interface MqttConfigProperties {
+
+  mqttTopic?: string;
+  mqttUrl?: string;
+}
+
+/**
+ * The input {@link mqttConnectionSettings} resolves from.
+ *
+ * @property config         - Optional. The plugin's own configuration properties for this identity. See {@link MqttConfigProperties}. Omitted by a plugin that
+ *                            carries none.
+ * @property controller     - Optional. The identity the options resolve at: a controller's MAC for a plugin declaring the group at controller scope, omitted for a
+ *                            plugin declaring it at global scope.
+ * @property featureOptions - The feature-option engine, over a catalog that composes the group {@link mqttFeatureOptions} builds.
+ *
+ * @category Feature Options
+ */
+export interface MqttConnectionSettingsInput {
+
+  config?: MqttConfigProperties;
+  controller?: string;
+  featureOptions: FeatureOptions;
+}
+
+/**
+ * What {@link mqttConnectionSettings} resolves: the half of an {@link MqttConfig} that comes from configuration rather than from the caller, so
+ * `createMqttClient({ ...settings, log }, init)` composes the two halves with no bridge in between.
+ *
+ * @category Feature Options
+ */
+export type MqttConnectionSettings = Pick<MqttConfig, "brokerUrl" | "topicPrefix">;
+
+/**
+ * Resolve the broker URL and topic prefix one identity's MQTT client is constructed from, or `null` when MQTT is off for that identity.
+ *
+ * `null` covers every way a plugin ends up with no client: no broker configured anywhere, an option the user set to off, and an option the user enabled without
+ * giving it a value. A caller hands the result to {@link createMqttClient} and is done, because the answers line up with what that guard already refuses.
+ *
+ * Both options resolve through {@link FeatureOptions.consolidatedValue | consolidatedValue}, the engine's one statement of the rule a configured option follows, so
+ * this module states no precedence of its own. What that rule yields here: a configured entry answers whatever the user made of it, an untouched option yields to
+ * the configuration property, and an untouched `Mqtt.Topic` with no property beside it answers the catalog's registered default - the same string the plugin passed
+ * as `defaultTopic`, so the canonical prefix has exactly one statement and this function needs no constant of its own.
+ *
+ * An empty property topic is read as unset. A blank configuration field is what produces one, and the client refuses an empty prefix outright, so passing it
+ * through would turn MQTT off for an identity whose user has configured a broker.
+ *
+ * The catalog contract is checked before anything is read: a catalog that never composed the group, or composed it with an empty `defaultTopic`, has no canonical
+ * prefix to answer with, and the client would read the resulting empty prefix as MQTT off with nothing logged. That is a programming error rather than a
+ * configuration state, so it throws where it can be seen rather than degrading into silence.
+ *
+ * Both consumers resolve this once, where the client is constructed, behind the example's `??=`: a client's broker and prefix are fixed for its lifetime, so a
+ * later re-resolution reaches no existing client.
+ *
+ * @param input                - The engine, the identity, and the configuration properties. See {@link MqttConnectionSettingsInput}.
+ * @param input.config         - Optional. The plugin's own configuration properties for this identity.
+ * @param input.controller     - Optional. The identity the options resolve at.
+ * @param input.featureOptions - The feature-option engine over a catalog composing the MQTT group.
+ *
+ * @returns The resolved broker URL and topic prefix, or `null` when MQTT is off for this identity. See {@link MqttConnectionSettings}.
+ *
+ * @throws `Error` naming `Mqtt.Topic` when the catalog carries no MQTT group, or carries one registered with an empty canonical topic.
+ *
+ * @example
+ *
+ * ```ts
+ * import { createMqttClient, mqttConnectionSettings } from "homebridge-plugin-utils";
+ *
+ * const settings = mqttConnectionSettings({ config: this.config, controller: mac, featureOptions });
+ *
+ * this.mqtt ??= settings && createMqttClient({ ...settings, log }, { signal: platform.signal });
+ * ```
+ *
+ * @category Feature Options
+ */
+export function mqttConnectionSettings({ config = {}, controller, featureOptions }: MqttConnectionSettingsInput): Nullable<MqttConnectionSettings> {
+
+  // First, and unconditionally: a catalog with no usable canonical topic is a composition mistake, and meeting it here means the plugin author meets it at its
+  // first resolution rather than at the first user who configures a broker. Emptiness counts as absence because an empty prefix is exactly what the client reads
+  // as MQTT off.
+  if(!featureOptions.valueDefault("Mqtt.Topic")) {
+
+    throw new Error("mqttConnectionSettings: the feature-option catalog carries no Mqtt.Topic entry with a canonical topic prefix; compose " +
+      "mqttFeatureOptions into the catalog before resolving MQTT settings.");
+  }
+
+  // The identity travels as the engine's controller argument, which is the scope both entries declare for a per-controller plugin and the scope a global plugin
+  // leaves undefined. The topic property is normalized to unset here, at the one place that reads it, so the emptiness rule sits beside the read it governs.
+  const brokerUrl = featureOptions.consolidatedValue({ controller, fallback: config.mqttUrl, option: "Mqtt.Url" });
+  const topicPrefix = featureOptions.consolidatedValue({ controller, fallback: config.mqttTopic?.length ? config.mqttTopic : undefined, option: "Mqtt.Topic" });
+
+  // Either read can come back empty, `null`, or `undefined`, and all three mean the same thing to a caller: there is nothing to connect with. A configured option
+  // reaches here as `null` when the user turned it off and as `undefined` when they enabled it without a value, and both are the user saying MQTT is off.
+  if(!brokerUrl || !topicPrefix) {
+
+    return null;
+  }
+
+  return { brokerUrl, topicPrefix };
 }
 
 /**
@@ -946,14 +1058,11 @@ export type MqttClientConfigCandidate = Omit<MqttConfig, "brokerUrl" | "topicPre
  * @example
  *
  * ```ts
- * import { createMqttClient } from "homebridge-plugin-utils";
+ * import { createMqttClient, mqttConnectionSettings } from "homebridge-plugin-utils";
  *
- * const mqtt = createMqttClient({
+ * const settings = mqttConnectionSettings({ controller: mac, featureOptions });
  *
- *   brokerUrl: featureOptions.value("Mqtt.Url"),
- *   log,
- *   topicPrefix: featureOptions.value("Mqtt.Topic")
- * }, { signal: platform.signal });
+ * this.mqtt ??= settings && createMqttClient({ ...settings, log }, { signal: platform.signal });
  * ```
  *
  * @category Utilities

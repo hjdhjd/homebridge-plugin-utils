@@ -10,7 +10,8 @@
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
-import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
+import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttConnectionSettings, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl,
+  routeMqttBrokerError } from "./mqttClient.ts";
 import { assertNoUnhandledRejections, capturingLog, formatLogEntry, silentLog } from "./testing/index.ts";
 import { awaitClientConnected, awaitConnect, firstRendered, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes,
   startTestBroker, waitForLog } from "./mqtt.helpers.ts";
@@ -1702,6 +1703,184 @@ describe("mqttFeatureOptions - canonical MQTT feature-option group", () => {
     // null, which is the unambiguous "MQTT is off" answer. Flipping either default fails exactly one of these two assertions.
     assert.equal(featureOptions.value("Mqtt.Topic"), "hydrawise");
     assert.equal(featureOptions.value("Mqtt.Url"), null);
+  });
+});
+
+/* The resolution the two controller-scoped plugins and the four global-scope ones share. Every row drives a real engine over a real catalog composed from the
+ * group itself, and every row builds its own engine, because `setOption` mutates in place and one row's entries reaching the next would read as a resolution
+ * defect rather than as the leak it is.
+ */
+describe("mqttConnectionSettings - broker and topic-prefix resolution", () => {
+
+  /* Seven fixtures, pairwise distinct, so no row can pass by one of them coinciding with another. The canonical prefix is deliberately not "test/canonical"
+   * either: a resolver that hardcoded a plausible canonical string rather than reading the catalog would still fail here.
+   */
+  const CONTROLLER = "AABBCCDDEEFF";
+  const OTHER_CONTROLLER = "112233445566";
+  const PROPERTY_BROKER = "mqtt://property.broker:1883";
+  const PROPERTY_TOPIC = "property/prefix";
+  const OPTION_BROKER = "mqtt://option.broker:1883";
+  const OPTION_TOPIC = "option/prefix";
+  const CANONICAL = "canonical/prefix";
+
+  // A fresh engine over a catalog composing nothing but the MQTT group, at the scope the caller asks for. Controller scope is the default because it is what the
+  // two large plugins declare; the global-scope rows ask for theirs.
+  function engineWith(scopes: NonNullable<FeatureOptionEntry["scopes"]> = ["controller"]): FeatureOptions {
+
+    const group = mqttFeatureOptions({ defaultTopic: CANONICAL, scopes });
+
+    return new FeatureOptions([group.category], { [group.category.name]: group.options });
+  }
+
+  test("no broker anywhere leaves MQTT off for the identity", () => {
+
+    assert.deepEqual(mqttConnectionSettings({ config: {}, controller: CONTROLLER, featureOptions: engineWith() }), null,
+      "an empty configuration with nothing configured has no broker to connect to");
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC }, controller: CONTROLLER, featureOptions: engineWith() }), null,
+      "a topic is not a broker, so a configuration carrying one and nothing else is still off");
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttUrl: "" }, controller: CONTROLLER, featureOptions: engineWith() }), null,
+      "an empty property broker is no broker at all");
+    assert.deepEqual(mqttConnectionSettings({ controller: CONTROLLER, featureOptions: engineWith() }), null,
+      "and a plugin that carries no configuration properties at all resolves the same way");
+  });
+
+  test("a configuration carrying only the properties resolves both of them", () => {
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER,
+      featureOptions: engineWith() }), { brokerUrl: PROPERTY_BROKER, topicPrefix: PROPERTY_TOPIC },
+    "the transition assertion: a configuration nobody has opened the webUI on must keep resolving exactly what it always resolved");
+  });
+
+  test("a property broker with no topic beside it resolves the catalog's registered canonical prefix", () => {
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: engineWith() }),
+      { brokerUrl: PROPERTY_BROKER, topicPrefix: CANONICAL },
+      "the canonical prefix is read from the catalog the plugin registered it in, so a hardcoded string cannot answer here");
+  });
+
+  test("an empty property topic is read as unset and the canonical prefix answers", () => {
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: "", mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: engineWith() }),
+      { brokerUrl: PROPERTY_BROKER, topicPrefix: CANONICAL },
+      "a blank configuration field produces this, and passing it through would turn off an identity whose user configured a broker");
+  });
+
+  test("a configured broker outranks the property broker", () => {
+
+    const withTopic = engineWith();
+
+    withTopic.setOption({ enabled: true, id: CONTROLLER, option: "Mqtt.Url", value: OPTION_BROKER });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER,
+      featureOptions: withTopic }), { brokerUrl: OPTION_BROKER, topicPrefix: PROPERTY_TOPIC },
+    "the configured broker answers and the untouched topic still reads its property");
+
+    const withoutTopic = engineWith();
+
+    withoutTopic.setOption({ enabled: true, id: CONTROLLER, option: "Mqtt.Url", value: OPTION_BROKER });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: withoutTopic }),
+      { brokerUrl: OPTION_BROKER, topicPrefix: CANONICAL }, "and with no property topic the canonical prefix closes the chain");
+  });
+
+  test("a configured topic outranks the property topic", () => {
+
+    const engine = engineWith();
+
+    engine.setOption({ enabled: true, id: CONTROLLER, option: "Mqtt.Topic", value: OPTION_TOPIC });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: engine }),
+      { brokerUrl: PROPERTY_BROKER, topicPrefix: OPTION_TOPIC }, "the user's own configured entry is their choice and supersedes the property");
+  });
+
+  test("a topic the user turned off turns MQTT off, even beside a usable property topic and broker", () => {
+
+    const engine = engineWith();
+
+    engine.setOption({ enabled: false, id: CONTROLLER, option: "Mqtt.Topic" });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: engine }),
+      null, "a configured option rules in every state, so a property must not resurrect a topic the user switched off");
+  });
+
+  test("an identity that resolves no controller reads its properties alone, and another controller's entries never reach it", () => {
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, featureOptions: engineWith() }),
+      { brokerUrl: PROPERTY_BROKER, topicPrefix: PROPERTY_TOPIC }, "with no identity to address, the properties are the whole of the answer");
+
+    const elsewhere = engineWith();
+
+    elsewhere.setOption({ enabled: true, id: OTHER_CONTROLLER, option: "Mqtt.Url", value: OPTION_BROKER });
+    elsewhere.setOption({ enabled: true, id: OTHER_CONTROLLER, option: "Mqtt.Topic", value: OPTION_TOPIC });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, featureOptions: elsewhere }),
+      { brokerUrl: PROPERTY_BROKER, topicPrefix: PROPERTY_TOPIC }, "another controller's entries must not reach an identity that never resolves one");
+  });
+
+  test("a global-scope catalog resolves its own configured entries with no identity passed", () => {
+
+    const engine = engineWith(["global"]);
+
+    engine.setOption({ enabled: true, option: "Mqtt.Url", value: OPTION_BROKER });
+    engine.setOption({ enabled: true, option: "Mqtt.Topic", value: OPTION_TOPIC });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, featureOptions: engine }),
+      { brokerUrl: OPTION_BROKER, topicPrefix: OPTION_TOPIC }, "the four global-scope plugins pass no identity, and their configured entries must still answer");
+  });
+
+  test("a topic the user enabled without giving it a value turns MQTT off", () => {
+
+    /* A bare enable is a state only the global scope can express - a scoped enable carrying no value reduces to clearing the scope - so these two rows sit at
+     * global scope. A hand-authored scoped entry of the same shape degrades through the very same guard.
+     */
+    const engine = engineWith(["global"]);
+
+    engine.setOption({ enabled: true, option: "Mqtt.Topic" });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttUrl: PROPERTY_BROKER }, featureOptions: engine }), null,
+      "an enable carrying nothing is still the user speaking about the topic, so the canonical prefix must not answer over it");
+  });
+
+  test("a broker the user enabled without giving it a value turns MQTT off", () => {
+
+    const engine = engineWith(["global"]);
+
+    engine.setOption({ enabled: true, option: "Mqtt.Url" });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, featureOptions: engine }), null,
+      "the same rule on the broker: an enable with no value must not fall back to the property");
+  });
+
+  test("a broker the user turned off turns MQTT off, even beside a usable property broker", () => {
+
+    const engine = engineWith();
+
+    engine.setOption({ enabled: false, id: CONTROLLER, option: "Mqtt.Url" });
+
+    assert.deepEqual(mqttConnectionSettings({ config: { mqttTopic: PROPERTY_TOPIC, mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: engine }),
+      null, "a property broker must not resurrect a broker the user switched off");
+  });
+
+  test("a catalog with no usable canonical topic is refused before anything is read", () => {
+
+    const deviceOnly = new FeatureOptions([{ description: "Device", name: "Device" }],
+      { Device: [{ default: true, description: "Make this device available in HomeKit.", name: "" }] });
+
+    assert.throws(() => mqttConnectionSettings({ config: { mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: deviceOnly }),
+      /^Error: mqttConnectionSettings: .*Mqtt\.Topic/);
+
+    // With no configuration at all the check still runs, which is what says it precedes every read rather than depending on one of them.
+    assert.throws(() => mqttConnectionSettings({ controller: CONTROLLER, featureOptions: deviceOnly }), /^Error: mqttConnectionSettings: .*Mqtt\.Topic/);
+
+    // A group composed with an empty canonical topic is the same programming error: the client would read the empty prefix as MQTT off, with nothing logged.
+    const emptyGroup = mqttFeatureOptions({ defaultTopic: "", scopes: ["controller"] });
+    const emptyCanonical = new FeatureOptions([emptyGroup.category], { [emptyGroup.category.name]: emptyGroup.options });
+
+    assert.throws(() => mqttConnectionSettings({ config: { mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: emptyCanonical }),
+      /^Error: mqttConnectionSettings: .*Mqtt\.Topic/);
+
+    assert.doesNotThrow(() => mqttConnectionSettings({ config: { mqttUrl: PROPERTY_BROKER }, controller: CONTROLLER, featureOptions: engineWith() }),
+      "a catalog carrying the group with a non-empty canonical topic must resolve rather than refuse");
   });
 });
 

@@ -1579,7 +1579,7 @@ describe("MqttClient - transport error handler (real network)", () => {
     // by identity. A substring alone would be satisfied instantly by the first line and prove nothing about the retry loop.
     const seen = new Set(log.entries);
 
-    await waitForLog(log, (entry) => !seen.has(entry) && isHostnameLine(entry), 5000);
+    await waitForLog(log, (entry) => !seen.has(entry) && isHostnameLine(entry));
   });
 });
 

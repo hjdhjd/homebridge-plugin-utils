@@ -34,6 +34,11 @@ import { createServer } from "node:net";
 import { format } from "node:util";
 import { once } from "node:events";
 
+// The rows behind `waitForLog` and `awaitClientConnected` drive a real in-process broker or a real TCP socket, and under the parallel full-suite run those
+// waits pay OS scheduling and event-loop contention that an in-memory wait never sees...the shared `waitUntil` default is the right floor for in-memory
+// state, not for a socket round trip. This deadline sits well inside the per-test budget, so a row that waits twice still fits with room to spare.
+const REAL_BROKER_WAIT_MS = 5000;
+
 /**
  * Handle returned by {@link startTestBroker}. Implements `AsyncDisposable` so test sites can use the canonical `await using broker = await startTestBroker()` idiom for
  * scope-bound teardown - identical in shape to HBPU's other lifetime-managed test substrates (`RtpDemuxer`, `FfmpegProcess`).
@@ -143,11 +148,11 @@ export async function awaitConnect(broker: TestBroker): Promise<void> {
  * client's own getter waits on exactly the reading the pre-check consults, so a publish that follows it is issued against a live session.
  *
  * @param client    - The client under test.
- * @param timeoutMs - Maximum total wait time, in milliseconds. Defaults to 1000.
+ * @param timeoutMs - Maximum total wait time, in milliseconds. Defaults to `REAL_BROKER_WAIT_MS`.
  *
  * @throws `Error` if the client does not report a session within `timeoutMs`.
  */
-export async function awaitClientConnected(client: MqttClient, timeoutMs = 1000): Promise<void> {
+export async function awaitClientConnected(client: MqttClient, timeoutMs = REAL_BROKER_WAIT_MS): Promise<void> {
 
   return waitUntil(() => client.connected, { description: "the client to hold a broker session", timeoutMs });
 }
@@ -254,11 +259,11 @@ export function recordClientPublishes(broker: TestBroker): ClientPublishRecorder
  *
  * @param log       - Capturing logger to scan.
  * @param predicate - Predicate that selects the entry the test is waiting for.
- * @param timeoutMs - Maximum total wait time, in milliseconds. Defaults to 1000 - a comfortable margin for localhost-loopback log timing on slow CI runners.
+ * @param timeoutMs - Maximum total wait time, in milliseconds. Defaults to `REAL_BROKER_WAIT_MS`, sized for a real-socket round trip under a loaded suite.
  *
  * @throws `Error` if no matching entry is observed within `timeoutMs`.
  */
-export async function waitForLog(log: CapturingLog, predicate: (entry: TestLogEntry) => boolean, timeoutMs = 1000): Promise<void> {
+export async function waitForLog(log: CapturingLog, predicate: (entry: TestLogEntry) => boolean, timeoutMs = REAL_BROKER_WAIT_MS): Promise<void> {
 
   return waitUntil(() => log.entries.some(predicate), { description: "a matching log entry", timeoutMs });
 }

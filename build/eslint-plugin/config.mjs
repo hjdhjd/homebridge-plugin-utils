@@ -115,6 +115,7 @@ const commonRules = {
   "@hjdhjd/blank-line-after-open-brace": "warn",
   "@hjdhjd/comment-style": "error",
   "@hjdhjd/enforce-node-protocol": "warn",
+  "@hjdhjd/no-numeric-separators": "warn",
   "@hjdhjd/paren-comparisons-in-logical": "warn",
   "@hjdhjd/split-type-imports": "warn",
   "@stylistic/array-bracket-spacing": [ "warn", "always", { "arraysInArrays": true, "objectsInArrays": true, "singleValue": false } ],

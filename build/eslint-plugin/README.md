@@ -1,6 +1,6 @@
 # `@hjdhjd` ESLint plugin
 
-A self-contained ESLint flat-config plugin bundled inside `homebridge-plugin-utils`. Provides five custom rules and an opinionated flat-config builder
+A self-contained ESLint flat-config plugin bundled inside `homebridge-plugin-utils`. Provides custom rules and an opinionated flat-config builder
 tuned for Homebridge plugin development - TypeScript backend, JavaScript build tooling, browser-side webUI - all in one consistent rule surface.
 
 ## Quick start
@@ -37,6 +37,8 @@ build/eslint-plugin/
     ├── comment-style.test.mjs                      # co-located RuleTester suite
     ├── enforce-node-protocol.mjs                   # @hjdhjd/enforce-node-protocol
     ├── enforce-node-protocol.test.mjs              # co-located RuleTester suite
+    ├── no-numeric-separators.mjs                   # @hjdhjd/no-numeric-separators
+    ├── no-numeric-separators.test.mjs              # co-located RuleTester suite
     ├── paren-comparisons-in-logical.mjs            # @hjdhjd/paren-comparisons-in-logical
     ├── paren-comparisons-in-logical.test.mjs       # co-located RuleTester suite
     ├── split-type-imports.mjs                      # @hjdhjd/split-type-imports
@@ -73,6 +75,7 @@ Each rule is described in detail by its own file's header comment. One-line summ
 | `@hjdhjd/blank-line-after-open-brace` | Require a blank line after an opening brace when the brace is followed by a newline and the next line carries non-whitespace content. Covers block statements, class bodies, object expressions, and TypeScript interface/type-literal bodies. |
 | `@hjdhjd/comment-style` | Enforce ASCII-first comment style. Substitutes Unicode arrows/comparison glyphs/em-dash with ASCII equivalents, removes decorative banner separators, and strips characters from the Unicode Box Drawing block. |
 | `@hjdhjd/enforce-node-protocol` | Require the `node:` protocol prefix on every reference to a Node.js built-in module. |
+| `@hjdhjd/no-numeric-separators` | Bar underscore separators from numeric literals, rewriting the literal to its plain digits on fix. Covers every base, both sides of a decimal point, the exponent, and bigints; leaves strings, identifiers, and property keys alone. |
 | `@hjdhjd/paren-comparisons-in-logical` | Require parentheses around any comparison operand that is a direct child of a compound `&&` or `||` expression. |
 | `@hjdhjd/split-type-imports` | Require type imports and re-exports to live in declaration-level `import type` / `export type` statements rather than as inline specifier-level `type` qualifiers. Pairs with `@typescript-eslint/consistent-type-imports` configured with `fixStyle: "separate-type-imports"` to express the split-form policy as a single source of truth. |
 
@@ -83,7 +86,7 @@ Each rule is described in detail by its own file's header comment. One-line summ
 ```js
 {
   meta: { name: "@hjdhjd/eslint-rules", version: <package.json version> },
-  rules: { /* the five rules above */ }
+  rules: { /* the rules above */ }
 }
 ```
 

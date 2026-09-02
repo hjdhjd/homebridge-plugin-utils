@@ -328,7 +328,8 @@ describe("FeatureOptions - declared option scopes", () => {
     const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
     const configIndex = buildConfigIndex(catalog, [ "Enable.Motion.Detect.dev1", "Disable.Motion.Detect.ctrl1", "Disable.Motion.Detect" ]);
 
-    assert.deepEqual(catalog.scopes, {}, "no entry in the shared fixture declares a scope");
+    // A catalog registry carries no prototype, so it is never deep-equal to a plain literal; the spread copies its keys into one so the row compares contents.
+    assert.deepEqual({ ...catalog.scopes }, {}, "no entry in the shared fixture declares a scope");
     assert.equal(resolveScope({ catalog, configIndex, controller: "ctrl1", device: "dev1", option: "Motion.Detect" }).scope, "device");
     assert.equal(resolveScope({ catalog, configIndex, controller: "ctrl1", option: "Motion.Detect" }).scope, "controller");
     assert.equal(resolveScope({ catalog, configIndex, option: "Motion.Detect" }).scope, "global");
@@ -1147,7 +1148,7 @@ describe("FeatureOptions - setters regenerate derived state", () => {
     fo.options = undefined;
 
     assert.equal(fo.defaultValue("Motion.Detect"), false, "with no options defined the lookup resolves to the defaultReturnValue");
-    assert.deepEqual(fo.groups, {});
+    assert.deepEqual({ ...fo.groups }, {});
   });
 });
 
@@ -2048,7 +2049,7 @@ describe("FeatureOptions - pure functional core", () => {
       assert.equal(catalog.defaults["audio.volume"], false, "value-centric default from catalog");
       assert.equal(catalog.valueOptions["audio.volume"], 50, "value-centric default value indexed");
       assert.equal(catalog.valueOptions["network.mtu"], "1500", "string-typed default value indexed");
-      assert.deepEqual(catalog.groupParents, { "Audio.Mute": "Audio", "Motion.Sensitivity": "Motion.Detect" }, "child-to-parent reverse index");
+      assert.deepEqual({ ...catalog.groupParents }, { "Audio.Mute": "Audio", "Motion.Sensitivity": "Motion.Detect" }, "child-to-parent reverse index");
       assert.deepEqual(catalog.groups["Motion.Detect"], ["Motion.Sensitivity"], "parent-to-children forward index");
       assert.deepEqual(catalog.sortedValueOptionNames, [...catalog.sortedValueOptionNames].sort((a, b) => b.length - a.length), "sorted longest-first");
     });
@@ -2081,6 +2082,71 @@ describe("FeatureOptions - pure functional core", () => {
       assert.equal(catalog.optionsByName["motion.detect"]?.name, "Detect", "a boolean option is registered exactly as a value option is");
       assert.equal(Object.keys(catalog.optionsByName).length, Object.keys(catalog.defaults).length, "every option the defaults map carries has an entry here");
       assert.equal(catalog.optionsByName["unknown.option"], undefined, "an option the catalog does not declare has no entry");
+    });
+
+    test("every registry the index carries starts from no prototype, so a membership test answers only for what the catalog registered", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const registries = [ catalog.defaults, catalog.groupParents, catalog.groups, catalog.optionsByName, catalog.renderers, catalog.scopes,
+        catalog.valueOptions ];
+
+      // The scope-address arbitration and the value-option probe both ask a registry for membership directly, so a registry built as a plain literal would answer
+      // yes for every name Object.prototype carries and read those as options the catalog had declared.
+      for(const registry of registries) {
+
+        assert.equal(Object.getPrototypeOf(registry), null, "the registry carries no prototype");
+        assert.equal("constructor" in registry, false, "so a name every plain object inherits is not a member of it");
+        assert.equal("toString" in registry, false, "nor is any other inherited name");
+      }
+
+      assert.equal("motion.detect" in catalog.defaults, true, "and a name the catalog registered is a member");
+      assert.equal("Motion.Sensitivity" in catalog.groupParents, true, "including in the registries keyed as the entry is spelled");
+    });
+
+    test("refuses a second entry that expands onto a name an earlier entry already registered, whatever category or casing it arrives from", () => {
+
+      /* The collision arrives from inside a category, where the duplicate differs only in case, and from across categories, where the expansions meet in the
+       * middle - `A` + `B.C` and `A.B` + `C` both spell `A.B.C`. Either way the registries are keyed on the lowercased name, so the second entry would take the
+       * first one's place in every derived view. The message names that lowercased name rather than either spelling, since the name is what the entries collide on.
+       */
+      const caseVariant: Record<string, FeatureOptionEntry[]> = {
+
+        Motion: [
+
+          { default: true, description: "Enable motion detection.", name: "Detect" },
+          { default: false, description: "The same option in another casing.", name: "detect" }
+        ]
+      };
+
+      const nestedCategories: FeatureCategoryEntry[] = [ { description: "A Options", name: "A" }, { description: "A.B Options", name: "A.B" } ];
+      const nestedOptions: Record<string, FeatureOptionEntry[]> = {
+
+        "A": [{ default: false, description: "An option whose name carries the dot.", name: "B.C" }],
+        "A.B": [{ default: false, description: "The same expansion, reached from the other side.", name: "C" }]
+      };
+
+      assert.throws(() => buildCatalogIndex(CATEGORIES, caseVariant),
+        /the name "motion\.detect", which an earlier entry already registered, declared on option "Motion\.detect"/);
+      assert.throws(() => buildCatalogIndex(nestedCategories, nestedOptions),
+        /the name "a\.b\.c", which an earlier entry already registered, declared on option "A\.B\.C"/);
+    });
+
+    test("the duplicate-name refusal reaches a plugin through the constructor exactly as it does through the builder", () => {
+
+      // The class builds its catalog index while constructing, so a catalog carrying a collision fails to construct rather than yielding an instance whose derived
+      // views quietly lost an option. A plugin sees the same sentence either way.
+      const categories: FeatureCategoryEntry[] = [{ description: "Stream Options", name: "Stream" }];
+      const options: Record<string, FeatureOptionEntry[]> = {
+
+        Stream: [
+
+          { default: false, description: "Bandwidth budget.", name: "Bandwidth" },
+          { default: true, description: "The same name in another casing.", name: "BANDWIDTH" }
+        ]
+      };
+
+      assert.throws(() => new FeatureOptions(categories, options),
+        /FeatureOptions: the name "stream\.bandwidth", which an earlier entry already registered, declared on option "Stream\.BANDWIDTH"\./);
     });
 
     // The picker declarations are catalog data the engine itself never reads, so the one thing that can go wrong with them is a plugin declaring a combination

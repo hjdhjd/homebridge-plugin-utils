@@ -1185,11 +1185,20 @@ function validateChoiceDeclaration(option: FeatureOptionEntry, entry: string): v
   }
 }
 
+// Build one of the catalog index's registries. Every registry here is keyed on names a plugin declares, so it starts from no prototype: a membership test or a
+// bracket read then answers only for what the catalog registered and never for a property every plain object inherits. The assertion is what carries the key and
+// value types across, since `Object.create` is declared to return `any`.
+function createRegistry<T>(): Record<string, T> {
+
+  return Object.create(null) as Record<string, T>;
+}
+
 /**
  * Build the catalog-derived index from raw categories + options. The result carries the raw inputs alongside every derivation needed for O(1) catalog queries -
  * defaults, value-options registry, groups (both directions), renderers, the raw-entry lookup, and the longest-first cache the entry parser consumes. Throws when a
  * built-in formatter name on a `render` declaration does not resolve, and on any picker declaration the engine cannot honor (see {@link FeatureOptionEntry.choices}
- * and {@link FeatureOptionEntry.multiple}), surfacing the misconfiguration at load time rather than degrading a display path in silence.
+ * and {@link FeatureOptionEntry.multiple}), and when two entries expand to the same lowercased name, surfacing the misconfiguration at load time rather than
+ * degrading a display path in silence.
  *
  * The index is the catalog-side input to every other pure helper in this module. Build it once per catalog; reuse it across every configured-options mutation
  * because the catalog is unchanged across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
@@ -1202,13 +1211,13 @@ function validateChoiceDeclaration(option: FeatureOptionEntry, entry: string): v
  */
 export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], options: Readonly<Record<string, readonly FeatureOptionEntry[]>>): CatalogIndex {
 
-  const defaults: Record<string, boolean> = {};
-  const groupParents: Record<string, string> = {};
-  const groups: Record<string, string[]> = {};
-  const optionsByName: Record<string, FeatureOptionEntry> = {};
-  const renderers: Record<string, (value: string) => string> = {};
-  const scopes: Record<string, readonly FeatureOptionScope[]> = {};
-  const valueOptions: Record<string, number | string | undefined> = {};
+  const defaults = createRegistry<boolean>();
+  const groupParents = createRegistry<string>();
+  const groups = createRegistry<string[]>();
+  const optionsByName = createRegistry<FeatureOptionEntry>();
+  const renderers = createRegistry<(value: string) => string>();
+  const scopes = createRegistry<readonly FeatureOptionScope[]>();
+  const valueOptions = createRegistry<number | string | undefined>();
 
   for(const category of categories) {
 
@@ -1222,17 +1231,28 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
     for(const option of categoryOptions) {
 
       const entry = expandOption(category, option);
+      const key = entry.toLowerCase();
 
-      defaults[entry.toLowerCase()] = option.default;
+      /* One key, one entry, across the whole catalog. Every registry keyed below reads the lowercased expanded name, so two entries that expand to the same name -
+       * a case-variant pair inside one category, or a pair that meets across categories the way `A` + `B.C` and `A.B` + `C` do - would share a key and the later
+       * would take the earlier one's place in every derived view. A catalog is the plugin's own declaration, so a collision in it is a declaration bug: it is
+       * refused here, at build, rather than resolved into an option that silently answers for another.
+       */
+      if(key in defaults) {
+
+        throw catalogError("the name \"" + key + "\", which an earlier entry already registered,", entry);
+      }
+
+      defaults[key] = option.default;
 
       // The general raw-entry lookup, keyed exactly as every other registry here is. A consumer that needs the entry itself - the picker read, a plugin walking
       // one option - reads it in O(1) rather than re-walking the categories and options maps to find what the builder already had in hand.
-      optionsByName[entry.toLowerCase()] = option;
+      optionsByName[key] = option;
 
       // Track value-centric options separately so the lookup index built later knows which entries can carry a value.
       if("defaultValue" in option) {
 
-        valueOptions[entry.toLowerCase()] = option.defaultValue;
+        valueOptions[key] = option.defaultValue;
       }
 
       validateChoiceDeclaration(option, entry);
@@ -1252,10 +1272,10 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
             throw catalogError("unknown built-in formatter \"" + option.render + "\"", entry);
           }
 
-          renderers[entry.toLowerCase()] = formatter;
+          renderers[key] = formatter;
         } else {
 
-          renderers[entry.toLowerCase()] = option.render;
+          renderers[key] = option.render;
         }
       }
 
@@ -1263,7 +1283,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
       // entry gets a key: an option that says nothing about its scopes leaves the lookup empty, which every consumer reads as "valid at every level."
       if(option.scopes) {
 
-        scopes[entry.toLowerCase()] = option.scopes;
+        scopes[key] = option.scopes;
       }
 
       if(option.group !== undefined) {

@@ -59,7 +59,8 @@ describe("initialState", () => {
     assert.equal(state.mode, "device-only");
     assert.ok(state.catalog, "placeholder catalog populated so selectors do not need null guards during loading");
     assert.deepEqual(state.catalog.choiceSources, {}, "no catalog means no picker can name a source, so the empty map is the whole truth rather than a stand-in");
-    assert.deepEqual(state.catalog.optionsByName, {}, "and the placeholder's raw-entry lookup is empty for the same reason");
+    // A catalog registry carries no prototype, so it is never deep-equal to a plain literal; the spread copies its keys into one so the row compares contents.
+    assert.deepEqual({ ...state.catalog.optionsByName }, {}, "and the placeholder's raw-entry lookup is empty for the same reason");
   });
 
   test("returns a fresh object on each call - state instances are not shared across stores", () => {

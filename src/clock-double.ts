@@ -11,6 +11,9 @@
  * resolves only when {@link TestClock.advance} crosses its deadline, or rejects when its signal aborts - matching `node:timers/promises` `setTimeout`'s `AbortError`
  * shape. No real timers and no wall-clock are used, so a consumer's pacing/timeout/duration path runs deterministically and instantly under test.
  *
+ * Beside the timeline the double keeps the ledger a pacing assertion reads: `requested` is every `ms` a consumer asked for, in call order, and `advanceToNext()`
+ * steps straight to the earliest pending deadline - so a suite drives a consumer's schedule by the numbers the consumer chose rather than by numbers it restates.
+ *
  * The double builds on the library's own primitives rather than hand-rolling them: {@link onAbort} wires the abort listener and yields the `Disposable` that detaches
  * it, and `Promise.withResolvers` captures each pending wait's deferred. The abort listener is detached on EITHER resolution path (deadline-crossed or aborted), so no
  * listener leaks onto a long-lived signal across many short waits.
@@ -18,6 +21,7 @@
  * @module
  */
 import type { Clock } from "./clock.ts";
+import type { Nullable } from "./util.ts";
 import { onAbort } from "./util.ts";
 
 /**
@@ -83,6 +87,13 @@ function abortError(): Error {
  */
 export class TestClock implements Clock {
 
+  /**
+   * Every `ms` a {@link TestClock.delay} call asked for, in call order. A request lands here before its wait is registered and whatever later becomes of that wait,
+   * so a delay the clock crossed, one whose signal aborted mid-wait, and one whose signal was already aborted all appear. That is the ledger a suite does its
+   * cadence arithmetic against - a history that dropped the waits which never came due would understate exactly the loops worth asserting on.
+   */
+  public readonly requested: number[] = [];
+
   // The current virtual time. Seeded by the constructor and moved only by `advance`.
   #now: number;
 
@@ -130,11 +141,38 @@ export class TestClock implements Clock {
   }
 
   /**
+   * Advance virtual time to the earliest pending deadline and settle everything due there - the step a consumer's next real timer firing would produce. A clock
+   * with nothing pending answers `false` and moves no time.
+   *
+   * The step is `Math.max(0, deadline - now())`, so an entry that is already due - a `delay(0)`, or a `delay` with a negative `ms` - is flushed through
+   * {@link TestClock.advance}'s zero path rather than reached backward for. Entries sharing the earliest deadline settle together within the one step, in
+   * {@link TestClock.advance}'s own order, since `advance` stays the single place an entry settles. A whole schedule drains with
+   * `while(clock.advanceToNext()) { ... }`: each pass settles one deadline's worth of waits, and the loop ends when nothing is left.
+   *
+   * @returns `true` when a deadline was stepped to, `false` when nothing was pending.
+   */
+  public advanceToNext(): boolean {
+
+    const deadline = this.nextDeadline;
+
+    if(deadline === null) {
+
+      return false;
+    }
+
+    // Clamp the step at zero. An already-due entry needs `advance(0)`, which flushes it without moving time at all; stepping by the raw difference would drag the
+    // virtual time backward to a deadline the clock has already passed, corrupting the timeline every other pending entry and every `now()` read is measured on.
+    this.advance(Math.max(0, deadline - this.#now));
+
+    return true;
+  }
+
+  /**
    * Register a delay that resolves when virtual time reaches `this.now() + ms`, or rejects with an `AbortError` (matching `node:timers/promises`) if `init.signal` aborts
    * first. A non-positive `ms` yields a deadline at or before the current time, which the very next {@link TestClock.advance} (including `advance(0)`) flushes.
    *
    * A pre-aborted signal rejects on the executor's microtask exactly as `systemClock` does (NOT a synchronous throw): {@link onAbort} fires the handler inline, which
-   * removes the just-registered entry and rejects, so the entry never lingers in `pending`.
+   * removes the just-registered entry and rejects, so the entry never lingers in `pending`. Either way the call's `ms` is recorded in {@link TestClock.requested}.
    *
    * @param ms   - The delay, in milliseconds. May be zero or negative (flushed by the next `advance`).
    * @param init - Optional init options. A supplied `signal` rejects the wait with an `AbortError` when it aborts.
@@ -145,6 +183,10 @@ export class TestClock implements Clock {
 
     const { promise, reject, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
     const entry: ClockEntry = { deadline: this.#now + ms, resolve };
+
+    // Record the request before the entry is registered, so the history covers every call rather than only the calls that survive registration: a pre-aborted
+    // signal removes its entry within this very call, and a wait a consumer asked for belongs to its cadence whether or not the wait ever came due.
+    this.requested.push(ms);
 
     // Register the entry FIRST so a pre-aborted signal's inline `onAbort` handler (below) can find and remove it. `onAbort` runs the handler synchronously when the
     // signal is already aborted, so for a pre-aborted signal the entry is pushed and then immediately removed-and-rejected within this call - settling on the executor's
@@ -171,6 +213,29 @@ export class TestClock implements Clock {
   public now(): number {
 
     return this.#now;
+  }
+
+  /**
+   * The earliest deadline among the registered delays that have neither resolved nor rejected, and `null` when nothing is pending. A test reads it to assert WHEN a
+   * consumer's next wait comes due, where {@link TestClock.pending} answers how many of them are outstanding.
+   *
+   * @returns The earliest pending deadline, in virtual time, or `null` when no delay is pending.
+   */
+  public get nextDeadline(): Nullable<number> {
+
+    // One pass, seeded from the list itself rather than from a sentinel bound, so the empty case falls out as null instead of as an infinity every caller would
+    // have to recognize and translate.
+    let earliest: Nullable<number> = null;
+
+    for(const entry of this.#pending) {
+
+      if((earliest === null) || (entry.deadline < earliest)) {
+
+        earliest = entry.deadline;
+      }
+    }
+
+    return earliest;
   }
 
   /**

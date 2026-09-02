@@ -2,8 +2,8 @@
  *
  * clock.test.ts: Unit tests for the injectable Clock seam - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
  * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape), plus the shipped controllable TestClock double (advanceable virtual time,
- * deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, and the no-listener-leak teardown on both resolution
- * paths).
+ * deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on both resolution
+ * paths, the requested-delay history across every settlement path, the earliest-pending-deadline read, and the step that lands on that deadline).
  */
 import { describe, test } from "node:test";
 import type { Clock } from "./clock.ts";
@@ -300,5 +300,147 @@ describe("TestClock - abort and no-leak", () => {
 
     assert.equal((fakeError as Error).name, (realError as Error).name, "the TestClock AbortError name must match systemClock's");
     assert.equal(fakeCode, realCode, "the TestClock AbortError code must match systemClock's");
+  });
+});
+
+describe("TestClock - requested history and stepping", () => {
+
+  test("requested records every delay's ms in call order, across all three settlement paths", async () => {
+
+    const clock = new TestClock();
+    const midWait = new AbortController();
+    const preAborted = new AbortController();
+
+    preAborted.abort();
+
+    // One delay per settlement path - crossed by advance, aborted mid-wait, and pre-aborted - so the history is proven to carry the waits that never came due
+    // alongside the one that did. A wait a consumer asked for belongs to its cadence whatever became of the wait.
+    const crossed = clock.delay(100);
+    const aborting = clock.delay(250, { signal: midWait.signal });
+    const preRejected = clock.delay(500, { signal: preAborted.signal });
+
+    await assert.rejects(() => preRejected, (error: unknown) => {
+
+      assertAbortError(error, "TestClock pre-aborted delay");
+
+      return true;
+    });
+
+    midWait.abort();
+
+    await assert.rejects(() => aborting, (error: unknown) => {
+
+      assertAbortError(error, "TestClock mid-wait delay");
+
+      return true;
+    });
+
+    clock.advance(100);
+    await crossed;
+
+    assert.deepEqual(clock.requested, [ 100, 250, 500 ], "every requested delay is recorded, in call order");
+    assert.equal(clock.pending, 0, "and every one of them has left the pending list");
+  });
+
+  test("nextDeadline reads null on a fresh clock, the earliest of out-of-order deadlines, and null again once the last wait leaves", async () => {
+
+    const clock = new TestClock();
+    const controller = new AbortController();
+
+    assert.equal(clock.nextDeadline, null, "a clock with nothing pending has no next deadline");
+
+    // Registered out of deadline order, so the answer cannot be registration order dressed up as a minimum.
+    const late = clock.delay(300);
+    const early = clock.delay(100);
+    const aborting = clock.delay(200, { signal: controller.signal });
+
+    assert.equal(clock.nextDeadline, 100, "the earliest deadline answers, whatever order the waits were registered in");
+
+    clock.advance(100);
+    await early;
+
+    assert.equal(clock.nextDeadline, 200, "the answer moves up to the next wait as each one settles");
+
+    controller.abort();
+
+    await assert.rejects(() => aborting, (error: unknown) => {
+
+      assertAbortError(error, "TestClock mid-wait delay");
+
+      return true;
+    });
+
+    assert.equal(clock.nextDeadline, 300, "an aborted wait leaves the pending list, so it stops answering");
+
+    clock.advance(200);
+    await late;
+
+    assert.equal(clock.nextDeadline, null, "the last wait settling returns the answer to null");
+  });
+
+  test("advanceToNext answers false and moves no time when nothing is pending", () => {
+
+    const clock = new TestClock(1000);
+
+    assert.equal(clock.advanceToNext(), false, "there is no deadline to step to");
+    assert.equal(clock.now(), 1000, "and an empty clock's step is not a step at all");
+  });
+
+  test("advanceToNext lands exactly on the earliest deadline, settling everything due there and nothing later", async () => {
+
+    const clock = new TestClock();
+    const settled: string[] = [];
+
+    // Two waits share the earliest deadline and a third comes later, so one step is proven to settle a whole deadline's worth at once without reaching past it.
+    const firstAtHundred = clock.delay(100).then(() => settled.push("first at 100"));
+    const secondAtHundred = clock.delay(100).then(() => settled.push("second at 100"));
+
+    clock.delay(400);
+
+    assert.equal(clock.advanceToNext(), true);
+
+    await Promise.all([ firstAtHundred, secondAtHundred ]);
+
+    assert.equal(clock.now(), 100, "the step lands on the deadline itself, never past it");
+    assert.deepEqual(settled, [ "first at 100", "second at 100" ], "waits sharing a deadline settle together, in registration order");
+    assert.equal(clock.pending, 1, "the later wait is left alone");
+    assert.equal(clock.nextDeadline, 400, "and it is what the next step would land on");
+  });
+
+  test("advanceToNext flushes an already-due negative delay without moving time backward", async () => {
+
+    const clock = new TestClock(1000);
+
+    const waited = clock.delay(-100);
+
+    assert.equal(clock.nextDeadline, 900, "a negative delay's deadline is already behind the clock");
+    assert.equal(clock.advanceToNext(), true);
+
+    await waited;
+
+    assert.equal(clock.now(), 1000, "the step is clamped at zero, so an already-due wait is flushed rather than reached backward for");
+    assert.equal(clock.pending, 0, "and it is flushed, not stranded");
+  });
+
+  test("a while drain settles every registered wait, in deadline order", async () => {
+
+    const clock = new TestClock();
+    const settled: number[] = [];
+    const waits = [ 300, 100, 200 ].map((ms) => clock.delay(ms).then(() => settled.push(ms)));
+
+    let steps = 0;
+
+    while(clock.advanceToNext()) {
+
+      steps++;
+    }
+
+    await Promise.all(waits);
+
+    assert.deepEqual(settled, [ 100, 200, 300 ], "the drain walks the deadlines in ascending order");
+    assert.equal(steps, 3, "one step per distinct deadline");
+    assert.equal(clock.now(), 300, "the drain leaves the clock standing on the last deadline");
+    assert.equal(clock.pending, 0, "and nothing is left pending");
+    assert.deepEqual(clock.requested, [ 300, 100, 200 ], "the history keeps call order, not deadline order");
   });
 });

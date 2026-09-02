@@ -1,16 +1,17 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * mqtt-publish.ts: The publish-outcome vocabulary the MQTT client and its shipped test double share.
+ * mqtt-publish.ts: The MQTT publish-outcome vocabulary the client and its shipped test double share.
  */
 
 /**
- * The publish-outcome vocabulary the MQTT client and its shipped test double share: the error a publish is refused with while the client holds no broker session, and
+ * The MQTT publish-outcome vocabulary the client and its shipped test double share: the error a publish is refused with while the client holds no broker session, and
  * the pure router that classifies a guarded publish's failure into the one line that reports it.
  *
- * Both pieces live here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge to
+ * Both live here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge to
  * `mqttClient.ts` is a type import, which the compiler erases, and the `/testing` entry point aggregates every shipped double...so a value import from the client
  * would pull the mqtt package and everything under it into the load closure of any consumer test process that reaches for any double at all. This module carries no
- * runtime dependency beyond `./util.ts`, which lets both sides import the same classification without either one paying for a broker library.
+ * runtime dependency beyond `./util.ts`, which lets the client and the double share one refusal and one classification without either one paying for a broker
+ * library.
  *
  * @module
  */

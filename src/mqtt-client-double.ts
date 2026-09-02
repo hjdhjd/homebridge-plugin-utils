@@ -25,13 +25,9 @@
  */
 import { HbpuAbortError, composeSignals, markHandled, noOpLog, onAbort } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
+import { MQTT_GET_SUFFIX, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
 import type { MqttGetHandler, MqttHandler, MqttPublishInit, MqttSetHandler, MqttSubscribeInit, MqttSubscribeSetInit } from "./mqttClient.ts";
 import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
-
-// The suffixes the client appends to a get and a set registration's topic. Named here because both sides of this module spell them: the registration side appends one,
-// and the get driver strips it back off to recover the parent topic a republish goes to.
-const GET_SUFFIX = "/get";
-const SET_SUFFIX = "/set";
 
 /**
  * One recorded subscription registration.
@@ -299,7 +295,7 @@ export class TestMqttClient implements AsyncDisposable {
    */
   public subscribeGet(topic: string, type: string, getValue: MqttGetHandler, init: MqttSubscribeInit = {}): void {
 
-    this.#register({ handler: getValue, init, kind: "get", topic: topic + GET_SUFFIX, type });
+    this.#register({ handler: getValue, init, kind: "get", topic: mqttGetTopic(topic), type });
   }
 
   /**
@@ -313,7 +309,7 @@ export class TestMqttClient implements AsyncDisposable {
    */
   public subscribeSet(topic: string, type: string, setValue: MqttSetHandler, init: MqttSubscribeSetInit = {}): void {
 
-    this.#register({ handler: setValue, init, kind: "set", topic: topic + SET_SUFFIX, type });
+    this.#register({ handler: setValue, init, kind: "set", topic: mqttSetTopic(topic), type });
   }
 
   /**
@@ -331,7 +327,7 @@ export class TestMqttClient implements AsyncDisposable {
       return;
     }
 
-    const full = id + "/" + topic;
+    const full = mqttTopic(id, topic);
 
     this.unsubscribes.push({ id, topic });
 
@@ -457,7 +453,7 @@ export class TestMqttClient implements AsyncDisposable {
     // The recorded topic carries the `/get` suffix the client appended, so the republish goes to that topic with the suffix taken back off. The client's get path
     // answers a failed republish in its log rather than to a caller, and the driver takes the same posture: a refusal is absorbed here, already counted in
     // `rejectedPublishes`, and the getter's value is still what the caller asked for.
-    await this.publish(entry.topic.slice(0, -GET_SUFFIX.length), value).catch(() => { /* The refusal is counted, not answered. */ });
+    await this.publish(entry.topic.slice(0, -MQTT_GET_SUFFIX.length), value).catch(() => { /* The refusal is counted, not answered. */ });
 
     return value;
   }

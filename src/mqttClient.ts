@@ -29,6 +29,7 @@ import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.
 import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
 import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
+import { mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
 import util from "node:util";
@@ -653,7 +654,7 @@ export class MqttClient implements AsyncDisposable {
    */
   public subscribeGet(topic: string, type: string, getValue: MqttGetHandler, init: MqttSubscribeInit = {}): void {
 
-    this.subscribe(topic + "/get", (message: Buffer) => {
+    this.subscribe(mqttGetTopic(topic), (message: Buffer) => {
 
       const value = message.toString().toLowerCase();
 
@@ -688,7 +689,7 @@ export class MqttClient implements AsyncDisposable {
 
     const timeout = init.timeout;
 
-    this.subscribe(topic + "/set", async (message: Buffer) => {
+    this.subscribe(mqttSetTopic(topic), async (message: Buffer) => {
 
       const rawValue = message.toString();
       const value = rawValue.toLowerCase();
@@ -743,7 +744,7 @@ export class MqttClient implements AsyncDisposable {
       return;
     }
 
-    const full = this.#expandTopic(id + "/" + topic);
+    const full = this.#expandTopic(mqttTopic(id, topic));
 
     this.#subscriptions.delete(full);
     this.#mqtt.unsubscribe(full);

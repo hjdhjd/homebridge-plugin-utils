@@ -26,12 +26,13 @@
  */
 import type { AddressInfo, Server } from "node:net";
 import type { CapturingLog, TestLogEntry } from "./testing/index.ts";
+import { formatLogEntry, waitUntil } from "./testing/index.ts";
 import { Aedes } from "aedes";
 import type { MqttClient } from "./mqttClient.ts";
+import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import { format } from "node:util";
 import { once } from "node:events";
-import { waitUntil } from "./testing/index.ts";
 
 /**
  * Handle returned by {@link startTestBroker}. Implements `AsyncDisposable` so test sites can use the canonical `await using broker = await startTestBroker()` idiom for
@@ -274,4 +275,15 @@ export async function waitForLog(log: CapturingLog, predicate: (entry: TestLogEn
 export function logContains(substring: string): (entry: TestLogEntry) => boolean {
 
   return (entry) => format(entry.message, ...entry.params).includes(substring);
+}
+
+// Render the first entry of `log` as a single interpolated string, matching how a real logger would print the entry. Asserts that at least one entry exists so a
+// regression that silently swallows the log call fails loudly here rather than producing a misleading empty-string match.
+export function firstRendered(log: CapturingLog): string {
+
+  const [entry] = log.entries;
+
+  assert.ok(entry, "expected at least one log entry to have been emitted");
+
+  return formatLogEntry(entry);
 }

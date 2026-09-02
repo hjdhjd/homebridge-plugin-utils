@@ -104,6 +104,7 @@ export class TestMqttClient implements AsyncDisposable {
 
   /**
    * Every recorded publish, in order. A publish the refusal lever rejected never lands here - it is counted in {@link TestMqttClient.rejectedPublishes} instead.
+   * {@link TestMqttClient.publishedTo} is the view over this list a scenario reads when it cares about one topic rather than about the whole conversation.
    */
   public readonly published: TestMqttPublish[] = [];
 
@@ -138,6 +139,9 @@ export class TestMqttClient implements AsyncDisposable {
   // Backing state for the connection lever. A test writes it; the getter composes it with the lifetime signal, as the client composes mqtt.js's flag with its own.
   #connected = true;
 
+  // The gate an admitted publish parks on while a hold is active, and null while none is. `holdPublishes` installs each gate and its release closure owns it.
+  #hold: Nullable<Promise<void>> = null;
+
   // Where the guarded publish path reports.
   readonly #log: HomebridgePluginLogging;
 
@@ -166,7 +170,8 @@ export class TestMqttClient implements AsyncDisposable {
    * Record a publish of `payload` to `topic`, mirroring {@link mqttClient!MqttClient.publish | MqttClient.publish}. The composed signal is read first, so a publish
    * issued after teardown rejects with the abort reason rather than recording. {@link TestMqttClient.connected} is read next: while it is false the publish is
    * refused with {@link MqttOfflineError}, exactly as the client refuses a publish it has no broker session for. The refusal lever - when armed - rejects last, in
-   * place of recording.
+   * place of recording. A publish those admissions let through parks on the gate {@link TestMqttClient.holdPublishes} installed, if one is active, and faces
+   * those same admissions again when the gate is released, so the state at release is what answers a held publish.
    *
    * @param topic   - The relative topic (tail) to publish to. Recorded verbatim; the double expands nothing.
    * @param payload - The payload to publish. Buffers and strings are recorded unchanged.
@@ -177,25 +182,19 @@ export class TestMqttClient implements AsyncDisposable {
    */
   public async publish(topic: string, payload: Buffer | string, init: MqttPublishInit = {}): Promise<void> {
 
-    // The client composes its lifetime signal with the caller's and short-circuits a pre-aborted publish before anything reaches the wire. Composing the same way here
-    // is what makes a consumer's per-publish cancellation observable against the double.
-    composeSignals(this.signal, init.signal).throwIfAborted();
+    const composed = composeSignals(this.signal, init.signal);
 
-    // The client refuses a publish it has no session for before it consults anything else, so the double reads its own connection state before the lever. A test
-    // that arms both gets the offline refusal, which is the client's order: an arbitrary refusal a test arms stands for a broker that took the message and said
-    // no, and there is no broker to say anything while the double is disconnected. Nothing is recorded either way, and the counter is what a test reads instead.
-    if(!this.connected) {
+    this.#admit(composed);
 
-      this.rejectedPublishes++;
+    // A hold parks the publish between two admissions, on whichever gate is active at this moment rather than on whatever the hold holds by the time it wakes. The
+    // second admission runs on the same composed signal the first did, mirroring the real client, which races its in-flight acknowledgement against that signal and
+    // rejects a publish a teardown catches mid-flight; the connection and lever re-reads stand for a broker answer that arrives after the flight rather than before.
+    const gate = this.#hold;
 
-      throw new MqttOfflineError();
-    }
+    if(gate !== null) {
 
-    if(this.publishRejection !== null) {
-
-      this.rejectedPublishes++;
-
-      throw this.publishRejection;
+      await gate;
+      this.#admit(composed);
     }
 
     this.published.push({ payload, topic });
@@ -223,6 +222,57 @@ export class TestMqttClient implements AsyncDisposable {
 
       routeGuardedPublishFailure({ clientSignal: this.signal, error, log: this.#log, publishSignal: init.signal, topic });
     }));
+  }
+
+  /**
+   * Park every publish admitted from here on and return the closure that releases them. A parked publish has passed the admissions {@link TestMqttClient.publish}
+   * opens with and is waiting to be recorded - where a real publish sits while the broker acknowledges it - so a scenario can land a teardown, an outage, or a
+   * refusal ON an in-flight publish rather than racing one.
+   *
+   * Each call installs a fresh gate, and a publish parks on whichever gate is active when it is admitted. A release resolves its own gate and stands down as the
+   * active hold only while nothing has replaced it, so an earlier release frees exactly the publishes parked on its own gate and leaves a later hold standing. A
+   * second call is a second gate, not an error.
+   *
+   * Everything that publishes parks with it. {@link TestMqttClient.publishGuarded} routes through `publish`, so a guarded publish released after the double aborts
+   * reaches the aborted line at debug; {@link TestMqttClient.invokeGet}'s republish parks too, so a get-driver invocation issued during a hold resolves at release.
+   * {@link TestMqttClient.abort} releases nothing - the release is the test's own hand, and a held publish on a double that aborted rejects when it comes. A hold a
+   * scenario never releases leaves that scenario's own awaited publishes pending.
+   *
+   * @returns The closure that releases the publishes parked on this call's gate. Safe to call more than once.
+   */
+  public holdPublishes(): () => void {
+
+    const gate: PromiseWithResolvers<void> = Promise.withResolvers();
+
+    this.#hold = gate.promise;
+
+    return (): void => {
+
+      // Stand down only while this gate is still the active hold. A later `holdPublishes` has replaced it, and clearing unconditionally would let that later hold's
+      // parked publishes through on this release. The resolve is unconditional, since the publishes waiting on this gate are this closure's to free either way.
+      if(this.#hold === gate.promise) {
+
+        this.#hold = null;
+      }
+
+      gate.resolve();
+    };
+  }
+
+  /**
+   * The recorded publishes whose topic ends with `topicSuffix`, in publish order. Suffix matching is the double's own addressing - the tail match
+   * {@link TestMqttClient.invokeGet} and {@link TestMqttClient.invokeSet} find a registration by - so a scenario names a topic here the way it already names one.
+   *
+   * An empty answer is an outcome rather than a mis-bound call, which is why this accessor stays quiet where the drivers report a miss: a scenario proving nothing
+   * reached a topic asks exactly this question and reads the empty list as its result.
+   *
+   * @param topicSuffix - The tail to match against each recorded topic.
+   *
+   * @returns A fresh array of the matching publishes, in the order they were recorded. Mutating it leaves {@link TestMqttClient.published} untouched.
+   */
+  public publishedTo(topicSuffix: string): TestMqttPublish[] {
+
+    return this.published.filter((entry) => entry.topic.endsWith(topicSuffix));
   }
 
   /**
@@ -441,6 +491,30 @@ export class TestMqttClient implements AsyncDisposable {
 
     // The same `kind`-established assertion the delivery path makes.
     await (entry.handler as MqttSetHandler)(rawValue.toLowerCase(), rawValue, this.signal);
+  }
+
+  // The publish admission, stated once and run by each of `publish`'s admission passes. The client composes its lifetime signal with the caller's and short-circuits a
+  // pre-aborted publish before anything reaches the wire, and composing the same way here is what makes a consumer's per-publish cancellation observable against the
+  // double. The client then refuses a publish it has no session for before it consults anything else, so the double reads its own connection state before the lever:
+  // a test that arms both gets the offline refusal, because an arbitrary refusal a test arms stands for a broker that took the message and said no, and there is no
+  // broker to say anything while the double is disconnected. Nothing is recorded on either refusal, and the counter is what a test reads instead.
+  #admit(composed: AbortSignal): void {
+
+    composed.throwIfAborted();
+
+    if(!this.connected) {
+
+      this.rejectedPublishes++;
+
+      throw new MqttOfflineError();
+    }
+
+    if(this.publishRejection !== null) {
+
+      this.rejectedPublishes++;
+
+      throw this.publishRejection;
+    }
   }
 
   // Record a registration under the client's registration-time rules: nothing is registered that cannot receive (an aborted double, or a pre-aborted

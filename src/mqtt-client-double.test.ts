@@ -11,6 +11,11 @@
  *   terms are exercised with a plain error as the abort reason, so nothing about the rejection's shape can route them and only the signal read can.
  * - Connection state: `connected` true on a fresh double, a publish refused and counted while it is false, the refusal answering ahead of the arbitrary refusal
  *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts.
+ * - The publish hold: a held publish recording only at release, behind the publish that preceded the hold; the double aborting, the refusal lever arming, and the
+ *   connection dropping during a hold each answering the held publish at release, with the guarded form of the teardown reaching the debug line alone; a publish
+ *   refused at issue never parking and the release freeing nothing; two holds each freeing their own gate's publishes; and the get driver's republish parking too.
+ * - The suffix view: publishedTo answering a topic's publishes in order, holding back a topic the suffix merely appears inside, answering an empty array when
+ *   nothing matches, and handing back an array of its own rather than the recording.
  * - Registration: raw, get, and set entries carrying the appended suffix, the label, and the caller's init verbatim; a pre-aborted signal registering nothing; a
  *   signal aborting after registration releasing its own entry and no other.
  * - Teardown: aborting releasing every registration and turning every later call into a no-op - the drivers' quiet answer among them - the recorded history
@@ -294,6 +299,239 @@ describe("TestMqttClient - connection state", () => {
 
     assert.equal(mqtt.connected, false);
     assert.equal(mqtt.aborted, true);
+  });
+});
+
+describe("TestMqttClient - the publish hold", () => {
+
+  test("a held publish records only at release, behind the publish that preceded the hold", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    await mqtt.publish("device1/status", "before");
+
+    const release = mqtt.holdPublishes();
+    const parked = mqtt.publish("device1/status", "held");
+
+    await tick();
+
+    assert.deepEqual(mqtt.published, [{ payload: "before", topic: "device1/status" }], "a parked publish records nothing while it waits");
+
+    release();
+    await parked;
+
+    assert.deepEqual(mqtt.published, [ { payload: "before", topic: "device1/status" }, { payload: "held", topic: "device1/status" } ]);
+    assert.equal(mqtt.rejectedPublishes, 0, "parking a publish is not refusing it");
+  });
+
+  test("a held publish rejects at release with the abort reason when the double aborted during the hold", async () => {
+
+    const mqtt = new TestMqttClient();
+    const release = mqtt.holdPublishes();
+    const parked = mqtt.publish("device1/status", "on");
+
+    await tick();
+
+    // Tearing the double down onto a parked publish is the race the hold exists to force. The second admission is what answers it: the composed signal the first
+    // admission read is the same one read at release, so the publish rejects rather than recording into a double that is already down.
+    mqtt.abort();
+    release();
+
+    await assert.rejects(parked, (error: unknown) => error === mqtt.signal.reason);
+
+    assert.deepEqual(mqtt.published, []);
+  });
+
+  test("the guarded form of that teardown reaches the debug aborted line and nothing at error", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+      const release = mqtt.holdPublishes();
+
+      mqtt.publishGuarded("device1/status", "on");
+
+      await tick();
+
+      assert.deepEqual(log.entries, [], "a parked guarded publish says nothing while it waits");
+
+      mqtt.abort();
+      release();
+
+      await tick();
+
+      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(mqtt.published, []);
+    });
+  });
+
+  test("the refusal lever armed during a hold rejects the held publish at release and counts once", async () => {
+
+    const mqtt = new TestMqttClient();
+    const refusal = new Error("broker refused the message");
+    const release = mqtt.holdPublishes();
+    const parked = mqtt.publish("device1/status", "on");
+
+    await tick();
+
+    assert.equal(mqtt.rejectedPublishes, 0, "a parked publish has been refused nothing yet");
+
+    mqtt.publishRejection = refusal;
+    release();
+
+    await assert.rejects(parked, (error: unknown) => error === refusal);
+
+    assert.equal(mqtt.rejectedPublishes, 1, "the refusal is counted at the admission that made it, and only there");
+    assert.deepEqual(mqtt.published, []);
+  });
+
+  test("connected dropping during a hold refuses the held publish at release with MqttOfflineError and counts once", async () => {
+
+    const mqtt = new TestMqttClient();
+    const release = mqtt.holdPublishes();
+    const parked = mqtt.publish("device1/status", "on");
+
+    await tick();
+
+    mqtt.connected = false;
+    release();
+
+    await assert.rejects(parked, (error: unknown) => error instanceof MqttOfflineError);
+
+    assert.equal(mqtt.rejectedPublishes, 1);
+    assert.deepEqual(mqtt.published, []);
+  });
+
+  test("a publish the lever refuses at issue never parks, counts once, and the release frees nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+    const refusal = new Error("broker refused the message");
+
+    mqtt.publishRejection = refusal;
+
+    const release = mqtt.holdPublishes();
+
+    // The rejection arriving with no release behind it is what proves the publish was refused ahead of the park rather than parked and refused at release.
+    await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error === refusal);
+
+    assert.equal(mqtt.rejectedPublishes, 1);
+
+    release();
+    await tick();
+
+    assert.deepEqual(mqtt.published, []);
+    assert.equal(mqtt.rejectedPublishes, 1, "nothing was parked, so the release refuses nothing a second time");
+  });
+
+  test("a publish refused offline at issue never parks, counts once, and the release frees nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    mqtt.connected = false;
+
+    const release = mqtt.holdPublishes();
+
+    await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error instanceof MqttOfflineError);
+
+    assert.equal(mqtt.rejectedPublishes, 1);
+
+    release();
+    await tick();
+
+    assert.deepEqual(mqtt.published, []);
+    assert.equal(mqtt.rejectedPublishes, 1, "nothing was parked, so the release refuses nothing a second time");
+  });
+
+  test("each release frees its own gate's publishes and leaves a later hold standing", async () => {
+
+    const mqtt = new TestMqttClient();
+    const releaseFirst = mqtt.holdPublishes();
+    const first = mqtt.publish("device1/first", "1");
+    const releaseSecond = mqtt.holdPublishes();
+    const second = mqtt.publish("device1/second", "2");
+
+    await tick();
+
+    assert.deepEqual(mqtt.published, []);
+
+    releaseFirst();
+    await first;
+
+    assert.deepEqual(mqtt.published, [{ payload: "1", topic: "device1/first" }], "the first release frees the publish parked on its own gate alone");
+
+    // The second hold is still the active one, so a publish issued after the first release parks rather than recording - the ownership guard the release makes.
+    const third = mqtt.publish("device1/third", "3");
+
+    await tick();
+
+    assert.deepEqual(mqtt.published, [{ payload: "1", topic: "device1/first" }], "the first release did not stand the second hold down");
+
+    releaseSecond();
+    await Promise.all([ second, third ]);
+
+    assert.deepEqual(mqtt.published,
+      [ { payload: "1", topic: "device1/first" }, { payload: "2", topic: "device1/second" }, { payload: "3", topic: "device1/third" } ]);
+  });
+
+  test("the get driver's republish parks with everything else and lands at release", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    mqtt.subscribeGet("device1/status", "Status", () => "42");
+
+    const release = mqtt.holdPublishes();
+    const invoked = mqtt.invokeGet("device1/status/get");
+
+    await tick();
+
+    assert.deepEqual(mqtt.published, [], "the republish is parked, so the driver has not answered yet");
+
+    release();
+
+    assert.equal(await invoked, "42");
+    assert.deepEqual(mqtt.published, [{ payload: "42", topic: "device1/status" }]);
+  });
+});
+
+describe("TestMqttClient - publishedTo", () => {
+
+  test("answers the publishes whose topic ends with the suffix, in order, and holds back a topic it merely appears inside", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    // The middle topic carries "status" in its body rather than at its end, so a substring or prefix match would answer three where the suffix match answers two.
+    await mqtt.publish("device1/power/status", "on");
+    await mqtt.publish("device1/status/detail", "verbose");
+    await mqtt.publish("device2/power/status", "off");
+
+    assert.deepEqual(mqtt.publishedTo("status"), [ { payload: "on", topic: "device1/power/status" }, { payload: "off", topic: "device2/power/status" } ]);
+    assert.deepEqual(mqtt.publishedTo("device1/power/status"), [{ payload: "on", topic: "device1/power/status" }], "a whole topic is a suffix of itself");
+  });
+
+  test("answers an empty array when no recorded topic ends with the suffix", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    await mqtt.publish("device1/status", "on");
+
+    assert.deepEqual(mqtt.publishedTo("device9/status"), [], "nothing having reached a topic is an outcome, not a miss to report");
+  });
+
+  test("answers a fresh array rather than the recording itself", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    await mqtt.publish("device1/status", "on");
+
+    const answer = mqtt.publishedTo("device1/status");
+
+    assert.notEqual(answer, mqtt.published);
+
+    answer.length = 0;
+
+    assert.equal(mqtt.published.length, 1, "mutating the answer leaves the recording intact");
   });
 });
 

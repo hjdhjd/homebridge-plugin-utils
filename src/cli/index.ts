@@ -26,10 +26,11 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { parseWebUiLoaderConfig, renderWebUiBootRegion } from "../webui-loader.ts";
-import type { renderFeatureOptionsReference, spliceMarkedRegion } from "../featureOptions-docs.ts";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 import { realpathSync } from "node:fs";
+import type { renderFeatureOptionsReference } from "../featureOptions-docs.ts";
+import type { spliceMarkedRegion } from "../doc-markdown.ts";
 
 // Semver-shaped subdir names that {@link prepareUi} owns. Only entries matching this pattern are candidates for the stale-build sweep; anything else in the
 // destination is left alone. Pattern matches `MAJOR.MINOR.PATCH` plus the optional pre-release (`-...`) and build-metadata (`+...`) segments semver permits, so a
@@ -131,7 +132,8 @@ async function computeContentHash(root: string): Promise<string> {
  *                          mirror-only path and its existing tests are untouched. Supplied with `splice`, it stamps the plugin's `index.html` loader region.
  * @param args.sourceRoot - Path to HBPU's package root (the directory containing `package.json` and `dist/`). The entry block resolves this from the CLI's own
  *                          real path; tests pass a tmpdir populated with a synthetic HBPU layout.
- * @param args.splice     - The injected {@link spliceMarkedRegion} that replaces the loader's marked region. Paired with `loader`; absent = no stamp step.
+ * @param args.splice     - The injected {@link spliceMarkedRegion} from `doc-markdown.ts` that replaces the loader's marked region. Paired with `loader`; absent =
+ *                          no stamp step.
  *
  * @throws When the source has not been built (`dist/ui/` missing), the source `package.json` lacks a `version` field (or, when stamping, a `name` field), or the source
  *         `dist/ui` path exists but is not a directory; and, when stamping, propagates the parse/splice framed errors under a "mirror succeeded, stamp failed" frame.
@@ -239,6 +241,16 @@ interface WebUiLoaderModule {
   readonly renderWebUiBootRegion: typeof renderWebUiBootRegion;
 }
 
+// The subset of the `featureOptions-docs` module the CLI reaches through a computed dynamic import at dispatch time: the two marker strings and the reference renderer.
+// Declaring it as an interface built from the module's own export types keeps the injected namespace in lockstep with `featureOptions-docs.ts` without a load-time
+// value import that would fracture this symlink-safe bin.
+interface FeatureOptionsDocsModule {
+
+  readonly FEATURE_OPTIONS_DOC_BEGIN: string;
+  readonly FEATURE_OPTIONS_DOC_END: string;
+  readonly renderFeatureOptionsReference: typeof renderFeatureOptionsReference;
+}
+
 // Stamp the rendered loader block into the plugin's index.html. Marker-gated and a no-op on repeat: no index.html beside the destination, or no BEGIN marker, is a
 // silent skip (a plugin without a config UI, or one that has not opted into the stamped loader, is left untouched); otherwise the config comment is parsed, the block
 // rendered from it plus this run's destination-relative libPath and the mirrored package's name, and spliced into the marked region with an atomic `.tmp` + rename.
@@ -293,9 +305,9 @@ async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
  * place between the shared `FEATURE OPTIONS:BEGIN` / `END` markers. This centralizes the read/splice/atomic-write orchestration so a plugin's `build-docs` script
  * only needs a single line invoking this subcommand instead of a bespoke `*-gendocs.ts` shim.
  *
- * Pure-by-injection on `render` and `splice`: the renderer and the splice helper are passed in rather than imported statically, so this function is unit-testable
- * against the real `featureOptions-docs.ts` exports without a built `dist/`, and the CLI's single-file no-static-relative-import discipline is preserved (the dispatch
- * site reaches the renderer through a computed dynamic import). The catalog is loaded by dynamic import of its absolute path resolved to a `file:` URL, since a bare
+ * Pure-by-injection on `docs` and `splice`: the renderer's own module namespace and the splice helper are passed in rather than imported statically, so this function is
+ * unit-testable against the real `featureOptions-docs.ts` exports without a built `dist/`, and the CLI's single-file no-static-relative-import discipline is preserved
+ * (the dispatch site reaches both through computed dynamic imports). The catalog is loaded by dynamic import of its absolute path resolved to a `file:` URL, since a bare
  * absolute path is not a valid ESM specifier on every platform. The module's required exports are validated up front so a mis-shaped catalog fails with a
  * diagnostic naming the offending module and export rather than a downstream type error inside the renderer.
  *
@@ -313,18 +325,18 @@ async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
  * @param args.catalogModulePath - Absolute path to the plugin's compiled catalog module exporting `featureOptionCategories` (an array) and `featureOptions` (an
  *                                 object). Resolved to a `file:` URL before the dynamic import.
  * @param args.docPath           - Absolute path to the doc whose marked region is replaced (typically the plugin's `docs/FeatureOptions.md`).
- * @param args.render            - The injected {@link renderFeatureOptionsReference} from `featureOptions-docs.ts`.
- * @param args.splice            - The injected {@link spliceMarkedRegion} from `featureOptions-docs.ts`.
+ * @param args.docs              - The injected `featureOptions-docs` namespace: its two marker constants and {@link renderFeatureOptionsReference}.
+ * @param args.splice            - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
  *
  * @throws When the catalog module lacks `featureOptionCategories` (or it is not an array) or `featureOptions` (or it is not a non-null object), when it exports a
  *         present-but-non-function `describeCategoryScope` or `describeOptionScope`, and propagates the splice's own framed errors when the doc's marker pair is absent
  *         or ambiguous.
  */
-export async function prepareDocs({ catalogModulePath, docPath, render, splice }: {
+export async function prepareDocs({ catalogModulePath, docPath, docs, splice }: {
 
   catalogModulePath: string;
   docPath: string;
-  render: typeof renderFeatureOptionsReference;
+  docs: FeatureOptionsDocsModule;
   splice: typeof spliceMarkedRegion;
 }): Promise<void> {
 
@@ -369,15 +381,17 @@ export async function prepareDocs({ catalogModulePath, docPath, render, splice }
   // zero-hook catalog renders cleanly. The renderer is the single source of truth for the index, the per-category tables, and the scope prose the optional hooks
   // contribute, while this function only wires the catalog and its hooks to it. Each hook is cast to the renderer's parameter type only after its function
   // guard above, the same discipline the catalog arrays follow.
-  const reference = render({ categories: catalog.featureOptionCategories as Parameters<typeof render>[0]["categories"],
-    describeCategoryScope: catalog.describeCategoryScope as Parameters<typeof render>[0]["describeCategoryScope"],
-    describeOptionScope: catalog.describeOptionScope as Parameters<typeof render>[0]["describeOptionScope"],
-    options: catalog.featureOptions as Parameters<typeof render>[0]["options"] });
+  const reference = docs.renderFeatureOptionsReference({
 
-  // Read the existing doc and splice the rendered fragment in place between the markers, leaving the hand-written header and intro untouched. The splice throws its
-  // own framed errors on a missing or ambiguous marker pair; we let those propagate so the dispatch site frames them uniformly.
+    categories: catalog.featureOptionCategories as Parameters<typeof docs.renderFeatureOptionsReference>[0]["categories"],
+    describeCategoryScope: catalog.describeCategoryScope as Parameters<typeof docs.renderFeatureOptionsReference>[0]["describeCategoryScope"],
+    describeOptionScope: catalog.describeOptionScope as Parameters<typeof docs.renderFeatureOptionsReference>[0]["describeOptionScope"],
+    options: catalog.featureOptions as Parameters<typeof docs.renderFeatureOptionsReference>[0]["options"] });
+
+  // Read the existing doc and splice the rendered fragment in place between the markers the renderer's own module names, leaving the hand-written header and intro
+  // untouched. The splice throws its own framed errors on a missing or ambiguous marker pair; we let those propagate so the dispatch site frames them uniformly.
   const source = await readFile(docPath, "utf8");
-  const updated = splice(source, reference);
+  const updated = splice(source, reference, { beginMarker: docs.FEATURE_OPTIONS_DOC_BEGIN, endMarker: docs.FEATURE_OPTIONS_DOC_END });
 
   // Atomic write: stage in a sibling temp file, then rename over the doc.
   await writeFile(docPath + ".tmp", updated, "utf8");
@@ -514,7 +528,7 @@ interface DocChromeModule {
  * @param args.fetchImpl    - The `fetch` implementation used to resolve a remote project source. Defaults to the global `fetch`; tests inject a fake.
  * @param args.manifestPath - Absolute path to the plugin's manifest - a compiled module or a `.json` file.
  * @param args.pluginRoot   - Absolute path to the plugin root that the manifest's surface and file references resolve against.
- * @param args.splice       - The injected {@link spliceMarkedRegion} from `featureOptions-docs.ts`.
+ * @param args.splice       - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
  *
  * @throws When the manifest is mis-shaped, when a resolved project source is malformed, when a target file cannot be read, or when any region's marker pair is absent or
  *         ambiguous - propagating the splice's own framed errors so the dispatch site frames them uniformly.
@@ -712,7 +726,7 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       // single-file bin stays symlink-safe. A dist complete enough to mirror `dist/ui` yet missing these is a build inconsistency that must fail loudly rather than
       // silently skip the wanted stamp, exactly as prepare-docs hard-fails on its own missing renderer.
       const loaderPath = join(sourceRoot, "dist", "webui-loader.js");
-      const uiSplicePath = join(sourceRoot, "dist", "featureOptions-docs.js");
+      const uiSplicePath = join(sourceRoot, "dist", "doc-markdown.js");
 
       let loader: WebUiLoaderModule;
       let uiSplicer: { spliceMarkedRegion: typeof spliceMarkedRegion };
@@ -758,26 +772,30 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       const catalogModulePath = resolve(cwd, catalogArg);
       const docPath = resolve(cwd, values.doc ?? "docs/FeatureOptions.md");
 
-      // Reach HBPU's own renderer through a computed dynamic import of its compiled module - never a static relative import - so the single-file bin stays
-      // symlink-safe (it imports only `node:` builtins at load time). A failed import here means HBPU itself has not been built, which is a distinct, actionable
-      // condition from a downstream render/splice failure, so we frame it separately and point at the corrective action.
+      // Reach HBPU's own renderer and the splice primitive through computed dynamic imports of their compiled modules - never static relative imports - so the
+      // single-file bin stays symlink-safe (it imports only `node:` builtins at load time). A failed import here means HBPU itself has not been built, which is a
+      // distinct, actionable condition from a downstream render/splice failure, so we frame it separately and point at the corrective action.
       const rendererPath = join(sourceRoot, "dist", "featureOptions-docs.js");
+      const splicePath = join(sourceRoot, "dist", "doc-markdown.js");
 
-      let renderer: { renderFeatureOptionsReference: typeof renderFeatureOptionsReference; spliceMarkedRegion: typeof spliceMarkedRegion };
+      let renderer: FeatureOptionsDocsModule;
+      let splicer: { spliceMarkedRegion: typeof spliceMarkedRegion };
 
       try {
 
-        renderer = await import(pathToFileURL(rendererPath).href) as typeof renderer;
+        renderer = await import(pathToFileURL(rendererPath).href) as FeatureOptionsDocsModule;
+        splicer = await import(pathToFileURL(splicePath).href) as typeof splicer;
       } catch {
 
-        stderr.write("homebridge-plugin-utils prepare-docs: HBPU has not been built: " + rendererPath + " is missing. Run `npm run build` in HBPU first.\n");
+        stderr.write("homebridge-plugin-utils prepare-docs: HBPU has not been built: " + rendererPath + " or " + splicePath + " is missing. Run `npm run build` in " +
+          "HBPU first.\n");
 
         return 1;
       }
 
       try {
 
-        await prepareDocs({ catalogModulePath, docPath, render: renderer.renderFeatureOptionsReference, splice: renderer.spliceMarkedRegion });
+        await prepareDocs({ catalogModulePath, docPath, docs: renderer, splice: splicer.spliceMarkedRegion });
       } catch(error) {
 
         stderr.write("homebridge-plugin-utils prepare-docs: " + (error instanceof Error ? error.message : String(error)) + "\n");
@@ -806,7 +824,7 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       // Reach HBPU's own doc-chrome renderers and the splice primitive through computed dynamic imports of their compiled modules - never static relative imports - so
       // the single-file bin stays symlink-safe. A failed import means HBPU itself has not been built, a distinct and actionable condition from a downstream failure.
       const chromePath = join(sourceRoot, "dist", "docChrome.js");
-      const splicePath = join(sourceRoot, "dist", "featureOptions-docs.js");
+      const splicePath = join(sourceRoot, "dist", "doc-markdown.js");
 
       let chrome: DocChromeModule;
       let splicer: { spliceMarkedRegion: typeof spliceMarkedRegion };

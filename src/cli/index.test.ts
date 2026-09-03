@@ -10,7 +10,7 @@
  */
 import * as docChrome from "../docChrome.ts";
 import * as webuiLoader from "../webui-loader.ts";
-import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference, spliceMarkedRegion } from "../featureOptions-docs.ts";
+import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference } from "../featureOptions-docs.ts";
 import { USAGE, prepareChrome, prepareDocs, prepareUi, runCli } from "./index.ts";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { describe, test } from "node:test";
@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { spliceMarkedRegion } from "../doc-markdown.ts";
 import { tmpdir } from "node:os";
 
 /**
@@ -65,22 +66,24 @@ async function setupSource({ files, root, version }: { files: readonly string[];
 }
 
 /**
- * Write the two compiled dist modules the `prepare-ui` dispatch reaches through computed dynamic imports for its loader stamp: `dist/webui-loader.js` and
- * `dist/featureOptions-docs.js`, each a thin re-export of the real source through a `file:` URL. This mirrors how the `prepare-docs` dispatch tests supply their
- * renderer, so a `runCli` (or subprocess) `prepare-ui` invocation exercises the genuine dynamic-import path rather than a mock, and hard-fails the same way when these
- * are absent.
+ * Write the compiled dist modules the `prepare-ui` dispatch reaches through computed dynamic imports for its loader stamp: `dist/webui-loader.js`,
+ * `dist/featureOptions-docs.js`, and `dist/doc-markdown.js`, each a thin re-export of the real source through a `file:` URL. This mirrors how the `prepare-docs`
+ * dispatch tests supply their renderer, so a `runCli` (or subprocess) `prepare-ui` invocation exercises the genuine dynamic-import path rather than a mock, and
+ * hard-fails the same way when these are absent.
  *
- * @param root - The synthetic HBPU source root whose `dist/` receives the two re-export modules.
+ * @param root - The synthetic HBPU source root whose `dist/` receives the re-export modules.
  */
 async function writeLoaderDist(root: string): Promise<void> {
 
   const realLoader = fileURLToPath(new URL("../webui-loader.ts", import.meta.url));
   const realDocs = fileURLToPath(new URL("../featureOptions-docs.ts", import.meta.url));
+  const realMarkdown = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
 
   await mkdir(join(root, "dist"), { recursive: true });
   await writeFile(join(root, "dist", "webui-loader.js"), "export * from " + JSON.stringify(pathToFileURL(realLoader).href) + ";\n");
-  await writeFile(join(root, "dist", "featureOptions-docs.js"), "export { renderFeatureOptionsReference, spliceMarkedRegion } from " +
-    JSON.stringify(pathToFileURL(realDocs).href) + ";\n");
+  await writeFile(join(root, "dist", "featureOptions-docs.js"), "export { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, " +
+    "renderFeatureOptionsReference } from " + JSON.stringify(pathToFileURL(realDocs).href) + ";\n");
+  await writeFile(join(root, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " + JSON.stringify(pathToFileURL(realMarkdown).href) + ";\n");
 }
 
 /**
@@ -500,6 +503,10 @@ describe("prepareUi - webUI loader stamp", () => {
 // A minimal well-formed catalog module body: two categories, one of which carries a value option, sufficient to render a non-trivial fragment (including the
 // `=<value>` legend) so the splice has substantive content to verify. Held as a module-scope constant rather than inlined as a parameter default so the multi-line
 // ESM source stays out of the destructuring signature.
+// The `featureOptions-docs` namespace the transform takes: the two marker constants and the renderer, exactly as the dispatch site hands them over from the compiled
+// module. Named once here so every row below injects the same shape rather than respelling it.
+const FEATURE_OPTIONS_DOCS = { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference };
+
 const VALID_CATALOG_BODY = "export const featureOptionCategories = [ { description: \"Audio\", name: \"Audio\" }, { description: \"Recording\", name: \"Nvr\" } ];\n" +
   "export const featureOptions = { Audio: [ { default: true, description: \"Audio support.\", name: \"\" } ], Nvr: [ { default: true, defaultValue: 10, " +
   "description: \"Days of recordings to retain.\", name: \"Recording.Retention\" } ] };\n";
@@ -560,7 +567,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion });
+    await prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion });
 
     const first = await readFile(docPath, "utf8");
 
@@ -575,7 +582,7 @@ describe("prepareDocs", () => {
 
     // Re-running against the now-spliced doc must reproduce it byte-for-byte: the renderer is a pure projection of the unchanged catalog and the splice is
     // repeatable, so a second pass is a no-op. This is the property the plugin's build-docs script relies on to stay diff-free across rebuilds.
-    await prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion });
+    await prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion });
 
     const second = await readFile(docPath, "utf8");
 
@@ -591,7 +598,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: "export const featureOptions = {};\n", root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await assert.rejects(prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion }),
+    await assert.rejects(prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion }),
       /does not export a `featureOptionCategories` array/);
   });
 
@@ -604,7 +611,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: "export const featureOptionCategories = {}; export const featureOptions = {};\n", root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await assert.rejects(prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion }),
+    await assert.rejects(prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion }),
       /does not export a `featureOptionCategories` array/);
   });
 
@@ -617,7 +624,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: "export const featureOptionCategories = []; export const featureOptions = null;\n", root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await assert.rejects(prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion }),
+    await assert.rejects(prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion }),
       /does not export a `featureOptions` object/);
   });
 
@@ -630,7 +637,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ root: scratch.path });
     const docPath = await writeDoc({ markers: false, root: scratch.path });
 
-    await assert.rejects(prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion }),
+    await assert.rejects(prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion }),
       /begin marker not found/);
   });
 
@@ -645,7 +652,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: VALID_CATALOG_BODY + DESCRIBE_CATEGORY_SCOPE_EXPORT + DESCRIBE_OPTION_SCOPE_EXPORT, root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion });
+    await prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion });
 
     const doc = await readFile(docPath, "utf8");
 
@@ -665,7 +672,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: VALID_CATALOG_BODY, root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion });
+    await prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion });
 
     const noHooksDoc = await readFile(docPath, "utf8");
 
@@ -680,7 +687,7 @@ describe("prepareDocs", () => {
     });
     const baselineSource = "# Header\n\nHand-written intro.\n\n" + FEATURE_OPTIONS_DOC_BEGIN + "\nstale content to be replaced\n" + FEATURE_OPTIONS_DOC_END +
       "\n\nHand-written footer.\n";
-    const baselineDoc = spliceMarkedRegion(baselineSource, reference);
+    const baselineDoc = spliceMarkedRegion(baselineSource, reference, { beginMarker: FEATURE_OPTIONS_DOC_BEGIN, endMarker: FEATURE_OPTIONS_DOC_END });
 
     assert.equal(noHooksDoc, baselineDoc, "a catalog exporting neither hook must render byte-identically to the no-hook-argument render path");
     assert.equal(noHooksDoc.includes("<BR>"), false, "no option scope suffix may appear when the catalog exports no describeOptionScope");
@@ -697,7 +704,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: VALID_CATALOG_BODY + "export const describeOptionScope = 42;\n", root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await assert.rejects(prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion }),
+    await assert.rejects(prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion }),
       /exports a non-function `describeOptionScope`/);
   });
 
@@ -710,7 +717,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: VALID_CATALOG_BODY + "export const describeCategoryScope = \"not a function\";\n", root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await assert.rejects(prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion }),
+    await assert.rejects(prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion }),
       /exports a non-function `describeCategoryScope`/);
   });
 
@@ -724,7 +731,7 @@ describe("prepareDocs", () => {
     const catalogModulePath = await writeCatalog({ body: VALID_CATALOG_BODY + DESCRIBE_OPTION_SCOPE_EXPORT, root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
 
-    await prepareDocs({ catalogModulePath, docPath, render: renderFeatureOptionsReference, splice: spliceMarkedRegion });
+    await prepareDocs({ catalogModulePath, docPath, docs: FEATURE_OPTIONS_DOCS, splice: spliceMarkedRegion });
 
     const doc = await readFile(docPath, "utf8");
 
@@ -848,15 +855,14 @@ describe("runCli", () => {
 
     await using scratch = await makeScratchRoot();
 
-    // The sourceRoot tmpdir has no dist/featureOptions-docs.js, so the renderer's dynamic import fails. The dispatcher must catch that specific failure and frame it
-    // as the actionable "HBPU has not been built" condition, distinct from a render/splice failure - and it must do so without ever reaching prepareDocs (a catalog
-    // argument is supplied here precisely so the only thing that can fail is the renderer import). This exercises the renderer-missing branch with no built dist.
+    // The sourceRoot tmpdir has neither dist/featureOptions-docs.js nor dist/doc-markdown.js, so the dynamic imports fail. The dispatcher must catch that failure and
+    // frame it as the actionable "HBPU has not been built" condition, distinct from a render/splice failure - and it must do so without ever reaching prepareDocs (a
+    // catalog argument is supplied here precisely so the only thing that can fail is the module import). This exercises the not-built branch with no built dist.
     const capture = captureStderr();
     const code = await runCli({ argv: [ "prepare-docs", "dist/options.js" ], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
 
     assert.equal(code, 1);
-    assert.match(capture.chunks(), /HBPU has not been built/);
-    assert.match(capture.chunks(), /featureOptions-docs\.js is missing/);
+    assert.match(capture.chunks(), /HBPU has not been built:.*featureOptions-docs\.js.*doc-markdown\.js is missing/);
   });
 
   test("prepare-docs dispatches to prepareDocs, regenerates the doc, and exits 0 on success", async () => {
@@ -870,10 +876,13 @@ describe("runCli", () => {
     // dispatch path - the renderer dynamic import, the prepareDocs call, and the success return - with a self-contained sourceRoot, so the test stays independent of
     // whether dist/ has been built. The re-export resolves the source by its absolute file URL, the same indirection the production dynamic import uses.
     const realDocsModule = fileURLToPath(new URL("../featureOptions-docs.ts", import.meta.url));
+    const realMarkdownModule = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
 
     await mkdir(join(sourceRoot, "dist"), { recursive: true });
-    await writeFile(join(sourceRoot, "dist", "featureOptions-docs.js"), "export { renderFeatureOptionsReference, spliceMarkedRegion } from " +
-      JSON.stringify(pathToFileURL(realDocsModule).href) + ";\n");
+    await writeFile(join(sourceRoot, "dist", "featureOptions-docs.js"), "export { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, " +
+      "renderFeatureOptionsReference } from " + JSON.stringify(pathToFileURL(realDocsModule).href) + ";\n");
+    await writeFile(join(sourceRoot, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " +
+      JSON.stringify(pathToFileURL(realMarkdownModule).href) + ";\n");
 
     // The plugin side: a compiled catalog module and a doc carrying the marker pair, both addressed by paths relative to the injected cwd to prove the dispatcher
     // resolves its arguments against cwd rather than the process working directory.
@@ -901,10 +910,13 @@ describe("runCli", () => {
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
     const realDocsModule = fileURLToPath(new URL("../featureOptions-docs.ts", import.meta.url));
+    const realMarkdownModule = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
 
     await mkdir(join(sourceRoot, "dist"), { recursive: true });
-    await writeFile(join(sourceRoot, "dist", "featureOptions-docs.js"), "export { renderFeatureOptionsReference, spliceMarkedRegion } from " +
-      JSON.stringify(pathToFileURL(realDocsModule).href) + ";\n");
+    await writeFile(join(sourceRoot, "dist", "featureOptions-docs.js"), "export { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, " +
+      "renderFeatureOptionsReference } from " + JSON.stringify(pathToFileURL(realDocsModule).href) + ";\n");
+    await writeFile(join(sourceRoot, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " +
+      JSON.stringify(pathToFileURL(realMarkdownModule).href) + ";\n");
 
     // The doc lives at a non-default path and is referenced through --doc; it deliberately lacks the marker pair so prepareDocs's splice throws. The dispatcher must
     // both honor the --doc override (resolving it against cwd) and surface the propagated splice error as a framed stderr line with exit 1 - covering the prepareDocs
@@ -1283,12 +1295,11 @@ describe("runCli - prepare-chrome dispatch", () => {
   async function writeSyntheticSource(sourceRoot: string): Promise<void> {
 
     const realChrome = fileURLToPath(new URL("../docChrome.ts", import.meta.url));
-    const realDocs = fileURLToPath(new URL("../featureOptions-docs.ts", import.meta.url));
+    const realMarkdown = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
 
     await mkdir(join(sourceRoot, "dist"), { recursive: true });
     await writeFile(join(sourceRoot, "dist", "docChrome.js"), "export * from " + JSON.stringify(pathToFileURL(realChrome).href) + ";\n");
-    await writeFile(join(sourceRoot, "dist", "featureOptions-docs.js"), "export { renderFeatureOptionsReference, spliceMarkedRegion } from " +
-      JSON.stringify(pathToFileURL(realDocs).href) + ";\n");
+    await writeFile(join(sourceRoot, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " + JSON.stringify(pathToFileURL(realMarkdown).href) + ";\n");
   }
 
   test("dispatches to prepareChrome, stamps the tree, and exits 0 on success", async () => {

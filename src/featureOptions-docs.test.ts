@@ -1,16 +1,15 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * featureOptions-docs.test.ts: Unit tests for the shared Feature Options documentation renderer - the catalog-to-markdown projection (renderFeatureOptionsReference)
- * and the in-place marker splice (spliceMarkedRegion).
+ * featureOptions-docs.test.ts: Unit tests for the shared Feature Options documentation renderer - the catalog-to-markdown projection
+ * (renderFeatureOptionsReference).
  *
  * Coverage focuses on the contract that is hard to see from the code alone: the index/detail structure, the per-row deep-link anchors, the value/toggle distinction
  * signaled by the "=<value>" placeholder, the raw (never formatted) default cell with its empty-string -> "none" substitution proven non-mutating, the two scope
- * hooks (string inserted, `undefined` omitted cleanly), the category-level bare-key option, and the splice's happy path, repeatability, prose preservation, and
- * malformed-marker throws. The canonical worked example is reproduced verbatim as the contract test.
+ * hooks (string inserted, `undefined` omitted cleanly), and the category-level bare-key option. The canonical worked example is reproduced verbatim as the
+ * contract test.
  */
-import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, buildComposedScopeDescribers, buildFixedScopeDescribers, renderFeatureOptionsReference,
-  spliceMarkedRegion } from "./featureOptions-docs.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionScope } from "./featureOptions.ts";
+import { buildComposedScopeDescribers, buildFixedScopeDescribers, renderFeatureOptionsReference } from "./featureOptions-docs.ts";
 import { describe, test } from "node:test";
 import { ALL_CHOICES } from "./featureOptions.ts";
 import assert from "node:assert/strict";
@@ -604,95 +603,5 @@ describe("buildComposedScopeDescribers", () => {
 
     assert.ok(output.includes("Audio support. **(default: enabled)**. <BR>*Configurable on each zone or globally.*"),
       "the suffix is concatenated onto the bolded default with its markup intact");
-  });
-});
-
-describe("spliceMarkedRegion - replacement", () => {
-
-  // A canonical marked document: hand-written prose around a marked region holding stale generated content.
-  const document = [
-
-    "# Feature Options",
-    "",
-    "Intro prose the maintainer owns.",
-    "",
-    FEATURE_OPTIONS_DOC_BEGIN,
-    "stale generated content",
-    FEATURE_OPTIONS_DOC_END,
-    "",
-    "Footer prose."
-  ].join("\n");
-
-  test("replaces the region strictly between the markers, framing the content with newlines", () => {
-
-    const result = spliceMarkedRegion(document, "FRESH CONTENT");
-
-    assert.ok(result.includes(FEATURE_OPTIONS_DOC_BEGIN + "\nFRESH CONTENT\n" + FEATURE_OPTIONS_DOC_END));
-    assert.ok(!result.includes("stale generated content"));
-  });
-
-  test("preserves the surrounding hand-written prose untouched", () => {
-
-    const result = spliceMarkedRegion(document, "FRESH CONTENT");
-
-    assert.ok(result.startsWith("# Feature Options\n\nIntro prose the maintainer owns.\n"));
-    assert.ok(result.endsWith("\nFooter prose."));
-  });
-
-  test("is repeatable: splicing the same content twice yields an identical document", () => {
-
-    const once = spliceMarkedRegion(document, "FRESH CONTENT");
-    const twice = spliceMarkedRegion(once, "FRESH CONTENT");
-
-    assert.equal(once, twice);
-  });
-
-  test("honors overridden begin and end markers", () => {
-
-    const custom = "BEGIN_HERE\nold\nEND_HERE";
-    const result = spliceMarkedRegion(custom, "new", { beginMarker: "BEGIN_HERE", endMarker: "END_HERE" });
-
-    assert.equal(result, "BEGIN_HERE\nnew\nEND_HERE");
-  });
-});
-
-describe("spliceMarkedRegion - malformed markers", () => {
-
-  test("throws naming the begin marker when it is absent", () => {
-
-    const source = "no markers here at all\n" + FEATURE_OPTIONS_DOC_END;
-
-    assert.throws(() => spliceMarkedRegion(source, "x"), /begin marker not found/);
-  });
-
-  test("throws naming the end marker when it is absent", () => {
-
-    const source = FEATURE_OPTIONS_DOC_BEGIN + "\nno end marker here";
-
-    assert.throws(() => spliceMarkedRegion(source, "x"), /end marker not found/);
-  });
-
-  test("throws when the end marker precedes the begin marker", () => {
-
-    // The markers are present but inverted, which would otherwise produce a negative-length region.
-    const source = FEATURE_OPTIONS_DOC_END + "\ncontent\n" + FEATURE_OPTIONS_DOC_BEGIN;
-
-    assert.throws(() => spliceMarkedRegion(source, "x"), /precedes begin marker/);
-  });
-
-  test("throws when the document contains a second begin marker", () => {
-
-    // Two begin markers make the marked region ambiguous - splicing into the first pair would leave the duplicate begin marker (and stale content) behind.
-    const source = FEATURE_OPTIONS_DOC_BEGIN + "\nfirst\n" + FEATURE_OPTIONS_DOC_BEGIN + "\nsecond\n" + FEATURE_OPTIONS_DOC_END;
-
-    assert.throws(() => spliceMarkedRegion(source, "x"), /multiple begin markers found/);
-  });
-
-  test("throws when the document contains a second end marker", () => {
-
-    // Two end markers are likewise ambiguous; the region cannot be uniquely identified.
-    const source = FEATURE_OPTIONS_DOC_BEGIN + "\ncontent\n" + FEATURE_OPTIONS_DOC_END + "\nmore\n" + FEATURE_OPTIONS_DOC_END;
-
-    assert.throws(() => spliceMarkedRegion(source, "x"), /multiple end markers found/);
   });
 });

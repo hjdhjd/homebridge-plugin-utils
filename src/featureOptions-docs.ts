@@ -11,22 +11,22 @@
  * construction and the value-vs-toggle distinction that this library already owns as single-source-of-truth helpers. This module collapses all of that into one
  * elegant renderer so the documentation becomes a pure projection of the live catalog.
  *
- * The module exports two pure string functions:
+ * The module exports one pure string function:
  *
  *   - {@link renderFeatureOptionsReference} - the projection itself. It derives every key via {@link expandOption}, decides value-ness via {@link isValueOption}, and
  *     builds the catalog index once via {@link buildCatalogIndex}; it never re-derives any of those. Plugin-private scope prose is supplied through two optional render
  *     hooks that mirror the webUI's field-blind `validOption` / `validOptionCategory` predicate boundary, lifted from *filter* (boolean) to *describe* (string). No
  *     plugin-specific field name appears anywhere in this file.
  *
- *   - {@link spliceMarkedRegion} - the in-place splice that replaces the region between {@link FEATURE_OPTIONS_DOC_BEGIN} / {@link FEATURE_OPTIONS_DOC_END} in an
- *     existing doc with freshly rendered content, leaving each plugin's hand-written header and intro untouched.
+ * Putting the rendered fragment into a plugin's doc is {@link doc-markdown!spliceMarkedRegion}, the in-place splice every generator's CLI verb uses, and the table
+ * layout the projection prints its option rows through is {@link doc-markdown!renderMarkdownTable}.
  *
  * It also ships two builders for those scope hooks, because writing them by hand is what every plugin was doing and the results converged on two shapes. Neither builder
  * is required - a plugin with prose of its own still writes the hooks directly - but between them they cover what the family actually says.
  * {@link buildFixedScopeDescribers} produces the fixed pair of sentences a plugin with a flat global-or-per-device hierarchy wants;
  * {@link buildComposedScopeDescribers} composes a sentence from a plugin's own vocabulary for the levels it names, for a hierarchy the fixed sentences cannot describe.
  *
- * Both functions are pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading the doc and writing it back - is two lines of
+ * The renderer is pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading the doc and writing it back - is two lines of
  * `node:fs/promises` in each plugin's build-script shim, which is inherently a tooling concern. This module is therefore browser-safe and trivially testable, but it
  * is a tooling concern and is deliberately NOT mirrored into `dist/ui/` by the build pipeline.
  *
@@ -34,11 +34,12 @@
  */
 import { ALL_CHOICES, buildCatalogIndex, expandOption, isValueOption } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionScope } from "./featureOptions.ts";
+import { renderMarkdownTable } from "./doc-markdown.ts";
 
 /**
- * The opening marker of the auto-generated region in a plugin's `docs/FeatureOptions.md`. {@link spliceMarkedRegion} replaces everything strictly between this marker
- * and {@link FEATURE_OPTIONS_DOC_END}, preserving both markers and the hand-written prose around them. The text doubles as an in-document warning to maintainers not to
- * edit the region by hand.
+ * The opening marker of the auto-generated region in a plugin's `docs/FeatureOptions.md`. The documentation module's {@link doc-markdown!spliceMarkedRegion} replaces
+ * everything strictly between this marker and {@link FEATURE_OPTIONS_DOC_END}, preserving both markers and the hand-written prose around them. The text doubles as an
+ * in-document warning to maintainers not to edit the region by hand.
  *
  * @category Feature Options
  */
@@ -51,14 +52,11 @@ export const FEATURE_OPTIONS_DOC_BEGIN = "<!-- FEATURE OPTIONS:BEGIN - Auto-gene
  */
 export const FEATURE_OPTIONS_DOC_END = "<!-- FEATURE OPTIONS:END -->";
 
-// The fixed width, in dashes, of the description-side divider segment. The Option-side width is auto-computed per table from the visible cell widths; the
-// description side has no upper bound worth chasing (descriptions plus scope suffixes can be arbitrarily long), so it is a sensible constant rather than a second
-// max pass. Padding is cosmetic - rendered markdown ignores it - so this is presentation polish, not part of the semantic contract.
+// The fixed width, in dashes, of the description-side divider segment {@link doc-markdown!renderMarkdownTable} draws for this document. The Option-side width is
+// auto-computed per table from the visible cell widths; the description side has no upper bound worth chasing (descriptions plus scope suffixes can be arbitrarily
+// long), so it is a sensible constant rather than a second max pass. Padding is cosmetic - rendered markdown ignores it - so this is presentation polish, not part of
+// the semantic contract.
 const DESCRIPTION_DIVIDER_WIDTH = 61;
-
-// One trailing space of breathing room added to the auto-computed Option-column width so the widest key cell does not sit flush against the column separator. Purely
-// cosmetic alignment, matching the canonical rendering the family converges on.
-const OPTION_COLUMN_PADDING = 1;
 
 // The substitution shown in the default cell for a value option whose declared default is the empty string. We render "none" rather than an empty cell so the table
 // communicates "this option defaults to no value" explicitly. The substitution happens at render time only; the catalog entry is never mutated.
@@ -212,20 +210,11 @@ export function renderFeatureOptionsReference<TOptionMeta = unknown, TCategoryMe
       return { descriptionCell, keyCell };
     });
 
-    // Auto-compute the Option-column width from the widest visible key cell and the header label, plus one space of breathing room. Padding is cosmetic - rendered
-    // markdown collapses it - so this is alignment polish for the raw source, not part of the semantic contract.
-    const optionColumnWidth = rows.reduce((width, row) => Math.max(width, row.keyCell.length), "Option".length) + OPTION_COLUMN_PADDING;
-
-    // Table header and divider. The Option-side divider width tracks the computed column (plus the two single-space gutters around the cell); the description-side
-    // divider is the fixed constant.
-    lines.push("| " + "Option".padEnd(optionColumnWidth) + " | Description");
-    lines.push("|" + "-".repeat(optionColumnWidth + 2) + "|" + "-".repeat(DESCRIPTION_DIVIDER_WIDTH));
-
-    // One flat row per option, in catalog order. No group nesting - the rows are flat by design.
-    for(const row of rows) {
-
-      lines.push("| " + row.keyCell.padEnd(optionColumnWidth) + " | " + row.descriptionCell);
-    }
+    // The table primitive sizes the Option column from the widest rendered key cell and the heading in its single width pass, and draws the description-side divider
+    // at this document's own constant. The rows stay flat and in catalog order - no group nesting - and the cells go in already rendered, so the padding is measured
+    // on the anchored code span a reader actually sees.
+    lines.push(...renderMarkdownTable({ dividerWidth: DESCRIPTION_DIVIDER_WIDTH, headings: [ "Option", "Description" ],
+      rows: rows.map((row) => [ row.keyCell, row.descriptionCell ]) }));
 
     // A trailing blank line after each table separates it from the next section.
     lines.push("");
@@ -394,67 +383,4 @@ export function buildComposedScopeDescribers<TOptionMeta = unknown, TCategoryMet
       return " <BR>*" + leadingWord + " " + listFormatter.format(scopes.map((scope) => vocabulary[scope])) + ".*";
     }
   };
-}
-
-/**
- * Replace the region strictly between {@link FEATURE_OPTIONS_DOC_BEGIN} and {@link FEATURE_OPTIONS_DOC_END} in `source` with `content`, leaving both markers and all
- * surrounding prose untouched. This is the pure half of the in-place splice each plugin's build-script shim performs; the shim supplies the trivial `readFile` /
- * `writeFile` around it.
- *
- * The replacement inserts a newline before and after `content`, so a marker pair on its own lines stays on its own lines and the rendered fragment is cleanly framed.
- * The operation is repeatable: splicing the same `content` into an already-spliced document reproduces it byte-for-byte. Each marker may be overridden through the
- * options object for documents that use a different convention, though the defaults match what every plugin in the family embeds.
- *
- * @param source            - The full document text.
- * @param content           - The fragment to insert between the markers, typically the output of {@link renderFeatureOptionsReference}.
- * @param markers
- * @param markers.beginMarker - The opening marker to search for. Defaults to {@link FEATURE_OPTIONS_DOC_BEGIN}.
- * @param markers.endMarker   - The closing marker to search for. Defaults to {@link FEATURE_OPTIONS_DOC_END}.
- *
- * @returns `source` with the marked region's contents replaced by `content`.
- *
- * @throws `Error` naming the offending marker when either marker is absent, when the closing marker precedes the opening marker, or when the document is ambiguous - a
- *         second begin marker after the first, or a second end marker - since the marked region would not be uniquely identified.
- */
-export function spliceMarkedRegion(source: string, content: string,
-  { beginMarker = FEATURE_OPTIONS_DOC_BEGIN, endMarker = FEATURE_OPTIONS_DOC_END }: { beginMarker?: string; endMarker?: string } = {}): string {
-
-  const beginIndex = source.indexOf(beginMarker);
-
-  if(beginIndex === -1) {
-
-    throw new Error("spliceMarkedRegion: begin marker not found in source: \"" + beginMarker + "\".");
-  }
-
-  const endIndex = source.indexOf(endMarker);
-
-  if(endIndex === -1) {
-
-    throw new Error("spliceMarkedRegion: end marker not found in source: \"" + endMarker + "\".");
-  }
-
-  // The opening marker must come before the closing marker. We compare against the end of the begin marker so an end marker that overlaps or sits immediately after
-  // the begin marker is still rejected as malformed rather than producing a negative-length region.
-  const regionStart = beginIndex + beginMarker.length;
-
-  if(endIndex < regionStart) {
-
-    throw new Error("spliceMarkedRegion: end marker \"" + endMarker + "\" precedes begin marker \"" + beginMarker + "\" in source.");
-  }
-
-  // Reject an ambiguous document. A second begin marker after the first - or a second end marker anywhere - means the marked region is not uniquely identified, and
-  // splicing into the first pair would silently leave the duplicate marker (and any stale content between the duplicates) behind. We search from just past the end of
-  // the first occurrence (the `includes` fromIndex argument) so an exact re-find of the same marker is not mistaken for a duplicate.
-  if(source.includes(beginMarker, beginIndex + beginMarker.length)) {
-
-    throw new Error("spliceMarkedRegion: multiple begin markers found in source; the marked region is ambiguous.");
-  }
-
-  if(source.includes(endMarker, endIndex + endMarker.length)) {
-
-    throw new Error("spliceMarkedRegion: multiple end markers found in source; the marked region is ambiguous.");
-  }
-
-  // Reassemble: everything up to and including the begin marker, a newline-framed copy of the new content, then everything from the end marker onward.
-  return source.slice(0, regionStart) + "\n" + content + "\n" + source.slice(endIndex);
 }

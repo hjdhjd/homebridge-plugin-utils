@@ -9,6 +9,8 @@
  * - The guarded path: a successful publish that says nothing, a genuine failure on the error line, each cancellation term - the double aborted, the per-publish
  *   signal aborted, an HbpuAbortError refusal, an "AbortError"-named refusal - reaching the debug line, and an offline refusal reaching the dropped line. The signal
  *   terms are exercised with a plain error as the abort reason, so nothing about the rejection's shape can route them and only the signal read can.
+ * - The change gate: the first payload on a topic recorded and a repeat of it suppressed, the Buffer copy and the cross-kind answer, a refused or parked publish
+ *   leaving the memory as it was, the lever's false-to-true transition clearing it where a re-assert does not, and a suppressed call saying nothing at all.
  * - Connection state: `connected` true on a fresh double, a publish refused and counted while it is false, the refusal answering ahead of the arbitrary refusal
  *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts.
  * - The publish hold: a held publish recording only at release, behind the publish that preceded the hold; the double aborting, the refusal lever arming, and the
@@ -230,6 +232,207 @@ describe("TestMqttClient - publishGuarded", () => {
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
+    });
+  });
+});
+
+describe("TestMqttClient - the change gate", () => {
+
+  // The double's half of the `ifChanged` contract. What is asserted here is where the gate and the memory sit among the double's own admissions and levers; the
+  // comparison and keeping rules themselves are stated once in the vocabulary module's suite.
+  const TOPIC = "device1/status";
+  const OTHER = "device2/status";
+
+  test("records the first payload on a topic, suppresses a repeat of it, and leaves the memory to change-gated publishes alone", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "off", topic: TOPIC } ]);
+      assert.equal(mqtt.rejectedPublishes, 0, "suppressing a publish is not refusing it");
+
+      // A publish that does not ask for the gate neither reads the memory nor writes it, so it can neither arm nor disarm the gated call after it.
+      await mqtt.publish(TOPIC, "on");
+
+      mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "off", topic: TOPIC }, { payload: "on", topic: TOPIC } ]);
+    });
+  });
+
+  test("keeps a copy of a remembered Buffer and never matches a Buffer against a remembered string", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const scratch = Buffer.from("on");
+
+      mqtt.publishGuarded(TOPIC, scratch, { ifChanged: true });
+      await tick();
+
+      scratch.write("no");
+      mqtt.publishGuarded(TOPIC, Buffer.from("on"), { ifChanged: true });
+      await tick();
+
+      assert.equal(mqtt.published.length, 1, "a fresh buffer carrying the recorded bytes must be suppressed even after the caller rewrote its own buffer");
+
+      mqtt.publishGuarded(OTHER, "on", { ifChanged: true });
+      await tick();
+
+      mqtt.publishGuarded(OTHER, Buffer.from("on"), { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published.map((entry) => entry.topic), [ TOPIC, OTHER, OTHER ],
+        "a Buffer carrying a remembered string's bytes is a different kind of payload and must be recorded");
+    });
+  });
+
+  test("leaves the memory as it was when the refusal lever answers, so the same payload records once the lever is cleared", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      mqtt.publishRejection = new Error("broker refused the message.");
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published, [], "a refused publish records nothing");
+      assert.equal(mqtt.rejectedPublishes, 1);
+      assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
+
+      mqtt.publishRejection = null;
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "the refusal wrote nothing, so the retry of the same payload must record");
+    });
+  });
+
+  test("clears the memory when the lever restores a session, and leaves it standing on a write that moves nothing", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      // The client's connect fires once per session rather than on every reading of the connection, so re-asserting a lever that already reads true is not a session
+      // event and must not wipe what the session delivered.
+      mqtt.connected = true;
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "a lever write that moves nothing is not a session event");
+
+      mqtt.connected = false;
+
+      await mqtt.publish(TOPIC, "on", { ifChanged: true });
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "an unchanged payload is answered by the gate, ahead of the offline refusal");
+      assert.equal(mqtt.rejectedPublishes, 0, "a publish the gate answered was never offered to the admissions");
+
+      await assert.rejects(mqtt.publish(TOPIC, "off", { ifChanged: true }), MqttOfflineError);
+
+      assert.equal(mqtt.rejectedPublishes, 1, "a changed payload with no session to carry it is refused and counted");
+
+      mqtt.connected = true;
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "on", topic: TOPIC } ],
+        "a session restored begins with nothing remembered, so the current value records again");
+    });
+  });
+
+  test("rejects a change-gated publish on an aborted double with the abort reason, and reports the guarded form on the aborted line", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      // A cancelled publish is answered by the signal rather than by the gate, and the per-publish signal is what shows it: the double's own abort empties the
+      // memory, so after that nothing is remembered and the gate falls through whatever its position. A signal that cancels one publish leaves the memory
+      // standing, so this call is the one that reads the gate's position against a payload the double still holds.
+      const perPublish = new AbortController();
+      const reason = new HbpuAbortError("replaced");
+
+      perPublish.abort(reason);
+
+      await assert.rejects(mqtt.publish(TOPIC, "on", { ifChanged: true, signal: perPublish.signal }), (error: unknown) => error === reason);
+
+      mqtt.abort();
+
+      await assert.rejects(mqtt.publish(TOPIC, "on", { ifChanged: true }), (error: unknown) => error === mqtt.signal.reason);
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "a torn-down double records nothing, whatever the memory holds");
+    });
+  });
+
+  test("parks two change-gated calls of one payload and records both at release, then suppresses the next", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const release = mqtt.holdPublishes();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+      await tick();
+
+      assert.deepEqual(mqtt.published, [], "both calls park before either is recorded");
+
+      release();
+      await tick();
+
+      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "on", topic: TOPIC } ],
+        "the memory takes a payload only once the publish is recorded, so neither parked call could suppress the other");
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      assert.equal(mqtt.published.length, 2, "a call issued after the release has a recorded payload to weigh against and must be suppressed");
+    });
+  });
+
+  test("says nothing, counts nothing, and records nothing when a payload is suppressed", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await tick();
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }]);
+      assert.equal(mqtt.rejectedPublishes, 0);
+      assert.deepEqual(log.entries, [], "nothing was attempted, so there is nothing to report at any level");
     });
   });
 });

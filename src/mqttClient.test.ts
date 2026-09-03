@@ -1,9 +1,10 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * mqttClient.test.ts: Unit tests for the AsyncDisposable MqttClient - composed connection lifetime, signal-driven publish / subscribe semantics, the offline publish
- * posture and the connection state behind it, the guarded fire-and-forget publish, subscribeSet handler-timeout, transport-error routing, and AsyncDisposable
- * wiring. Tests run against a real in-process aedes broker on an ephemeral localhost port (the same architectural pattern the rest of HBPU uses for tests of
- * subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP for RtpDemuxer, real DOM for the webUI).
+ * posture and the connection state behind it, the guarded fire-and-forget publish, the change-gated publish option and the session-bound memory behind it,
+ * subscribeSet handler-timeout, transport-error routing, and AsyncDisposable wiring. Tests run against a real in-process aedes broker on an ephemeral localhost
+ * port (the same architectural pattern the rest of HBPU uses for tests of subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP for
+ * RtpDemuxer, real DOM for the webUI).
  * Transport-level errno paths (ECONNREFUSED, ECONNRESET, ENOTFOUND) exercise real network failures; the error-routing switch is covered by direct invocation of the
  * pure {@link routeMqttBrokerError} helper, mirroring how `parseFfmpegCodecs` is tested directly with fixture strings while the spawn-end-to-end path is covered by
  * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
@@ -12,7 +13,7 @@ import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttConnectionSettings, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl,
   routeMqttBrokerError } from "./mqttClient.ts";
-import { assertNoUnhandledRejections, capturingLog, formatLogEntry, silentLog } from "./testing/index.ts";
+import { assertNoUnhandledRejections, capturingLog, formatLogEntry, silentLog, waitUntil } from "./testing/index.ts";
 import { awaitClientConnected, awaitConnect, firstRendered, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes,
   startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
@@ -498,6 +499,278 @@ describe("MqttClient - offline publish posture", () => {
     await publishes.awaitFirst;
 
     assert.deepEqual(publishes.entries, [{ payload: "back", topic: "test/device1/status" }], "the publish issued during the outage must not replay on recovery");
+  });
+});
+
+describe("MqttClient - change-gated publish", () => {
+
+  // The `ifChanged` option end to end against a real broker: what goes out, what does not, and where the gate and the memory sit among the admissions every publish
+  // already passes. Every row here publishes through `publishGuarded` unless it needs the promise, since the guarded form is what a poll-driven plugin calls.
+  const TOPIC = "device1/status";
+  const FULL_TOPIC = "test/device1/status";
+
+  // Race a publish's settlement against a short budget, answering the rejection itself when the publish settled and a naming string when it did not, so a row can
+  // state that an unchanged payload resolves during an outage rather than parking.
+  async function settleOrPending(promise: Promise<void>): Promise<unknown> {
+
+    return Promise.race([ promise.then(() => "resolved", (error: unknown) => error), delay(100).then(() => "pending") ]);
+  }
+
+  // A guarded publish hands its caller nothing to await, so a row that needs an acknowledgement to have reached the memory waits for the broker to record the
+  // message and then lets the loop settle. The acknowledgement is the client's own write callback and the entry is the broker's read of the same bytes, two events
+  // with no ordering between them, and the memory takes the payload a microtask after the first of them.
+  async function awaitDelivered(delivered: () => number, count: number): Promise<void> {
+
+    await waitUntil(() => (delivered() >= count), { description: "the broker records " + String(count) + " publish(es) from the client", timeoutMs: 5000 });
+    await delay(SETTLE_MS);
+  }
+
+  test("sends the first change-gated payload, suppresses a repeat of it, and leaves the memory to change-gated publishes alone", async () => {
+
+    // The whole of the parity behavior a consumer's own compare-then-publish cell had, plus the asymmetry that makes the option safe to mix with plain publishes on
+    // one topic: a publish that does not ask for the gate neither reads the memory nor writes it, so a `subscribeGet` republish cannot arm or disarm the next gated
+    // call.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 1);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+    client.publishGuarded(TOPIC, "off", { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 2);
+    await client.publish(TOPIC, "on");
+    await awaitDelivered(() => publishes.entries.length, 3);
+
+    client.publishGuarded(TOPIC, "off", { ifChanged: true });
+
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "off", topic: FULL_TOPIC },
+      { payload: "on", topic: FULL_TOPIC } ], "the repeated payload and the payload the memory still holds must never have reached the broker");
+  });
+
+  test("weighs a Buffer payload against the bytes that were delivered rather than against the caller's buffer later on", async () => {
+
+    // A plugin that fills one scratch buffer per pass is the case the copy exists for: rewriting the buffer after the publish must not rewrite what the memory
+    // believes the broker has.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+
+    const scratch = Buffer.from("on");
+
+    client.publishGuarded(TOPIC, scratch, { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 1);
+
+    scratch.write("no");
+
+    client.publishGuarded(TOPIC, Buffer.from("on"), { ifChanged: true });
+    client.publishGuarded(TOPIC, Buffer.from("off"), { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 2);
+
+    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "off", topic: FULL_TOPIC } ],
+      "a fresh buffer carrying the delivered bytes must be suppressed even after the original buffer was rewritten");
+  });
+
+  test("never treats a string and a Buffer as the same payload on the wire", async () => {
+
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 1);
+
+    client.publishGuarded(TOPIC, Buffer.from("on"), { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 2);
+
+    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "on", topic: FULL_TOPIC } ],
+      "a Buffer carrying a remembered string's bytes is a different kind of payload and must go out");
+  });
+
+  test("sends both of two change-gated publishes issued before the first acknowledgement, and suppresses one issued after they land", async () => {
+
+    // The memory takes a payload on acknowledgement and not before, so a burst issued in one turn is honest about what had actually been delivered when each call
+    // was made: nothing had, and both go out. Setting the memory on issue instead would swallow the second.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 2);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "on", topic: FULL_TOPIC } ],
+      "the third publish had an acknowledged payload to weigh against and must be suppressed");
+  });
+
+  test("resolves an unchanged payload through an outage, refuses a changed one every time it is offered, and sends again on a broker that returns", async () => {
+
+    // The outage end to end against a real socket, which is where the memory's lifecycle shows: the gate answers ahead of the offline refusal, so an unchanged
+    // payload resolves rather than being refused; a refusal writes nothing, so the same payload is refused again rather than being suppressed; and the connect that
+    // ends the outage clears the memory, so a subscriber that missed a change while the broker was away hears the current value on the next pass.
+    const log = capturingLog();
+    const broker = await startTestBroker();
+    const port = Number.parseInt(new URL(broker.url).port, 10);
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url, log, reconnectInterval: 1 });
+
+    await awaitClientConnected(client);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 1);
+    await broker[Symbol.asyncDispose]();
+    await waitForLog(log, logContains("Connection closed"));
+
+    assert.equal(client.connected, false);
+
+    const unchanged = await settleOrPending(client.publish(TOPIC, "on", { ifChanged: true }));
+    const changed = await settleOrPending(client.publish(TOPIC, "off", { ifChanged: true }));
+    const offeredAgain = await settleOrPending(client.publish(TOPIC, "off", { ifChanged: true }));
+
+    assert.equal(unchanged, "resolved", "a payload the broker already has is answered by the gate, ahead of the refusal, observed: " + String(unchanged));
+    assert.ok(changed instanceof MqttOfflineError, "a changed payload with no session to carry it must be refused, observed: " + String(changed));
+    assert.ok(offeredAgain instanceof MqttOfflineError, "a refused publish writes nothing, so the same payload must be refused again, observed: " +
+      String(offeredAgain));
+
+    await using returned = await startTestBroker({ port });
+
+    const afterOutage = recordClientPublishes(returned);
+
+    await awaitClientConnected(client);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await afterOutage.awaitFirst;
+
+    assert.deepEqual(afterOutage.entries, [{ payload: "on", topic: FULL_TOPIC }], "a session begins with nothing remembered, so the current value goes out again");
+  });
+
+  test("rejects a change-gated publish on an aborted client with the abort reason, and reports the guarded form on the aborted line", async () => {
+
+    // The abort check answers ahead of the gate, so a torn-down client keeps rejecting with its own reason rather than quietly resolving a payload it has no way
+    // to deliver.
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+
+      await using broker = await startTestBroker();
+
+      const publishes = recordClientPublishes(broker);
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      await awaitClientConnected(client);
+
+      client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+      await awaitDelivered(() => publishes.entries.length, 1);
+
+      client.abort();
+
+      const reason = await client.publish(TOPIC, "on", { ifChanged: true }).then(() => null, (error: unknown) => error);
+
+      assert.ok(isHbpuAbortReason(reason, "shutdown"), "an aborted client rejects a change-gated publish with its own reason rather than resolving it, observed: " +
+        String(reason));
+
+      client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+      await waitForLog(log, logContains("MQTT publish aborted: " + FULL_TOPIC + "."));
+    });
+  });
+
+  test("lets a pre-aborted per-publish signal answer ahead of the change gate", async () => {
+
+    // The per-publish signal governs a change-gated publish exactly as it governs any other, and it answers first: a cancelled publish is reported as cancelled
+    // rather than silently reading as a payload the broker already had.
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+
+      await using broker = await startTestBroker();
+
+      const publishes = recordClientPublishes(broker);
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      await awaitClientConnected(client);
+
+      client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+      await awaitDelivered(() => publishes.entries.length, 1);
+
+      const perPublish = new AbortController();
+
+      perPublish.abort(new HbpuAbortError("replaced"));
+      client.publishGuarded(TOPIC, "on", { ifChanged: true, signal: perPublish.signal });
+
+      await waitForLog(log, logContains("MQTT publish aborted: " + FULL_TOPIC + "."));
+
+      client.publishGuarded(TOPIC, "off", { ifChanged: true });
+
+      await awaitDelivered(() => publishes.entries.length, 2);
+
+      assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "off", topic: FULL_TOPIC } ],
+        "the cancelled publish must never have reached the broker, and the change after it must still go out");
+    });
+  });
+
+  test("leaves exactly one publish trace in the log when a repeat of the payload is suppressed", async () => {
+
+    // A suppressed publish attempted nothing, so there is nothing to report: the trace belongs to the call that reached the wire and to that call alone.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    await awaitClientConnected(client);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await awaitDelivered(() => publishes.entries.length, 1);
+
+    client.publishGuarded(TOPIC, "on", { ifChanged: true });
+
+    await delay(SETTLE_MS);
+
+    const debugLines = log.entries.filter((entry) => entry.level === "debug").map((entry) => formatLogEntry(entry));
+
+    assert.equal(debugLines.filter((line) => line === "MQTT publish: " + FULL_TOPIC + ".").length, 1,
+      "a suppressed publish must leave no trace of its own, observed: " + JSON.stringify(debugLines));
+    assert.deepEqual(publishes.entries, [{ payload: "on", topic: FULL_TOPIC }]);
   });
 });
 

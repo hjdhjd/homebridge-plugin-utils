@@ -18,6 +18,9 @@
  * an outage and nothing replays after it, and {@link MqttClient.connected} answers the same question a consumer can ask for itself before it publishes. See
  * {@link MqttConfig.reconnectInterval} for the setting that leaves automatic reconnection disabled entirely.
  *
+ * For a state topic a plugin re-derives on a schedule, the `ifChanged` option on {@link MqttPublishInit} publishes only when the payload moved, remembering per
+ * topic what the broker last acknowledged for the life of a session.
+ *
  * The module offers two construction postures. Direct construction fails loudly on an invalid broker URL: the constructor throws with the underlying mqtt.js error
  * attached as `cause`, so a misconfigured plugin cannot silently sit in a zombie state where every call either pretends to succeed or throws an unrelated abort
  * error. {@link createMqttClient} is the graceful path, answering `null` for an unconfigured broker and for a construction failure alike, so a mistyped MQTT entry
@@ -28,7 +31,7 @@
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptions } from "./featureOptions.ts";
 import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
-import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
+import { MqttLastPayloads, MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
 import { assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
@@ -516,15 +519,19 @@ export interface MqttSubscribeSetInit {
 }
 
 /**
- * Per-publish options accepted by {@link MqttClient.publish}.
+ * Per-publish options accepted by {@link MqttClient.publish} and {@link MqttClient.publishGuarded}.
  *
- * @property signal - Optional {@link AbortSignal}. When it aborts before the broker acknowledges the publish, the returned promise rejects with `signal.reason`.
- *                    Composes with the connection-level signal.
+ * @property ifChanged - Optional. When `true`, the publish goes out only when `payload` differs from the last payload this client delivered on `topic` through a
+ *                       publish that also asked for it, and otherwise resolves at once with nothing sent. For a state topic whose value a plugin re-derives on a
+ *                       schedule, never for an event. The memory's rules are stated on {@link MqttClient.publish}.
+ * @property signal    - Optional {@link AbortSignal}. When it aborts before the broker acknowledges the publish, the returned promise rejects with `signal.reason`.
+ *                       Composes with the connection-level signal.
  *
  * @category Utilities
  */
 export interface MqttPublishInit {
 
+  ifChanged?: boolean;
   signal?: AbortSignal;
 }
 
@@ -558,6 +565,7 @@ export class MqttClient implements AsyncDisposable {
 
   readonly #brokerUrl: string;
   readonly #controller: AbortController;
+  readonly #lastPayloads: MqttLastPayloads;
   readonly #log: HomebridgePluginLogging;
   readonly #mqtt: MqttJsClient;
   readonly #reconnectInterval: number;
@@ -586,6 +594,7 @@ export class MqttClient implements AsyncDisposable {
 
     this.#brokerUrl = config.brokerUrl;
     this.#isConnected = false;
+    this.#lastPayloads = new MqttLastPayloads();
     this.#log = config.log;
     this.#reconnectInterval = config.reconnectInterval ?? MQTT_DEFAULT_RECONNECT_INTERVAL;
     this.#subscriptions = new Map();
@@ -628,6 +637,19 @@ export class MqttClient implements AsyncDisposable {
    * A publish issued while {@link MqttClient.connected} reads `false` is refused on the spot rather than held for delivery once the broker returns, so nothing is
    * retained during an outage and nothing replays after it. See {@link MqttOfflineError} for the reasoning.
    *
+   * With `ifChanged` set on {@link MqttPublishInit}, the publish goes out only when the payload differs from the last one the broker acknowledged for a change-gated
+   * publish on that topic. The gate answers after the abort check and the placeholder refusal and before the trace and the offline refusal, so a torn-down client
+   * keeps rejecting with its own reason, an unchanged payload during an outage resolves rather than being refused, and a suppressed publish leaves no line in the
+   * log, since nothing was attempted. The memory takes a payload only once the broker has acknowledged it, so a refused, failed, or cancelled publish leaves the
+   * next attempt free to go out, and it is cleared on every connect and at teardown, which is what makes the first change-gated publish after an outage always go
+   * out: a subscriber that missed a change while the broker was away hears the current value on the next pass. Only a change-gated publish is weighed against the
+   * memory or written into it, so a publish without the option on the same topic neither reads nor updates it, and a {@link MqttClient.subscribeGet} republish
+   * stays a plain restatement. The boundary is state, never events: an event's payload repeating is the event happening again - a second ring on a doorbell topic,
+   * a second detection on a motion topic - and the gate would swallow it. The comparison is
+   * {@link mqtt-publish!MqttLastPayloads | MqttLastPayloads}'s rule: strings by value, Buffers by their bytes, a string never the same as a Buffer, and a remembered
+   * Buffer copied. The promise reads as "ensure the broker has this value" - it resolves whether the payload just went out or the broker already had it, and rejects
+   * only as an attempted publish does.
+   *
    * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after the abort check and before
    * anything else, so an unresolved placeholder never reaches the broker.
    *
@@ -635,8 +657,8 @@ export class MqttClient implements AsyncDisposable {
    * @param payload - The payload to publish. Buffers and strings are passed through unchanged.
    * @param init    - Optional per-publish options. See {@link MqttPublishInit}.
    *
-   * @returns A promise that resolves once the broker acknowledges, rejects with {@link MqttOfflineError} when the client is not connected to the broker, and
-   *          otherwise rejects with the abort reason or the underlying error.
+   * @returns A promise that resolves once the broker acknowledges - or at once, with nothing sent, when `ifChanged` finds the payload unchanged - rejects with
+   *          {@link MqttOfflineError} when the client is not connected to the broker, and otherwise rejects with the abort reason or the underlying error.
    */
   public async publish(topic: string, payload: Buffer | string, init: MqttPublishInit = {}): Promise<void> {
 
@@ -649,6 +671,15 @@ export class MqttClient implements AsyncDisposable {
     // Refuse a tail still carrying a placeholder before anything reaches the broker. The abort check answers first, so a torn-down client keeps rejecting with its
     // own reason, and the refusal answers next, so a topic carrying an unresolved template never reaches the expansion, the trace, or the wire.
     assertResolvedMqttTopic("MqttClient", topic);
+
+    // A change-gated publish whose payload the broker already has ends here, with nothing sent and no trace line: nothing was attempted, so there is nothing to
+    // report. The gate reads after the abort check, so a torn-down client keeps rejecting with its own reason, and before the expansion and the offline
+    // refusal, so whether a payload is a change is answered on its own terms - an unchanged payload during an outage resolves rather than being refused, and
+    // the refusal is kept for a publish that would actually go out.
+    if(init.ifChanged && this.#lastPayloads.sameAsLast(topic, payload)) {
+
+      return;
+    }
 
     const full = this.#expandTopic(topic);
 
@@ -683,7 +714,16 @@ export class MqttClient implements AsyncDisposable {
       resolve();
     });
 
-    return waitWithSignal(ackPromise, composed);
+    await waitWithSignal(ackPromise, composed);
+
+    // The memory takes the payload only now, once the broker has acknowledged it, so a publish that never went out cannot suppress the next attempt; two
+    // change-gated publishes that race ahead of the first acknowledgement both go out, which is the honest reading, since neither had been delivered when it
+    // was issued. Only a change-gated publish writes the memory: copying every payload of every topic - snapshot images among them - would pay for a question
+    // no other publish asks.
+    if(init.ifChanged) {
+
+      this.#lastPayloads.remember(topic, payload);
+    }
   }
 
   /**
@@ -696,7 +736,8 @@ export class MqttClient implements AsyncDisposable {
    * debug line. A publish refused because the client holds no broker session drops to a debug line of its own, since the outage behind it is already reported at
    * error level by the broker error line. {@link routeGuardedPublishFailure} owns the classification and the reasoning behind the order it reads those terms in.
    *
-   * `init` passes through to {@link publish} unchanged, which is what lets a per-publish signal cancel this one publish quietly while the connection carries on.
+   * `init` passes through to {@link publish} unchanged, which is what lets a per-publish signal cancel this one publish quietly while the connection carries on,
+   * and what lets a change-gated publish suppress itself just as quietly when the broker already has the payload.
    *
    * @param topic   - The relative topic (tail) to publish to.
    * @param payload - The payload to publish. Buffers and strings are passed through unchanged.
@@ -938,6 +979,9 @@ export class MqttClient implements AsyncDisposable {
 
     client.on("connect", () => {
 
+      // A session begins with nothing remembered: whatever a topic last delivered belonged to the session before it, and a subscriber may have missed a change in
+      // between, so the first change-gated publish on every topic goes out again.
+      this.#lastPayloads.clear();
       this.#isConnected = true;
 
       // Every surface in this module that prints the broker URL routes through the shared redactor, so a configured credential never reaches the log stream. Keeping
@@ -1038,10 +1082,12 @@ export class MqttClient implements AsyncDisposable {
   // on the way out, then ends the MQTT.js connection with `force = true` so any in-flight publish / subscribe packets are dropped rather than awaited - the client is
   // unambiguously done, and the underlying library's reconnect logic exits permanently. The `#mqtt` reference is not nulled: callers never reach `#mqtt` accesses
   // when the signal is aborted (every public method short-circuits on `signal.aborted`), and keeping the reference preserves the `readonly #mqtt: MqttJsClient`
-  // guarantee that lets TypeScript drop every non-null assertion in the live paths.
+  // guarantee that lets TypeScript drop every non-null assertion in the live paths. The change-gated memory goes with the subscriptions, which is hygiene rather
+  // than behavior: every publish from here on rejects at the abort check before the gate could read it.
   #teardown(): void {
 
     this.#subscriptions.clear();
+    this.#lastPayloads.clear();
     this.#mqtt.end(true);
   }
 }

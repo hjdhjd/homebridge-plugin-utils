@@ -4,14 +4,15 @@
  */
 
 /**
- * The MQTT publish-outcome vocabulary the client and its shipped test double share: the error a publish is refused with while the client holds no broker session, and
- * the pure router that classifies a guarded publish's failure into the one line that reports it.
+ * The MQTT publish-outcome vocabulary the client and its shipped test double share: the error a publish is refused with while the client holds no broker session, the
+ * pure router that classifies a guarded publish's failure into the one line that reports it, and the per-topic memory a change-gated publish is answered against.
  *
- * Both live here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge to
+ * All three live here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge to
  * `mqttClient.ts` is a type import, which the compiler erases, and the `/testing` entry point aggregates every shipped double...so a value import from the client
  * would pull the mqtt package and everything under it into the load closure of any consumer test process that reaches for any double at all. This module carries no
  * runtime dependency beyond `./util.ts`, which lets the client and the double share one refusal and one classification without either one paying for a broker
- * library.
+ * library. The memory is here for the same reason: the double has to answer "is this the same payload?" exactly as the client does, and one class the two of them
+ * import by value is what keeps them from drifting on the comparison or on how a payload is kept.
  *
  * @module
  */
@@ -101,4 +102,72 @@ export function routeGuardedPublishFailure(options: { clientSignal: AbortSignal;
   }
 
   log.error("Unable to publish to the MQTT topic %s: %s.", topic, formatErrorMessage(error));
+}
+
+/**
+ * The last payload each topic went out with through a change-gated publish, kept per client so that such a publish goes out only when the payload moved.
+ *
+ * The client holds one behind the `ifChanged` option of {@link mqttClient!MqttPublishInit | MqttPublishInit}, and the shipped double holds its own mirror. A plugin
+ * reaches the behavior through that option and never constructs one of these itself.
+ *
+ * Two payloads are the same when they are equal strings, or when they are Buffers carrying the same bytes. A string and a Buffer are never the same, whatever their
+ * bytes: a topic's payloads are one kind or the other, and comparing across kinds would encode every string on the hot path to answer a question no caller asks.
+ *
+ * @category Utilities
+ */
+export class MqttLastPayloads {
+
+  // The last payload delivered on each topic, keyed by the topic exactly as the caller spells it.
+  readonly #payloads = new Map<string, Buffer | string>();
+
+  /**
+   * Answer whether `payload` is what was last remembered for `topic`.
+   *
+   * @param topic   - The topic to read, spelled as the caller spells its topics.
+   * @param payload - The payload to weigh against what was remembered.
+   *
+   * @returns `true` when a payload was remembered for `topic` and it is the same one, and `false` otherwise, so the first change-gated publish on any topic goes
+   *          out.
+   */
+  public sameAsLast(topic: string, payload: Buffer | string): boolean {
+
+    const last = this.#payloads.get(topic);
+
+    if(last === undefined) {
+
+      return false;
+    }
+
+    // A string on either side settles the answer by value, which is both halves of the cross-kind rule in one comparison: two strings match when they read the same,
+    // and a string never matches a Buffer.
+    if((typeof last === "string") || (typeof payload === "string")) {
+
+      return last === payload;
+    }
+
+    return last.equals(payload);
+  }
+
+  /**
+   * Remember `payload` as what `topic` last went out with, replacing whatever was remembered for it.
+   *
+   * A Buffer is copied rather than kept by reference, so a caller that fills one scratch buffer per pass is weighed against the bytes it actually delivered rather
+   * than against whatever that buffer holds by the time the next publish asks. A string is kept as it is, since nothing can rewrite it.
+   *
+   * @param topic   - The topic to remember under.
+   * @param payload - The payload that went out.
+   */
+  public remember(topic: string, payload: Buffer | string): void {
+
+    this.#payloads.set(topic, (typeof payload === "string") ? payload : Buffer.from(payload));
+  }
+
+  /**
+   * Forget every topic, so the next change-gated publish on each one goes out. The client clears its memory on every connect and at teardown, and the double clears
+   * its own when a session is restored and at abort.
+   */
+  public clear(): void {
+
+    this.#payloads.clear();
+  }
 }

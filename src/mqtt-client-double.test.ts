@@ -921,3 +921,96 @@ describe("TestMqttClient - drivers", () => {
     assert.equal(device.power, true);
   });
 });
+
+describe("TestMqttClient - the unresolved-placeholder refusal", () => {
+
+  // The double refuses what the client refuses, so a scenario that hands it a template fails where the plugin would have failed rather than recording a topic the
+  // broker could never match.
+  const UNRESOLVED = "relay/{output}/state";
+
+  test("publish rejects with the refusal and records nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    await assert.rejects(mqtt.publish(UNRESOLVED, "on"), { message: "TestMqttClient: the topic \"relay/{output}/state\" carries a brace; a placeholder must be " +
+      "resolved through resolveMqttTopic before the topic is used." });
+    assert.deepEqual(mqtt.published, []);
+  });
+
+  test("refuses a brace-carrying tail ahead of the offline refusal, counting no refusal", async () => {
+
+    // The double here holds no session, so the offline refusal is armed and waiting. The brace refusal answering instead, with the counter untouched, is what
+    // proves it sits ahead of the session admission, exactly where the client's own refusal sits.
+    const mqtt = new TestMqttClient();
+
+    mqtt.connected = false;
+
+    await assert.rejects(mqtt.publish(UNRESOLVED, "on"), { message: "TestMqttClient: the topic \"relay/{output}/state\" carries a brace; a placeholder must be " +
+      "resolved through resolveMqttTopic before the topic is used." });
+    assert.equal(mqtt.rejectedPublishes, 0);
+    assert.deepEqual(mqtt.published, []);
+  });
+
+  test("publishGuarded never throws and reports the refusal on one error line naming the tail", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      assert.doesNotThrow(() => mqtt.publishGuarded(UNRESOLVED, "on"));
+
+      await tick();
+
+      assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic relay/{output}/state: TestMqttClient: the topic " +
+        "\"relay/{output}/state\" carries a brace; a placeholder must be resolved through resolveMqttTopic before the topic is used."]);
+      assert.deepEqual(mqtt.published, []);
+    });
+  });
+
+  test("subscribe, subscribeGet, subscribeSet, and unsubscribe throw synchronously and register nothing", () => {
+
+    const mqtt = new TestMqttClient();
+    const refusal = /^Error: TestMqttClient: the topic "relay\/\{output\}(\/state)?(\/get|\/set)?" carries a brace;/;
+
+    assert.throws(() => mqtt.subscribe(UNRESOLVED, () => { /* Never registered. */ }), refusal);
+    assert.throws(() => mqtt.subscribeGet("relay/{output}", "relay", () => "on"), refusal);
+    assert.throws(() => mqtt.subscribeSet("relay/{output}", "relay", () => { /* Never registered. */ }), refusal);
+    assert.throws(() => mqtt.unsubscribe("device1", UNRESOLVED), refusal);
+
+    assert.deepEqual(mqtt.subscriptions, []);
+    assert.deepEqual(mqtt.unsubscribes, []);
+  });
+
+  test("leaves a brace-free tail alone on every verb", () => {
+
+    const mqtt = new TestMqttClient();
+
+    assert.doesNotThrow(() => mqtt.subscribe("relay/1/state", () => { /* Registered. */ }));
+    assert.doesNotThrow(() => mqtt.subscribeGet("relay/1", "relay", () => "on"));
+    assert.doesNotThrow(() => mqtt.subscribeSet("relay/1", "relay", () => { /* Registered. */ }));
+    assert.doesNotThrow(() => mqtt.unsubscribe("device1", "relay/1/state"));
+
+    assert.deepEqual(mqtt.subscriptions.map((entry) => entry.topic), [ "relay/1/state", "relay/1/get", "relay/1/set" ]);
+  });
+
+  test("answers after the abort and empty-id guards, so a torn-down double and an empty id stay no-ops", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    mqtt.abort();
+
+    const reason = await mqtt.publish(UNRESOLVED, "on").then(() => null, (error: unknown) => error);
+
+    assert.ok(reason instanceof HbpuAbortError, "an aborted double rejects with its own abort reason rather than the refusal, observed: " + String(reason));
+    assert.doesNotThrow(() => mqtt.subscribe(UNRESOLVED, () => { /* Never reached. */ }), "subscribe on an aborted double stays a no-op");
+    assert.doesNotThrow(() => mqtt.unsubscribe("device1", UNRESOLVED), "unsubscribe on an aborted double stays a no-op");
+
+    const live = new TestMqttClient();
+
+    assert.doesNotThrow(() => live.unsubscribe("", UNRESOLVED), "an empty id short-circuits ahead of the refusal");
+
+    assert.deepEqual(live.unsubscribes, []);
+    assert.deepEqual(mqtt.published, []);
+  });
+});

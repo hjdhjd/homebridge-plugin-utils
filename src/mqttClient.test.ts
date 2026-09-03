@@ -2029,3 +2029,86 @@ describe("createMqttClient - guarded construction", () => {
     assert.equal(client.aborted, true);
   });
 });
+
+describe("MqttClient - the unresolved-placeholder refusal", () => {
+
+  // A tail a plugin declared as a template and never resolved. Nothing in the family's own catalogs carries a brace, so this shape only ever reaches the client
+  // through the widened declaration form, which is exactly the case the compile-time guard cannot see.
+  const UNRESOLVED = "relay/{output}/state";
+
+  test("publish rejects with the refusal, ahead of the offline posture and before anything reaches the wire", async () => {
+
+    // The client here has no session at all, so the offline refusal is armed and waiting. The brace refusal answering instead is what proves it sits ahead of the
+    // expansion and the connection reading.
+    await using client = makeClient();
+
+    await assert.rejects(client.publish(UNRESOLVED, "on"),
+      /^Error: MqttClient: the topic "relay\/\{output\}\/state" carries a brace; a placeholder must be resolved through resolveMqttTopic before the topic is used\.$/);
+    assert.equal(client.connected, false);
+  });
+
+  test("publishGuarded never throws and reports the refusal on one error line naming the expanded topic", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      // A live broker, so the only error line the log can carry is the one the refusal produced.
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      await awaitClientConnected(client);
+
+      assert.doesNotThrow(() => client.publishGuarded(UNRESOLVED, "on"), "the guarded form answers in the log, never to the caller");
+
+      await waitForLog(log, (entry) => entry.level === "error");
+
+      const failures = log.entries.filter((entry) => entry.level === "error").map((entry) => formatLogEntry(entry));
+
+      assert.deepEqual(failures, ["Unable to publish to the MQTT topic test/relay/{output}/state: MqttClient: the topic \"relay/{output}/state\" carries a brace; " +
+        "a placeholder must be resolved through resolveMqttTopic before the topic is used."]);
+    });
+  });
+
+  test("subscribe, subscribeGet, subscribeSet, and unsubscribe throw synchronously with the refusal", async () => {
+
+    await using client = makeClient();
+
+    const refusal = /^Error: MqttClient: the topic "relay\/\{output\}(\/state)?(\/get|\/set)?" carries a brace;/;
+
+    assert.throws(() => client.subscribe(UNRESOLVED, () => { /* Never registered. */ }), refusal);
+    assert.throws(() => client.subscribeGet("relay/{output}", "relay", () => "on"), refusal);
+    assert.throws(() => client.subscribeSet("relay/{output}", "relay", () => { /* Never registered. */ }), refusal);
+    assert.throws(() => client.unsubscribe("device1", UNRESOLVED), refusal);
+  });
+
+  test("leaves a brace-free tail alone on every verb", async () => {
+
+    // The floor: the refusal is a check on a shape no family tail carries, so every ordinary path answers exactly as it did before it.
+    await using client = makeClient();
+
+    assert.doesNotThrow(() => client.subscribe("relay/1/state", () => { /* Registered. */ }));
+    assert.doesNotThrow(() => client.subscribeGet("relay/1", "relay", () => "on"));
+    assert.doesNotThrow(() => client.subscribeSet("relay/1", "relay", () => { /* Registered. */ }));
+    assert.doesNotThrow(() => client.unsubscribe("device1", "relay/1/state"));
+  });
+
+  test("answers after the abort and empty-id guards, so a torn-down client and an empty id stay no-ops", async () => {
+
+    // The ordering contract. The refusal is a diagnostic for a live client; a client that has already been torn down keeps the silence its own documentation
+    // promises, and an empty id short-circuits before anything is inspected.
+    const client = makeClient();
+
+    client.abort();
+
+    const reason = await client.publish(UNRESOLVED, "on").then(() => null, (error: unknown) => error);
+
+    assert.ok(isHbpuAbortReason(reason, "shutdown"), "an aborted client rejects with its own abort reason rather than the refusal, observed: " + String(reason));
+    assert.doesNotThrow(() => client.subscribe(UNRESOLVED, () => { /* Never reached. */ }), "subscribe on an aborted client stays a no-op");
+    assert.doesNotThrow(() => client.unsubscribe("device1", UNRESOLVED), "unsubscribe on an aborted client stays a no-op");
+
+    await using live = makeClient();
+
+    assert.doesNotThrow(() => live.unsubscribe("", UNRESOLVED), "an empty id short-circuits ahead of the refusal");
+  });
+});

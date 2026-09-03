@@ -29,7 +29,7 @@ import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptions } from ".
 import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
 import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
-import { mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
+import { assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
 import util from "node:util";
@@ -628,6 +628,9 @@ export class MqttClient implements AsyncDisposable {
    * A publish issued while {@link MqttClient.connected} reads `false` is refused on the spot rather than held for delivery once the broker returns, so nothing is
    * retained during an outage and nothing replays after it. See {@link MqttOfflineError} for the reasoning.
    *
+   * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after the abort check and before
+   * anything else, so an unresolved placeholder never reaches the broker.
+   *
    * @param topic   - The relative topic (tail) to publish to.
    * @param payload - The payload to publish. Buffers and strings are passed through unchanged.
    * @param init    - Optional per-publish options. See {@link MqttPublishInit}.
@@ -642,6 +645,10 @@ export class MqttClient implements AsyncDisposable {
     // Short-circuit pre-aborted signals before queueing anything into mqtt.js. Without this check, a publish issued after the client has already torn down would
     // still enqueue inside mqtt.js's internal buffer (which is already being flushed by `end(true)`), producing a phantom write.
     composed.throwIfAborted();
+
+    // Refuse a tail still carrying a placeholder before anything reaches the broker. The abort check answers first, so a torn-down client keeps rejecting with its
+    // own reason, and the refusal answers next, so a topic carrying an unresolved template never reaches the expansion, the trace, or the wire.
+    assertResolvedMqttTopic("MqttClient", topic);
 
     const full = this.#expandTopic(topic);
 
@@ -711,7 +718,9 @@ export class MqttClient implements AsyncDisposable {
 
   /**
    * Subscribe to `topic` with the given handler. The topic is prefixed with the configured {@link MqttConfig.topicPrefix} before being registered with the broker.
-   * Multiple handlers may subscribe to the same topic; each gets independent delivery.
+   * Multiple handlers may subscribe to the same topic; each gets independent delivery. A tail still carrying a brace is refused through
+   * {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after the aborted short-circuit, so an unresolved placeholder never becomes a
+   * subscription.
    *
    * @param topic   - The relative topic (tail) to subscribe to.
    * @param handler - Callback invoked with each received payload.
@@ -725,6 +734,10 @@ export class MqttClient implements AsyncDisposable {
 
       return;
     }
+
+    // Refuse a tail still carrying a placeholder, after the no-op guards above. A live client learns at the call site rather than registering a handler on a topic no
+    // publisher will ever match.
+    assertResolvedMqttTopic("MqttClient", topic);
 
     const full = this.#expandTopic(topic);
 
@@ -844,6 +857,9 @@ export class MqttClient implements AsyncDisposable {
    * cancellation semantic the method cannot deliver. Callers composing teardown through a signal remove handlers by aborting the per-subscription signal they passed
    * to `subscribe*` instead.
    *
+   * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after the aborted and empty-id guards, so
+   * both of those stay the no-ops documented above.
+   *
    * @param id    - The device or accessory identifier portion of the topic. An empty string short-circuits the whole call.
    * @param topic - The topic tail relative to the id.
    */
@@ -855,6 +871,9 @@ export class MqttClient implements AsyncDisposable {
 
       return;
     }
+
+    // Refuse a tail still carrying a placeholder, after the no-op guards above so an aborted client and an empty id stay the no-ops this class documents.
+    assertResolvedMqttTopic("MqttClient", topic);
 
     const full = this.#expandTopic(mqttTopic(id, topic));
 

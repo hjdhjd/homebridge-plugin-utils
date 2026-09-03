@@ -25,7 +25,7 @@
  */
 import { HbpuAbortError, composeSignals, markHandled, noOpLog, onAbort } from "./util.ts";
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
-import { MQTT_GET_SUFFIX, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
+import { MQTT_GET_SUFFIX, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
 import type { MqttGetHandler, MqttHandler, MqttPublishInit, MqttSetHandler, MqttSubscribeInit, MqttSubscribeSetInit } from "./mqttClient.ts";
 import { MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
 
@@ -173,12 +173,21 @@ export class TestMqttClient implements AsyncDisposable {
    * @param payload - The payload to publish. Buffers and strings are recorded unchanged.
    * @param init    - Optional per-publish options. See {@link MqttPublishInit}.
    *
+   * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic} once the composed signal has answered,
+   * ahead of the session and lever admissions, which is where the client's own publish refuses one.
+   *
    * @returns A promise that resolves once the publish is recorded, or rejects with the composed signal's reason, with {@link MqttOfflineError}, or with the armed
    *          refusal.
    */
   public async publish(topic: string, payload: Buffer | string, init: MqttPublishInit = {}): Promise<void> {
 
     const composed = composeSignals(this.signal, init.signal);
+
+    // The composed signal answers first, so a torn-down double stays silent, and the placeholder refusal answers next, ahead of the session and lever admissions -
+    // the order the client's own publish keeps - so a disconnected double and a disconnected client answer a brace-carrying tail with the same error. The admission
+    // below reads the composed signal again; that repeat is a no-op and keeps the admission whole for the post-hold pass.
+    composed.throwIfAborted();
+    assertResolvedMqttTopic("TestMqttClient", topic);
 
     this.#admit(composed);
 
@@ -273,7 +282,8 @@ export class TestMqttClient implements AsyncDisposable {
 
   /**
    * Record a raw subscription on `topic`, mirroring {@link mqttClient!MqttClient.subscribe | MqttClient.subscribe}. An aborted double or a pre-aborted
-   * per-subscription signal records nothing, and a supplied signal releases the entry when it - or the double - aborts.
+   * per-subscription signal records nothing, and a supplied signal releases the entry when it - or the double - aborts. A tail still carrying a brace is refused
+   * through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after those guards.
    *
    * @param topic   - The relative topic (tail) to subscribe to. Recorded verbatim.
    * @param handler - The callback to record. {@link TestMqttClient.deliver} runs it.
@@ -316,6 +326,8 @@ export class TestMqttClient implements AsyncDisposable {
    * Record an unsubscribe of the `(id, topic)` tuple and release every registration on the topic it names, mirroring
    * {@link mqttClient!MqttClient.unsubscribe | MqttClient.unsubscribe}.
    *
+   * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after those guards.
+   *
    * @param id    - The device or accessory identifier portion of the topic. An empty string short-circuits the whole call, as it does on the client.
    * @param topic - The topic tail relative to the id.
    */
@@ -326,6 +338,9 @@ export class TestMqttClient implements AsyncDisposable {
 
       return;
     }
+
+    // Refuse a tail still carrying a placeholder, after the no-op guards above, so an aborted double and an empty id stay the no-ops the client's own verb documents.
+    assertResolvedMqttTopic("TestMqttClient", topic);
 
     const full = mqttTopic(id, topic);
 
@@ -522,6 +537,10 @@ export class TestMqttClient implements AsyncDisposable {
 
       return;
     }
+
+    // Refuse a tail still carrying a placeholder, after the registration guards, which is where the client's own subscribe refuses one. Every subscribe verb reaches
+    // this, so the raw, get, and set paths all answer alike.
+    assertResolvedMqttTopic("TestMqttClient", entry.topic);
 
     this.subscriptions.push(entry);
 

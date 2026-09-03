@@ -13,6 +13,7 @@ export * from "./featureOptions-docs.ts";
 export * from "./homebridge-enums.ts";
 export * from "./mqtt-publish.ts";
 export * from "./mqtt-topics.ts";
+export * from "./mqtt-topics-docs.ts";
 export * from "./mqttClient.ts";
 export * from "./rate-budget.ts";
 export * from "./service.ts";

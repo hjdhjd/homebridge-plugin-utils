@@ -6,7 +6,8 @@
 
 /**
  * The homebridge-plugin-utils CLI, exposed to consumers via the `bin` field in `package.json`. A single cohesive module: the content-hash helper, the `prepareUi`,
- * `prepareDocs`, and `prepareChrome` transforms, the `runCli` dispatcher, and the entry-point execution all live here with no inter-file relative VALUE imports.
+ * `prepareDocs`, `prepareMqttDocs`, and `prepareChrome` transforms, the `runCli` dispatcher, and the entry-point execution all live here with no inter-file relative
+ * VALUE imports.
  *
  * That single-file shape is deliberate, not incidental. A bin is invoked through an `npm`-managed symlink in `node_modules/.bin`; if the entry imported a sibling
  * module by relative path AT LOAD TIME, that import would resolve against the symlink's directory under symlink-preserving or copied-package layouts and fail. With
@@ -15,9 +16,9 @@
  * so it carries the SSOT types without reintroducing a load-time relative dependency; when `prepareDocs` actually needs the renderer it reaches it through a computed
  * dynamic import the dispatch site supplies, the same indirection the `hblog` bin uses.
  *
- * The module is simultaneously the executable (run via the bin) and a side-effect-free library surface (`prepareUi` / `prepareDocs` / `prepareChrome` / `runCli` /
- * `USAGE`) that the test suite imports. The entry block at the bottom only executes when this module is the program entry point, detected by comparing canonicalized
- * real paths - see its comment for why a raw path comparison is insufficient.
+ * The module is simultaneously the executable (run via the bin) and a side-effect-free library surface (`prepareUi` / `prepareDocs` / `prepareMqttDocs` /
+ * `prepareChrome` / `runCli` / `USAGE`) that the test suite imports. The entry block at the bottom only executes when this module is the program entry point,
+ * detected by comparing canonicalized real paths - see its comment for why a raw path comparison is insufficient.
  *
  * @module
  */
@@ -30,6 +31,7 @@ import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 import { realpathSync } from "node:fs";
 import type { renderFeatureOptionsReference } from "../featureOptions-docs.ts";
+import type { renderMqttTopicsReference } from "../mqtt-topics-docs.ts";
 import type { spliceMarkedRegion } from "../doc-markdown.ts";
 
 // Semver-shaped subdir names that {@link prepareUi} owns. Only entries matching this pattern are candidates for the stale-build sweep; anything else in the
@@ -52,6 +54,7 @@ const HASH_LENGTH = 16;
 export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
   "  prepare-docs <catalog-module> [--doc <path>]    Generate the Feature Options reference into the plugin's docs.\n" +
+  "  prepare-mqtt <catalog-module> [--doc <path>]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
   "  prepare-chrome <manifest> [--root <dir>]    Stamp the doc-chrome regions (masthead, nav, badges, projects) across the plugin's docs, README, and webUI.\n";
 
 /**
@@ -394,6 +397,74 @@ export async function prepareDocs({ catalogModulePath, docPath, docs, splice }: 
   const updated = splice(source, reference, { beginMarker: docs.FEATURE_OPTIONS_DOC_BEGIN, endMarker: docs.FEATURE_OPTIONS_DOC_END });
 
   // Atomic write: stage in a sibling temp file, then rename over the doc.
+  await writeFile(docPath + ".tmp", updated, "utf8");
+  await rename(docPath + ".tmp", docPath);
+}
+
+// The subset of the `mqtt-topics-docs` module the CLI reaches through a computed dynamic import at dispatch time: the four marker strings and the reference renderer.
+// Declaring it as an interface built from the module's own export types keeps the injected namespace in lockstep with `mqtt-topics-docs.ts` without a load-time value
+// import that would fracture this symlink-safe bin.
+interface MqttTopicsDocsModule {
+
+  readonly MQTT_PUBLISHED_DOC_BEGIN: string;
+  readonly MQTT_PUBLISHED_DOC_END: string;
+  readonly MQTT_SUBSCRIBED_DOC_BEGIN: string;
+  readonly MQTT_SUBSCRIBED_DOC_END: string;
+  readonly renderMqttTopicsReference: typeof renderMqttTopicsReference;
+}
+
+/**
+ * Regenerate a plugin's MQTT topic tables by projecting its live topic catalog through HBPU's shared renderer and splicing the two results into the plugin's MQTT
+ * document, in place between the shared `MQTT PUBLISHED` and `MQTT SUBSCRIBED` marker pairs. This makes the document a projection of the same declaration the
+ * plugin's publish and subscribe sites read their tails from, so the two cannot drift apart.
+ *
+ * Pure-by-injection on `docs` and `splice` exactly as {@link prepareDocs} is: the renderer's module namespace and the splice helper are passed in rather than
+ * imported statically, so this function is unit-testable against the real `mqtt-topics-docs.ts` exports without a built `dist/`, and the CLI's single-file
+ * no-static-relative-import discipline is preserved. The catalog is loaded by dynamic import of its absolute path resolved to a `file:` URL, since a bare absolute
+ * path is not a valid ESM specifier on every platform. Its one required export is validated up front so a mis-built or wrong-module path fails with a diagnostic
+ * naming what is wrong and where.
+ *
+ * Both regions are spliced against the in-memory copy before a single atomic write. A document that carries the published pair but not the subscribed one therefore
+ * fails on the second splice with nothing yet written, leaving the file byte-identical rather than half generated; the write itself stages a sibling `.tmp` file and
+ * renames it over the document, which is atomic on a single filesystem.
+ *
+ * @param args
+ * @param args.catalogModulePath - Absolute path to the plugin's compiled catalog module exporting `mqttTopics` (an object). Resolved to a `file:` URL before the
+ *                                 dynamic import.
+ * @param args.docPath           - Absolute path to the document whose two marked regions are replaced (typically the plugin's `docs/MQTT.md`).
+ * @param args.docs              - The injected `mqtt-topics-docs` namespace: its four marker constants and {@link renderMqttTopicsReference}.
+ * @param args.splice            - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
+ *
+ * @throws When the catalog module lacks `mqttTopics` (or it is not a non-null object), propagating the renderer's own framed errors for a mis-declared catalog and
+ *         the splice's framed errors when either marker pair is absent or ambiguous.
+ */
+export async function prepareMqttDocs({ catalogModulePath, docPath, docs, splice }: {
+
+  catalogModulePath: string;
+  docPath: string;
+  docs: MqttTopicsDocsModule;
+  splice: typeof spliceMarkedRegion;
+}): Promise<void> {
+
+  // Load the catalog by dynamic import, converting the absolute path to a `file:` URL first for the reason {@link prepareDocs} converts its own. The namespace is
+  // typed with the one required export as `unknown` until it is validated below, so nothing reaches the renderer as a mis-typed value.
+  const catalog = await import(pathToFileURL(catalogModulePath).href) as { mqttTopics?: unknown };
+
+  if((typeof catalog.mqttTopics !== "object") || (catalog.mqttTopics === null)) {
+
+    throw new Error("Catalog module " + catalogModulePath + " does not export an `mqttTopics` object.");
+  }
+
+  // Render both sections from one traversal. The device column travels inside the catalog under its own symbol, so there is no second export to find here and no
+  // second binding that could drift - the renderer owns every check the document's shape needs and frames its own diagnostics.
+  const reference = docs.renderMqttTopicsReference(catalog.mqttTopics as Parameters<typeof docs.renderMqttTopicsReference>[0]);
+
+  // Splice both regions against the in-memory copy, then write once.
+  const source = await readFile(docPath, "utf8");
+  const withPublished = splice(source, reference.published, { beginMarker: docs.MQTT_PUBLISHED_DOC_BEGIN, endMarker: docs.MQTT_PUBLISHED_DOC_END });
+  const updated = splice(withPublished, reference.subscribed, { beginMarker: docs.MQTT_SUBSCRIBED_DOC_BEGIN, endMarker: docs.MQTT_SUBSCRIBED_DOC_END });
+
+  // Atomic write: stage in a sibling temp file, then rename over the document.
   await writeFile(docPath + ".tmp", updated, "utf8");
   await rename(docPath + ".tmp", docPath);
 }
@@ -806,6 +877,55 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       return 0;
     }
 
+    case "prepare-mqtt": {
+
+      const [catalogArg] = rest;
+
+      if(!catalogArg) {
+
+        stderr.write("homebridge-plugin-utils prepare-mqtt: missing required catalog-module argument.\n");
+
+        return 1;
+      }
+
+      // Resolve both paths against the injected working directory. The catalog argument is the plugin's compiled topics module; the document defaults to the
+      // family's canonical `docs/MQTT.md` and is overridable through `--doc` for a plugin that ships its tables elsewhere.
+      const catalogModulePath = resolve(cwd, catalogArg);
+      const docPath = resolve(cwd, values.doc ?? "docs/MQTT.md");
+
+      // Reach HBPU's own renderer and the splice primitive through computed dynamic imports of their compiled modules - never static relative imports - so the
+      // single-file bin stays symlink-safe. A failed import means HBPU itself has not been built, a distinct and actionable condition from a downstream failure.
+      const docsPath = join(sourceRoot, "dist", "mqtt-topics-docs.js");
+      const splicePath = join(sourceRoot, "dist", "doc-markdown.js");
+
+      let docs: MqttTopicsDocsModule;
+      let splicer: { spliceMarkedRegion: typeof spliceMarkedRegion };
+
+      try {
+
+        docs = await import(pathToFileURL(docsPath).href) as MqttTopicsDocsModule;
+        splicer = await import(pathToFileURL(splicePath).href) as typeof splicer;
+      } catch {
+
+        stderr.write("homebridge-plugin-utils prepare-mqtt: HBPU has not been built: " + docsPath + " or " + splicePath + " is missing. Run `npm run build` in " +
+          "HBPU first.\n");
+
+        return 1;
+      }
+
+      try {
+
+        await prepareMqttDocs({ catalogModulePath, docPath, docs, splice: splicer.spliceMarkedRegion });
+      } catch(error) {
+
+        stderr.write("homebridge-plugin-utils prepare-mqtt: " + (error instanceof Error ? error.message : String(error)) + "\n");
+
+        return 1;
+      }
+
+      return 0;
+    }
+
     case "prepare-chrome": {
 
       const [manifestArg] = rest;
@@ -897,7 +1017,7 @@ function isEntryPoint(): boolean {
 }
 
 // Execute the CLI when this module is the program entry point. When imported by the test suite instead, `isEntryPoint()` is false and the module exposes
-// `prepareUi` / `prepareDocs` / `prepareChrome` / `runCli` / `USAGE` as a side-effect-free library surface.
+// `prepareUi` / `prepareDocs` / `prepareMqttDocs` / `prepareChrome` / `runCli` / `USAGE` as a side-effect-free library surface.
 if(isEntryPoint()) {
 
   // Resolve HBPU's package root from this file's real location. The compiled CLI sits at `dist/cli/index.js`; walking two segments up from its real directory

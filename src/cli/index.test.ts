@@ -11,7 +11,9 @@
 import * as docChrome from "../docChrome.ts";
 import * as webuiLoader from "../webui-loader.ts";
 import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference } from "../featureOptions-docs.ts";
-import { USAGE, prepareChrome, prepareDocs, prepareUi, runCli } from "./index.ts";
+import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END,
+  renderMqttTopicsReference } from "../mqtt-topics-docs.ts";
+import { USAGE, prepareChrome, prepareDocs, prepareMqttDocs, prepareUi, runCli } from "./index.ts";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
@@ -500,13 +502,13 @@ describe("prepareUi - webUI loader stamp", () => {
   });
 });
 
-// A minimal well-formed catalog module body: two categories, one of which carries a value option, sufficient to render a non-trivial fragment (including the
-// `=<value>` legend) so the splice has substantive content to verify. Held as a module-scope constant rather than inlined as a parameter default so the multi-line
-// ESM source stays out of the destructuring signature.
 // The `featureOptions-docs` namespace the transform takes: the two marker constants and the renderer, exactly as the dispatch site hands them over from the compiled
 // module. Named once here so every row below injects the same shape rather than respelling it.
 const FEATURE_OPTIONS_DOCS = { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference };
 
+// A minimal well-formed catalog module body: two categories, one of which carries a value option, sufficient to render a non-trivial fragment (including the
+// `=<value>` legend) so the splice has substantive content to verify. Held as a module-scope constant rather than inlined as a parameter default so the multi-line
+// ESM source stays out of the destructuring signature.
 const VALID_CATALOG_BODY = "export const featureOptionCategories = [ { description: \"Audio\", name: \"Audio\" }, { description: \"Recording\", name: \"Nvr\" } ];\n" +
   "export const featureOptions = { Audio: [ { default: true, description: \"Audio support.\", name: \"\" } ], Nvr: [ { default: true, defaultValue: 10, " +
   "description: \"Days of recordings to retain.\", name: \"Recording.Retention\" } ] };\n";
@@ -556,6 +558,94 @@ async function writeDoc({ markers = true, root }: { markers?: boolean; root: str
   await writeFile(docPath, "# Header\n\nHand-written intro.\n\n" + region + "\n\nHand-written footer.\n");
 
   return docPath;
+}
+
+// The `mqtt-topics-docs` namespace the MQTT transform takes: the four marker constants and the renderer, exactly as the dispatch site hands them over from the
+// compiled module.
+const MQTT_TOPICS_DOCS = { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END, renderMqttTopicsReference };
+
+// A minimal well-formed topic catalog module body. The CLI validates the export's SHAPE, not its provenance, so the fixture declares a plain object literal rather
+// than building one through `mqttTopicCatalog` - the builder's declaration-time checks belong to the vocabulary's own suite, not to this transform's.
+const VALID_MQTT_CATALOG_BODY = "export const mqttTopics = {\n" +
+  "  lock: { get: \"`true` requests a publish of the current lock state.\", label: \"lock\", " +
+  "publish: \"`true` when locked, `false` when unlocked.\", set: \"`true` to lock, `false` to unlock.\", topic: \"lock\" },\n" +
+  "  motion: { label: \"motion\", publish: \"`true` when motion is detected.\", topic: \"motion\" }\n" +
+  "};\n";
+
+// The same catalog with a device column attached under the real symbol, which the fixture reaches through the scratch tree's own stub of the built library. Reading
+// the symbol from the library rather than spelling a second one is what keeps the fixture and the renderer looking at the same key.
+const MQTT_CATALOG_WITH_COLUMN_BODY = "import { MQTT_DEVICE_COLUMN } from \"./mqtt-topics.mjs\";\n\n" +
+  "export const mqttTopics = {\n" +
+  "  [MQTT_DEVICE_COLUMN]: { heading: \"Device Type\", vocabulary: { hub: \"Hub\" } },\n" +
+  "  lock: { devices: [\"hub\"], label: \"lock\", publish: \"`true` when locked, `false` when unlocked.\", topic: \"lock\" }\n" +
+  "};\n";
+
+// The same shape with a column that declares no heading, so the renderer's own refusal is what the transform propagates.
+const MQTT_CATALOG_BAD_COLUMN_BODY = "import { MQTT_DEVICE_COLUMN } from \"./mqtt-topics.mjs\";\n\n" +
+  "export const mqttTopics = {\n" +
+  "  [MQTT_DEVICE_COLUMN]: { vocabulary: { hub: \"Hub\" } },\n" +
+  "  lock: { devices: [\"hub\"], label: \"lock\", publish: \"`true` when locked.\", topic: \"lock\" }\n" +
+  "};\n";
+
+/**
+ * Write a synthetic plugin topic-catalog module into a scratch root as a `.mjs` file, beside a stub that re-exports the library's device-column symbol, and return
+ * the catalog's absolute path. Writing real module source - rather than mocking the dynamic import - exercises the genuine `pathToFileURL` + `import()` path the
+ * production code takes.
+ *
+ * @param args
+ * @param args.body - The module body text. Defaults to {@link VALID_MQTT_CATALOG_BODY}.
+ * @param args.root - The scratch directory the catalog file is written into.
+ *
+ * @returns The absolute path to the written catalog module.
+ */
+async function writeMqttCatalog({ body = VALID_MQTT_CATALOG_BODY, root }: { body?: string; root: string }): Promise<string> {
+
+  const catalogPath = join(root, "topics.mjs");
+  const realTopics = fileURLToPath(new URL("../mqtt-topics.ts", import.meta.url));
+
+  await writeFile(join(root, "mqtt-topics.mjs"), "export { MQTT_DEVICE_COLUMN } from " + JSON.stringify(pathToFileURL(realTopics).href) + ";\n");
+  await writeFile(catalogPath, body);
+
+  return catalogPath;
+}
+
+/**
+ * Write a synthetic plugin MQTT document carrying both marker pairs wrapped in hand-written prose - before the first region, between the two, and after the second -
+ * and return its absolute path. The prose is what each assertion reads to confirm the two splices touch only their own regions.
+ *
+ * @param args
+ * @param args.root       - The scratch directory the document is written into.
+ * @param args.subscribed - When `false`, the subscribed marker pair is omitted so the second splice's throw can be exercised. Defaults to `true`.
+ *
+ * @returns The absolute path to the written document.
+ */
+async function writeMqttDoc({ root, subscribed = true }: { root: string; subscribed?: boolean }): Promise<string> {
+
+  const docPath = join(root, "MQTT.md");
+  const subscribedRegion = subscribed ? (MQTT_SUBSCRIBED_DOC_BEGIN + "\nstale subscribed tables\n" + MQTT_SUBSCRIBED_DOC_END) : "no subscribed markers here";
+
+  await writeFile(docPath, "# MQTT\n\nHand-written intro.\n\n### Topics Published\n\n" + MQTT_PUBLISHED_DOC_BEGIN + "\nstale published tables\n" +
+    MQTT_PUBLISHED_DOC_END + "\n\nHand-written prose between the sections.\n\n### Topics Subscribed\n\n" + subscribedRegion + "\n\nHand-written footer.\n");
+
+  return docPath;
+}
+
+/**
+ * Write the compiled dist modules the `prepare-mqtt` dispatch reaches through computed dynamic imports: `dist/mqtt-topics-docs.js`, `dist/doc-markdown.js`, and
+ * `dist/mqtt-topics.js`, each a thin re-export of the real source through a `file:` URL.
+ *
+ * @param sourceRoot - The synthetic HBPU source root whose `dist/` receives the re-export modules.
+ */
+async function writeMqttDist(sourceRoot: string): Promise<void> {
+
+  const realDocs = fileURLToPath(new URL("../mqtt-topics-docs.ts", import.meta.url));
+  const realMarkdown = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
+  const realTopics = fileURLToPath(new URL("../mqtt-topics.ts", import.meta.url));
+
+  await mkdir(join(sourceRoot, "dist"), { recursive: true });
+  await writeFile(join(sourceRoot, "dist", "mqtt-topics-docs.js"), "export * from " + JSON.stringify(pathToFileURL(realDocs).href) + ";\n");
+  await writeFile(join(sourceRoot, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " + JSON.stringify(pathToFileURL(realMarkdown).href) + ";\n");
+  await writeFile(join(sourceRoot, "dist", "mqtt-topics.js"), "export { MQTT_DEVICE_COLUMN } from " + JSON.stringify(pathToFileURL(realTopics).href) + ";\n");
 }
 
 describe("prepareDocs", () => {
@@ -737,6 +827,110 @@ describe("prepareDocs", () => {
 
     assert.match(doc, /<BR>Annotated scope for Recording\.Retention\./, "the single exported option hook must be applied");
     assert.equal(doc.includes("Scope: applies to"), false, "the unexported category hook must be omitted cleanly, contributing no line");
+  });
+});
+
+describe("prepareMqttDocs", () => {
+
+  test("replaces both marked regions and leaves the prose before, between, and after untouched", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const catalogModulePath = await writeMqttCatalog({ root: scratch.path });
+    const docPath = await writeMqttDoc({ root: scratch.path });
+
+    await prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion });
+
+    const doc = await readFile(docPath, "utf8");
+
+    assert.ok(doc.startsWith("# MQTT\n\nHand-written intro.\n"), "the prose ahead of the first region survives");
+    assert.ok(doc.includes("\nHand-written prose between the sections.\n"), "the prose between the two regions survives");
+    assert.ok(doc.endsWith("\nHand-written footer.\n"), "the prose after the second region survives");
+    assert.equal(doc.includes("stale published tables"), false, "the published region is regenerated");
+    assert.equal(doc.includes("stale subscribed tables"), false, "the subscribed region is regenerated");
+    assert.match(doc, /\| `lock`\s+\| `true` when locked/, "the published table carries the entry's own message text");
+    assert.match(doc, /\| `lock\/set`\s+\| `true` to lock/, "the subscribed table carries the set child and its message text");
+  });
+
+  test("is repeatable, reproducing an already generated document byte for byte", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const catalogModulePath = await writeMqttCatalog({ root: scratch.path });
+    const docPath = await writeMqttDoc({ root: scratch.path });
+
+    await prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion });
+
+    const once = await readFile(docPath, "utf8");
+
+    await prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion });
+
+    assert.equal(await readFile(docPath, "utf8"), once, "a second run over a generated document changes nothing");
+  });
+
+  test("throws naming the module when it exports no mqttTopics", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const catalogModulePath = await writeMqttCatalog({ body: "export const somethingElse = {};\n", root: scratch.path });
+    const docPath = await writeMqttDoc({ root: scratch.path });
+
+    await assert.rejects(prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion }),
+      /does not export an `mqttTopics` object/);
+  });
+
+  test("throws naming the module when mqttTopics is not an object", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const catalogModulePath = await writeMqttCatalog({ body: "export const mqttTopics = null;\n", root: scratch.path });
+    const docPath = await writeMqttDoc({ root: scratch.path });
+
+    await assert.rejects(prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion }),
+      /does not export an `mqttTopics` object/);
+  });
+
+  test("renders the device column for a catalog that attaches one under the symbol", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const catalogModulePath = await writeMqttCatalog({ body: MQTT_CATALOG_WITH_COLUMN_BODY, root: scratch.path });
+    const docPath = await writeMqttDoc({ root: scratch.path });
+
+    await prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion });
+
+    const doc = await readFile(docPath, "utf8");
+
+    assert.match(doc, /\| Topic\s+\| Device Type\s+\| Message Published/, "the column's heading takes the second column");
+    assert.match(doc, /\| `lock`\s+\| Hub\s+\| `true` when locked/, "the entry's device label fills its cell");
+  });
+
+  test("propagates the renderer's refusal and leaves the document byte-identical", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const catalogModulePath = await writeMqttCatalog({ body: MQTT_CATALOG_BAD_COLUMN_BODY, root: scratch.path });
+    const docPath = await writeMqttDoc({ root: scratch.path });
+    const before = await readFile(docPath, "utf8");
+
+    await assert.rejects(prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion }),
+      /renderMqttTopicsReference: the catalog's device column declares no heading text/);
+    assert.equal(await readFile(docPath, "utf8"), before, "a refused render writes nothing");
+  });
+
+  test("propagates the splice's refusal for a missing subscribed pair, leaving the document byte-identical", async () => {
+
+    // Both regions are spliced against the in-memory copy before anything is written, so a document that carries the published pair and not the subscribed one is
+    // left exactly as it was rather than half generated.
+    await using scratch = await makeScratchRoot();
+
+    const catalogModulePath = await writeMqttCatalog({ root: scratch.path });
+    const docPath = await writeMqttDoc({ root: scratch.path, subscribed: false });
+    const before = await readFile(docPath, "utf8");
+
+    await assert.rejects(prepareMqttDocs({ catalogModulePath, docPath, docs: MQTT_TOPICS_DOCS, splice: spliceMarkedRegion }), /begin marker not found/);
+    assert.equal(await readFile(docPath, "utf8"), before, "the published splice never reaches the file when the subscribed one fails");
+    assert.ok(before.includes("stale published tables"), "and the stale published region is still exactly where it was");
   });
 });
 
@@ -932,6 +1126,104 @@ describe("runCli", () => {
     assert.equal(code, 1);
     assert.match(capture.chunks(), /homebridge-plugin-utils prepare-docs: /, "the prepareDocs failure must be framed under the subcommand prefix");
     assert.match(capture.chunks(), /begin marker not found/, "the propagated splice error must be surfaced verbatim");
+  });
+
+  test("prepare-mqtt without a catalog-module argument writes a misuse message and exits 1", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: ["prepare-mqtt"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.equal(capture.chunks(), "homebridge-plugin-utils prepare-mqtt: missing required catalog-module argument.\n");
+  });
+
+  test("prepare-mqtt against an unbuilt HBPU frames the failure naming both compiled files and exits 1", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    // The sourceRoot tmpdir has neither dist/mqtt-topics-docs.js nor dist/doc-markdown.js, so the dynamic imports fail. A catalog argument is supplied precisely so
+    // the only thing that can fail is the module import, which the dispatcher frames as the actionable not-built condition.
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-mqtt", "dist/topics.js" ], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.match(capture.chunks(), /HBPU has not been built:.*mqtt-topics-docs\.js.*doc-markdown\.js is missing/);
+  });
+
+  test("prepare-mqtt dispatches to prepareMqttDocs, regenerates the default document, and exits 0 on success", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const cwd = join(scratch.path, "plugin");
+
+    await writeMqttDist(sourceRoot);
+
+    // The plugin side: a compiled catalog module and a document carrying both marker pairs, both addressed by paths relative to the injected cwd to prove the
+    // dispatcher resolves its arguments against cwd rather than the process working directory.
+    await mkdir(join(cwd, "dist"), { recursive: true });
+    await mkdir(join(cwd, "docs"), { recursive: true });
+    await writeMqttCatalog({ root: join(cwd, "dist") });
+    await writeMqttDoc({ root: join(cwd, "docs") });
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-mqtt", "dist/topics.mjs" ], cwd, sourceRoot, stderr: capture.stderr });
+
+    assert.equal(code, 0);
+    assert.equal(capture.chunks(), "", "successful dispatch must not write to stderr");
+
+    const doc = await readFile(join(cwd, "docs", "MQTT.md"), "utf8");
+
+    assert.equal(doc.includes("stale published tables"), false, "the stale published region must be replaced");
+    assert.equal(doc.includes("stale subscribed tables"), false, "the stale subscribed region must be replaced");
+    assert.match(doc, /\| `lock\/get`\s+\| `true` requests a publish/, "the rendered tables must land in the default docs/MQTT.md");
+  });
+
+  test("prepare-mqtt honors --doc to target another path, and surfaces prepareMqttDocs errors as exit 1", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const cwd = join(scratch.path, "plugin");
+
+    await writeMqttDist(sourceRoot);
+    await mkdir(join(cwd, "dist"), { recursive: true });
+    await mkdir(join(cwd, "reference"), { recursive: true });
+    await writeMqttCatalog({ root: join(cwd, "dist") });
+
+    // The --doc target carries neither marker pair, so the first splice throws. The dispatcher has to honor the override (resolving it against cwd) and surface the
+    // propagated error as a framed stderr line with exit 1.
+    await writeFile(join(cwd, "reference", "Topics.md"), "no markers in this file");
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-mqtt", "dist/topics.mjs", "--doc", "reference/Topics.md" ], cwd, sourceRoot, stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.match(capture.chunks(), /homebridge-plugin-utils prepare-mqtt: /, "the prepareMqttDocs failure must be framed under the subcommand prefix");
+    assert.match(capture.chunks(), /begin marker not found/, "the propagated splice error must be surfaced verbatim");
+  });
+
+  test("prepare-mqtt renders the device column when the plugin's catalog attaches one", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const cwd = join(scratch.path, "plugin");
+
+    await writeMqttDist(sourceRoot);
+    await mkdir(join(cwd, "dist"), { recursive: true });
+    await mkdir(join(cwd, "docs"), { recursive: true });
+    await writeMqttCatalog({ body: MQTT_CATALOG_WITH_COLUMN_BODY, root: join(cwd, "dist") });
+    await writeMqttDoc({ root: join(cwd, "docs") });
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-mqtt", "dist/topics.mjs" ], cwd, sourceRoot, stderr: capture.stderr });
+
+    assert.equal(code, 0);
+    assert.match(await readFile(join(cwd, "docs", "MQTT.md"), "utf8"), /\| Topic\s+\| Device Type\s+\| Message Published/,
+      "the column travels inside the catalog under its symbol and needs no second export");
   });
 });
 

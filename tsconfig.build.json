@@ -18,6 +18,6 @@
     "src/**/*.helpers.cts", "src/**/*.helpers.mts", "src/**/*.helpers.ts",
     "src/**/*.test.cts", "src/**/*.test.mts", "src/**/*.test.ts"
   ],
-  "extends": "./build/tsconfig.json",
+  "extends": "./build/tsconfig.library.json",
   "include": [ "src" ]
 }

@@ -1,0 +1,16 @@
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
+ *
+ * tsconfig.library.json: The profile for a package that publishes its own types, turning declaration and declaration map emit on over the shared base. Declaration
+ * emit is the library's explicit opt-in rather than a default the base hands to everyone, because the two failures are not equal: a package that forgets to opt in
+ * ships without types and breaks every consumer that imports it, while a plugin that emits when it should not ships a handful of files nobody reads. The profile
+ * stays one setting long until something else in the family's compiler settings differs by package kind.
+ */
+{
+  "compilerOptions": {
+
+    "declaration": true,
+    "declarationMap": true
+  },
+
+  "extends": "./tsconfig.json"
+}

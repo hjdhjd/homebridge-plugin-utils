@@ -1,13 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * tsconfig.json: Default TypeScript transpiler options for ESM Homebridge plugins.
+ * tsconfig.json: The kind-neutral TypeScript base every family build extends through one of the profiles beside it, tsconfig.library.json and tsconfig.plugin.json.
  */
 {
   "compilerOptions": {
 
     "allowImportingTsExtensions": true,
-    "declaration": true,
-    "declarationMap": true,
     "erasableSyntaxOnly": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -55,7 +53,8 @@
     "verbatimModuleSyntax": true
   }
 }
-/* When creating your own tsconfig.json, use the following as a starting point to inherit these defaults:
+/* When creating your own tsconfig.json, extend one of the profiles beside this file rather than this base directly: a Homebridge plugin extends
+ * tsconfig.plugin.json, and a package that publishes its own types extends tsconfig.library.json. Use the following as a starting point to inherit these defaults:
  *
  * {
  *   "compilerOptions": {
@@ -64,7 +63,7 @@
  *     "rootDir": "src"
  *   },
  *
- *   "extends": "./build/tsconfig.json",
+ *   "extends": "./node_modules/homebridge-plugin-utils/build/tsconfig.plugin.json",
  *
  *   "include": [
  *

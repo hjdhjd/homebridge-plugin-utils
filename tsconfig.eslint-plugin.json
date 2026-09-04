@@ -27,6 +27,6 @@
     "sourceMap": false
   },
 
-  "extends": "./build/tsconfig.json",
+  "extends": "./build/tsconfig.library.json",
   "files": [ "build/eslint-plugin/index.mjs" ]
 }

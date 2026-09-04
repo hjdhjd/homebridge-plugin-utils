@@ -1,0 +1,15 @@
+/* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
+ *
+ * tsconfig.plugin.json: The profile for a Homebridge plugin, turning declaration and declaration map emit off over the shared base. A plugin publishes no types and
+ * carries no `exports` field, so the declaration files a build would emit have no reader. Both settings are spelled out here rather than left to the compiler's
+ * defaults, so the decision is written down in the file that makes it.
+ */
+{
+  "compilerOptions": {
+
+    "declaration": false,
+    "declarationMap": false
+  },
+
+  "extends": "./tsconfig.json"
+}

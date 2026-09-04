@@ -12,6 +12,6 @@
   },
 
   "exclude": [ "dist", "node_modules" ],
-  "extends": "./build/tsconfig.json",
+  "extends": "./build/tsconfig.library.json",
   "include": [ "build", "eslint.config.mjs", "src", "ui" ]
 }

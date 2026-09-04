@@ -61,6 +61,12 @@ export interface RateBudgetOptions {
  * dispose. That is the deliberate contrast with `TimerRegistry`, which holds real platform timers and therefore must implement `Disposable` and drain them: this class
  * holds only bookkeeping - an array of numbers and a promise chain - which the garbage collector reclaims on its own.
  *
+ * Time is the wall clock. Grants are pruned from the front of the log on the premise that timestamps never decrease, and the production {@link Clock} reads
+ * `Date.now()`, which a clock correction on the host can step. A backward step keeps the grants issued before it inside the window for about the size of the step, so
+ * the budget admits fewer calls than the contract allows and never more; a forward step ages them out early and can release one burst of up to `capacity` inside a
+ * true window. Both are accepted by design: a synchronized host slews small offsets and steps by seconds against windows of minutes, the large forward steps come at
+ * boot with an empty log or after a suspend the remote clock shared, and a monotonic source would go blind across that suspend instead.
+ *
  * @example
  *
  * ```ts

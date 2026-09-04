@@ -363,12 +363,14 @@ describe("RateBudget - cancellation", () => {
     const clock = new TestClock();
     const failure = new Error("the clock broke");
 
-    // A clock whose delay fails outright. The cancellation normalization consults the signals and finds neither aborted, so the underlying failure must reach the
-    // caller untouched rather than being reported as a cancellation.
+    // A clock whose delay fails outright, with its other members delegating to the row's own clock so the literal is a faithful Clock in every respect but the one
+    // under test. The cancellation normalization consults the signals and finds neither aborted, so the underlying failure must reach the caller untouched rather
+    // than being reported as a cancellation.
     const failingClock: Clock = {
 
       delay: (): Promise<void> => Promise.reject(failure),
-      now: (): number => clock.now()
+      now: (): number => clock.now(),
+      schedule: (callback: () => void, ms: number, init?: { repeat?: boolean }): Disposable => clock.schedule(callback, ms, init)
     };
     const budget = new RateBudget({ capacity: 1, clock: failingClock, window: 1000 });
 

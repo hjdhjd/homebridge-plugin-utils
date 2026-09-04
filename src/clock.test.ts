@@ -1,14 +1,16 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * clock.test.ts: Unit tests for the injectable Clock seam - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
- * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape), plus the shipped controllable TestClock double (advanceable virtual time,
- * deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on both resolution
- * paths, the requested-delay history across every settlement path, the earliest-pending-deadline read, and the step that lands on that deadline).
+ * clock.test.ts: Unit tests for the injectable Clock contract - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
+ * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, and its schedule() IS the global callback timers read at call time), plus
+ * the shipped controllable TestClock double (advanceable virtual time, deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises
+ * AbortError on abort, the no-listener-leak teardown on both resolution paths, the requested history across every settlement path, the earliest-pending-deadline read,
+ * the step that lands on that deadline, and the callback timers that share that one timeline with the delays).
  */
 import { describe, test } from "node:test";
 import type { Clock } from "./clock.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { systemClock } from "./clock.ts";
 
 // Flush the microtask queue so a delay that became due during a synchronous `advance` has run its `resolve`/`reject` continuation before the test inspects the outcome.
@@ -90,6 +92,43 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
       return true;
     });
+  });
+
+  test("systemClock.schedule arms the global timers, so a harness that replaces them observes every timer", (t) => {
+
+    // The per-test enable is auto-restored when the row ends, so the real-time row that follows is never driven by a mock left running. This is the one mock-timer
+    // use this suite keeps, because it is the contract every consumer suite that drives mock timers through an injected clock depends on.
+    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
+
+    const fired: string[] = [];
+    const oneShot = systemClock.schedule(() => fired.push("one-shot"), 10);
+
+    t.mock.timers.tick(10);
+
+    assert.deepEqual(fired, ["one-shot"], "the production clock's one-shot is a global timer the harness can tick");
+
+    const repeat = systemClock.schedule(() => fired.push("repeat"), 10, { repeat: true });
+
+    t.mock.timers.tick(20);
+
+    assert.deepEqual(fired, [ "one-shot", "repeat", "repeat" ], "and its repeat is a global interval firing once per window");
+
+    repeat[Symbol.dispose]();
+    t.mock.timers.tick(1000);
+
+    assert.equal(fired.length, 3, "disposing the handle cancels the underlying global timer, so a further tick fires nothing");
+
+    oneShot[Symbol.dispose]();
+  });
+
+  test("systemClock.schedule fires a one-shot against real elapsed time", async () => {
+
+    const { promise, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
+    const handle = systemClock.schedule((): void => resolve(), 5);
+
+    await promise;
+
+    handle[Symbol.dispose]();
   });
 });
 
@@ -263,13 +302,14 @@ describe("TestClock - abort and no-leak", () => {
     const controller = new AbortController();
 
     // A delay WITH a (non-aborting) signal that resolves by advance. The resolve path must detach the abort listener via dispose - so a later abort of the same signal
-    // does nothing (no late rejection, no second settlement). We prove the detachment by aborting AFTER resolution and confirming nothing changes and no unhandled
-    // rejection surfaces.
+    // does nothing (no late rejection, no second settlement). We prove the detachment by reading the listener count on the signal directly, and then by aborting AFTER
+    // resolution and confirming nothing changes and no unhandled rejection surfaces.
     const waited = clock.delay(100, { signal: controller.signal });
 
     clock.advance(100);
     await waited;
 
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0, "the resolve path detaches the abort listener");
     assert.equal(clock.pending, 0, "the resolved delay must be cleared from pending");
 
     // Aborting the signal after the listener was detached must be inert: the promise already resolved, and the detached listener cannot fire a late rejection.
@@ -442,5 +482,192 @@ describe("TestClock - requested history and stepping", () => {
     assert.equal(clock.now(), 300, "the drain leaves the clock standing on the last deadline");
     assert.equal(clock.pending, 0, "and nothing is left pending");
     assert.deepEqual(clock.requested, [ 300, 100, 200 ], "the history keeps call order, not deadline order");
+  });
+});
+
+describe("TestClock - callback timers", () => {
+
+  test("a one-shot fires exactly once at its deadline, and its handle is inert afterwards", () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+    const handle = clock.schedule(() => fired.push("one-shot"), 100);
+
+    assert.equal(clock.pending, 1, "an armed timer is outstanding until it fires");
+
+    clock.advance(99);
+
+    assert.deepEqual(fired, [], "an advance short of the deadline fires nothing");
+
+    clock.advance(1);
+
+    assert.deepEqual(fired, ["one-shot"], "crossing the deadline fires the callback");
+    assert.equal(clock.pending, 0, "and a fired one-shot has left the timeline");
+
+    clock.advance(1000);
+
+    assert.deepEqual(fired, ["one-shot"], "a one-shot fires once, never again on a later advance");
+
+    // Disposing a handle whose one-shot already fired finds nothing to remove, so it must neither throw nor disturb the timeline.
+    handle[Symbol.dispose]();
+    handle[Symbol.dispose]();
+
+    assert.equal(clock.pending, 0, "disposing after the fire, and disposing twice, are both no-ops");
+  });
+
+  test("disposing a one-shot before its deadline cancels it", () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+    const handle = clock.schedule(() => fired.push("cancelled"), 100);
+
+    handle[Symbol.dispose]();
+
+    assert.equal(clock.pending, 0, "a cancelled timer leaves the timeline immediately");
+
+    clock.advance(1000);
+
+    assert.deepEqual(fired, [], "and nothing fires once the deadline passes");
+  });
+
+  test("a repeat re-arms from its own deadline rather than from the current time, and its dispose stops it", () => {
+
+    const clock = new TestClock();
+    const fired: number[] = [];
+    const handle = clock.schedule(() => fired.push(clock.now()), 10, { repeat: true });
+
+    // A span of 25 covers the deadlines at 10 and at 20 but not the one at 30. A repeat re-armed from the current time instead of from its own deadline would fire
+    // once here and land its next deadline at 35, so this input separates the correct cadence from that drift.
+    clock.advance(25);
+
+    assert.deepEqual(fired, [ 25, 25 ], "one fire per elapsed interval, not one per advance");
+    assert.equal(clock.pending, 1, "a repeat stays on the timeline across its fires");
+
+    clock.advance(5);
+
+    assert.equal(fired.length, 3, "the third window elapses at 30, exactly one interval past the second");
+
+    handle[Symbol.dispose]();
+
+    assert.equal(clock.pending, 0, "disposing the handle takes the repeat off the timeline");
+
+    clock.advance(1000);
+
+    assert.equal(fired.length, 3, "and nothing fires afterwards");
+  });
+
+  test("a repeat floors its first deadline and its period at one millisecond", () => {
+
+    const clock = new TestClock();
+    let fired = 0;
+    const handle = clock.schedule(() => fired++, 0, { repeat: true });
+
+    // The platform floors a zero-period interval at one millisecond, first fire included. A first deadline seeded from the raw zero would come due immediately and
+    // then once more per pass, so this span reads four fires against a floored three.
+    clock.advance(3);
+
+    assert.equal(fired, 3, "a zero-period repeat fires once per millisecond of elapsed virtual time");
+    assert.deepEqual(clock.requested, [0], "and the ledger records the window as asked, before the floor");
+
+    handle[Symbol.dispose]();
+  });
+
+  test("delays and callbacks settle on one timeline in deadline order, FIFO on a tie", async () => {
+
+    const clock = new TestClock();
+    const observed: number[] = [];
+
+    // A delay registered FIRST at the same deadline as a callback, so the tie is decided by registration order rather than by kind. The delay's continuation runs on
+    // a later microtask while a callback runs inside `advance`, so each callback reads the pending count `advance` has reached at the moment it fires.
+    const waited = clock.delay(10);
+
+    clock.schedule(() => observed.push(clock.pending), 10);
+    clock.schedule(() => observed.push(clock.pending), 20);
+
+    assert.equal(clock.nextDeadline, 10, "the shared earliest deadline answers before anything settles");
+
+    clock.advance(20);
+
+    assert.deepEqual(observed, [ 1, 0 ], "the delay left the list on the tie before the callback at 10 ran, and the callback at 20 ran last");
+    assert.equal(clock.pending, 0, "every entry has settled");
+
+    await waited;
+  });
+
+  test("a callback that arms an already-due timer from inside its fire settles it in the same advance", () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+
+    clock.schedule(() => {
+
+      fired.push("outer");
+      clock.schedule(() => fired.push("inner, already due"), 0);
+      clock.schedule(() => fired.push("inner, still future"), 50);
+    }, 10);
+
+    clock.advance(10);
+
+    assert.deepEqual(fired, [ "outer", "inner, already due" ], "an already-due timer armed mid-pass settles in that pass, as the platform settles it in one tick");
+    assert.equal(clock.pending, 1, "the future timer is left armed");
+    assert.equal(clock.nextDeadline, 60, "measured from the virtual time at which it was armed");
+  });
+
+  test("a callback that disposes a sibling due at the same deadline cancels it mid-pass", () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+
+    // The first callback closes over the second handle, which is initialized on the next statement. The closure runs during `advance`, long after that
+    // initialization, so it reads a live handle rather than a hole.
+    clock.schedule(() => {
+
+      fired.push("first");
+      second[Symbol.dispose]();
+    }, 10);
+
+    const second = clock.schedule(() => fired.push("second"), 10);
+
+    clock.advance(10);
+
+    assert.deepEqual(fired, ["first"], "the pass re-checks each entry at fire time, so a sibling cancelled mid-pass never fires");
+    assert.equal(clock.pending, 0, "and neither entry is stranded on the timeline");
+  });
+
+  test("a repeat fired by a nested advance is not fired again by the outer pass", () => {
+
+    const clock = new TestClock();
+
+    let repeats = 0;
+
+    // A one-shot that advances the clock from inside its own fire, registered BEFORE a repeat sharing its deadline. The nested advance settles the repeat's first two
+    // windows; the outer pass then reaches the repeat's snapshot entry with a deadline it has already pushed past, which the fire-time due check must decline.
+    clock.schedule(() => clock.advance(10), 10);
+
+    const handle = clock.schedule(() => repeats++, 10, { repeat: true });
+
+    clock.advance(10);
+
+    assert.equal(repeats, 2, "the repeat fires once per window the nested advance crossed, and no extra time for the outer pass");
+    assert.equal(clock.now(), 20, "the nested advance moved the timeline the outer pass then measures against");
+
+    handle[Symbol.dispose]();
+  });
+
+  test("requested and advanceToNext cover callback timers beside delays", () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+
+    clock.delay(100);
+    clock.schedule(() => fired.push("timer at 40"), 40);
+    clock.delay(250);
+
+    assert.deepEqual(clock.requested, [ 100, 40, 250 ], "a scheduled window lands in the ledger in call order, beside the delays");
+    assert.equal(clock.nextDeadline, 40, "a callback timer is an equal candidate for the earliest deadline");
+    assert.equal(clock.advanceToNext(), true);
+    assert.equal(clock.now(), 40, "the step lands on the callback timer's deadline");
+    assert.deepEqual(fired, ["timer at 40"], "and the step fires it rather than only settling delays");
+    assert.equal(clock.pending, 2, "the two later delays are left alone");
   });
 });

@@ -1,15 +1,19 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * clock-double.ts: A reusable, controllable Clock test double - virtual time a test advances explicitly - for the injectable Clock seam in clock.ts.
+ * clock-double.ts: A reusable, controllable Clock test double - one virtual timeline a test advances explicitly, carrying awaited delays and callback timers alike.
  */
 
 /**
  * A reusable, controllable {@link Clock} test double.
  *
- * The {@link Clock} seam in `clock.ts` exists so a consuming plugin's time-dependent code can be driven without real wall-clock waits. This module ships the fake that
- * cashes that in: a {@link TestClock} over a virtual timeline a test advances explicitly. `now()` returns the virtual time; `delay()` registers a pending wait that
- * resolves only when {@link TestClock.advance} crosses its deadline, or rejects when its signal aborts - matching `node:timers/promises` `setTimeout`'s `AbortError`
- * shape. No real timers and no wall-clock are used, so a consumer's pacing/timeout/duration path runs deterministically and instantly under test.
+ * The {@link Clock} contract in `clock.ts` exists so a consuming plugin's time-dependent code can be driven without real wall-clock waits. This module ships the fake
+ * that cashes that in: a {@link TestClock} over one virtual timeline a test advances explicitly. `now()` returns the virtual time; `delay()` registers a pending wait
+ * that resolves only when {@link TestClock.advance} crosses its deadline, or rejects when its signal aborts - matching `node:timers/promises` `setTimeout`'s
+ * `AbortError` shape; `schedule()` registers a callback timer that runs inside `advance` when its deadline is crossed, once or on repeat. No real timers and no
+ * wall-clock are used, so a consumer's pacing, timeout, and heartbeat paths all run deterministically and instantly under test.
+ *
+ * Both shapes share ONE timeline, which is the point: a scenario spanning a backoff wait and a liveness deadline is driven by a single `advance` rather than by a
+ * clock for the waits and a mock-timer harness for the deadlines, and they interleave exactly as the platform would order them.
  *
  * Beside the timeline the double keeps the ledger a pacing assertion reads: `requested` is every `ms` a consumer asked for, in call order, and `advanceToNext()`
  * steps straight to the earliest pending deadline - so a suite drives a consumer's schedule by the numbers the consumer chose rather than by numbers it restates.
@@ -25,16 +29,17 @@ import type { Nullable } from "./util.ts";
 import { onAbort } from "./util.ts";
 
 /**
- * A single registered, not-yet-settled delay. `deadline` is the virtual time at or after which the wait resolves; `resolve` settles the caller's promise when the
- * deadline is crossed; `dispose` detaches the abort listener (present only when a signal was supplied, absent otherwise). The matching `reject` is held by the abort
- * handler's closure rather than stored here, since only the abort path needs it.
+ * A single registered, not-yet-settled timeline entry, tagged by `kind` so {@link TestClock.advance} branches on the tag rather than on whichever optional fields
+ * happen to be present. Every arm carries `deadline`, the virtual time at or after which the entry comes due, because one ordered list holds them all.
+ *
+ * A `"delay"` entry settles an awaited wait: `resolve` settles the caller's promise, and `dispose` detaches the abort listener (present only when a signal was
+ * supplied, absent otherwise). The matching `reject` is held by the abort handler's closure rather than stored here, since only the abort path needs it. A `"once"`
+ * entry runs its `callback` and leaves the list. A `"repeat"` entry runs its `callback` and re-arms itself `interval` milliseconds past its own deadline, staying in
+ * the list until its handle is disposed.
  */
-interface ClockEntry {
-
-  deadline: number;
-  dispose?: Disposable;
-  resolve: () => void;
-}
+type ClockEntry = { deadline: number; dispose?: Disposable; kind: "delay"; resolve: () => void } |
+  { callback: () => void; deadline: number; kind: "once" } |
+  { callback: () => void; deadline: number; interval: number; kind: "repeat" };
 
 /**
  * Construct the rejection a {@link TestClock} `delay` produces when its signal aborts, matching `node:timers/promises` `setTimeout` exactly: a plain `Error` whose `name`
@@ -58,9 +63,14 @@ function abortError(): Error {
 }
 
 /**
- * A controllable {@link Clock} double over virtual time. `now()` returns the current virtual time; `delay()` registers a pending wait that resolves only when
- * {@link TestClock.advance} crosses its deadline (in ascending-deadline order), or rejects with an `AbortError` (matching `node:timers/promises` `setTimeout` - `name`
- * `"AbortError"`, `code` `"ABORT_ERR"`, NOT the signal's reason) when its signal aborts. No real timers or wall-clock are used.
+ * A controllable {@link Clock} double over virtual time, carrying awaited delays and callback timers on one timeline. `now()` returns the current virtual time;
+ * `delay()` registers a pending wait that resolves only when {@link TestClock.advance} crosses its deadline (in ascending-deadline order), or rejects with an
+ * `AbortError` (matching `node:timers/promises` `setTimeout` - `name` `"AbortError"`, `code` `"ABORT_ERR"`, NOT the signal's reason) when its signal aborts;
+ * `schedule()` registers a callback timer that `advance` runs when it crosses that deadline, once or on repeat. No real timers or wall-clock are used.
+ *
+ * A callback and an awaited delay settle at different moments, which a test that observes both has to account for: a callback runs SYNCHRONOUSLY inside `advance`,
+ * while an awaited delay's continuation runs on a later microtask, so a callback firing at the same deadline as a delay observes the state `advance` has reached
+ * rather than the state the awaiting code will later see.
  *
  * The virtual time is a RELATIVE timeline seeded at `start` (default `0`), NOT real epoch milliseconds. A consumer that compares `now()` against an absolute real-epoch
  * constant would diverge; consumers must only compare `now()` values to each other (deriving elapsed intervals from differences), which is the only use a
@@ -74,8 +84,9 @@ function abortError(): Error {
  * const clock = new TestClock();
  *
  * const waited = clock.delay(100);
+ * using heartbeat = clock.schedule(() => beat(), 25, { repeat: true });
  *
- * // Nothing resolves until virtual time crosses the deadline.
+ * // Nothing resolves and nothing fires until virtual time crosses each deadline.
  * clock.advance(100);
  *
  * await waited;
@@ -88,17 +99,20 @@ function abortError(): Error {
 export class TestClock implements Clock {
 
   /**
-   * Every `ms` a {@link TestClock.delay} call asked for, in call order. A request lands here before its wait is registered and whatever later becomes of that wait,
-   * so a delay the clock crossed, one whose signal aborted mid-wait, and one whose signal was already aborted all appear. That is the ledger a suite does its
-   * cadence arithmetic against - a history that dropped the waits which never came due would understate exactly the loops worth asserting on.
+   * Every `ms` a {@link TestClock.delay} or {@link TestClock.schedule} call asked for, in call order. A request lands here before its entry is registered and whatever
+   * later becomes of that entry, so a delay the clock crossed, one whose signal aborted mid-wait, one whose signal was already aborted, and a cancelled callback timer
+   * all appear. That is the ledger a suite does its cadence arithmetic against - a history that dropped the entries which never came due would understate exactly the
+   * loops worth asserting on. Delays and callback timers share it, so a clock driving several timers at once is read BY VALUE (`requested.includes(...)`, a count of a
+   * given window) rather than at a fixed index, since the interleaving depends on what the consumer armed when.
    */
   public readonly requested: number[] = [];
 
   // The current virtual time. Seeded by the constructor and moved only by `advance`.
   #now: number;
 
-  // The registered, not-yet-settled delays. An entry leaves this list exactly once - either when `advance` crosses its deadline or when its signal aborts - via
-  // `#remove`, which splices by identity so a mixed resolve-and-abort sequence never strands or mis-removes an entry.
+  // The registered, not-yet-settled entries: delays and callback timers on one list. A delay or a one-shot leaves this list exactly once - when `advance` crosses its
+  // deadline, when its signal aborts, or when its handle is disposed - via `#remove`, which splices by identity so a mixed settle-and-cancel sequence never strands or
+  // mis-removes an entry. A repeat stays until its handle is disposed.
   readonly #pending: ClockEntry[] = [];
 
   /**
@@ -112,13 +126,17 @@ export class TestClock implements Clock {
   }
 
   /**
-   * Advance virtual time by `ms` and resolve every delay whose deadline the new time has reached. The delta is applied regardless of sign, so a negative `ms` moves time
-   * backward; `advance(0)` moves time nowhere but STILL flushes any already-due entry (a `delay(0)` or a `delay` with a non-positive `ms`), so a zero or negative delay
-   * is never a lost wakeup.
+   * Advance virtual time by `ms`, resolving every delay and running every callback timer whose deadline the new time has reached. The delta is applied regardless of
+   * sign, so a negative `ms` moves time backward; `advance(0)` moves time nowhere but STILL flushes any already-due entry (a `delay(0)`, a zero-delay callback timer, or
+   * an entry with a non-positive `ms`), so a zero or negative window is never a lost wakeup.
    *
-   * Due entries resolve in ASCENDING deadline order; entries that share a deadline keep their FIFO registration order, because the snapshot is taken before any removal
-   * and the numeric sort is stable - matching how `setTimeout` fires equal-deadline timers in scheduling order. Each due entry is removed by identity and has its abort
-   * listener detached before it resolves, so the resolve path leaks no listener and the iteration is immune to the index shifts a forward in-place splice would cause.
+   * Due entries settle in ASCENDING deadline order; entries that share a deadline keep their FIFO registration order, because each pass snapshots before any removal and
+   * the numeric sort is stable - matching how the platform fires equal-deadline timers in scheduling order. A delay is removed by identity and has its abort listener
+   * detached before it resolves, so the resolve path leaks no listener; a one-shot is removed before its callback runs; a repeat re-arms from its own deadline and stays.
+   *
+   * A callback runs synchronously inside this call, so it observes the clock mid-pass and may register or cancel entries. Anything it arms that is ALREADY due fires
+   * within this same `advance`, exactly as the platform processes it within one tick - which also means a callback that re-arms a zero-delay one-shot on every fire
+   * spins here as it would spin on the platform.
    *
    * @param ms - The amount of virtual time to advance, in milliseconds. May be zero or negative.
    */
@@ -126,28 +144,77 @@ export class TestClock implements Clock {
 
     this.#now += ms;
 
-    // Snapshot the due entries BEFORE mutating `#pending`, then sort them into deadline order. Filtering off a live array while removing from it would shift indices and
-    // strand entries; the snapshot first decouples the iteration from the removal. The sort is a stable numeric comparator, so equal deadlines preserve FIFO order.
-    const due = this.#pending.filter((entry) => entry.deadline <= this.#now).sort((a, b) => a.deadline - b.deadline);
+    // Settle in passes rather than in one sweep, because a callback can arm an already-due entry from inside its own fire (a watchdog re-arm at an elapsed window, a
+    // zero-delay one-shot). Each pass re-snapshots, so those entries settle in this same advance; the loop ends the first time a pass finds nothing due.
+    for(;;) {
 
-    for(const entry of due) {
+      // Snapshot the due entries BEFORE mutating `#pending`, then sort them into deadline order. Filtering off a live array while removing from it would shift indices
+      // and strand entries; the snapshot first decouples the iteration from the removal. The sort is a stable numeric comparator, so equal deadlines preserve FIFO order.
+      const due = this.#pending.filter((entry) => entry.deadline <= this.#now).sort((a, b) => a.deadline - b.deadline);
 
-      // Remove by identity first so a re-entrant observer sees the correct `pending` count, then detach the abort listener (present only when this delay had a signal) so
-      // the resolve path leaves no listener on a long-lived signal, then settle the caller's promise.
-      this.#remove(entry);
-      entry.dispose?.[Symbol.dispose]();
-      entry.resolve();
+      if(due.length === 0) {
+
+        return;
+      }
+
+      for(const entry of due) {
+
+        /* Re-check each entry at fire time rather than trusting the snapshot, because the snapshot is a plan a callback earlier in the same pass can invalidate. Two
+         * things can have changed. A sibling callback may have disposed this entry, so the membership test keeps a cancelled timer from firing anyway. And a callback
+         * that ran a nested `advance` may already have settled this entry and pushed a repeat's deadline past the outer pass's time, so the due test keeps that repeat
+         * from firing a second time for one window.
+         */
+        if(!this.#pending.includes(entry) || (entry.deadline > this.#now)) {
+
+          continue;
+        }
+
+        switch(entry.kind) {
+
+          case "delay": {
+
+            // Remove by identity first so a re-entrant observer sees the correct `pending` count, then detach the abort listener (present only when this delay had a
+            // signal) so the resolve path leaves no listener on a long-lived signal, then settle the caller's promise.
+            this.#remove(entry);
+            entry.dispose?.[Symbol.dispose]();
+            entry.resolve();
+
+            break;
+          }
+
+          case "once": {
+
+            // A one-shot leaves the list before it runs, so its callback and anything that callback triggers read `pending` without it, and disposing the handle
+            // afterwards finds nothing left to remove.
+            this.#remove(entry);
+            entry.callback();
+
+            break;
+          }
+
+          case "repeat": {
+
+            // Re-arm from the entry's OWN deadline rather than from the current time, so a long advance fires a repeat once per elapsed interval instead of once per
+            // advance and the cadence never drifts. The re-arm lands BEFORE the callback runs, so a callback that disposes its own handle cancels the next fire.
+            entry.deadline += entry.interval;
+            entry.callback();
+
+            break;
+          }
+        }
+      }
     }
   }
 
   /**
-   * Advance virtual time to the earliest pending deadline and settle everything due there - the step a consumer's next real timer firing would produce. A clock
-   * with nothing pending answers `false` and moves no time.
+   * Advance virtual time to the earliest pending deadline and settle everything due there - the step a consumer's next real timer firing would produce. Delays and
+   * callback timers are equal candidates for that deadline. A clock with nothing pending answers `false` and moves no time.
    *
-   * The step is `Math.max(0, deadline - now())`, so an entry that is already due - a `delay(0)`, or a `delay` with a negative `ms` - is flushed through
+   * The step is `Math.max(0, deadline - now())`, so an entry that is already due - a `delay(0)`, or an entry with a negative `ms` - is flushed through
    * {@link TestClock.advance}'s zero path rather than reached backward for. Entries sharing the earliest deadline settle together within the one step, in
    * {@link TestClock.advance}'s own order, since `advance` stays the single place an entry settles. A whole schedule drains with
-   * `while(clock.advanceToNext()) { ... }`: each pass settles one deadline's worth of waits, and the loop ends when nothing is left.
+   * `while(clock.advanceToNext()) { ... }`: each pass settles one deadline's worth of entries, and the loop ends when nothing is left - though a repeating timer never
+   * empties the list, so a drain loop over one of those needs its own bound.
    *
    * @returns `true` when a deadline was stepped to, `false` when nothing was pending.
    */
@@ -182,7 +249,7 @@ export class TestClock implements Clock {
   public delay(ms: number, init?: { signal?: AbortSignal }): Promise<void> {
 
     const { promise, reject, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
-    const entry: ClockEntry = { deadline: this.#now + ms, resolve };
+    const entry: ClockEntry = { deadline: this.#now + ms, kind: "delay", resolve };
 
     // Record the request before the entry is registered, so the history covers every call rather than only the calls that survive registration: a pre-aborted
     // signal removes its entry within this very call, and a wait a consumer asked for belongs to its cadence whether or not the wait ever came due.
@@ -216,10 +283,41 @@ export class TestClock implements Clock {
   }
 
   /**
-   * The earliest deadline among the registered delays that have neither resolved nor rejected, and `null` when nothing is pending. A test reads it to assert WHEN a
-   * consumer's next wait comes due, where {@link TestClock.pending} answers how many of them are outstanding.
+   * Register a callback timer that {@link TestClock.advance} runs when virtual time reaches its deadline: once at `this.now() + ms`, or every `ms` from that point when
+   * `init.repeat` is set. The callback runs synchronously inside `advance`, not on a microtask, so a test reads its effects immediately after the advance returns.
    *
-   * @returns The earliest pending deadline, in virtual time, or `null` when no delay is pending.
+   * A repeat floors BOTH its first deadline and its period at one millisecond, because the platform's `setInterval` floors a zero or negative period the same way - a
+   * repeat seeded from a raw zero would otherwise fire once per pass rather than once per elapsed millisecond. A one-shot's deadline is uncoerced, matching `delay`, so
+   * a non-positive `ms` comes due at or before the current time and the very next `advance` (including `advance(0)`) flushes it. The call's `ms` is recorded in
+   * {@link TestClock.requested} as asked, before either coercion.
+   *
+   * @param callback - The function to run when the timer fires.
+   * @param ms       - The timer's window, in milliseconds.
+   * @param init     - Optional init options. `repeat` arms a repeating timer rather than a one-shot.
+   *
+   * @returns A handle whose `[Symbol.dispose]` cancels the timer by removing its entry from the timeline. Disposing after a one-shot has fired, and disposing a second
+   * time, find nothing to remove and do nothing.
+   */
+  public schedule(callback: () => void, ms: number, init?: { repeat?: boolean }): Disposable {
+
+    const interval = Math.max(1, ms);
+
+    // Record the request as asked, before the repeat floor, so the ledger reads back the window the consumer chose rather than the one the platform would enforce.
+    this.requested.push(ms);
+
+    const entry: ClockEntry = (init?.repeat ?? false) ? { callback, deadline: this.#now + interval, interval, kind: "repeat" } :
+      { callback, deadline: this.#now + ms, kind: "once" };
+
+    this.#pending.push(entry);
+
+    return { [Symbol.dispose]: (): void => this.#remove(entry) };
+  }
+
+  /**
+   * The earliest deadline among the registered entries that have not yet settled - delays and callback timers alike - and `null` when nothing is pending. A test reads
+   * it to assert WHEN a consumer's next wait or next timer comes due, where {@link TestClock.pending} answers how many of them are outstanding.
+   *
+   * @returns The earliest pending deadline, in virtual time, or `null` when nothing is pending.
    */
   public get nextDeadline(): Nullable<number> {
 
@@ -239,18 +337,18 @@ export class TestClock implements Clock {
   }
 
   /**
-   * The number of registered delays that have neither resolved nor rejected. A test reads this to assert a consumer registered its waits and later cleared them (no
-   * leak).
+   * The number of registered entries that have not yet settled, counting pending delays and armed callback timers together. A test reads this to assert a consumer
+   * registered its waits and timers and later cleared them (no leak). A repeating timer counts once and keeps counting until its handle is disposed.
    *
-   * @returns The count of unsettled delays.
+   * @returns The count of outstanding entries.
    */
   public get pending(): number {
 
     return this.#pending.length;
   }
 
-  // Remove `entry` from `#pending` by identity. A guarded `indexOf` + `splice` makes a second removal (e.g. an abort that races a resolve) a safe no-op and
-  // never removes the wrong entry, so `#pending` stays consistent across any resolve-and-abort interleaving.
+  // Remove `entry` from `#pending` by identity. A guarded `indexOf` + `splice` makes a second removal (an abort that races a resolve, a handle disposed after its
+  // one-shot fired) a safe no-op and never removes the wrong entry, so `#pending` stays consistent across any settle-and-cancel interleaving.
   #remove(entry: ClockEntry): void {
 
     const index = this.#pending.indexOf(entry);

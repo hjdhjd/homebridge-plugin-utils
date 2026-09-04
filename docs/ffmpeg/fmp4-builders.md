@@ -9,8 +9,8 @@
 Shared ISO BMFF (fMP4) byte-level construction builders.
 
 The parser-aligned construction surface every consumer's tests build fragments and initialization segments on - the library's own parser, assembler, and predicate
-suites and downstream plugins alike. Ships on the package's main export alongside the other test doubles (`TestClock`, `TestRecordingProcessFactory`) so a consumer
-composes real fMP4 bytes without hand-rolling box headers or re-deriving the wire layouts the predicates read.
+suites and downstream plugins alike. Ships on the `homebridge-plugin-utils/testing` entry point alongside the other test doubles (`TestClock`,
+`TestRecordingProcessFactory`) so a consumer composes real fMP4 bytes without hand-rolling box headers or re-deriving the wire layouts the predicates read.
 
 Construction layers, from primitive to fullbox builders:
 
@@ -24,7 +24,7 @@ Construction layers, from primitive to fullbox builders:
 here so the production reader and the construction path share one definition. Test-only values production never consumes - the video handler-type code, used as a
 negative-path handler for `hasAudioTrack` - live in this module, which keeps the production surface to exactly what production needs.
 
-## Variables
+## Testing
 
 ### HDLR\_TYPE\_VIDE
 
@@ -36,7 +36,7 @@ Handler-type code for video tracks in ISO BMFF `hdlr` boxes: ASCII `"vide"` enco
 production never inspects it - `hasAudioTrack` compares each track's handler_type against `HDLR_TYPE_SOUN` and any non-match (including `"vide"`) is treated
 uniformly as "not audio." Tests need a concrete non-audio value to exercise the negative path of that predicate, so the constant lives with the test builders.
 
-## Functions
+***
 
 ### makeBox()
 

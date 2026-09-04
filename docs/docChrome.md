@@ -134,14 +134,22 @@ type DocEntry =
   kind: "doc";
   masthead?: boolean;
   title: string;
+}
+  | {
+  blurb: string;
+  kind: "external";
+  title: string;
+  url: string;
 };
 ```
 
 One documentation-index entry. A discriminated union on `kind`: a `"doc"` entry points at a file under the plugin's `docs/` tree (and may opt out of the masthead via
 `masthead: false`, or of the documentation-footer region via `footer: false` - with both opted out, a linked file such as the changelog stays entirely free of stamped
-chrome while remaining listed in every documentation index), while a `"readme-anchor"` entry points at a section anchor within the README itself. The renderer derives
-the correct href per surface from this one canonical shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere
-else.
+chrome while remaining listed in every documentation index), a `"readme-anchor"` entry points at a section anchor within the README itself, and an `"external"` entry
+points at a destination outside the repository - a sibling project's documentation, say. The renderer derives the correct href per surface from this one canonical
+shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere else. An external entry is the one kind with nothing
+to derive: it names a complete destination, so its `url` renders verbatim on every surface, and the chrome stamper passes over it because there is no file of the
+plugin's own to stamp.
 
 ***
 
@@ -347,8 +355,8 @@ Render the documentation index for a surface. On the markdown surfaces (`"readme
 entry; on `"webui"` it is one `<h5>` heading per section followed by a `<div class="px-4">` wrapping the section's `<ul>`, which is the indented body under a
 flush heading that matches the rhythm of the hand-authored sections a webUI support tab surrounds it with. The indent belongs to the wrapper rather than to the
 list because a list's indentation is its own padding, which a padding utility on the list element replaces rather than composes with. Href derivation follows the
-surface: in-README anchors on `"readme"`, absolute blob URLs elsewhere. A `"doc-footer"` render omits the current document (via `currentFile`) and drops any
-section left empty by that omission, so a doc's own footer never links back to itself.
+surface: in-README anchors on `"readme"`, absolute blob URLs elsewhere, and an external entry's own URL wherever it is listed. A `"doc-footer"` render omits the
+current document (via `currentFile`) and drops any section left empty by that omission, so a doc's own footer never links back to itself.
 
 #### Parameters
 

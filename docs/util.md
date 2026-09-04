@@ -250,6 +250,7 @@ Options accepted by [retry](#retry).
 | ------ | ------ | ------ |
 | <a id="attempts"></a> `attempts?` | `number` | Total number of attempts, including the first. Must be >= 1. Defaults to 3. Values less than 1 throw synchronously (rejected promise) at the top of `retry()`. Pass `Infinity` for unbounded attempts - the loop then terminates only on success, an abort, or a `shouldRetry` veto, never on an exhausted budget. |
 | <a id="backoff"></a> `backoff?` | (`attempt`) => `number` | Backoff policy, invoked with the attempt number (1-indexed) about to be run. The returned value is the delay in milliseconds before running that attempt. Called only between attempts (i.e., never with `attempt === 1`). Defaults to [defaultRetryBackoff](#defaultretrybackoff) (exponential with a 30-second ceiling). |
+| <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | Optional time source for the between-attempt backoff waits. Defaults to [systemClock](clock.md#systemclock), whose `delay` IS the platform `node:timers/promises` `setTimeout`, so the default path is that same platform call with one indirection in front of it and no behavior change. Supplying a controllable clock (`TestClock`) puts the backoff schedule on virtual time, so a test asserts what the policy actually waited instead of waiting it out in real seconds. |
 | <a id="shouldretry"></a> `shouldRetry?` | (`error`, `attemptNumber`) => `boolean` | Optional predicate consulted after an attempt throws and attempts remain. Receives the rejected error and the 1-indexed number of the attempt that just failed; return `false` to stop immediately and rethrow that error (no backoff wait, no further attempts), or `true` to retry per the backoff policy. When omitted, every error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the mechanism that lets a caller retry some failures and fail fast on others (e.g. retry network faults but give up on an authentication error) without owning the attempt loop itself. |
 | <a id="signal"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional abort signal. Aborting cancels any in-flight backoff wait and is forwarded verbatim to `operation` as its own signal argument, so well-behaved operations cancel too. An abort at any point - mid-attempt, mid-backoff, or before the first attempt - rejects the outer promise with the signal's reason. |
 
@@ -486,6 +487,37 @@ time through a discriminated union - the "no abort mechanism" case is unrepresen
 
 ***
 
+### consoleLog
+
+```ts
+const consoleLog: HomebridgePluginLogging;
+```
+
+A shippable console-backed [HomebridgePluginLogging](#homebridgepluginlogging) for a plugin's Homebridge custom-UI server: `error`, `info`, and `warn` reach the console, and
+`debug` discards its arguments.
+
+A custom-UI server runs as a child process, and Config UI X captures that process's console output into the Homebridge UI log prefixed by the plugin's name, so a
+line written here lands where the plugin's own lines land. `HomebridgePluginUiServer` hands the server no logger of its own, which makes the console the
+sanctioned transport at that boundary and this constant the one place that shape is spelled.
+
+The debug channel is silent by design. That child process carries no debug switch to gate on, and the wire-level detail a client narrates at debug would fill every
+user's UI log for as long as the settings panel sits open...so what reaches the log is what a user acts on: failures at `error` and `warn`, lifecycle at `info`.
+A server that does have a switch composes one rather than reaching for a variant of this - `debugGatedLog(consoleLog, isEnabled)` gates the debug channel and
+leaves the other three alone.
+
+A module-scope singleton for the reason [noOpLog](#nooplog) is one: the methods are stateless, so a single shared instance serves every caller.
+
+#### Example
+
+```ts
+// Inside a plugin's homebridge-ui/server.js, where the console reaches the Homebridge UI log.
+const feed = new StatusFeed({ controller, log: consoleLog });
+
+consoleLog.info("Watching %s for status updates.", controller.name);
+```
+
+***
+
 ### noOpLog
 
 ```ts
@@ -541,6 +573,54 @@ const composed = composeSignals(this.signal, init.signal);
 
 // Compose an optional caller signal with a derived watchdog timeout.
 const composed = composeSignals(init.signal, AbortSignal.timeout(PROBE_DEFAULT_TIMEOUT_MS));
+```
+
+***
+
+### debugGatedLog()
+
+```ts
+function debugGatedLog(base, isEnabled): HomebridgePluginLogging;
+```
+
+Derive a config-gated debug [HomebridgePluginLogging](#homebridgepluginlogging) from a base logger. The `debug` level emits through the base logger's `warn` channel when `isEnabled`
+answers `true`, and is dropped without touching its arguments when it answers `false`. The `error`, `info`, and `warn` levels pass straight through to the
+corresponding base level, exactly as [prefixedLog](#prefixedlog) does, so the gate reaches the debug channel and nothing else.
+
+Warn is the emission channel because Homebridge suppresses its native DEBUG channel unless Homebridge's own global debug switch is on. A plugin that offers users
+an opt-in debug setting of its own therefore has to emit at a level Homebridge always prints, and warn additionally marks the line as diagnostic rather than
+folding it into the ordinary informational stream. The consequence runs in the other direction too, deliberately: a gate that answers `false` drops the line no
+matter what Homebridge's switch is doing, so the plugin's own setting is the single answer to whether this user wants debug output.
+
+The predicate is evaluated on every call, which is what keeps it honest against live configuration: `() => config.debug === true` reflects a setting the user just
+changed on the very next line, while a boolean captured when the wrapper was built freezes the gate at whatever it was then. The same shape carries scope without
+any per-call plumbing - a plugin whose debug setting resolves per device passes a closure over its own option lookup, and the device that lookup resolves against
+lives in the closure rather than being threaded through each logging call.
+
+Compose with [prefixedLog](#prefixedlog) gate-outermost, as `debugGatedLog(prefixedLog(base, prefix), isEnabled)`, so a suppressed debug line pays for the predicate and
+nothing else. The reverse nesting builds the prefixed string before the gate ever runs, which is precisely the work the gate exists to skip. A base that is
+itself already gated needs no special handling: a device that re-gates outermost around a `prefixedLog` over a platform's own gated logger pays one predicate
+to drop a suppressed line, since the outer gate returns before the inner one is ever consulted.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `base` | [`Logger`](#logger) | The logger that receives the passed-through calls and the gated debug output. |
+| `isEnabled` | () => `boolean` | Predicate deciding whether a debug line is emitted, evaluated on every `debug` call. |
+
+#### Returns
+
+[`HomebridgePluginLogging`](#homebridgepluginlogging)
+
+A [HomebridgePluginLogging](#homebridgepluginlogging) whose `debug` level is gated and routed to `base.warn`, and whose other levels route to the matching level of `base`.
+
+#### Example
+
+```ts
+const log = debugGatedLog(prefixedLog(platformLog, () => this.name), () => this.config.debug === true);
+
+log.debug("Polling returned %d devices.", devices.length);
 ```
 
 ***
@@ -862,6 +942,72 @@ this.ready = markHandled(readyResolvers.promise);
 
 ***
 
+### membershipDelta()
+
+```ts
+function membershipDelta<T>(currentIds, configuredIds): {
+  toAdd: T[];
+  toRemove: T[];
+};
+```
+
+Compute the membership delta between the ids a source currently reports and the ids already configured: `toAdd` holds the current ids that are not yet
+configured, `toRemove` the configured ids that are no longer current.
+
+The use case this exists for is reconciliation: a plugin asks its source what exists, holds the set of things it has already configured, and needs to know
+what arrived and what left before it touches anything. One diff answers both halves at once, and isolating it lets the reconcile that consumes it read as a
+decision followed by its effects rather than as two membership walks tangled into the work they drive. What the ids mean, and what adding or removing one
+entails, stay entirely with the caller...this decides only which ids fall on which side.
+
+Each direction is filtered against a `Set` built from the opposing input, so the cost is linear in the two lengths rather than their product. The filtering
+walks the original arrays rather than the sets, which is what keeps each output in the order its own input arrived in - the result is never sorted - and what
+keeps duplicates: an id appearing twice in `currentIds` and absent from `configuredIds` appears twice in `toAdd`. Identity is SameValueZero, the comparison
+`Set` itself uses, so `NaN` matches `NaN` and `0` matches `-0`.
+
+Neither input is mutated, and the returned arrays are freshly built, so a caller is free to sort or splice them without disturbing what it passed in.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` | The id type, commonly a string or a numeric identifier. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `currentIds` | readonly `T`[] | The ids the source currently reports. |
+| `configuredIds` | readonly `T`[] | The ids already configured. |
+
+#### Returns
+
+```ts
+{
+  toAdd: T[];
+  toRemove: T[];
+}
+```
+
+An object whose `toAdd` holds the current ids that are not configured and whose `toRemove` holds the configured ids that are not current.
+
+| Name | Type |
+| ------ | ------ |
+| `toAdd` | `T`[] |
+| `toRemove` | `T`[] |
+
+#### Example
+
+```ts
+const { toAdd, toRemove } = membershipDelta(devices.map((device) => device.id), [...this.configured.keys()]);
+
+for(const id of toRemove) {
+
+  this.retire(id);
+}
+```
+
+***
+
 ### onAbort()
 
 ```ts
@@ -983,8 +1129,9 @@ function retry<T>(operation, options?): Promise<T>;
 Retry an async operation with configurable attempts and backoff, with first-class abort signal support.
 
 The operation receives the caller's [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) directly (or a permanent never-aborted sentinel when no caller signal was provided). Well-behaved operations
-forward this signal to any cancellation-aware API they call (`fetch`, `events.once`, etc.) so the in-flight attempt actually cancels. Between-attempt waits use
-`node:timers/promises` `setTimeout` with the signal, so abort also interrupts the backoff.
+forward this signal to any cancellation-aware API they call (`fetch`, `events.once`, etc.) so the in-flight attempt actually cancels. Between-attempt waits run through
+the injected [Clock](clock.md#clock) with the signal - [systemClock](clock.md#systemclock) unless the caller supplies one - so abort also interrupts the backoff, and a test that supplies a
+controllable clock drives the whole backoff schedule on virtual time.
 
 #### Type Parameters
 

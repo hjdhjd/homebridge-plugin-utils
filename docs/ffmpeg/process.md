@@ -122,6 +122,21 @@ get aborted(): boolean;
 
 `boolean`
 
+##### commandLine
+
+###### Get Signature
+
+```ts
+get commandLine(): readonly string[];
+```
+
+The composed FFmpeg argument vector this process was spawned with, readable from construction onward. The array is the frozen copy the class itself holds, returned
+as a readonly view: callers read the exact vector the child received rather than recovering it from the construction log line.
+
+###### Returns
+
+readonly `string`[]
+
 ##### hasError
 
 ###### Get Signature

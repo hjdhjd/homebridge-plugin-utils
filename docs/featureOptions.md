@@ -47,9 +47,14 @@ The delimiter claims an entry only when the canonical reading holds together end
 option name plus a single dot-free id, and a scoped payload must carry content - at least one character that is not the delimiter itself (see
 [hasValueContent](#hasvaluecontent), which also explains why the value domain draws that line). An entry that fails either test reads under the legacy dot grammar
 instead, with the "=" as ordinary value text: `Enable.Security.Key.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=` ends in a bare delimiter that carries
-nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that a value-centric option enabled at a device or controller
-scope always carries a value - the grammar has no scoped spelling for "enabled here, nothing given" - so [setOption](#setoption) reduces
-that request to clearing the scope.
+nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that a value-centric option storing a single value and enabled
+at a device or controller scope always carries a value - the grammar has no scoped spelling for "enabled here, nothing given" - so
+[setOption](#setoption) reduces that request to clearing the scope.
+
+An option declaring [FeatureOptionEntry.multiple](#multiple) is the exception, because for a list "on, with nothing selected" is a selection like any other and has
+to be tellable from the bare enable that resolves the registered default. Its zero-length payload therefore reads canonically at either scope, so
+`Enable.Motion.SmartDetect=` and `Enable.Motion.SmartDetect.ABC123=` each store the empty selection. The exception reaches the empty payload alone: an all-"="
+payload is base64-padding-shaped and stays with the legacy reading for every option.
 
 The older form, where a value was simply the last dot-separated segment (`Enable.Audio.Volume.50`), still parses so hand-authored configurations keep working;
 [normalizeConfiguredOptions](#normalizeconfiguredoptions) rewrites entries into the canonical form as configurations are saved.
@@ -81,6 +86,66 @@ entry, with no precedence applied and no catalog default substituted.
 
 ***
 
+### ConsolidatedValueArgs
+
+Arguments for [FeatureOptions.consolidatedValue](#consolidatedvalue). Carries the addressing intent - the option and the identities to resolve it at - plus the configuration
+property the caller still offers as that option's transition fallback.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="controller"></a> `controller?` | `string` | Optional controller scope identifier. |
+| <a id="device"></a> `device?` | `string` | Optional device scope identifier. |
+| <a id="fallback"></a> `fallback?` | `string` | Optional. The configuration property the plugin still carries for this option, read exactly as it is supplied. An empty string answers as itself, because what counts as an empty property is the caller's rule rather than the engine's. |
+| <a id="option-1"></a> `option` | `string` | Feature option to read (case-insensitive). |
+
+***
+
+### FeatureOptionChoice
+
+One selectable choice a value-centric option offers: what the editor shows, and what the configuration stores when the user picks it. A catalog declares its
+choices inline on [FeatureOptionEntry.choices](#choices), or names a source the plugin's webUI registers and that derives the list from the device in view.
+
+[isValidChoice](#isvalidchoice) is what makes a choice legal, and it is the one rule both sides answer to: [buildCatalogIndex](#buildcatalogindex) applies it to every inline choice at
+catalog-build time, and the webUI's projection applies it to whatever a source returns at resolve time.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="label"></a> `label` | `string` | The text the editor shows for this choice. |
+| <a id="value-2"></a> `value` | `string` | The text the configuration stores when this choice is picked. |
+
+***
+
+### SelectValuesArgs
+
+Arguments for [selectValues](#selectvalues). Carries the reading intent: the domain to read against, whether the option stores a list, and the stored text itself.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="domain"></a> `domain` | readonly `string`[] | The values available in this context. |
+| <a id="multiple-1"></a> `multiple` | `boolean` | Whether the option stores a list rather than a single value. |
+| <a id="value-3"></a> `value` | `string` \| `undefined` | The stored text, or undefined when nothing is stored. |
+
+***
+
+### ValueSelection
+
+What a stored value selects out of a domain, as [selectValues](#selectvalues) reads it.
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="selected"></a> `selected` | `readonly` | readonly `string`[] | The members of the domain the stored value selects, in domain order and de-duplicated, each spelled as the domain spells it. |
+| <a id="unknown"></a> `unknown` | `readonly` | readonly `string`[] | The entries the stored value names that the domain does not carry, in the order it named them and de-duplicated, each spelled as it was stored. Preserved rather than discarded so a choice the device stopped offering stays visible to both the editor and the plugin. |
+
+***
+
 ### FeatureOptionFormatter
 
 ```ts
@@ -95,6 +160,67 @@ available for bespoke needs that the registry does not cover.
 The set targets the unit categories that recur across plugin catalogs: bitrate (in either of the two common storage conventions), data size, percentages, and
 durations. Extend the union when a new format is genuinely shared across multiple plugins. Resist adding a formatter speculatively - the function escape
 hatch already covers one-off needs, and an unused formatter is dead surface that downstream plugins still see in their IDE autocomplete.
+
+***
+
+### ALL\_CHOICES
+
+```ts
+const ALL_CHOICES: "*" = "*";
+```
+
+The one reserved spelling of a default meaning "every member of this option's domain", declared on a `multiple` option that also declares
+[FeatureOptionEntry.choices](#choices). A domain a source derives from a device record cannot be enumerated in the catalog, so a multi-select over one has no other
+way to say that everything is selected to begin with, and an empty default faked into that role would leave the editor's boxes describing a selection the
+resolution does not have.
+
+It is catalog data and nothing else. The editor never writes it into the configuration - a user's edit stores the explicit list, and a selection covering the
+whole domain clears the entry so the option resumes tracking that domain - while a Node-side read expands it against a domain through [selectValues](#selectvalues). It
+has no meaning on an option that is not `multiple` or declares no choices, and [buildCatalogIndex](#buildcatalogindex) rejects both declarations.
+
+***
+
+### composeScopeId()
+
+```ts
+function composeScopeId(controller, device): string;
+```
+
+Compose the scope identifier addressing one device of one controller, joining the two parts with a dash.
+
+A device identifier that is unique only within its controller cannot address a scope on its own: two controllers can each own a device numbered "27", and a bare
+"27" would name both of them. Qualifying the device with its controller is the whole answer, and the join lives here so every plugin that needs one spells it the
+same way rather than hand-rolling a separator alongside its own rules about what may sit either side of it.
+
+What comes back is an opaque device identifier as far as the engine is concerned. Nothing decomposes it - resolution matches it whole and the entry grammar
+carries it whole - so the dash is a convention for the reader's eyes rather than a delimiter anything parses. Both parts must satisfy the identifier rule the
+address grammar imposes, and a part that does not throws rather than composing an address no reader could resolve. A caller holding parts it does not shape asks
+[isValidScopeId](#isvalidscopeid) about each one first and decides there what an unusable part means, so this throw stays the signal of a programming error. Whether the
+composed value is unique across the caller's whole identifier space is the caller's own domain knowledge...this guarantees the spelling, not the uniqueness.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `controller` | `string` | The controller's identifier. |
+| `device` | `string` | The device's identifier, unique within that controller. |
+
+#### Returns
+
+`string`
+
+The composed scope identifier, ready to serve as the `id` of any scoped read or write.
+
+#### Throws
+
+`Error` naming the offending part when either part is empty or carries a period or an equals sign.
+
+#### Example
+
+```ts
+// Address one shade of one hub, on a system whose device numbering repeats from hub to hub.
+featureOpts.setOption({ enabled: false, id: composeScopeId(hub.serialNumber, shade.id), option: "Shade.Calibrate" });
+```
 
 ***
 
@@ -145,6 +271,29 @@ for(const entry of enumerateConfiguredEntries({ catalog, configuredOptions, opti
 
 ***
 
+### formatValueList()
+
+```ts
+function formatValueList(values): string;
+```
+
+Compose the canonical stored form of a list-valued option from its entries: join them with the bare delimiter. The inverse of [parseValueList](#parsevaluelist) over every
+list that function produces, and the one writer of the stored form, so a UI composing a list and a plugin reading it back cannot disagree about the spelling.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `values` | readonly `string`[] | The entries to store. |
+
+#### Returns
+
+`string`
+
+The canonical delimiter-joined text.
+
+***
+
 ### hasValueContent()
 
 ```ts
@@ -153,10 +302,13 @@ function hasValueContent(value): boolean;
 
 Return whether a string survives as a canonical payload once trimmed: at least one character other than the payload delimiter itself must remain. This is the
 single definition of "carries a value", shared by the entry writer and the entry parser, and it is exported so a UI composing mutations can predict whether a
-given input will persist - a prediction that has to agree with [applySetOption](#applysetoption) exactly.
+given input will persist - a prediction that has to agree with [applySetOption](#applysetoption) exactly for every option storing a single value. An option declaring
+[FeatureOptionEntry.multiple](#multiple) persists one payload this refuses, the empty selection, so a UI predicting for a list asks after the declaration too.
 
 The characters this excludes are not arbitrary. A payload that is empty or all "=" is exactly the shape a base64 value's terminal padding takes when a legacy
-dot-form entry is scanned for the delimiter, so ruling that shape out of the canonical value domain is what lets those entries keep their legacy reading.
+dot-form entry is scanned for the delimiter, so ruling that shape out of the canonical value domain is what lets those entries keep their legacy reading. The
+empty selection is spelled with the zero-length payload alone and never with the all-"=" one, which keeps that collision guard whole: a list option's stored
+empty is a shape no legacy entry can produce, since a legacy tail scanned for the delimiter always leaves the padding behind it.
 
 #### Parameters
 
@@ -169,6 +321,183 @@ dot-form entry is scanned for the delimiter, so ruling that shape out of the can
 `boolean`
 
 True when the trimmed text carries at least one non-delimiter character, false otherwise.
+
+***
+
+### isValidChoice()
+
+```ts
+function isValidChoice(choice): choice is FeatureOptionChoice;
+```
+
+Return whether a candidate is a legal [FeatureOptionChoice](#featureoptionchoice): an object carrying a non-empty `label` and a non-empty `value` that neither contains the list
+delimiter nor spells [ALL\_CHOICES](#all_choices). This is the single definition of what a legal choice is - [buildCatalogIndex](#buildcatalogindex) applies it to every inline choice a
+catalog declares, and the webUI's projection applies it to every choice a registered source returns.
+
+The two exclusions on the value are what keep a choice addressable once a list stores it. A value carrying the delimiter would come back from
+[parseValueList](#parsevaluelist) as two entries, neither of which names a choice; a value spelling the all-choices default would be indistinguishable from the wildcard
+the read side expands against the whole domain.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `choice` | `unknown` | The candidate. |
+
+#### Returns
+
+`choice is FeatureOptionChoice`
+
+True when the candidate is a legal choice, false otherwise.
+
+***
+
+### isValidScopeId()
+
+```ts
+function isValidScopeId(id): boolean;
+```
+
+Return whether a string may serve as a scope identifier: non-empty, and carrying neither a period nor an equals sign.
+
+This is the single definition of what a scope identifier may spell. The address grammar spends both characters elsewhere - a dot separates address segments, and
+the first "=" ends the address - so an identifier holding either names a scope the grammar has no spelling for. Every surface that composes, validates, or matches
+a scoped address consults this one predicate, which is what keeps the writers and the readers agreeing about which addresses exist at all.
+
+A plugin whose identifiers come from a source it does not shape - a cloud-issued home id, a serial a controller hands over - screens each part once, at the
+boundary where it learns the identifier, and decides there what an unusable one means in its own terms: warn and keep serving without per-device options, fall
+back to a coarser scope, or refuse the device outright. The parts it then hands [composeScopeId](#composescopeid) are parts it trusts, which leaves that composer's throw
+what it is meant to be...the signal of a programming error, rather than a runtime posture a supervised loop has to catch. A plugin that repairs an unusable
+identifier rather than refusing it reaches for [scopeSafeId](#scopesafeid), whose substitutions follow this same rule.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `id` | `string` | The candidate identifier. |
+
+#### Returns
+
+`boolean`
+
+`true` when the string may serve as a scope identifier, `false` when it may not.
+
+#### Example
+
+```ts
+// Screen the cloud-issued identifier where it is learned, once, and keep the composer for the parts that survive the screen.
+if(!isValidScopeId(home.cloudId)) {
+
+  log.warn("This home reports the identifier %s, which cannot address per-shade feature options.", home.cloudId);
+
+  return;
+}
+
+featureOpts.setOption({ enabled: false, id: composeScopeId(home.cloudId, shade.id), option: "Shade.Calibrate" });
+```
+
+***
+
+### parseValueList()
+
+```ts
+function parseValueList(value): readonly string[];
+```
+
+Split a list-valued option's stored string into the entries it names: split on the delimiter, trim each entry, and drop the empties. Paired with
+[formatValueList](#formatvaluelist), which composes the canonical form, so a parse followed by a format is stable for every string this accepts - hand-authored spacing and
+stray delimiters normalize the first time the value is written and never move again.
+
+Duplicates pass through as written. Whether a repeated entry means anything is the consumer's question, and [selectValues](#selectvalues) is where a selection over a
+domain de-duplicates.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `value` | `string` | The raw stored text. |
+
+#### Returns
+
+readonly `string`[]
+
+The entries the text names, in the order it names them.
+
+***
+
+### scopeSafeId()
+
+```ts
+function scopeSafeId(id): string;
+```
+
+Repair a string into one that may serve as a scope identifier, replacing every character the address grammar reserves with the separator the composer joins with.
+
+A plugin whose identifiers come from a source it does not shape - a cloud-issued home id, a serial a controller hands over - has two honest answers to an
+identifier the rule turns away: refuse it, which [isValidScopeId](#isvalidscopeid) is the screen for, or repair it and keep serving. This is the repair, and what it answers
+becomes that plugin's identity for the thing everywhere - its accessory UUIDs, its option addresses, the context they are read back through - rather than a
+display alias sitting over a raw identifier the addressing still uses. Choosing one or the other is the plugin's call; spelling the repair is not, which is why it
+lives beside the rule it repairs against rather than in each consumer.
+
+An identifier the rule already accepts answers character-identical, so adopting this cannot move an address the field has already produced. An empty identifier
+answers empty, because no substitution can invent one...[isValidScopeId](#isvalidscopeid) therefore remains the usability check after this, rather than being made redundant
+by it.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `id` | `string` | The candidate identifier, from a source the caller does not shape. |
+
+#### Returns
+
+`string`
+
+The identifier with every reserved character replaced, ready for [isValidScopeId](#isvalidscopeid) to have the final word on.
+
+#### Example
+
+```ts
+// Repair the cloud-issued identifier where it is learned, once, and address every per-device scope of that home by what comes back.
+const homeId = scopeSafeId(home.cloudId);
+
+featureOpts.setOption({ enabled: false, id: composeScopeId(homeId, shade.id), option: "Shade.Calibrate" });
+```
+
+***
+
+### selectValues()
+
+```ts
+function selectValues(args): ValueSelection;
+```
+
+Read which members of a domain a stored value selects, and which entries it names that the domain does not carry. The single definition of what a stored value
+SELECTS, shared by the Node-side read ([FeatureOptions.valueList](#valuelist)) and the webUI's projection, so a plugin acting on a selection and the editor showing
+it can never disagree - including about the [ALL\_CHOICES](#all_choices) wildcard, which is expanded here and nowhere else.
+
+Matching folds case, and a match answers in the domain's spelling: a stored "medium" selects a domain's "Medium" and reads back as "Medium", because the domain
+is the authority on how the values it offers are spelled. The fold is matching-only - nothing stored is rewritten - and it lives at this chokepoint alone,
+which is the honest scope to state: [FeatureOptions.value](#value) and the readers built on it are handed no domain, so they answer stored or declared text
+verbatim.
+
+An entry no member of the domain folds to is reported rather than discarded, in the text it was stored as, since the domain has no spelling to offer for a
+value it does not carry. A device that stops offering a value the user chose earlier - a detection type a firmware update withdrew, a relay output a smaller
+unit does not have - would otherwise have that choice silently dropped from the configuration the next time anything wrote it, so the editor keeps showing it
+and the plugin can say what it is looking at.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | [`SelectValuesArgs`](#selectvaluesargs) | - |
+
+#### Returns
+
+[`ValueSelection`](#valueselection)
+
+The selected members, spelled as the domain spells them and in domain order, and the named-but-absent entries, spelled as they were stored and in the
+         order the stored value named them. Both are de-duplicated on the folded value.
 
 ## Other
 
@@ -407,6 +736,10 @@ Callers express intent ("forget any configuration for option X at scope Y") and 
 value-centric options it covers the bare scoped entry and any entry carrying a value, in either the canonical or the legacy form, so a subsequent
 [setOption](#setoption) cleanly replaces whatever was there. No-op when no entry addresses the target scope, so callers can treat this as a repeatable reset.
 
+A scoped clear whose id cannot address the option is refused rather than performed: an id carrying a period or an equals sign has no spelling in the address
+grammar, and an id whose composed address is itself a catalog option would delete that option's own entry in the name of clearing a scope of a shorter one. A
+global clear has no id to check, and a legal scoped clear is unaffected.
+
 ###### Parameters
 
 | Parameter | Type | Description |
@@ -417,11 +750,59 @@ value-centric options it covers the bare scoped entry and any entry carrying a v
 
 `void`
 
+###### Throws
+
+`Error` naming the id and the option when a present id cannot address a scope of that option.
+
 ###### Example
 
 ```ts
 // Remove any configured value for "Audio.Volume" on device ABC123 (drops both `Enable.Audio.Volume.ABC123` and `Enable.Audio.Volume.ABC123=50`).
 featureOpts.clearOption({ option: "Audio.Volume", id: "ABC123" });
+```
+
+##### consolidatedValue()
+
+```ts
+consolidatedValue(args): Nullable<string | undefined>;
+```
+
+Return the effective value of a value-centric option for a plugin that still carries a configuration property as that option's transition fallback.
+
+One rule decides it, and it is one rule because a setting a user can reach in two places needs a single statement of which one answers. A configured option
+rules in every state it can be in - enabled with a value, disabled, or enabled with no value at all - because configuring an option is the user saying what
+they want, so `fallback` never outranks an entry the user wrote. An option nobody has configured yields to the property. The catalog's registered default
+closes the chain, so an unconfigured option with no property beside it answers exactly what [value](#value) answers.
+
+Configured-ness here is the resolution's own scope rather than [exists](#exists). The walk honors the entry's declared scopes, so an entry
+written where the option does not apply cannot make it configured for an identity it never reaches; `exists` reads the configured entries alone and is blind to
+those declarations.
+
+The answer vocabulary is `value`'s: `null` for a disabled option and for one that is not value-centric, `undefined` for one enabled at an explicit scope with
+nothing stored, and the string otherwise. A caller that turns its feature off on `null` or `undefined` therefore needs no second read to tell those states
+apart. `fallback` is read exactly as it is supplied, an empty string included, because what counts as an empty property is the caller's rule rather than the
+engine's.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | [`ConsolidatedValueArgs`](#consolidatedvalueargs) | - |
+
+###### Returns
+
+[`Nullable`](util.md#nullable)\<`string` \| `undefined`\>
+
+The configured entry's value, the fallback, or the registered default, in the vocabulary described above.
+
+###### Example
+
+```ts
+// An API key the plugin still accepts as a configuration property while the option takes the setting over.
+const apiKey = featureOpts.consolidatedValue({ fallback: config.apiKey, option: "Api.Key" });
+
+// The same read for a catalog declaring the option at controller scope, resolved at one controller's identity.
+const brokerUrl = featureOpts.consolidatedValue({ controller: mac, fallback: config.mqttUrl, option: "Mqtt.Url" });
 ```
 
 ##### defaultValue()
@@ -454,6 +835,9 @@ Return whether the option explicitly exists in the list of configured options.
 
 This reads the configured entries alone and is blind to [FeatureOptionEntry.scopes](#scopes-1): it reports what the user configured, not what takes effect. Ask
 [FeatureOptions.test](#test) when the question is whether the option applies at a given scope.
+
+A scoped question is arbitrated against the catalog, so an id whose composed address belongs to another option reads false - see [optionExists](#optionexists), which
+this delegates to.
 
 ###### Parameters
 
@@ -666,6 +1050,10 @@ A value-centric option enabled with no resolvable value anywhere - no catalog-de
 `<label> enabled.` line above rather than the `enabled at <value>` form, since there is nothing meaningful to render after "at" (see the defensive fallback in
 the implementation below).
 
+An option declaring [FeatureOptionEntry.multiple](#multiple) that resolves to the empty selection keeps the same axis split and states the emptiness in words:
+`<label> enabled with an empty selection.` where the boolean axis deviated, `<label> set to an empty selection.` where only the value axis did. Saying it
+outright is what keeps the line a sentence, since interpolating the empty string into either shape above would emit "enabled at ." instead.
+
 Value rendering consults the catalog-declared [FeatureOptionEntry.render](#render) when present; otherwise the raw string returned by [FeatureOptions.value](#value)
 is used. The renderer may be either a [FeatureOptionFormatter](#featureoptionformatter) string naming a built-in formatter from the shared registry (preferred when the format exists
 there, since this keeps the catalog JSON-serializable and lets every plugin share one implementation) or an inline function for bespoke cases. Declaring the
@@ -741,10 +1129,15 @@ format never leaks past this method. Values are emitted only when `enabled` is t
 disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules. A value is free-form at either scope - it is
 written behind a payload delimiter and trimmed of surrounding whitespace - and persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)).
 At the global scope an enable without content composes the bare entry; at a device or controller scope it reduces to clearing the scope, because a scoped
-entry always carries a value.
+entry storing a single value always carries one. An option declaring [FeatureOptionEntry.multiple](#multiple) persists a SUPPLIED empty value at either scope
+instead, as the explicit empty selection; omitting the value keeps the behavior every other option gets.
 
 Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See
 [normalizeConfiguredOptions](#normalizeconfiguredoptions) for what that does and does not touch.
+
+A scoped write whose id cannot address the option is refused rather than composed: an id carrying a period or an equals sign has no spelling in the address
+grammar, and an id whose composed address is itself a catalog option would write that option's own entry under another option's name. A global write has no id
+to check, and a legal scoped write is unaffected.
 
 ###### Parameters
 
@@ -755,6 +1148,10 @@ Saving also modernizes: any surviving entry still in the legacy dot form is rewr
 ###### Returns
 
 `void`
+
+###### Throws
+
+`Error` naming the id and the option when a present id cannot address a scope of that option.
 
 ###### Example
 
@@ -815,7 +1212,78 @@ Return the value associated with a value-centric feature option, traversing the 
 [`Nullable`](util.md#nullable)\<`string` \| `undefined`\>
 
 Returns the current value associated with `option` if the feature option is enabled, `null` if disabled (or not a value-centric feature option), or
-         `undefined` if it's not specified.
+         `undefined` if it's not specified. An option declaring [FeatureOptionEntry.multiple](#multiple) answers the empty string where its stored selection is
+         explicitly empty, which is a configured state rather than an unspecified one; for every option storing a single value an empty stored value reads
+         as unspecified and resolves onward.
+
+##### valueDefault()
+
+```ts
+valueDefault(option): string | undefined;
+```
+
+Return the value-centric default an option's catalog declaration registers, rendered as a string.
+
+The value-axis companion to [defaultValue](#defaultvalue), which answers the boolean axis. This reports the declaration alone - no scope
+resolution, no expansion - so an [ALL\_CHOICES](#all_choices) default comes back as the wildcard itself and reading it against a domain stays
+[valueList](#valuelist)'s job. A declared-empty default answers the empty string, which is the declaration as written and a different
+answer from the `undefined` that says there is no value-centric default here at all.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `option` | `string` | Feature option to check (case-insensitive). |
+
+###### Returns
+
+`string` \| `undefined`
+
+Returns the registered default rendered as a string, or `undefined` for an option that is not value-centric and for one the catalog does not carry.
+
+##### valueList()
+
+```ts
+valueList(args): readonly string[];
+```
+
+Return what a picker option's stored value selects, resolved through the scope hierarchy. The list read that pairs with [value](#value),
+which stays the single resolution: this method asks it what the option resolves to and then reads that text against a domain, rather than walking the
+hierarchy a second time.
+
+The domain decides how much reading happens. Supply one - the values the device actually reports - and the result is the members of that domain the stored
+value selects, in domain order, with an [ALL\_CHOICES](#all_choices) default expanded and any value the device no longer offers dropped. Supply none and an option
+whose catalog entry declares its choices inline reads against those, since the catalog already holds them. Supply none for a source-backed option and the
+stored text answers for itself: a `multiple` option's entries as the user's order named them, a single-valued option's value as the one member.
+
+An option that resolves to nothing reads as the empty list - disabled at some scope, enabled with no value, emptied on purpose, unknown to the catalog, or
+not value-centric at all. There is no separate "nothing here" answer to check for, so a caller iterates the result and is done.
+
+Asking for `defaultWhenUnset` changes exactly one of those readings: an option enabled at an explicit scope with nothing stored answers its registered
+default, read against the same domain and expanded the same way a stored value would be. The others hold - an emptied selection is a choice the user made
+and stays empty, and a disabled option has no value to substitute for.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | [`ValueListArgs`](#valuelistargs) | - |
+
+###### Returns
+
+readonly `string`[]
+
+The selected values, or an empty list when the option resolves to none.
+
+###### Example
+
+```ts
+// A domain the device reported: unknown members drop and an all-choices default expands to everything the camera offers.
+const types = featureOpts.valueList({ device: camera.mac, domain: camera.featureFlags.smartDetectTypes, option: "Motion.SmartDetect" });
+
+// No domain: an inline catalog list answers for itself, and a free-form list reads back exactly as the user entered it.
+const plates = featureOpts.valueList({ device: camera.mac, option: "Motion.Plates" });
+```
 
 ***
 
@@ -837,6 +1305,7 @@ directly hold it as state and reuse it across every dispatch that does not touch
 | <a id="groupparents-1"></a> `groupParents` | `readonly` | `Readonly`\<`Record`\<`string`, `string`\>\> | Reverse index from a child option's expanded name to its parent group's expanded name. Catalog case preserved on the keys. |
 | <a id="groups-1"></a> `groups` | `readonly` | `Readonly`\<`Record`\<`string`, readonly `string`[]\>\> | Forward index from a parent group's expanded name to its child options' expanded names. |
 | <a id="options-1"></a> `options` | `readonly` | `Readonly`\<`Record`\<`string`, readonly [`FeatureOptionEntry`](#featureoptionentry)[]\>\> | The raw options map, preserved alongside categories for the same reason. |
+| <a id="optionsbyname"></a> `optionsByName` | `readonly` | `Readonly`\<`Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)\>\> | Lowercased-key map from canonical option name to the raw catalog entry, the general per-option lookup for any consumer that needs the entry itself rather than one of the derivations beside it. Keyed exactly as `valueOptions` is, so one key discipline serves every registry on the index. It is named for what it holds because `entries` already means a category's projected rows in the webUI's vocabulary. |
 | <a id="renderers"></a> `renderers` | `readonly` | `Readonly`\<`Record`\<`string`, (`value`) => `string`\>\> | Lowercased-key map from canonical option name to its resolved value renderer (built-in or inline function). Built-in names that fail to resolve throw at index-build time rather than degrading silently at log time. |
 | <a id="scopes"></a> `scopes` | `readonly` | `Readonly`\<`Record`\<`string`, readonly [`FeatureOptionScope`](#featureoptionscope)[]\>\> | Lowercased-key map from canonical option name to the scope levels its catalog entry declares. An option that declares nothing has no key here, which is how the absent-means-every-level default stays free: the lookup returns `undefined` and every consumer reads that as "no restriction." See [FeatureOptionEntry.scopes](#scopes-1). |
 | <a id="sortedvalueoptionnames"></a> `sortedValueOptionNames` | `readonly` | readonly `string`[] | The keys of `valueOptions`, sorted longest-first, cached so the parser can do its greedy-prefix match without re-sorting on every Enable-entry parse. |
@@ -853,7 +1322,7 @@ enabled state or value because the operation forgets every entry addressing the 
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="id"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. |
+| <a id="id"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one whose composed address names another catalog option, is refused rather than cleared - see [composeScopeId](#composescopeid), which composes a controller-qualified identifier under the same rule. |
 | <a id="option"></a> `option` | `string` | Feature option to clear (case-insensitive). |
 
 ***
@@ -907,16 +1376,19 @@ const options: Record<string, FeatureOptionEntry[]> = {
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="choices"></a> `choices?` | `string` \| readonly [`FeatureOptionChoice`](#featureoptionchoice)[] | Optional. The list of values this option offers, which makes its editor a picker rather than a free-text field. A string names a source the plugin's webUI registers in its `ui.choices` bag; an array is a fixed list declared inline. Either way the editor offers the list and the configuration stores the chosen value, or values for a `multiple` option. Editor-only, exactly as `secret` is: parsing, storage, scope resolution, and [FeatureOptions.value](#value) never consult it. A source resolver receives the controller, the device (undefined at global and controller scope), and the option, and returns the list for that context; it must be a pure, cheap function of those three, since it runs on every projection recompute - the same cadence as the webUI's `validOption`. A string naming a source no resolver answers to fails the webUI at catalog load. An inline list is validated here at catalog build, members and default alike; a source-backed default cannot be, because the domain it draws on exists only on the page that holds the device record. |
 | <a id="default"></a> `default` | `boolean` | Default enabled/disabled state for this feature option. |
 | <a id="defaultvalue-1"></a> `defaultValue?` | `string` \| `number` | Optional. Default value for value-based feature options. |
 | <a id="description-1"></a> `description` | `string` | Description of the feature option for display or documentation. |
 | <a id="group"></a> `group?` | `string` | Optional. Grouping/category for the feature option. |
-| <a id="inputsize"></a> `inputSize?` | `number` | Optional. Width of the input field for a value-based feature option. Defaults to 5 characters. |
+| <a id="inputsize"></a> `inputSize?` | `number` | Optional. Width, in characters, of a field the user TYPES a value into. Defaults to 5. Every such field reads it - the free-text field, the masked field a `secret` declares, and the field a list editor takes its next entry in - while a control that OFFERS a list sizes itself to the members it holds and reads nothing here. |
 | <a id="meta-1"></a> `meta?` | `TMeta` | Optional. An opaque, plugin-private annotation channel the core never interprets. HBPU's types deliberately cannot see inside `TMeta`; the value is carried verbatim through the catalog and forwarded to the documentation renderer's closures (the only surface that knows its concrete shape). This mirrors the OpenAPI `x-*` extension discipline, made type-safe: a plugin parameterizes the entry with its own annotation type, the core treats it as `unknown`, and the round-trip stays structurally unchanged rather than a naming convention. |
+| <a id="multiple"></a> `multiple?` | `boolean` | Optional. True declares the option's value a LIST rather than a single value, stored in the shared list grammar as one comma-joined string ([parseValueList](#parsevaluelist) and [formatValueList](#formatvaluelist) are the pair that reads and writes it). With `choices` the editor is a checkbox group over the offered list; without them it is a free-form list the user builds entry by entry. With `choices` the default may be [ALL\_CHOICES](#all_choices), standing for every member of the option's domain. The engine sees one string throughout, which [FeatureOptions.valueList](#valuelist) is the read that splits, and the declaration reaches the grammar in one place: a list can be explicitly empty, so a zero-length payload stores that selection at either scope rather than reading as no value at all. |
 | <a id="name-1"></a> `name` | `string` | Name of the feature option (used in option strings). |
 | <a id="render"></a> `render?` | \| [`FeatureOptionFormatter`](#featureoptionformatter) \| ((`value`) => `string`) | Optional. Maps the raw stored value of a value-centric option to a display string. Either a [FeatureOptionFormatter](#featureoptionformatter) string naming a built-in formatter (preferred when the format already exists in the registry, since this keeps the enclosing catalog JSON-serializable and lets every plugin share one implementation) or an inline function for bespoke formatting the registry does not cover. Consulted by [FeatureOptions.logFeature](#logfeature) when emitting deviation lines so the catalog stays the single source of truth for how an option's value renders; ignored for plain boolean options. When absent, values render as the raw string returned by [FeatureOptions.value](#value). An unrecognized formatter name throws at catalog-rebuild time, surfacing the misconfiguration loudly rather than silently producing the raw-value fallback. |
 | <a id="scopes-1"></a> `scopes?` | readonly \[[`FeatureOptionScope`](#featureoptionscope), [`FeatureOptionScope`](#featureoptionscope)\] | Optional. The scope levels this option may be configured at - one or more of them, named in the [FeatureOptionScope](#featureoptionscope) vocabulary. Absent means every level, which is what an entry that declares nothing gets. Declared, it is true at every surface the framework owns: the option renders only on views the declaration admits - a global view needs `"global"`, a controller view needs `"controller"`, and a device view needs either `"controller"` or `"device"` - it resolves only at the declared levels, and a row inherits from a higher scope only through them. What you cannot resolve, you are neither offered nor promised through inheritance. Which devices see a device-view row stays with the plugin's `validOption`, refining the rows the declaration already admits. Declare consistent levels across a group: a child's dependency check resolves the PARENT's option, so a parent declared narrower than its children ignores parent configuration at exactly the levels the children are still editable from. The tuple is non-empty by construction, since an option declaring no level at all would render nowhere and resolve nowhere. |
 | <a id="secret"></a> `secret?` | `boolean` | Optional. True declares that the option's value is a secret the settings page must not display in clear text by default: the field renders masked, with a reveal the user operates when they want to read or check what they typed. Presentation only - parsing, storage, scope resolution, and the documentation renderer treat a secret option exactly like any other value option, and its value lands in `config.json` as plain text like every other value. What the masking buys is protection from someone reading the settings page over the user's shoulder; it is not secrecy at rest, and a plugin handling real credentials should say so in the option's description. |
+| <a id="style"></a> `style?` | `"dropdown"` \| `"radio"` | Optional. How a single choice offers its list on the settings page - `"dropdown"` for a select, `"radio"` for a group of radio buttons - overriding the presentation the editor picks on its own: a short inline list reads as a radio group, while a longer one or a list a source derives per device reads as a dropdown. Presentation only, exactly as `secret` is: neither the declaration nor the automatic pick changes what is stored, the entry grammar, or anything the engine resolves. Declared without `choices`, or on a `multiple` option, it is a catalog error - the first has no list to present and the second has a presentation of its own. |
 
 ***
 
@@ -946,9 +1418,26 @@ and optional value for value-centric options.
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="enabled-2"></a> `enabled` | `boolean` | True to enable, false to disable. |
-| <a id="id-2"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. |
-| <a id="option-1"></a> `option` | `string` | Feature option to set (case-insensitive). |
-| <a id="value-2"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry always carries a value. |
+| <a id="id-2"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one whose composed address names another catalog option, is refused rather than written - see [composeScopeId](#composescopeid), which composes a controller-qualified identifier under the same rule. |
+| <a id="option-2"></a> `option` | `string` | Feature option to set (case-insensitive). |
+| <a id="value-4"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry storing a single value always carries one. Supplying the empty string for a [FeatureOptionEntry.multiple](#multiple) option is the one value without content that persists: it is the explicit empty selection, and it composes at either scope. Omitting `value` entirely says nothing about the selection and keeps the plain enable, for every option alike. |
+
+***
+
+### ValueListArgs
+
+Arguments for [FeatureOptions.valueList](#valuelist). Carries the addressing intent - the option and the scope to resolve it at - plus the domain the caller wants the
+stored value read against.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="controller-1"></a> `controller?` | `string` | Optional controller scope identifier. |
+| <a id="defaultwhenunset"></a> `defaultWhenUnset?` | `boolean` | Optional. Read an option that is enabled at an explicit scope with nothing stored as its registered default rather than as the empty list. It reaches that one state and no other: a disabled option, an option the catalog does not carry, and one that is not value-centric all still read empty, and a `multiple` option whose selection the user emptied stays empty, since emptying it was a choice the user made rather than a value they omitted. |
+| <a id="device-1"></a> `device?` | `string` | Optional device scope identifier. |
+| <a id="domain-1"></a> `domain?` | readonly `string`[] | Optional. The values the option offers in this context, which a plugin derives from whatever the device reported. Supplying it is what lets the read drop a stored value the device no longer offers and expand an [ALL\_CHOICES](#all_choices) default. Omit it for an option whose catalog entry declares its choices inline, since the entry already holds them, and for a raw read of what the user stored. |
+| <a id="option-3"></a> `option` | `string` | Feature option to read (case-insensitive). |
 
 ***
 
@@ -1008,13 +1497,17 @@ Pure: does not mutate the input array. When no entry matched the target and none
 reference-equality consumers can detect a no-op without a contents comparison. Surviving entries are normalized on the way through, so a clear carries the same
 upgrade-on-save behavior a set does. See [normalizeConfiguredOptions](#normalizeconfiguredoptions).
 
+A scoped clear whose id cannot address the option is refused on the same terms [applySetOption](#applysetoption) refuses a write, and for a sharper reason: an id whose
+composed address is itself a catalog option would delete that option's own entry in the name of clearing a scope of a shorter one. A global clear has no id to
+check, and a legal scoped clear is unaffected.
+
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `options` | \{ `args`: [`ClearOptionArgs`](#clearoptionargs); `catalog`: [`CatalogIndex`](#catalogindex); `configuredOptions`: readonly `string`[]; \} | - |
 | `options.args` | [`ClearOptionArgs`](#clearoptionargs) | The addressing intent: option key, optional scope id. See [ClearOptionArgs](#clearoptionargs). |
-| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index that defines what counts as a value-centric option (which the matcher consults via the shared parser). |
+| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index that defines what counts as a value-centric option (which the matcher consults via the shared parser), and which settles whether a scoped target belongs to this option or to another one. |
 | `options.configuredOptions` | readonly `string`[] | The current configured-options array. |
 
 #### Returns
@@ -1022,6 +1515,10 @@ upgrade-on-save behavior a set does. See [normalizeConfiguredOptions](#normalize
 readonly `string`[]
 
 The new configured-options array, or the input array reference itself when nothing matched and nothing needed rewriting.
+
+#### Throws
+
+`Error` naming the id and the option when a present id cannot address a scope of that option.
 
 ***
 
@@ -1042,9 +1539,18 @@ because the matcher decodes entries through the same parser.
 A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
 need no escaping. Surrounding whitespace is trimmed first, and a value persists only when content survives the trim - see [hasValueContent](#hasvaluecontent). At the
 global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope there is
-no such spelling - a scoped entry always carries a value - so an enable without content reduces to clearing the scope: any entry addressing it is dropped and
-resolution falls back to inheritance. The surviving entries are normalized on the way through, so the save the caller asked for also modernizes anything still
-in the legacy form.
+no such spelling for an option storing a single value - a scoped entry carries one - so an enable without content reduces to clearing the scope: any entry
+addressing it is dropped and resolution falls back to inheritance. The surviving entries are normalized on the way through, so the save the caller asked for
+also modernizes anything still in the legacy form.
+
+An option declaring [FeatureOptionEntry.multiple](#multiple) reads a SUPPLIED empty value as content-bearing rather than as nothing given: the empty selection is a
+state the list can be in, told apart from the bare enable that resolves the registered default, so it composes the bare-delimiter entry at either scope. This
+turns on the caller supplying the value, not on what the value says: omit `value` and a list behaves like every other option, composing the bare entry
+globally and reducing to a clear at a scope.
+
+A scoped write whose id cannot address the option is refused outright rather than composed, because the entry it would produce is one the readers would
+attribute elsewhere: an id carrying a period or an equals sign has no spelling in the address grammar, and an id whose composed address is itself a catalog
+option would write that option's own entry under another option's name. A global write has no id to check, and a legal scoped write is unaffected.
 
 #### Parameters
 
@@ -1052,7 +1558,7 @@ in the legacy form.
 | ------ | ------ | ------ |
 | `options` | \{ `args`: [`SetOptionArgs`](#setoptionargs); `catalog`: [`CatalogIndex`](#catalogindex); `configuredOptions`: readonly `string`[]; \} | - |
 | `options.args` | [`SetOptionArgs`](#setoptionargs) | The mutation intent: option key, optional scope id, enabled state, optional value. See [SetOptionArgs](#setoptionargs). |
-| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index that defines what counts as a value-centric option (which determines whether to emit a value at all). |
+| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index that defines what counts as a value-centric option (which determines whether to emit a value at all), and which settles whether a scoped target belongs to this option or to another one. |
 | `options.configuredOptions` | readonly `string`[] | The current configured-options array. |
 
 #### Returns
@@ -1060,7 +1566,11 @@ in the legacy form.
 readonly `string`[]
 
 The new configured-options array - a fresh allocation whenever an entry was written or removed, or the input array reference itself when a scoped
-         enable without value content found nothing to drop, mirroring [applyClearOption](#applyclearoption)'s reference-stable no-op.
+         enable that reduced to a clear found nothing to drop, mirroring [applyClearOption](#applyclearoption)'s reference-stable no-op.
+
+#### Throws
+
+`Error` naming the id and the option when a present id cannot address a scope of that option.
 
 ***
 
@@ -1071,8 +1581,10 @@ function buildCatalogIndex(categories, options): CatalogIndex;
 ```
 
 Build the catalog-derived index from raw categories + options. The result carries the raw inputs alongside every derivation needed for O(1) catalog queries -
-defaults, value-options registry, groups (both directions), renderers, and the longest-first cache the entry parser consumes. Throws when a built-in formatter
-name on a `render` declaration does not resolve, surfacing the misconfiguration at load time rather than silently degrading the log-emission path.
+defaults, value-options registry, groups (both directions), renderers, the raw-entry lookup, and the longest-first cache the entry parser consumes. Throws when a
+built-in formatter name on a `render` declaration does not resolve, and on any picker declaration the engine cannot honor (see [FeatureOptionEntry.choices](#choices)
+and [FeatureOptionEntry.multiple](#multiple)), and when two entries expand to the same lowercased name, surfacing the misconfiguration at load time rather than
+degrading a display path in silence.
 
 The index is the catalog-side input to every other pure helper in this module. Build it once per catalog; reuse it across every configured-options mutation
 because the catalog is unchanged across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
@@ -1100,7 +1612,7 @@ function buildConfigIndex(catalog, configuredOptions): ConfigIndex;
 ```
 
 Build the configured-options lookup index from a catalog index + the configured-options array. Each entry contributes one or two lookup keys via the shared
-`parseEntry`: the raw tail (always) and an extracted value key (for value-centric Enable entries). First-write-wins on collision so the earliest entry in
+`parseEntry`: the raw tail and an extracted value key (for value-centric Enable entries). First-write-wins on collision so the earliest entry in
 the array takes precedence over later duplicates - users hand-editing config and accidentally listing an option twice get the natural "first one is canonical"
 semantic.
 
@@ -1246,9 +1758,10 @@ is already canonical yields the identical string, so running this repeatedly is 
 
 The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) is deliberately left alone for the same reason. That segment does double duty - the lookup
 index registers it as the option's global value and, through the primary key, as an enable at a scope carrying that same name - and no single canonical entry
-expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written. A segment containing "=" is the
-exception: the composer cannot address a scope whose id carries the delimiter, so only the global-value reading is live there, and the entry modernizes like
-any other unambiguous legacy form.
+expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written. A segment the option's declared
+choices settle one way or the other stays as written too, since what settles it is a catalog declaration a plugin can revise rather than the grammar itself. A
+segment containing "=" is the exception: the composer cannot address a scope whose id carries the delimiter, so only the global-value reading is live there,
+and the entry modernizes like any other unambiguous legacy form.
 
 [applySetOption](#applysetoption) and [applyClearOption](#applyclearoption) run their results through this, which is the whole of the upgrade path: a stored configuration modernizes as
 part of a save the user already asked for, and never merely because something read it. One consequence is worth stating plainly, since it becomes visible in the
@@ -1284,11 +1797,16 @@ It reads the configured entries alone and so is blind to [FeatureOptionEntry.sco
 and an entry written at a level the option does not declare is still an entry the user typed. Ask [resolveScope](#resolvescope) when the question is whether the option
 takes effect.
 
+A scoped question goes through the same arbitration every other reader and every writer consults, so an address the catalog claims for another option reads
+false here: an entry at `Motion.Detect.Sensitivity` is the `Motion.Detect.Sensitivity` option's own entry, not the `Motion.Detect` option configured at a scope
+named "Sensitivity".
+
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `args` | \{ `configIndex`: [`ConfigIndex`](#configindex); `id?`: `string`; `option`: `string`; \} | - |
+| `args` | \{ `catalog`: [`CatalogIndex`](#catalogindex); `configIndex`: [`ConfigIndex`](#configindex); `id?`: `string`; `option`: `string`; \} | - |
+| `args.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index, which settles whether a scoped address belongs to this option or to another one. |
 | `args.configIndex` | [`ConfigIndex`](#configindex) | The configured-options lookup index. |
 | `args.id?` | `string` | Optional scope identifier (device or controller). Omit to address the global scope. |
 | `args.option` | `string` | The option key (case-insensitive). |

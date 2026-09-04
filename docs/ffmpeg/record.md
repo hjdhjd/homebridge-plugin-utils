@@ -34,7 +34,7 @@ The command-line hook values that differ per mode:
 | `audioInputIndex`        | `0`                                        | `0` or `1` (if separate audio)          |
 | `audioTarget`            | `recordingConfig.audioCodec` (transcoding) | `init.audio` when provided              |
 | `videoEncoderArgs`       | `options.recordEncoder(...)`               | `-codec:v copy`                         |
-| `postFilterArgs`         | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
+| `fragmentArgs`           | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
 | `metadataLabel`          | `"HKSV Event"`                             | `"Livestream Buffer"`                   |
 
 The shared pipeline primitive ([Mp4SegmentAssembler](mp4-assembler.md#mp4segmentassembler)) also means this module avoids template-method coupling between
@@ -118,6 +118,25 @@ reserve when the FFmpeg source stalls. Delegates to [Mp4SegmentAssembler.buffere
 `number`
 
 The buffered-segment depth.
+
+##### commandLine
+
+###### Get Signature
+
+```ts
+get commandLine(): readonly string[];
+```
+
+The composed FFmpeg argument vector this process was spawned with, readable from construction onward. The array is the frozen copy the class itself holds, returned
+as a readonly view: callers read the exact vector the child received rather than recovering it from the construction log line.
+
+###### Returns
+
+readonly `string`[]
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`commandLine`](process.md#commandline)
 
 ##### hasError
 
@@ -401,6 +420,25 @@ The buffered-segment depth.
 ###### Inherited from
 
 [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`bufferedSegments`](#bufferedsegments)
+
+##### commandLine
+
+###### Get Signature
+
+```ts
+get commandLine(): readonly string[];
+```
+
+The composed FFmpeg argument vector this process was spawned with, readable from construction onward. The array is the frozen copy the class itself holds, returned
+as a readonly view: callers read the exact vector the child received rather than recovering it from the construction log line.
+
+###### Returns
+
+readonly `string`[]
+
+###### Inherited from
+
+[`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`commandLine`](#commandline)
 
 ##### hasError
 
@@ -704,6 +742,25 @@ stalls.
 ###### Inherited from
 
 [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`bufferedSegments`](#bufferedsegments)
+
+##### commandLine
+
+###### Get Signature
+
+```ts
+get commandLine(): readonly string[];
+```
+
+The composed FFmpeg argument vector this process was spawned with, readable from construction onward. The array is the frozen copy the class itself holds, returned
+as a readonly view: callers read the exact vector the child received rather than recovering it from the construction log line.
+
+###### Returns
+
+readonly `string`[]
+
+###### Inherited from
+
+[`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`commandLine`](#commandline)
 
 ##### hasError
 
@@ -1030,14 +1087,9 @@ Base options shared by both fMP4 recording and livestream sessions.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="audiofilters"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. Recording-only: the livestream builder ignores this field, driving its audio-filter decision from the `audio` target instead. |
 | <a id="audiostream"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). |
 | <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`). Defaults to `h264`. |
 | <a id="enableaudio"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. |
-| <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies. |
-| <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. |
-| <a id="transcodeaudio"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. Recording-only: the livestream builder ignores this field, driving its transcode decision from the `audio` target instead. |
-| <a id="videofilters"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. |
 | <a id="videostream"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). |
 
 ***
@@ -1058,23 +1110,19 @@ FMp4AudioInputConfig
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
-| <a id="audiofilters-1"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. Recording-only: the livestream builder ignores this field, driving its audio-filter decision from the `audio` target instead. | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioFilters`](#audiofilters) |
 | <a id="audioinput"></a> `audioInput?` | `string` \| [`FMp4AudioInputConfig`](#fmp4audioinputconfig) | Optional. A separate audio input source. When provided, audio is read from this source instead of the primary `url`. Can be a URL string for self-describing sources (e.g., RTSP), or an `FMp4AudioInputConfig` object for raw audio streams that require format metadata. | - |
 | <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-2"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`). Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec-1) |
 | <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
-| <a id="hardwaredecoding-1"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareDecoding`](#hardwaredecoding) |
-| <a id="hardwaretranscoding-1"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
-| <a id="transcodeaudio-1"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. Recording-only: the livestream builder ignores this field, driving its transcode decision from the `audio` target instead. | [`FMp4BaseOptions`](#fmp4baseoptions).[`transcodeAudio`](#transcodeaudio) |
 | <a id="url-1"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
-| <a id="videofilters-1"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoFilters`](#videofilters) |
 | <a id="videostream-1"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
 
 ***
 
 ### FMp4RecordingOptions
 
-Options for configuring an fMP4 HKSV recording session.
+Options for configuring an fMP4 HKSV recording session. Recording is the fMP4 mode that transcodes, so every option describing the transcode - the audio and video
+filters, the hardware-acceleration flags, and the audio transcode decision - lives here rather than on the shared base a livestream also carries.
 
 #### Extends
 
@@ -1084,17 +1132,17 @@ Options for configuring an fMP4 HKSV recording session.
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
-| <a id="audiofilters-2"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters. Recording-only: the livestream builder ignores this field, driving its audio-filter decision from the `audio` target instead. | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioFilters`](#audiofilters) |
+| <a id="audiofilters"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters, and they ride inside the audio target, so supplying one forces a transcode. Defaults to none. | - |
 | <a id="audiostream-2"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-3"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`). Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec-1) |
 | <a id="enableaudio-2"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="fps"></a> `fps` | `number` | The video frames per second for the session. Defaults to 30. | - |
-| <a id="hardwaredecoding-2"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareDecoding`](#hardwaredecoding) |
-| <a id="hardwaretranscoding-2"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`hardwareTranscoding`](#hardwaretranscoding) |
+| <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies. | - |
+| <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | - |
 | <a id="probesize"></a> `probesize` | `number` | Number of bytes to analyze for stream information. Defaults to 5,000,000 bytes (mirrors FFmpeg's own default probesize). | - |
 | <a id="timeshift"></a> `timeshift` | `number` | Timeshift offset for event-based recording (in milliseconds). Defaults to 0. | - |
-| <a id="transcodeaudio-2"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. Recording-only: the livestream builder ignores this field, driving its transcode decision from the `audio` target instead. | [`FMp4BaseOptions`](#fmp4baseoptions).[`transcodeAudio`](#transcodeaudio) |
-| <a id="videofilters-2"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters. | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoFilters`](#videofilters) |
+| <a id="transcodeaudio"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. | - |
+| <a id="videofilters"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters and appended, in caller order, after the encoder's own scale and pixel-format chain. Defaults to none. | - |
 | <a id="videostream-2"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
 
 ***

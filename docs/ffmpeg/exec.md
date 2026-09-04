@@ -119,6 +119,25 @@ get aborted(): boolean;
 
 [`FfmpegProcess`](process.md#ffmpegprocess).[`aborted`](process.md#aborted)
 
+##### commandLine
+
+###### Get Signature
+
+```ts
+get commandLine(): readonly string[];
+```
+
+The composed FFmpeg argument vector this process was spawned with, readable from construction onward. The array is the frozen copy the class itself holds, returned
+as a readonly view: callers read the exact vector the child received rather than recovering it from the construction log line.
+
+###### Returns
+
+readonly `string`[]
+
+###### Inherited from
+
+[`FfmpegProcess`](process.md#ffmpegprocess).[`commandLine`](process.md#commandline)
+
 ##### hasError
 
 ###### Get Signature

@@ -13,6 +13,9 @@ cashes that in: a [TestClock](#testclock) over a virtual timeline a test advance
 resolves only when [TestClock.advance](#advance) crosses its deadline, or rejects when its signal aborts - matching `node:timers/promises` `setTimeout`'s `AbortError`
 shape. No real timers and no wall-clock are used, so a consumer's pacing/timeout/duration path runs deterministically and instantly under test.
 
+Beside the timeline the double keeps the ledger a pacing assertion reads: `requested` is every `ms` a consumer asked for, in call order, and `advanceToNext()`
+steps straight to the earliest pending deadline - so a suite drives a consumer's schedule by the numbers the consumer chose rather than by numbers it restates.
+
 The double builds on the library's own primitives rather than hand-rolling them: [onAbort](util.md#onabort) wires the abort listener and yields the `Disposable` that detaches
 it, and `Promise.withResolvers` captures each pending wait's deferred. The abort listener is detached on EITHER resolution path (deadline-crossed or aborted), so no
 listener leaks onto a long-lived signal across many short waits.
@@ -32,7 +35,7 @@ constant would diverge; consumers must only compare `now()` values to each other
 #### Example
 
 ```ts
-import { TestClock } from "homebridge-plugin-utils";
+import { TestClock } from "homebridge-plugin-utils/testing";
 
 const clock = new TestClock();
 
@@ -72,7 +75,30 @@ Construct a clock seeded at `start` (default `0`). The seed is the initial value
 
 [`TestClock`](#testclock)
 
+#### Properties
+
+| Property | Modifier | Type | Default value | Description |
+| ------ | ------ | ------ | ------ | ------ |
+| <a id="requested"></a> `requested` | `readonly` | `number`[] | `[]` | Every `ms` a [TestClock.delay](#delay) call asked for, in call order. A request lands here before its wait is registered and whatever later becomes of that wait, so a delay the clock crossed, one whose signal aborted mid-wait, and one whose signal was already aborted all appear. That is the ledger a suite does its cadence arithmetic against - a history that dropped the waits which never came due would understate exactly the loops worth asserting on. |
+
 #### Accessors
+
+##### nextDeadline
+
+###### Get Signature
+
+```ts
+get nextDeadline(): Nullable<number>;
+```
+
+The earliest deadline among the registered delays that have neither resolved nor rejected, and `null` when nothing is pending. A test reads it to assert WHEN a
+consumer's next wait comes due, where [TestClock.pending](#pending) answers how many of them are outstanding.
+
+###### Returns
+
+[`Nullable`](util.md#nullable)\<`number`\>
+
+The earliest pending deadline, in virtual time, or `null` when no delay is pending.
 
 ##### pending
 
@@ -117,6 +143,26 @@ listener detached before it resolves, so the resolve path leaks no listener and 
 
 `void`
 
+##### advanceToNext()
+
+```ts
+advanceToNext(): boolean;
+```
+
+Advance virtual time to the earliest pending deadline and settle everything due there - the step a consumer's next real timer firing would produce. A clock
+with nothing pending answers `false` and moves no time.
+
+The step is `Math.max(0, deadline - now())`, so an entry that is already due - a `delay(0)`, or a `delay` with a negative `ms` - is flushed through
+[TestClock.advance](#advance)'s zero path rather than reached backward for. Entries sharing the earliest deadline settle together within the one step, in
+[TestClock.advance](#advance)'s own order, since `advance` stays the single place an entry settles. A whole schedule drains with
+`while(clock.advanceToNext()) { ... }`: each pass settles one deadline's worth of waits, and the loop ends when nothing is left.
+
+###### Returns
+
+`boolean`
+
+`true` when a deadline was stepped to, `false` when nothing was pending.
+
 ##### delay()
 
 ```ts
@@ -127,7 +173,7 @@ Register a delay that resolves when virtual time reaches `this.now() + ms`, or r
 first. A non-positive `ms` yields a deadline at or before the current time, which the very next [TestClock.advance](#advance) (including `advance(0)`) flushes.
 
 A pre-aborted signal rejects on the executor's microtask exactly as `systemClock` does (NOT a synchronous throw): [onAbort](util.md#onabort) fires the handler inline, which
-removes the just-registered entry and rejects, so the entry never lingers in `pending`.
+removes the just-registered entry and rejects, so the entry never lingers in `pending`. Either way the call's `ms` is recorded in [TestClock.requested](#requested).
 
 ###### Parameters
 

@@ -17,57 +17,115 @@ shape of what crosses the wire.
 
 ## WebUI Status
 
-### StatusRow
+### StatusChoice
 
-One rendered status row: a [StatusRowTemplate](#statusrowtemplate) plus its current display value. Snapshots carry full rows; subsequent `"row"` events carry only the id and the
-new value.
+One member of a [StatusChoicesRow](#statuschoicesrow)'s list: what to call it, and whether it is in effect on the device right now. Display-only in both directions - the panel
+draws a checked or unchecked box beside the label and offers no way to change it - so `selected` reports the device's state rather than collecting the user's.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="label"></a> `label` | `string` | The human-readable choice name, rendered beside its checkbox glyph. |
+| <a id="selected"></a> `selected` | `boolean` | Whether this choice is currently enabled on the device. |
+
+***
+
+### StatusChoicesRow
+
+One rendered choices row: a [StatusChoicesRowTemplate](#statuschoicesrowtemplate) plus the list it currently shows. Snapshots carry full rows; a subsequent `"row"` event carries this
+row's id and a whole replacement list.
 
 #### Extends
 
-- [`StatusRowTemplate`](#statusrowtemplate)
+- [`StatusChoicesRowTemplate`](#statuschoicesrowtemplate)
 
 #### Properties
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
-| <a id="id"></a> `id` | `string` | The stable row identity a live [StatusEvent](#statusevent) of kind `"row"` addresses to update exactly this row's value in place. | [`StatusRowTemplate`](#statusrowtemplate).[`id`](#id-1) |
-| <a id="label"></a> `label` | `string` | The human-readable row label. The label rides with the snapshot so the panel need not know the row-to-label mapping. | [`StatusRowTemplate`](#statusrowtemplate).[`label`](#label-1) |
-| <a id="latch"></a> `latch?` | [`StatusRowLatch`](#statusrowlatch-1) | The optional momentary-value latch. Present only for rows whose value is transient (a motion detection, an obstruction pulse). | [`StatusRowTemplate`](#statusrowtemplate).[`latch`](#latch-1) |
-| <a id="sizer"></a> `sizer` | `string` \| \[`string`, `...string[]`\] | The widest value the row's vocabulary can produce: a single string, or a non-empty tuple when more than one candidate contends for widest. The panel reserves each candidate as an invisible phantom and takes their maximum, so no font-metrics judgment lives in code. The tuple type forbids an empty reservation by construction. | [`StatusRowTemplate`](#statusrowtemplate).[`sizer`](#sizer-1) |
-| <a id="value"></a> `value` | `string` | The row's current display value. An empty or blank string renders as the placeholder dash. | - |
+| <a id="choices"></a> `choices` | [`StatusChoice`](#statuschoice)[] | The row's current choices, in the order the panel renders them. An empty list renders as the placeholder dash, exactly as an empty text value does. | - |
+| <a id="id"></a> `id` | `string` | The stable row identity a live [StatusEvent](#statusevent) of kind `"row"` addresses to replace exactly this row's choices in place. | [`StatusChoicesRowTemplate`](#statuschoicesrowtemplate).[`id`](#id-1) |
+| <a id="kind"></a> `kind` | `"choices"` | The tag marking this row as the choices form. | [`StatusChoicesRowTemplate`](#statuschoicesrowtemplate).[`kind`](#kind-1) |
+| <a id="label-1"></a> `label` | `string` | The human-readable row label. The label travels with the snapshot so the panel need not know the row-to-label mapping. | [`StatusChoicesRowTemplate`](#statuschoicesrowtemplate).[`label`](#label-2) |
+
+***
+
+### StatusChoicesRowTemplate
+
+A choices row's static vocabulary: its identity, its tag, and its display label. It declares no width reservation because a choices row already is one - every
+choice in the list renders at all times and the checkbox glyph is metrically constant, so the rendered list occupies exactly the width it reserves. Replacing the
+list can still move the panel's column widths, so a composer who wants a panel that never shifts holds the list itself steady and moves only
+[StatusChoice.selected](#selected), the same own-your-width-consequence posture a label override carries.
+
+#### Extended by
+
+- [`StatusChoicesRow`](#statuschoicesrow)
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="id-1"></a> `id` | `string` | The stable row identity a live [StatusEvent](#statusevent) of kind `"row"` addresses to replace exactly this row's choices in place. |
+| <a id="kind-1"></a> `kind` | `"choices"` | The tag marking this row as the choices form. |
+| <a id="label-2"></a> `label` | `string` | The human-readable row label. The label travels with the snapshot so the panel need not know the row-to-label mapping. |
 
 ***
 
 ### StatusRowLatch
 
-A row's momentary-value latch. A rendered value equal to [StatusRowLatch.value](#value-1) clears back to the placeholder dash after [StatusRowLatch.seconds](#seconds), a
-positive finite number of seconds; the panel ignores a non-positive latch. Re-arrival of the same value extends the timer, and a different value cancels it.
+A text row's momentary-value latch. A rendered value equal to [StatusRowLatch.value](#value) clears back to the placeholder dash after [StatusRowLatch.seconds](#seconds),
+a positive finite number of seconds; the panel ignores a non-positive latch. Re-arrival of the same value extends the timer, and a different value cancels it. It is
+a mechanism of the text form alone - a value is what a latch clears - so the choices form declares none.
 
 #### Properties
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="seconds"></a> `seconds` | `number` | The number of seconds the momentary value stays latched before it clears back to the placeholder. A non-positive value disables the latch. |
-| <a id="value-1"></a> `value` | `string` | The momentary value that arms the latch. Only a rendered value equal to this string starts the clear-back timer. |
+| <a id="value"></a> `value` | `string` | The momentary value that arms the latch. Only a rendered value equal to this string starts the clear-back timer. |
 
 ***
 
-### StatusRowTemplate
+### StatusTextRow
 
-A status row's static vocabulary: its identity, its display label, its optional momentary-value latch, and its width reservation. The panel's placeholder
-configuration speaks templates; the wire speaks full [StatusRow](#statusrow)s that add the live value.
+One rendered text row: a [StatusTextRowTemplate](#statustextrowtemplate) plus its current display value. Snapshots carry full rows; subsequent `"row"` events carry only the id and
+the new value.
+
+#### Extends
+
+- [`StatusTextRowTemplate`](#statustextrowtemplate)
+
+#### Properties
+
+| Property | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ |
+| <a id="id-2"></a> `id` | `string` | The stable row identity a live [StatusEvent](#statusevent) of kind `"row"` addresses to update exactly this row's value in place. | [`StatusTextRowTemplate`](#statustextrowtemplate).[`id`](#id-3) |
+| <a id="kind-2"></a> `kind?` | `"text"` | The optional tag marking this row as the text form. A row that states no kind is a text row. | [`StatusTextRowTemplate`](#statustextrowtemplate).[`kind`](#kind-3) |
+| <a id="label-3"></a> `label` | `string` | The human-readable row label. The label travels with the snapshot so the panel need not know the row-to-label mapping. | [`StatusTextRowTemplate`](#statustextrowtemplate).[`label`](#label-4) |
+| <a id="latch"></a> `latch?` | [`StatusRowLatch`](#statusrowlatch) | The optional momentary-value latch. Present only for rows whose value is transient (a motion detection, an obstruction pulse). | [`StatusTextRowTemplate`](#statustextrowtemplate).[`latch`](#latch-1) |
+| <a id="sizer"></a> `sizer` | `string` \| \[`string`, `...string[]`\] | The widest value the row's vocabulary can produce: a single string, or a non-empty tuple when more than one candidate contends for widest. The panel reserves each candidate as an invisible phantom and takes their maximum, so no font-metrics judgment lives in code. The tuple type forbids an empty reservation by construction. | [`StatusTextRowTemplate`](#statustextrowtemplate).[`sizer`](#sizer-1) |
+| <a id="value-1"></a> `value` | `string` | The row's current display value. An empty or blank string renders as the placeholder dash. | - |
+
+***
+
+### StatusTextRowTemplate
+
+A text row's static vocabulary: its identity, its optional tag, its display label, its optional momentary-value latch, and its width reservation. The tag is
+optional on this form alone, which makes the text row what an untagged composition means.
 
 #### Extended by
 
-- [`StatusRow`](#statusrow)
+- [`StatusTextRow`](#statustextrow)
 
 #### Properties
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="id-1"></a> `id` | `string` | The stable row identity a live [StatusEvent](#statusevent) of kind `"row"` addresses to update exactly this row's value in place. |
-| <a id="label-1"></a> `label` | `string` | The human-readable row label. The label rides with the snapshot so the panel need not know the row-to-label mapping. |
-| <a id="latch-1"></a> `latch?` | [`StatusRowLatch`](#statusrowlatch-1) | The optional momentary-value latch. Present only for rows whose value is transient (a motion detection, an obstruction pulse). |
+| <a id="id-3"></a> `id` | `string` | The stable row identity a live [StatusEvent](#statusevent) of kind `"row"` addresses to update exactly this row's value in place. |
+| <a id="kind-3"></a> `kind?` | `"text"` | The optional tag marking this row as the text form. A row that states no kind is a text row. |
+| <a id="label-4"></a> `label` | `string` | The human-readable row label. The label travels with the snapshot so the panel need not know the row-to-label mapping. |
+| <a id="latch-1"></a> `latch?` | [`StatusRowLatch`](#statusrowlatch) | The optional momentary-value latch. Present only for rows whose value is transient (a motion detection, an obstruction pulse). |
 | <a id="sizer-1"></a> `sizer` | `string` \| \[`string`, `...string[]`\] | The widest value the row's vocabulary can produce: a single string, or a non-empty tuple when more than one candidate contends for widest. The panel reserves each candidate as an invisible phantom and takes their maximum, so no font-metrics judgment lives in code. The tuple type forbids an empty reservation by construction. |
 
 ***
@@ -92,14 +150,19 @@ trigger - so optional payload fields stay additive.
 type StatusErrorReason = 
   | "auth-invalid"
   | "auth-missing"
+  | "misconfigured"
   | "not-found"
+  | "not-ready"
+  | "throttled"
   | "timeout"
-  | "unreachable";
+  | "unreachable"
+  | "unsupported";
 ```
 
 The classified reasons a status feed can fail to render, each mapping to distinct panel copy. Deliberately credential-neutral: `auth-invalid` / `auth-missing`
-serve a PSK, a password, or a token equally. The vocabulary grows additively in `homebridge-plugin-utils` when an adapter needs a new classification, never as a
-per-plugin fork.
+serve a PSK, a password, or a token equally. `misconfigured` (needing attention in its own app), `not-ready` (still starting), `throttled` (limiting its
+requests), and `unsupported` (not one this plugin works with) each name what a device that answered is doing, as distinct from a device that did not answer or
+refused a credential. The vocabulary grows additively in `homebridge-plugin-utils` when an adapter needs a new classification, never as a per-plugin fork.
 
 ***
 
@@ -126,7 +189,7 @@ type StatusEvent =
 }
   | {
   kind: "row";
-  row: Pick<StatusRow, "id" | "value">;
+  row: StatusRowUpdate;
   serialNumber: string;
   session: number;
 }
@@ -167,7 +230,62 @@ here rather than in machinery - in the brief window where a dying process's late
 cleared floor; device events carry no generation to attribute them by, the window requires two helper processes' messages to interleave across a handoff, and a
 per-event generation field remains the additive escape if the field ever reports it.
 
+Two members carry row content. A `snapshot` carries the authoritative `rows` set as full [StatusRow](#statusrow)s in either form, and a row absent from it disappears from
+the panel. A `row` event carries a [StatusRowUpdate](#statusrowupdate), addressing one row by id and replacing only what that row's own form holds - a text value or a whole
+choices list.
+
 The union grows additively in this library, and `hello`'s field set is itself additive.
+
+***
+
+### StatusRow
+
+```ts
+type StatusRow = 
+  | StatusChoicesRow
+  | StatusTextRow;
+```
+
+One rendered status row in either form: a text row carrying its display value, or a choices row carrying its list.
+
+***
+
+### StatusRowTemplate
+
+```ts
+type StatusRowTemplate = 
+  | StatusChoicesRowTemplate
+  | StatusTextRowTemplate;
+```
+
+A status row's static vocabulary in either form, tagged on `kind`. The panel's placeholder configuration speaks templates; the wire speaks full [StatusRow](#statusrow)s
+that add the live value or the live list.
+
+The vocabulary grows additively in this library as new row forms are needed, and the panel's contract for a form it does not recognize is honest degradation: it
+renders that row's label over the placeholder dash and leaves every neighboring row working, so a plugin composing a newer form against an older panel loses that
+one row's content rather than the panel.
+
+***
+
+### StatusRowUpdate
+
+```ts
+type StatusRowUpdate = 
+  | Pick<StatusChoicesRow, "choices" | "id"> & {
+  value?: never;
+}
+  | Pick<StatusTextRow, "id" | "value"> & {
+  choices?: never;
+};
+```
+
+The payload a `"row"` event carries: the addressed row's id plus the one thing that changed, stated in that row's own vocabulary - a replacement `value` for a text
+row, or a whole replacement `choices` list for a choices row. Either way the panel writes the addressed row in place rather than rebuilding the panel around it.
+
+The two arms exclude each other through the `never`-typed guards, so a literal carrying both `choices` and `value` fails to compile. That exclusivity is
+authoring-side protection for a TypeScript composer and nothing more: the panel's runtime authority for what an update MEANS is the kind of the template the
+addressed row was declared with, never the shape of the payload, so a text row addressed with a choices-shaped update degrades to the placeholder dash rather than
+changing form.
 
 ***
 

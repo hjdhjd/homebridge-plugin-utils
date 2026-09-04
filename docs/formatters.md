@@ -94,8 +94,8 @@ formatBytes(1099511627776);    // "1 TB".
 function formatMs(value): string;
 ```
 
-Format a millisecond duration into a human-readable form as ms, s, min, or hr. Tiered thresholds match how operators naturally read elapsed time: sub-second
-values stay in milliseconds for precision, longer durations promote to seconds, minutes, and hours.
+Format a millisecond duration into a human-readable form as ms, s, min, hr, or day. Tiered thresholds match how operators naturally read elapsed time: sub-second
+values stay in milliseconds for precision, longer durations promote to seconds, minutes, hours, and days.
 
 #### Parameters
 
@@ -112,11 +112,12 @@ Returns the value as a human-readable string.
 #### Example
 
 ```ts
-formatMs(250);        // "250 ms".
-formatMs(1500);       // "1.5 s".
-formatMs(15000);      // "15 s".
-formatMs(90000);      // "1.5 min".
-formatMs(5400000);    // "1.5 hr".
+formatMs(250);          // "250 ms".
+formatMs(1500);         // "1.5 s".
+formatMs(15000);        // "15 s".
+formatMs(90000);        // "1.5 min".
+formatMs(5400000);      // "1.5 hr".
+formatMs(129600000);    // "1.5 day".
 ```
 
 ***
@@ -159,8 +160,8 @@ formatPercent(33.333);   // "33.3%".
 function formatSeconds(value): string;
 ```
 
-Format a second-resolution duration into a human-readable form as s, min, or hr. Same tier semantics as [formatMs](#formatms), scaled for inputs that arrive already
-in seconds rather than milliseconds.
+Format a second-resolution duration into a human-readable form as s, min, hr, or day. Same tier semantics as [formatMs](#formatms), scaled for inputs that arrive
+already in seconds rather than milliseconds.
 
 #### Parameters
 
@@ -177,8 +178,9 @@ Returns the value as a human-readable string.
 #### Example
 
 ```ts
-formatSeconds(45);          // "45 s".
-formatSeconds(90);          // "1.5 min".
-formatSeconds(1800);        // "30 min".
-formatSeconds(5400);        // "1.5 hr".
+formatSeconds(45);        // "45 s".
+formatSeconds(90);        // "1.5 min".
+formatSeconds(1800);      // "30 min".
+formatSeconds(5400);      // "1.5 hr".
+formatSeconds(129600);    // "1.5 day".
 ```

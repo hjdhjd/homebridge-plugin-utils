@@ -10,8 +10,8 @@ Every piece of shipped test-support surface the library offers, reachable at one
 
 The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
 support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
-finders, the unhandled-rejection assertion, and the shared poll-with-deadline - the runtime-floor guard machinery in
-`runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
+finders, the unhandled-rejection assertion, the shared poll-with-deadline, and the macrotask yield with the two `TestClock` walks built on it - the runtime-floor
+guard machinery in `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
 
 The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
 `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
@@ -56,6 +56,40 @@ over in the live mutable reference.
 | Name | Type |
 | ------ | ------ |
 | `entries` | readonly [`TestLogEntry`](#testlogentry)[] |
+
+***
+
+### advanceThroughSchedule()
+
+```ts
+function advanceThroughSchedule(clock, waits): Promise<void>;
+```
+
+Walk `clock` through a schedule of waits, letting the queue come to rest before each step and once more after the last.
+
+A subject registers its next wait only after the one before it has settled, so a single advance across the whole schedule moves past deadlines that were never
+registered and strands every wait after the first; stepping releases one wait at a time. The trailing yield lets whatever the last step released run to completion, so
+the caller reads a finished body rather than one still mid-continuation.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `clock` | [`TestClock`](clock-double.md#testclock) | The clock whose virtual time the walk moves. |
+| `waits` | readonly `number`[] | The waits to step through, in the order the subject registers them. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+
+#### Example
+
+```ts
+// An operation whose backoff schedule is 100 ms and then 200 ms, walked to completion.
+await advanceThroughSchedule(clock, [ 100, 200 ]);
+
+assert.equal(clock.now(), 300);
+```
 
 ***
 
@@ -136,6 +170,47 @@ const log = capturingLog();
 classUnderTest.doSomething(log);
 
 assert.equal(log.entries.at(-1)?.level, "info");
+```
+
+***
+
+### drainClock()
+
+```ts
+function drainClock(clock, limit?): Promise<number>;
+```
+
+Step `clock` to each pending deadline until nothing is pending, and answer how many steps that took.
+
+The bound is what separates a finished drain from a spinning one: a repeating timer never empties the list, and a suite that hangs on one is a far worse failure than
+a suite that throws naming the limit it was given. Every step is followed by a yield before the clock is asked for the next deadline, so the continuations a step
+released have registered their own waits before the drain decides it is finished...which is also what lets the work after the last deadline run before the count comes
+back.
+
+#### Parameters
+
+| Parameter | Type | Default value | Description |
+| ------ | ------ | ------ | ------ |
+| `clock` | [`TestClock`](clock-double.md#testclock) | `undefined` | The clock to drain. |
+| `limit` | `number` | `1000` | The maximum number of steps to take. Defaults to 1000. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`number`\>
+
+The number of deadlines stepped to, which is zero for a clock that had nothing pending.
+
+#### Throws
+
+`Error` when the clock still has entries pending after `limit` steps.
+
+#### Example
+
+```ts
+// A body awaiting two delays in sequence, drained to completion.
+const steps = await drainClock(clock);
+
+assert.equal(steps, 2);
 ```
 
 ***
@@ -287,6 +362,40 @@ classUnderTest.retry(log);
 
 // The emission was `log.warn("Retrying in %d seconds.", 30)`, so "30" is nowhere in the captured message...only the render finds it.
 assert.ok(loggedAt(log.entries, "warn", "30"));
+```
+
+***
+
+### settle()
+
+```ts
+function settle(turns?): Promise<void>;
+```
+
+Yield to the macrotask queue `turns` times, so the continuations a test has already released have run by the time it looks at what they did.
+
+Each turn yields one macrotask, which drains the entire microtask cascade first: a chain of promise continuations - an attempt's rejection, the checks that follow it,
+the clock registration those checks arm - comes to rest before the caller looks. One turn is the default, and it is enough for any cascade that stays in promise-land;
+a caller names more turns only when its subject's cascade crosses more than one macrotask boundary of its own, a handshake whose steps each schedule the next being
+the usual case. A `turns` of zero yields nothing at all.
+
+#### Parameters
+
+| Parameter | Type | Default value | Description |
+| ------ | ------ | ------ | ------ |
+| `turns` | `number` | `1` | How many macrotask boundaries to cross. Defaults to 1. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+
+#### Example
+
+```ts
+clock.advance(100);
+await settle();
+
+assert.equal(attempts.length, 2);
 ```
 
 ***

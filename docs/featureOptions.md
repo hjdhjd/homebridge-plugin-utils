@@ -556,7 +556,8 @@ const volume = featureOpts.value("audio.volume");
 new FeatureOptions(
    categories, 
    options, 
-   configuredOptions?): FeatureOptions;
+   configuredOptions?
+): FeatureOptions;
 ```
 
 Create a new FeatureOptions instance.
@@ -879,7 +880,8 @@ Returns a fully formed feature option in the form of `category.option`.
 getFloat(
    option, 
    device?, 
-controller?): Nullable<number | undefined>;
+   controller?
+): Nullable<number | undefined>;
 ```
 
 Parse a floating point feature option value.
@@ -904,7 +906,8 @@ Returns the value of a value-centric option as a floating point number, `undefin
 getInteger(
    option, 
    device?, 
-controller?): Nullable<number | undefined>;
+   controller?
+): Nullable<number | undefined>;
 ```
 
 Parse an integer feature option value.
@@ -929,7 +932,8 @@ Returns the value of a value-centric option as an integer, `undefined` if it doe
 isDependencyMet(
    option, 
    device?, 
-   controller?): boolean;
+   controller?
+): boolean;
 ```
 
 Return whether a grouped option's parent is currently enabled at the given scope. For options that aren't grouped (no `group` property in the catalog entry),
@@ -1023,7 +1027,8 @@ logFeature(
    label, 
    log, 
    device?, 
-   controller?): void;
+   controller?
+): void;
 ```
 
 Emit an INFO-level log line for a feature option, but only when the user's effective configuration deviates from the declared default.
@@ -1096,7 +1101,8 @@ featureOptions.logFeature("HKSV.Record", "HKSV recording", log, device.mac, cont
 scope(
    option, 
    device?, 
-   controller?): OptionScope;
+   controller?
+): OptionScope;
 ```
 
 Return the scope hierarchy location of an option.
@@ -1169,7 +1175,8 @@ featureOpts.setOption({ enabled: true, id: "ABC123", option: "Audio.Volume", val
 test(
    option, 
    device?, 
-   controller?): boolean;
+   controller?
+): boolean;
 ```
 
 Return the current state of a feature option, traversing the scope hierarchy.
@@ -1194,7 +1201,8 @@ Returns true if the option is enabled, and false otherwise.
 value(
    option, 
    device?, 
-controller?): Nullable<string | undefined>;
+   controller?
+): Nullable<string | undefined>;
 ```
 
 Return the value associated with a value-centric feature option, traversing the scope hierarchy.

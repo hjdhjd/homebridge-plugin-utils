@@ -221,7 +221,8 @@ assert.equal(steps, 2);
 function expectAt<T>(
    items, 
    index, 
-   description?): T;
+   description?
+): T;
 ```
 
 Return `items[index]`, asserting the element exists. Narrows the result to `T` so test bodies can use the value without non-null assertions and without a separate
@@ -296,7 +297,8 @@ The entry's message with its params interpolated.
 function logCount(
    entries, 
    level, 
-   substring): number;
+   substring
+): number;
 ```
 
 Count the entries at `level` whose rendered line contains `substring`, matching by the same rules as [loggedAt](#loggedat).
@@ -326,7 +328,8 @@ The number of entries at `level` whose rendered line contains `substring`.
 function loggedAt(
    entries, 
    level, 
-   substring): boolean;
+   substring
+): boolean;
 ```
 
 Report whether any entry at `level`, once rendered through [formatLogEntry](#formatlogentry), contains `substring`.

@@ -58,7 +58,8 @@ A fresh gap-marker [LogRecord](types.md#logrecord).
 function stitchLive(
    history, 
    live, 
-   options?): LogRecord[];
+   options?
+): LogRecord[];
 ```
 
 Join a history tail and a live buffer at their overlap.

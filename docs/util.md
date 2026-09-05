@@ -200,6 +200,19 @@ when no arm is pending - repeat calls are no-ops.
 
 ***
 
+### ExponentialBackoffOptions
+
+Options accepted by [exponentialBackoff](#exponentialbackoff).
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="ceilingms"></a> `ceilingMs?` | `number` | The largest delay, in milliseconds, the ladder ever answers: once the doubling reaches this value the ladder holds here for every later attempt. Must be finite and positive. Defaults to 30000. |
+| <a id="seedms"></a> `seedMs?` | `number` | The delay, in milliseconds, before attempt 2 - the first retry - doubled for each attempt after it. Must be finite and positive. Defaults to 1000. |
+
+***
+
 ### HbpuAbortErrorOptions
 
 Options accepted by [HbpuAbortError](#hbpuaborterror)'s constructor.
@@ -252,7 +265,7 @@ Options accepted by [retry](#retry).
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="attempts"></a> `attempts?` | `number` | Total number of attempts, including the first. Must be >= 1. Defaults to 3. Values less than 1 throw synchronously (rejected promise) at the top of `retry()`. Pass `Infinity` for unbounded attempts - the loop then terminates only on success, an abort, or a `shouldRetry` veto, never on an exhausted budget. |
-| <a id="backoff"></a> `backoff?` | (`attempt`) => `number` | Backoff policy, invoked with the attempt number (1-indexed) about to be run. The returned value is the delay in milliseconds before running that attempt. Called only between attempts (i.e., never with `attempt === 1`). Defaults to [defaultRetryBackoff](#defaultretrybackoff) (exponential with a 30-second ceiling). |
+| <a id="backoff"></a> `backoff?` | [`RetryBackoff`](#retrybackoff) | Backoff policy, invoked with the attempt number (1-indexed) about to be run. The returned value is the delay in milliseconds before running that attempt. See [RetryBackoff](#retrybackoff) for the attempt-numbering convention. Defaults to [defaultRetryBackoff](#defaultretrybackoff) (exponential with a 30-second ceiling); build a curve with a different seed or ceiling through [exponentialBackoff](#exponentialbackoff). |
 | <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | Optional time source for the between-attempt backoff waits. Defaults to [systemClock](clock.md#systemclock), whose `delay` IS the platform `node:timers/promises` `setTimeout`, so the default path is that same platform call with one indirection in front of it and no behavior change. Supplying a controllable clock (`TestClock`) puts the backoff schedule on virtual time, so a test asserts what the policy actually waited instead of waiting it out in real seconds. |
 | <a id="shouldretry"></a> `shouldRetry?` | (`error`, `attemptNumber`) => `boolean` | Optional predicate consulted after an attempt throws and attempts remain. Receives the rejected error and the 1-indexed number of the attempt that just failed; return `false` to stop immediately and rethrow that error (no backoff wait, no further attempts), or `true` to retry per the backoff policy. When omitted, every error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the mechanism that lets a caller retry some failures and fail fast on others (e.g. retry network faults but give up on an authentication error) without owning the attempt loop itself. |
 | <a id="signal"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional abort signal. Aborting cancels any in-flight backoff wait and is forwarded verbatim to `operation` as its own signal argument, so well-behaved operations cancel too. An abort at any point - mid-attempt, mid-backoff, or before the first attempt - rejects the outer promise with the signal's reason. |
@@ -473,6 +486,29 @@ const invalid: DeviceUpdate = { name: "SomeOtherDevice" }; // TypeScript error
 
 ***
 
+### RetryBackoff
+
+```ts
+type RetryBackoff = (attempt) => number;
+```
+
+The shape of a backoff policy: the function [retry](#retry) consults between attempts to learn how long to wait before the next one.
+
+`attempt` is the 1-indexed number of the attempt about to run, and it is never 1 - the first attempt runs immediately - so a policy's seed delay is the one it
+answers for attempt 2. The answer is the delay, in milliseconds, to wait before running that attempt.
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `attempt` | `number` |
+
+#### Returns
+
+`number`
+
+***
+
 ### RunWithAbortOptions
 
 ```ts
@@ -651,7 +687,8 @@ log.debug("Polling returned %d devices.", devices.length);
 function defaultRetryBackoff(attempt): number;
 ```
 
-The default backoff policy used by [retry](#retry): exponential with a 30-second ceiling, starting at 1 second for the second attempt (`attempt = 2`).
+The default backoff policy used by [retry](#retry): [exponentialBackoff](#exponentialbackoff) at its defaults - exponential with a 30-second ceiling, starting at 1 second for the
+second attempt (`attempt = 2`).
 
 #### Parameters
 
@@ -664,6 +701,52 @@ The default backoff policy used by [retry](#retry): exponential with a 30-second
 `number`
 
 The delay, in milliseconds, to wait before executing `attempt`.
+
+***
+
+### exponentialBackoff()
+
+```ts
+function exponentialBackoff(options?): RetryBackoff;
+```
+
+Build an exponential backoff policy: a seed delay doubled for each successive attempt, never above a ceiling.
+
+This is the one exponential ladder in the library...the default retry policy ([defaultRetryBackoff](#defaultretrybackoff)) and the log client's reconnect curve both derive from
+it, so the formula and its attempt numbering live in one place. The numbering is [RetryBackoff](#retrybackoff)'s: [retry](#retry) consults the policy with the 1-indexed
+attempt about to run and never with `attempt === 1`, so `seedMs` is the delay before attempt 2 and `attempt - 2` is the zero-based exponent. What comes back is
+exactly what [RetryOptions.backoff](#backoff) accepts. Jitter is deliberately the caller's, composed on top of the ladder rather than offered as an option here: the
+useful jitter models differ in kind - a fraction of the computed delay, an absolute millisecond spread a user configures - so the ladder answers the bare curve
+and each caller spreads it the way its own fleet needs.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | [`ExponentialBackoffOptions`](#exponentialbackoffoptions) | The ladder's seed and ceiling. See [ExponentialBackoffOptions](#exponentialbackoffoptions). |
+
+#### Returns
+
+[`RetryBackoff`](#retrybackoff)
+
+A backoff policy answering the delay, in milliseconds, to wait before the attempt it is given.
+
+#### Throws
+
+`Error` if `seedMs` or `ceilingMs` is not a finite, positive number.
+
+#### Example
+
+```ts
+import { exponentialBackoff, retry } from "homebridge-plugin-utils";
+
+// A ladder with a one-minute ceiling, handed to retry as its policy.
+const device = await retry(async (signal) => fetchDevice(id, { signal }), { attempts: 5, backoff: exponentialBackoff({ ceilingMs: 60000 }) });
+
+// Jitter composed on top of the same ladder.
+const ladder = exponentialBackoff({ ceilingMs: 60000 });
+const spread = (attempt: number): number => ladder(attempt) + Math.round(Math.random() * 250);
+```
 
 ***
 
@@ -1245,7 +1328,8 @@ const result3 = await runWithAbort((signal) => once(emitter, "data", { signal })
 function sameEntries<T>(
    a, 
    b, 
-   same): boolean;
+   same
+): boolean;
 ```
 
 Compare two arrays entry by entry, deciding equality of each pair through a caller-supplied comparator.

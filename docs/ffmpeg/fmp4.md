@@ -118,7 +118,8 @@ function findBox(
    buffer, 
    type, 
    start?, 
-end?): Nullable<FMp4Box>;
+   end?
+): Nullable<FMp4Box>;
 ```
 
 Locates the first ISO BMFF box of a given type within a byte range.

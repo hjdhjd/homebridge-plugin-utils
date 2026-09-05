@@ -82,7 +82,8 @@ The table's lines: the heading line, the divider, then one line per row.
 function spliceMarkedRegion(
    source, 
    content, 
-   markers): string;
+   markers
+): string;
 ```
 
 Replace the region strictly between the begin marker and the end marker in `source` with `content`, leaving both markers and all surrounding prose untouched. This is

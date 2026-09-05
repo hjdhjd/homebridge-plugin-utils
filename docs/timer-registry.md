@@ -191,7 +191,8 @@ and answers the shared [NO\_OP\_DISPOSABLE](util.md#no_op_disposable), so a call
 setInterval(
    key, 
    callback, 
-   interval): void;
+   interval
+): void;
 ```
 
 Arm a keyed repeating timer. Any timer already armed under `key` - one-shot or interval - is cleared first, the same replace-on-register rule as [setTimeout](#settimeout).
@@ -215,7 +216,8 @@ The entry persists across fires until [clear](#clear) removes it or the registry
 setTimeout(
    key, 
    callback, 
-   delay): void;
+   delay
+): void;
 ```
 
 Arm a keyed one-shot. Any timer already armed under `key` - one-shot or interval - is cleared first, so registering under a key declares the current intent for it

@@ -545,8 +545,8 @@ dev tool should resume the tail promptly after the frequent Homebridge restarts 
 `JITTER_FRACTION` of the computed base is added as upward jitter so a fleet of clients does not reconnect in lockstep after a shared outage.
 
 It is exported (rather than left inline in the constructor) so the bare schedule is a directly unit-testable function: with `random` pinned to `0` the curve yields the
-exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. `retry` invokes the socket's backoff 1-indexed with the attempt about to run and never with
-`attempt === 1` (the first attempt runs immediately), so `attempt - 2` is the zero-based exponent for the second-and-later attempts.
+exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. The curve itself is [exponentialBackoff](../util.md#exponentialbackoff)'s ladder built from `RECONNECT_BASE_MS` and
+`RECONNECT_CAP_MS`, so the attempt numbering is the one that factory documents.
 
 #### Parameters
 

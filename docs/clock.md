@@ -81,7 +81,8 @@ The current time in epoch milliseconds.
 schedule(
    callback, 
    ms, 
-   init?): Disposable;
+   init?
+): Disposable;
 ```
 
 Arm a callback timer: run `callback` once after `ms` milliseconds, or every `ms` milliseconds when `init.repeat` is `true`. The production [systemClock](#systemclock)

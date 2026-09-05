@@ -173,7 +173,8 @@ Indicates whether verbose logging is enabled for FFmpeg probing and downstream c
 ffmpegAtLeast(
    major, 
    minor?, 
-   patch?): boolean;
+   patch?
+): boolean;
 ```
 
 Return `true` when the detected FFmpeg build is at least the requested version. Compares major, then minor, then patch - the canonical semver ordering. This is
@@ -431,7 +432,8 @@ function ffmpegVersionAtLeast(
    parts, 
    major, 
    minor?, 
-   patch?): boolean;
+   patch?
+): boolean;
 ```
 
 Return `true` when `parts` represents an FFmpeg version at least as new as the requested major/minor/patch. Compares major, then minor, then patch - the canonical

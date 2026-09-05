@@ -43,7 +43,8 @@ function acquireService<T>(
    serviceType, 
    name, 
    subtype?, 
-onServiceCreate?): Nullable<T>;
+   onServiceCreate?
+): Nullable<T>;
 ```
 
 Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
@@ -254,7 +255,8 @@ function validService(
    accessory, 
    serviceType, 
    validate, 
-   subtype?): boolean;
+   subtype?
+): boolean;
 ```
 
 Validates whether a specific service should exist on the given accessory, removing the service if it fails validation.

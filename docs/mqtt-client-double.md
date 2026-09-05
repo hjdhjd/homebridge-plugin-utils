@@ -279,7 +279,8 @@ has aborted the call returns quietly.
 publish(
    topic, 
    payload, 
-init?): Promise<void>;
+   init?
+): Promise<void>;
 ```
 
 Record a publish of `payload` to `topic`, mirroring [MqttClient.publish](mqttClient.md#publish). The composed signal is read first, so a publish
@@ -339,7 +340,8 @@ A fresh array of the matching publishes, in the order they were recorded. Mutati
 publishGuarded(
    topic, 
    payload, 
-   init?): void;
+   init?
+): void;
 ```
 
 The fire-and-forget counterpart to [TestMqttClient.publish](#publish), mirroring [MqttClient.publishGuarded](mqttClient.md#publishguarded): it returns
@@ -370,7 +372,8 @@ line at all, since nothing was attempted.
 subscribe(
    topic, 
    handler, 
-   init?): void;
+   init?
+): void;
 ```
 
 Record a raw subscription on `topic`, mirroring [MqttClient.subscribe](mqttClient.md#subscribe). An aborted double or a pre-aborted
@@ -396,7 +399,8 @@ subscribeGet(
    topic, 
    type, 
    getValue, 
-   init?): void;
+   init?
+): void;
 ```
 
 Record a get subscription on the `/get` child of `topic`, mirroring [MqttClient.subscribeGet](mqttClient.md#subscribeget). The registration rules
@@ -422,7 +426,8 @@ subscribeSet(
    topic, 
    type, 
    setValue, 
-   init?): void;
+   init?
+): void;
 ```
 
 Record a set subscription on the `/set` child of `topic`, mirroring [MqttClient.subscribeSet](mqttClient.md#subscribeset). The registration rules

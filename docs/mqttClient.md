@@ -177,7 +177,8 @@ Safe to call more than once. After this runs, every subsequent `publish`, `subsc
 publish(
    topic, 
    payload, 
-init?): Promise<void>;
+   init?
+): Promise<void>;
 ```
 
 Publish `payload` to `topic`, returning a promise that resolves when the broker acknowledges the publish, or rejects on failure, on abort, or because there is
@@ -225,7 +226,8 @@ A promise that resolves once the broker acknowledges - or at once, with nothing 
 publishGuarded(
    topic, 
    payload, 
-   init?): void;
+   init?
+): void;
 ```
 
 Publish `payload` to `topic` without waiting for the outcome. The fire-and-forget counterpart to [publish](#publish), for state fan-out where the caller has nothing
@@ -258,7 +260,8 @@ and what lets a change-gated publish suppress itself just as quietly when the br
 subscribe(
    topic, 
    handler, 
-   init?): void;
+   init?
+): void;
 ```
 
 Subscribe to `topic` with the given handler. The topic is prefixed with the configured [MqttConfig.topicPrefix](#topicprefix) before being registered with the broker.
@@ -285,7 +288,8 @@ subscribeGet(
    topic, 
    type, 
    getValue, 
-   init?): void;
+   init?
+): void;
 ```
 
 Subscribe to the `/get` child of `topic`. When a `"true"` message arrives on the get topic, the provided `getValue` callback runs and its return value is
@@ -311,7 +315,8 @@ subscribeSet(
    topic, 
    type, 
    setValue, 
-   init?): void;
+   init?
+): void;
 ```
 
 Subscribe to the `/set` child of `topic`. Each incoming message invokes `setValue` with the lowercased normalized value, the raw message string, and an
@@ -600,7 +605,8 @@ this.mqtt ??= settings && createMqttClient({ ...settings, log }, { signal: platf
 function logGetterPublishOutcome(
    log, 
    type, 
-   outcome): void;
+   outcome
+): void;
 ```
 
 Route the outcome of a `subscribeGet` response publish to the appropriate log line. Pure function: no class state, no mqtt.js handles, no closure over the live
@@ -688,7 +694,8 @@ The text with every occurrence of `brokerUrl` replaced by its redacted form. Tex
 function routeMqttBrokerError(
    error, 
    log, 
-   reconnectInterval): void;
+   reconnectInterval
+): void;
 ```
 
 Route a transport-level MQTT error to the appropriate log line. Pure function: no class state, no mqtt.js handles, no closure over the live client. The wiring layer

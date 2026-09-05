@@ -232,7 +232,8 @@ The current virtual time.
 schedule(
    callback, 
    ms, 
-   init?): Disposable;
+   init?
+): Disposable;
 ```
 
 Register a callback timer that [TestClock.advance](#advance) runs when virtual time reaches its deadline: once at `this.now() + ms`, or every `ms` from that point when

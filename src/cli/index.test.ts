@@ -1281,10 +1281,11 @@ async function writeManifest({ manifest, root }: { manifest: unknown; root: stri
  * region.
  *
  * @param args
+ * @param args.logo  - When `false`, the webUI's logo marker pair is omitted so the missing-pair failure can be exercised. Defaults to `true`.
  * @param args.root  - The scratch directory the tree is written into.
  * @param args.webui - When `false`, the webUI file is omitted so the webUI-absent skip can be exercised. Defaults to `true`.
  */
-async function writePluginTree({ root, webui = true }: { root: string; webui?: boolean }): Promise<void> {
+async function writePluginTree({ logo = true, root, webui = true }: { logo?: boolean; root: string; webui?: boolean }): Promise<void> {
 
   await writeFile(join(root, "README.md"), "# Top\n\n" + markedRegion(docChrome.MASTHEAD_BEGIN, docChrome.MASTHEAD_END) + "\n\nHand intro.\n\n## Documentation\n" +
     markedRegion(docChrome.DOCUMENTATION_BEGIN, docChrome.DOCUMENTATION_END) + "\n\n## Dashboard\n" + markedRegion(docChrome.DEV_BADGES_BEGIN, docChrome.DEV_BADGES_END) +
@@ -1301,8 +1302,12 @@ async function writePluginTree({ root, webui = true }: { root: string; webui?: b
 
     await mkdir(join(root, "homebridge-ui", "public"), { recursive: true });
 
-    await writeFile(join(root, "homebridge-ui", "public", "index.html"), "<html>\n" + markedRegion(docChrome.DOCUMENTATION_BEGIN, docChrome.DOCUMENTATION_END) + "\n" +
-      markedRegion(docChrome.PROJECTS_BEGIN, docChrome.PROJECTS_END) + "\n</html>\n");
+    // The logo pair sits inside a hand-authored centering wrapper, the shape every consumer's page uses, so an assertion can tell the stamped region apart from the
+    // markup around it.
+    const logoRegion = logo ? ("<p class=\"text-center\">\n" + markedRegion(docChrome.LOGO_BEGIN, docChrome.LOGO_END) + "\n</p>\n") : "";
+
+    await writeFile(join(root, "homebridge-ui", "public", "index.html"), "<html>\n" + logoRegion +
+      markedRegion(docChrome.DOCUMENTATION_BEGIN, docChrome.DOCUMENTATION_END) + "\n" + markedRegion(docChrome.PROJECTS_BEGIN, docChrome.PROJECTS_END) + "\n</html>\n");
   }
 }
 
@@ -1344,6 +1349,52 @@ describe("prepareChrome", () => {
 
     assert.match(html, /<h5>Getting Started<\/h5>/, "the webUI nav must be stamped as HTML");
     assert.match(html, /ratgdo: garage support\./, "the webUI project list must be stamped");
+  });
+
+  test("stamps the webUI logo between its own markers and leaves the page's wrapper markup alone", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion });
+
+    const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
+    const region = html.slice(html.indexOf(docChrome.LOGO_BEGIN) + docChrome.LOGO_BEGIN.length, html.indexOf(docChrome.LOGO_END));
+
+    assert.equal(region, "\n<img class=\"chrome-logo\" src=\"https://raw.test/logo.svg\" alt=\"example-plugin\" />\n",
+      "the region holds the manifest's artwork as the rendered image element and nothing else");
+    assert.equal(html.includes("<p class=\"text-center\">\n" + docChrome.LOGO_BEGIN), true, "the hand-authored wrapper before the region survives the stamp");
+    assert.equal(html.includes(docChrome.LOGO_END + "\n</p>"), true, "and so does the wrapper after it");
+    const documentation = html.slice(html.indexOf(docChrome.DOCUMENTATION_BEGIN) + docChrome.DOCUMENTATION_BEGIN.length, html.indexOf(docChrome.DOCUMENTATION_END));
+
+    assert.match(documentation, /<h5>Getting Started<\/h5>/, "the documentation index is stamped alongside it, as before");
+    assert.equal(documentation.includes("stale region content"), false, "and its own placeholder is gone");
+  });
+
+  test("a webUI page without the logo markers fails naming the begin marker, writing nothing", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
+
+    await writePluginTree({ logo: false, root: scratch.path });
+
+    const readmeBefore = await readFile(join(scratch.path, "README.md"), "utf8");
+
+    // A page missing the logo pair fails exactly as a page missing the documentation pair does: the splice refuses in the in-memory pass, before any file is written.
+    // That is the adoption contract - each consumer authors the pair around its existing image element once, and the run says so by name until it does.
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion }), (error: unknown) => {
+
+      assert.equal(error instanceof Error, true);
+      assert.equal((error as Error).message, "spliceMarkedRegion: begin marker not found in source: \"" + docChrome.LOGO_BEGIN + "\".");
+
+      return true;
+    });
+
+    assert.equal(await readFile(join(scratch.path, "README.md"), "utf8"), readmeBefore, "no file may be written when the logo region fails to splice");
   });
 
   test("a doc entry opted out of both regions stays byte-untouched while remaining listed in every documentation index", async () => {

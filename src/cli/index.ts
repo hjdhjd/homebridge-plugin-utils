@@ -22,7 +22,8 @@
  *
  * @module
  */
-import type { ProjectEntry, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } from "../docChrome.ts";
+import type { ProjectEntry, docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderLogo, renderMasthead,
+  renderProjects } from "../docChrome.ts";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -55,7 +56,7 @@ export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
   "  prepare-docs <catalog-module> [--doc <path>]    Generate the Feature Options reference into the plugin's docs.\n" +
   "  prepare-mqtt <catalog-module> [--doc <path>]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
-  "  prepare-chrome <manifest> [--root <dir>]    Stamp the doc-chrome regions (masthead, nav, badges, projects) across the plugin's docs, README, and webUI.\n";
+  "  prepare-chrome <manifest> [--root <dir>]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects) across the plugin's docs, README, and webUI.\n";
 
 /**
  * Compute a deterministic content hash over `root`'s file tree. Walks every file in lexicographic order of relative POSIX path so two runs against the same content
@@ -563,14 +564,18 @@ interface DocChromeModule {
   readonly DEV_BADGES_END: string;
   readonly DOCUMENTATION_BEGIN: string;
   readonly DOCUMENTATION_END: string;
+  readonly LOGO_BEGIN: string;
+  readonly LOGO_END: string;
   readonly MASTHEAD_BEGIN: string;
   readonly MASTHEAD_END: string;
   readonly PROJECTS_BEGIN: string;
   readonly PROJECTS_END: string;
+  readonly docChromeRegions: typeof docChromeRegions;
   readonly parseDocChromeManifest: typeof parseDocChromeManifest;
   readonly parseProjectEntries: typeof parseProjectEntries;
   readonly renderDevBadges: typeof renderDevBadges;
   readonly renderDocIndex: typeof renderDocIndex;
+  readonly renderLogo: typeof renderLogo;
   readonly renderMasthead: typeof renderMasthead;
   readonly renderProjects: typeof renderProjects;
 }
@@ -586,16 +591,16 @@ interface DocChromeModule {
  * preserved. `fetchImpl` is injected (defaulting to the global `fetch`) so the remote project-source path is testable without network access.
  *
  * The manifest is loaded (a typed module or a static JSON file), validated with a field-naming diagnostic, and its optional project source resolved to inline data. The
- * per-file edit plan is then built - the README carries the masthead, the documentation index, and the dashboard badges; each content doc carries the masthead (unless
- * its entry opts out) and a self-omitting footer index; the webUI, when present, carries the documentation index and the project list. Every region is spliced against
- * its own marker pair through the shared, ambiguity-rejecting splice primitive.
+ * per-file edit plan is then built - the README carries the masthead, the documentation index, and the dashboard badges; each content doc carries whichever regions
+ * `docChromeRegions` plans for its entry; the webUI, when present, carries the documentation index, the logo, and the project list. Every region is spliced against its
+ * own marker pair through the shared, ambiguity-rejecting splice primitive.
  *
  * The write is all-or-nothing across files in the realistic failure mode. Splicing happens entirely in memory first, so a missing or ambiguous marker in any file
  * aborts the run before a single write. The writes then proceed in two phases - every file's new content is staged in a sibling `.tmp`, and only once all temps exist
  * are they renamed over their targets - so a staging failure leaves every original untouched and each promotion is an atomic rename.
  *
  * @param args
- * @param args.chrome       - The injected `docChrome` module namespace (its renderers, marker constants, and validators).
+ * @param args.chrome       - The injected `docChrome` module namespace (its renderers, marker constants, region planner, and validators).
  * @param args.fetchImpl    - The `fetch` implementation used to resolve a remote project source. Defaults to the global `fetch`; tests inject a fake.
  * @param args.manifestPath - Absolute path to the plugin's manifest - a compiled module or a `.json` file.
  * @param args.pluginRoot   - Absolute path to the plugin root that the manifest's surface and file references resolve against.
@@ -613,8 +618,8 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
   splice: typeof spliceMarkedRegion;
 }): Promise<void> {
 
-  const { DEV_BADGES_BEGIN, DEV_BADGES_END, DOCUMENTATION_BEGIN, DOCUMENTATION_END, MASTHEAD_BEGIN, MASTHEAD_END, PROJECTS_BEGIN, PROJECTS_END,
-    parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } = chrome;
+  const { DEV_BADGES_BEGIN, DEV_BADGES_END, DOCUMENTATION_BEGIN, DOCUMENTATION_END, LOGO_BEGIN, LOGO_END, MASTHEAD_BEGIN, MASTHEAD_END, PROJECTS_BEGIN, PROJECTS_END,
+    docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderLogo, renderMasthead, renderProjects } = chrome;
 
   // Load and validate the manifest up front so a mis-shaped manifest fails with a diagnostic naming the offending field rather than a downstream render error. Parsing
   // returns the same value typed as a validated manifest, so every field access below is type-checked.
@@ -646,8 +651,8 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
     addRegion(readmePath, DEV_BADGES_BEGIN, DEV_BADGES_END, renderDevBadges(manifest));
   }
 
-  // Each content doc: the masthead and the self-omitting footer index, each unless the entry opts out. A file opted out of both - the changelog is the canonical case -
-  // receives no stamped regions at all while remaining listed in every documentation index.
+  // Each content doc: whichever regions the manifest entry plans for. A file that plans for neither - the changelog is the canonical case - receives no stamped regions
+  // at all while remaining listed in every documentation index.
   for(const section of manifest.nav) {
 
     for(const entry of section.entries) {
@@ -658,13 +663,14 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
       }
 
       const docPath = resolve(pluginRoot, entry.file);
+      const regions = docChromeRegions(entry);
 
-      if(entry.masthead !== false) {
+      if(regions.masthead) {
 
         addRegion(docPath, MASTHEAD_BEGIN, MASTHEAD_END, renderMasthead(manifest));
       }
 
-      if(entry.footer !== false) {
+      if(regions.documentation) {
 
         addRegion(docPath, DOCUMENTATION_BEGIN, DOCUMENTATION_END, renderDocIndex({ currentFile: entry.file, manifest, surface: "doc-footer" }));
       }
@@ -672,7 +678,8 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
   }
 
   // The webUI Support tab is optional: a plugin without a custom config UI has no target to stamp, so we include its regions only when the file exists. The
-  // documentation index is always stamped there; the project list only when a source resolved.
+  // documentation index and the logo are always stamped there; the project list only when a source resolved. Each of those regions needs its own marker pair present in
+  // the page, so a page is either authored with every pair it is planned for or the run fails naming the one it lacks.
   const webuiPath = resolve(pluginRoot, manifest.surfaces?.webui ?? "homebridge-ui/public/index.html");
   let webuiExists = true;
 
@@ -695,6 +702,7 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
   if(webuiExists) {
 
     addRegion(webuiPath, DOCUMENTATION_BEGIN, DOCUMENTATION_END, renderDocIndex({ manifest, surface: "webui" }));
+    addRegion(webuiPath, LOGO_BEGIN, LOGO_END, renderLogo(manifest));
 
     if(projects !== undefined) {
 

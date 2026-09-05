@@ -1,12 +1,14 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * docChrome.test.ts: Unit tests for the shared documentation-chrome renderers - the masthead, documentation index, dashboard badges, and project list projections, plus
- * the manifest and project-entry validators. Coverage pins each surface's canonical output byte-for-byte, proves the per-surface href derivation and HTML escaping,
- * exercises the doc-footer self-omission, and asserts the validators' framed diagnostics for every mis-shaped field.
+ * docChrome.test.ts: Unit tests for the shared documentation-chrome renderers - the masthead, documentation index, dashboard badges, logo, and project list
+ * projections - plus the region plan a documentation entry answers and the manifest and project-entry validators. Coverage pins each surface's canonical output
+ * byte-for-byte, proves the per-surface href derivation and HTML escaping, exercises the doc-footer self-omission, and asserts the validators' framed diagnostics for
+ * every mis-shaped field.
  */
-import type { DocChromeManifest, ProjectEntry } from "./docChrome.ts";
+import type { DocChromeManifest, DocEntry, ProjectEntry } from "./docChrome.ts";
+import { LOGO_BEGIN, LOGO_END, MASTHEAD_BEGIN, MASTHEAD_END, docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex,
+  renderLogo, renderMasthead, renderProjects } from "./docChrome.ts";
 import { describe, test } from "node:test";
-import { parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderMasthead, renderProjects } from "./docChrome.ts";
 import assert from "node:assert/strict";
 
 // The canonical worked-example manifest. Two masthead badges, one dashboard badge, and two nav sections that between them cover every entry kind: a README anchor, a
@@ -106,11 +108,72 @@ const WEBUI_NAV_OUTPUT = [
   "</div>"
 ].join("\n");
 
+describe("docChromeRegions", () => {
+
+  test("an entry naming no file of the plugin's own carries neither region", () => {
+
+    const anchor: DocEntry = { anchor: "installation", blurb: "installing this plugin.", kind: "readme-anchor", title: "Installation" };
+    const external: DocEntry = { blurb: "the companion plugin's own documentation.", kind: "external", title: "Companion Plugin",
+      url: "https://github.com/acme/companion-plugin#readme" };
+
+    assert.deepEqual(docChromeRegions(anchor), { documentation: false, masthead: false }, "a README anchor points into a file the README itself owns");
+    assert.deepEqual(docChromeRegions(external), { documentation: false, masthead: false }, "an external entry points outside the repository entirely");
+  });
+
+  test("a doc entry opting out of the masthead keeps its footer index", () => {
+
+    const entry: DocEntry = { blurb: "release history.", file: "docs/Changelog.md", kind: "doc", masthead: false, title: "Changelog" };
+
+    assert.deepEqual(docChromeRegions(entry), { documentation: true, masthead: false });
+  });
+
+  test("a doc entry opting out of the footer index keeps its masthead", () => {
+
+    const entry: DocEntry = { blurb: "best practices.", file: "docs/BestPractices.md", footer: false, kind: "doc", title: "Best Practices" };
+
+    assert.deepEqual(docChromeRegions(entry), { documentation: false, masthead: true });
+  });
+
+  test("a doc entry declaring neither opt-out carries both regions", () => {
+
+    const entry: DocEntry = { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", title: "Best Practices" };
+
+    assert.deepEqual(docChromeRegions(entry), { documentation: true, masthead: true });
+  });
+});
+
 describe("renderMasthead", () => {
 
   test("reproduces the canonical masthead block byte-for-byte", () => {
 
     assert.equal(renderMasthead(MANIFEST), MASTHEAD_OUTPUT);
+  });
+});
+
+describe("renderLogo", () => {
+
+  test("renders the manifest's artwork as one classed image element", () => {
+
+    const rendered = renderLogo(MANIFEST);
+
+    assert.equal(rendered, "<img class=\"chrome-logo\" src=\"https://raw.example/logo.svg\" alt=\"example-plugin: the logo\" />");
+    assert.equal(rendered.includes("\n"), false, "the region's content is a single line the page's own wrapper markup surrounds");
+  });
+
+  test("escapes a quote and an ampersand in both attribute values", () => {
+
+    const manifest: DocChromeManifest = { ...MANIFEST, masthead: { ...MANIFEST.masthead,
+      logo: { alt: "Acme & \"Friends\" logo", href: "https://github.com/acme/example-plugin", src: "https://raw.example/logo.svg?q=\"a\"&r=b" } } };
+
+    assert.equal(renderLogo(manifest),
+      "<img class=\"chrome-logo\" src=\"https://raw.example/logo.svg?q=&quot;a&quot;&amp;r=b\" alt=\"Acme &amp; &quot;Friends&quot; logo\" />");
+  });
+
+  test("the logo markers follow the family's marked-region template", () => {
+
+    // Derived from an existing pair rather than retyped, so a change to the family's template moves both together instead of leaving the newest pair behind.
+    assert.equal(LOGO_BEGIN, MASTHEAD_BEGIN.replace("MASTHEAD", "LOGO"));
+    assert.equal(LOGO_END, MASTHEAD_END.replace("MASTHEAD", "LOGO"));
   });
 });
 

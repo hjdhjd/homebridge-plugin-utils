@@ -270,7 +270,7 @@ interface FMp4CommandLineInput {
 }
 
 // Apply defaults to a partial base options object, describing which streams to read and how to decode them. Both fMP4 modes resolve through here.
-function resolveBaseOptions(options: FfmpegOptions, partial: Partial<FMp4BaseOptions>): Required<FMp4BaseOptions> {
+function resolveBaseOptions(partial: Partial<FMp4BaseOptions>): Required<FMp4BaseOptions> {
 
   return {
 
@@ -288,7 +288,7 @@ function resolveRecordingOptions(options: FfmpegOptions, partial: Partial<FMp4Re
 
   return {
 
-    ...resolveBaseOptions(options, partial),
+    ...resolveBaseOptions(partial),
     audioFilters: partial.audioFilters ?? [],
     fps: partial.fps ?? 30,
     hardwareDecoding: partial.hardwareDecoding ?? (options.config.codecSupport.ffmpegAtLeast(8) ? options.config.hardwareDecoding : false),
@@ -516,7 +516,7 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
 // Compose the command line for a livestream session. Extracted so the subclass constructor can compute its full arg vector ahead of the super() call.
 function buildLivestreamCommandLine(options: FfmpegOptions, init: FfmpegLivestreamInit): string[] {
 
-  const fMp4Options = resolveBaseOptions(options, init.livestream);
+  const fMp4Options = resolveBaseOptions(init.livestream);
   const { audio, livestream } = init;
 
   // Livestream input: connect to an RTSP source with direct I/O and TCP transport.

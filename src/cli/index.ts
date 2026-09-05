@@ -54,9 +54,10 @@ const HASH_LENGTH = 16;
  */
 export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
-  "  prepare-docs <catalog-module> [--doc <path>]    Generate the Feature Options reference into the plugin's docs.\n" +
-  "  prepare-mqtt <catalog-module> [--doc <path>]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
-  "  prepare-chrome <manifest> [--root <dir>]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects) across the plugin's docs, README, and webUI.\n";
+  "  prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.\n" +
+  "  prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
+  "  prepare-chrome <manifest> [--root <dir>] [--check]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects) across the plugin's docs, README, " +
+  "and webUI.\n";
 
 /**
  * Compute a deterministic content hash over `root`'s file tree. Walks every file in lexicographic order of relative POSIX path so two runs against the same content
@@ -322,27 +323,34 @@ async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
  * the renderer already treats an absent hook as "omit cleanly". Because the hooks arrive through the dynamic-imported catalog namespace (never a static relative
  * import), they preserve the bin's symlink-safe load-time edge discipline exactly as the catalog arrays do.
  *
- * The write is atomic: the new contents are staged in a sibling `.tmp` file and renamed over the doc. The rename is atomic on a single filesystem, so a crash
- * mid-write can never leave a half-spliced doc behind - the file is either the prior content or the complete new content, never a truncated splice.
+ * One pass answers both modes. The rendered fragment is spliced into a copy of the doc in memory and the result compared with the bytes read from disk, so the answer
+ * is the doc's own path when the two differ and nothing when they match. `"write"` mode then writes exactly that answer: the new contents are staged in a sibling
+ * `.tmp` file and renamed over the doc, and the rename is atomic on a single filesystem, so a crash mid-write can never leave a half-spliced doc behind - the file is
+ * either the prior content or the complete new content, never a truncated splice. A doc that already matches is not written at all and keeps its bytes and its
+ * modification time. `"check"` mode writes nothing and returns the same answer, so a caller cannot get a clean check and a differing write.
  *
  * @param args
  * @param args.catalogModulePath - Absolute path to the plugin's compiled catalog module exporting `featureOptionCategories` (an array) and `featureOptions` (an
  *                                 object). Resolved to a `file:` URL before the dynamic import.
  * @param args.docPath           - Absolute path to the doc whose marked region is replaced (typically the plugin's `docs/FeatureOptions.md`).
  * @param args.docs              - The injected `featureOptions-docs` namespace: its two marker constants and {@link renderFeatureOptionsReference}.
+ * @param args.mode              - `"write"` to write the doc when it differs, `"check"` to report without writing. Defaults to `"write"`.
  * @param args.splice            - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
+ *
+ * @returns The absolute paths whose spliced content differs from the file on disk - this doc's path, or nothing. Both modes answer the same set.
  *
  * @throws When the catalog module lacks `featureOptionCategories` (or it is not an array) or `featureOptions` (or it is not a non-null object), when it exports a
  *         present-but-non-function `describeCategoryScope` or `describeOptionScope`, and propagates the splice's own framed errors when the doc's marker pair is absent
  *         or ambiguous.
  */
-export async function prepareDocs({ catalogModulePath, docPath, docs, splice }: {
+export async function prepareDocs({ catalogModulePath, docPath, docs, mode = "write", splice }: {
 
   catalogModulePath: string;
   docPath: string;
   docs: FeatureOptionsDocsModule;
+  mode?: "check" | "write";
   splice: typeof spliceMarkedRegion;
-}): Promise<void> {
+}): Promise<readonly string[]> {
 
   // Load the catalog by dynamic import. A bare absolute filesystem path is not a portable ESM specifier (Windows drive letters in particular are mis-parsed), so we
   // convert it to a `file:` URL first - the same indirection the `hblog` bin uses to reach its sibling library from a single-file launcher. The namespace is typed with
@@ -397,9 +405,18 @@ export async function prepareDocs({ catalogModulePath, docPath, docs, splice }: 
   const source = await readFile(docPath, "utf8");
   const updated = splice(source, reference, { beginMarker: docs.FEATURE_OPTIONS_DOC_BEGIN, endMarker: docs.FEATURE_OPTIONS_DOC_END });
 
-  // Atomic write: stage in a sibling temp file, then rename over the doc.
-  await writeFile(docPath + ".tmp", updated, "utf8");
-  await rename(docPath + ".tmp", docPath);
+  // The answer both modes share: the spliced document compared against the bytes it came from, never the rendered fragment on its own, since the splice frames the
+  // fragment with newlines and leaves the rest of the document around it.
+  const changed = (updated === source) ? [] : [docPath];
+
+  // Atomic write: stage in a sibling temp file, then rename over the doc. A doc that already matches is skipped entirely, so its modification time survives the run.
+  if((mode === "write") && (changed.length > 0)) {
+
+    await writeFile(docPath + ".tmp", updated, "utf8");
+    await rename(docPath + ".tmp", docPath);
+  }
+
+  return changed;
 }
 
 // The subset of the `mqtt-topics-docs` module the CLI reaches through a computed dynamic import at dispatch time: the four marker strings and the reference renderer.
@@ -426,26 +443,32 @@ interface MqttTopicsDocsModule {
  * naming what is wrong and where.
  *
  * Both regions are spliced against the in-memory copy before a single atomic write. A document that carries the published pair but not the subscribed one therefore
- * fails on the second splice with nothing yet written, leaving the file byte-identical rather than half generated; the write itself stages a sibling `.tmp` file and
- * renames it over the document, which is atomic on a single filesystem.
+ * fails on the second splice with nothing yet written, leaving the file byte-identical rather than half generated. That same pass answers both modes: the twice-spliced
+ * document is compared with the bytes read from disk, so the answer is the document's own path when they differ and nothing when they match. `"write"` mode writes
+ * exactly that answer, staging a sibling `.tmp` file and renaming it over the document, which is atomic on a single filesystem; a document that already matches keeps
+ * its bytes and its modification time. `"check"` mode writes nothing and returns the same answer.
  *
  * @param args
  * @param args.catalogModulePath - Absolute path to the plugin's compiled catalog module exporting `mqttTopics` (an object). Resolved to a `file:` URL before the
  *                                 dynamic import.
  * @param args.docPath           - Absolute path to the document whose two marked regions are replaced (typically the plugin's `docs/MQTT.md`).
  * @param args.docs              - The injected `mqtt-topics-docs` namespace: its four marker constants and {@link renderMqttTopicsReference}.
+ * @param args.mode              - `"write"` to write the document when it differs, `"check"` to report without writing. Defaults to `"write"`.
  * @param args.splice            - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
+ *
+ * @returns The absolute paths whose spliced content differs from the file on disk - this document's path, or nothing. Both modes answer the same set.
  *
  * @throws When the catalog module lacks `mqttTopics` (or it is not a non-null object), propagating the renderer's own framed errors for a mis-declared catalog and
  *         the splice's framed errors when either marker pair is absent or ambiguous.
  */
-export async function prepareMqttDocs({ catalogModulePath, docPath, docs, splice }: {
+export async function prepareMqttDocs({ catalogModulePath, docPath, docs, mode = "write", splice }: {
 
   catalogModulePath: string;
   docPath: string;
   docs: MqttTopicsDocsModule;
+  mode?: "check" | "write";
   splice: typeof spliceMarkedRegion;
-}): Promise<void> {
+}): Promise<readonly string[]> {
 
   // Load the catalog by dynamic import, converting the absolute path to a `file:` URL first for the reason {@link prepareDocs} converts its own. The namespace is
   // typed with the one required export as `unknown` until it is validated below, so nothing reaches the renderer as a mis-typed value.
@@ -465,9 +488,17 @@ export async function prepareMqttDocs({ catalogModulePath, docPath, docs, splice
   const withPublished = splice(source, reference.published, { beginMarker: docs.MQTT_PUBLISHED_DOC_BEGIN, endMarker: docs.MQTT_PUBLISHED_DOC_END });
   const updated = splice(withPublished, reference.subscribed, { beginMarker: docs.MQTT_SUBSCRIBED_DOC_BEGIN, endMarker: docs.MQTT_SUBSCRIBED_DOC_END });
 
-  // Atomic write: stage in a sibling temp file, then rename over the document.
-  await writeFile(docPath + ".tmp", updated, "utf8");
-  await rename(docPath + ".tmp", docPath);
+  // The answer both modes share: the twice-spliced document compared against the bytes it came from, so a document already carrying both rendered tables answers empty.
+  const changed = (updated === source) ? [] : [docPath];
+
+  // Atomic write: stage in a sibling temp file, then rename over the document. A document that already matches is skipped, so its modification time survives the run.
+  if((mode === "write") && (changed.length > 0)) {
+
+    await writeFile(docPath + ".tmp", updated, "utf8");
+    await rename(docPath + ".tmp", docPath);
+  }
+
+  return changed;
 }
 
 // The diagnostic thrown when the manifest's `projects` field is neither an inline array nor a { file } / { url } reference. Named so the two guard clauses in
@@ -596,27 +627,33 @@ interface DocChromeModule {
  * own marker pair through the shared, ambiguity-rejecting splice primitive.
  *
  * The write is all-or-nothing across files in the realistic failure mode. Splicing happens entirely in memory first, so a missing or ambiguous marker in any file
- * aborts the run before a single write. The writes then proceed in two phases - every file's new content is staged in a sibling `.tmp`, and only once all temps exist
- * are they renamed over their targets - so a staging failure leaves every original untouched and each promotion is an atomic rename.
+ * aborts the run before a single write. That same pass answers both modes by comparing each target's spliced content with the bytes it was read from: `"write"` mode
+ * writes exactly the targets that differ, in two phases - each one's new content staged in a sibling `.tmp`, and only once all temps exist are they renamed over their
+ * targets, so a staging failure leaves every original untouched and each promotion is an atomic rename - while `"check"` mode writes nothing and returns the same set.
+ * A target already carrying its rendered regions is never staged, so it keeps its bytes and its modification time, and a run over an unchanged tree touches no file.
  *
  * @param args
  * @param args.chrome       - The injected `docChrome` module namespace (its renderers, marker constants, region planner, and validators).
  * @param args.fetchImpl    - The `fetch` implementation used to resolve a remote project source. Defaults to the global `fetch`; tests inject a fake.
  * @param args.manifestPath - Absolute path to the plugin's manifest - a compiled module or a `.json` file.
+ * @param args.mode         - `"write"` to write the targets that differ, `"check"` to report them without writing. Defaults to `"write"`.
  * @param args.pluginRoot   - Absolute path to the plugin root that the manifest's surface and file references resolve against.
  * @param args.splice       - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
+ *
+ * @returns The absolute paths of every planned target whose spliced content differs from the file on disk. Both modes answer the same set.
  *
  * @throws When the manifest is mis-shaped, when a resolved project source is malformed, when a target file cannot be read, or when any region's marker pair is absent or
  *         ambiguous - propagating the splice's own framed errors so the dispatch site frames them uniformly.
  */
-export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, pluginRoot, splice }: {
+export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, mode = "write", pluginRoot, splice }: {
 
   chrome: DocChromeModule;
   fetchImpl?: typeof fetch;
   manifestPath: string;
+  mode?: "check" | "write";
   pluginRoot: string;
   splice: typeof spliceMarkedRegion;
-}): Promise<void> {
+}): Promise<readonly string[]> {
 
   const { DEV_BADGES_BEGIN, DEV_BADGES_END, DOCUMENTATION_BEGIN, DOCUMENTATION_END, LOGO_BEGIN, LOGO_END, MASTHEAD_BEGIN, MASTHEAD_END, PROJECTS_BEGIN, PROJECTS_END,
     docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderLogo, renderMasthead, renderProjects } = chrome;
@@ -714,15 +751,17 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
   // the whole run here - before any file is written - rather than leaving a partial stamp behind.
   const staged = await Promise.all([...plan].map(async ([ path, edits ]) => {
 
-    let content: string;
+    let source: string;
 
     try {
 
-      content = await readFile(path, "utf8");
+      source = await readFile(path, "utf8");
     } catch {
 
       throw new Error("Target file " + path + " could not be read; ensure it exists and carries the required markers.");
     }
+
+    let content = source;
 
     // Splice each region against its own marker pair; a malformed marker throws, rejecting the whole collection (per the validate-all note above).
     for(const edit of edits) {
@@ -730,17 +769,27 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
       content = splice(content, edit.content, { beginMarker: edit.begin, endMarker: edit.end });
     }
 
-    return { content, path };
+    return { content, path, source };
   }));
 
-  // Write-all in two phases for strong cross-file atomicity. Stage every file's new content in a sibling `.tmp` first; if any staging write fails, remove the temps
-  // already written and abort with every original untouched. Only once all temps exist do we rename them over their targets, so the promotion phase - a set of atomic
-  // renames - cannot leave a half-spliced file behind.
-  const tmpPaths = staged.map(({ path }) => path + ".tmp");
+  // The answer both modes share: the planned targets whose spliced content differs from the bytes they were read from. Computing it once here is what makes a clean
+  // check and a differing write impossible to observe, and it is the whole of the work in check mode.
+  const differing = staged.filter(({ content, source }) => content !== source);
+  const changed = differing.map(({ path }) => path);
+
+  if(mode === "check") {
+
+    return changed;
+  }
+
+  // Write-all in two phases for strong cross-file atomicity, over the differing targets alone. Stage each one's new content in a sibling `.tmp` first; if any staging
+  // write fails, remove the temps already written and abort with every original untouched. Only once all temps exist do we rename them over their targets, so the
+  // promotion phase - a set of atomic renames - cannot leave a half-spliced file behind. An empty set stages nothing and renames nothing.
+  const tmpPaths = changed.map((path) => path + ".tmp");
 
   try {
 
-    await Promise.all(staged.map(({ content, path }) => writeFile(path + ".tmp", content, "utf8")));
+    await Promise.all(differing.map(({ content, path }) => writeFile(path + ".tmp", content, "utf8")));
   } catch(error) {
 
     await Promise.all(tmpPaths.map((tmpPath) => rm(tmpPath, { force: true })));
@@ -750,7 +799,7 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
 
   try {
 
-    await Promise.all(staged.map(({ path }) => rename(path + ".tmp", path)));
+    await Promise.all(changed.map((path) => rename(path + ".tmp", path)));
   } catch(error) {
 
     // A rename-phase failure is rare - every temp staged successfully - but it can leave some targets promoted and others not. Best-effort remove any temp that survives
@@ -759,6 +808,22 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, p
 
     throw error;
   }
+
+  return changed;
+}
+
+/* Report a check's answer and the exit code it implies: one full sentence per target whose content would change, framed under the verb exactly as every other
+ * diagnostic this file writes is, and `1` when any target would change. An empty answer writes nothing and returns `0`, so a documentation tree that is already what
+ * the verbs would produce passes silently. Shared by the docs verbs so the line's wording has one home rather than one copy per verb.
+ */
+function reportCheck(verb: string, changed: readonly string[], stderr: { write: (chunk: string) => unknown }): number {
+
+  for(const path of changed) {
+
+    stderr.write("homebridge-plugin-utils " + verb + ": " + path + " is out of date.\n");
+  }
+
+  return (changed.length > 0) ? 1 : 0;
 }
 
 /**
@@ -785,8 +850,13 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
   // parseArgs runs in strict mode, so an unrecognized flag (e.g. a typo'd `--docs`) throws `ERR_PARSE_ARGS_UNKNOWN_OPTION` here rather than falling through to the
   // usage banner. That throw is intentionally uncaught - the per-case try/catch blocks below wrap only the subcommand work - so it surfaces as a rejected `runCli`
   // promise at the entry point, distinct from the default case's banner handling for an unknown positional command.
-  const { positionals, values } = parseArgs({ allowPositionals: true, args: [...argv], options: { doc: { type: "string" }, root: { type: "string" } }, strict: true });
+  const { positionals, values } = parseArgs({ allowPositionals: true, args: [...argv],
+    options: { check: { type: "boolean" }, doc: { type: "string" }, root: { type: "string" } }, strict: true });
   const [ command, ...rest ] = positionals;
+
+  // The docs verbs share one mode: `--check` renders and compares every target it would write and reports instead of writing, which is the whole docs gate in
+  // one invocation per verb. `prepare-ui` mirrors a directory rather than splicing a document, so it has no target set to answer and ignores the flag.
+  const mode = values.check ? "check" : "write";
 
   switch(command) {
 
@@ -874,7 +944,12 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
 
       try {
 
-        await prepareDocs({ catalogModulePath, docPath, docs: renderer, splice: splicer.spliceMarkedRegion });
+        const changed = await prepareDocs({ catalogModulePath, docPath, docs: renderer, mode, splice: splicer.spliceMarkedRegion });
+
+        if(mode === "check") {
+
+          return reportCheck("prepare-docs", changed, stderr);
+        }
       } catch(error) {
 
         stderr.write("homebridge-plugin-utils prepare-docs: " + (error instanceof Error ? error.message : String(error)) + "\n");
@@ -923,7 +998,12 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
 
       try {
 
-        await prepareMqttDocs({ catalogModulePath, docPath, docs, splice: splicer.spliceMarkedRegion });
+        const changed = await prepareMqttDocs({ catalogModulePath, docPath, docs, mode, splice: splicer.spliceMarkedRegion });
+
+        if(mode === "check") {
+
+          return reportCheck("prepare-mqtt", changed, stderr);
+        }
       } catch(error) {
 
         stderr.write("homebridge-plugin-utils prepare-mqtt: " + (error instanceof Error ? error.message : String(error)) + "\n");
@@ -971,7 +1051,12 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
 
       try {
 
-        await prepareChrome({ chrome, manifestPath, pluginRoot, splice: splicer.spliceMarkedRegion });
+        const changed = await prepareChrome({ chrome, manifestPath, mode, pluginRoot, splice: splicer.spliceMarkedRegion });
+
+        if(mode === "check") {
+
+          return reportCheck("prepare-chrome", changed, stderr);
+        }
       } catch(error) {
 
         stderr.write("homebridge-plugin-utils prepare-chrome: " + (error instanceof Error ? error.message : String(error)) + "\n");

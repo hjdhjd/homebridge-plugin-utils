@@ -3,7 +3,8 @@
  * cli/index.test.ts: Unit tests for the CLI module, covering the pure {@link prepareUi} transform (content-hashed mirror semantics, manifest shape, stale-build
  * cleanup, preservation of non-version entries, source-side validation), the pure {@link prepareDocs} transform (catalog validation, scope-hook forwarding,
  * atomic-write marker splicing), the pure {@link prepareChrome} transform (multi-region stamping across the README, docs, and webUI, external project-source
- * resolution, and all-or-nothing writes), the {@link runCli} dispatcher (argument routing, exit codes, usage banner), and the entry-point execution invoked through
+ * resolution, and all-or-nothing writes), the {@link runCli} dispatcher (argument routing, exit codes, usage banner, and the check mode that reports every target
+ * that would change without writing any of them), and the entry-point execution invoked through
  * a symlink (the real bin invocation path that a direct-path test never exercises). Every surface runs against an AsyncDisposable tmpdir scratch root; only
  * the entry-point test forgoes the in-process `captureStderr()` helper, instead spawning the CLI as a real subprocess and reading its stderr pipe directly.
  * No test touches a real install or modifies the working tree.
@@ -14,7 +15,7 @@ import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOption
 import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END,
   renderMqttTopicsReference } from "../mqtt-topics-docs.ts";
 import { USAGE, prepareChrome, prepareDocs, prepareMqttDocs, prepareUi, runCli } from "./index.ts";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1631,19 +1632,24 @@ describe("prepareChrome", () => {
   });
 });
 
+/**
+ * Write the compiled dist modules the `prepare-chrome` dispatch reaches through computed dynamic imports: `dist/docChrome.js` and `dist/doc-markdown.js`, each a thin
+ * re-export of the real source through a `file:` URL. This runs the dispatch path - both dynamic imports, the prepareChrome call, and the return - against a
+ * self-contained root, independent of whether dist/ has been built.
+ *
+ * @param sourceRoot - The synthetic HBPU source root whose `dist/` receives the re-export modules.
+ */
+async function writeChromeDist(sourceRoot: string): Promise<void> {
+
+  const realChrome = fileURLToPath(new URL("../docChrome.ts", import.meta.url));
+  const realMarkdown = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
+
+  await mkdir(join(sourceRoot, "dist"), { recursive: true });
+  await writeFile(join(sourceRoot, "dist", "docChrome.js"), "export * from " + JSON.stringify(pathToFileURL(realChrome).href) + ";\n");
+  await writeFile(join(sourceRoot, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " + JSON.stringify(pathToFileURL(realMarkdown).href) + ";\n");
+}
+
 describe("runCli - prepare-chrome dispatch", () => {
-
-  // Build a synthetic HBPU sourceRoot whose dist modules re-export the REAL doc-chrome renderers and the real splice from this repo's source, so the dispatch path -
-  // both computed dynamic imports, the prepareChrome call, and the success return - runs against a self-contained root independent of whether dist/ has been built.
-  async function writeSyntheticSource(sourceRoot: string): Promise<void> {
-
-    const realChrome = fileURLToPath(new URL("../docChrome.ts", import.meta.url));
-    const realMarkdown = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
-
-    await mkdir(join(sourceRoot, "dist"), { recursive: true });
-    await writeFile(join(sourceRoot, "dist", "docChrome.js"), "export * from " + JSON.stringify(pathToFileURL(realChrome).href) + ";\n");
-    await writeFile(join(sourceRoot, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " + JSON.stringify(pathToFileURL(realMarkdown).href) + ";\n");
-  }
 
   test("dispatches to prepareChrome, stamps the tree, and exits 0 on success", async () => {
 
@@ -1652,7 +1658,7 @@ describe("runCli - prepare-chrome dispatch", () => {
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
 
-    await writeSyntheticSource(sourceRoot);
+    await writeChromeDist(sourceRoot);
     await mkdir(cwd, { recursive: true });
 
     const manifest = { ...BASE_MANIFEST, projects: [{ blurb: "garage support.", href: "https://github.com/acme/ratgdo", title: "ratgdo" }] };
@@ -1698,6 +1704,210 @@ describe("runCli - prepare-chrome dispatch", () => {
 
     assert.equal(code, 1);
     assert.match(capture.chunks(), /HBPU has not been built/);
+  });
+});
+
+describe("runCli - the check mode", () => {
+
+  /**
+   * Write a plugin tree every docs verb has a target in, beside a synthetic HBPU source root carrying every docs verb's compiled dependencies. The dist writers each
+   * emit `dist/doc-markdown.js` with identical content, so composing them is safe. Real files in a scratch tmpdir throughout - the check reads and compares
+   * bytes on disk, so there is nothing here a double could stand in for.
+   *
+   * @param scratchPath - The scratch directory the source root and the plugin tree are written into.
+   *
+   * @returns The plugin working directory and the synthetic HBPU source root, the paths every row below drives `runCli` with.
+   */
+  async function writeCheckTree(scratchPath: string): Promise<{ cwd: string; sourceRoot: string }> {
+
+    const cwd = join(scratchPath, "plugin");
+    const sourceRoot = join(scratchPath, "source");
+
+    await writeLoaderDist(sourceRoot);
+    await writeMqttDist(sourceRoot);
+    await writeChromeDist(sourceRoot);
+    await mkdir(join(cwd, "dist"), { recursive: true });
+    await mkdir(join(cwd, "docs"), { recursive: true });
+    await writeFile(join(cwd, "dist", "options.js"), VALID_CATALOG_BODY);
+    await writeMqttCatalog({ root: join(cwd, "dist") });
+    await writeMqttDoc({ root: join(cwd, "docs") });
+    await writeFile(join(cwd, "docs", "FeatureOptions.md"), "# Plugin\n\n" + FEATURE_OPTIONS_DOC_BEGIN + "\nstale\n" + FEATURE_OPTIONS_DOC_END + "\n");
+    await writeManifest({ manifest: BASE_MANIFEST, root: cwd });
+    await writePluginTree({ root: cwd });
+
+    return { cwd, sourceRoot };
+  }
+
+  test("after a real prepare-docs run, a check of the same doc reports nothing and exits 0", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
+    const seed = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-docs", "dist/options.js" ], cwd, sourceRoot, stderr: seed.stderr }), 0,
+      "the seeding run must succeed; stderr: " + seed.chunks());
+
+    const capture = captureStderr();
+
+    // The comparison is the SPLICED document against the file, not the rendered fragment on its own: the splice frames the fragment with newlines and leaves the
+    // hand-written prose around it, so a fragment-level comparison would report this up-to-date doc as drifted.
+    assert.equal(await runCli({ argv: [ "prepare-docs", "dist/options.js", "--check" ], cwd, sourceRoot, stderr: capture.stderr }), 0,
+      "a doc that already holds what the verb would write is not drift; stderr: " + capture.chunks());
+    assert.equal(capture.chunks(), "", "a check that finds nothing says nothing");
+  });
+
+  test("a hand-edited region makes the check exit 1 naming the doc, and the check writes nothing", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
+    const docPath = join(cwd, "docs", "FeatureOptions.md");
+    const seed = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-docs", "dist/options.js" ], cwd, sourceRoot, stderr: seed.stderr }), 0,
+      "the seeding run must succeed; stderr: " + seed.chunks());
+
+    // Edit inside the marked region, which is exactly the drift a committed-documentation gate exists to catch.
+    const drifted = (await readFile(docPath, "utf8")).replace("Audio support.", "Hand-edited prose.");
+
+    await writeFile(docPath, drifted);
+
+    const before = (await stat(docPath, { bigint: true })).mtimeNs;
+    const capture = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-docs", "dist/options.js", "--check" ], cwd, sourceRoot, stderr: capture.stderr }), 1);
+    assert.equal(capture.chunks(), "homebridge-plugin-utils prepare-docs: " + docPath + " is out of date.\n", "one full sentence naming the absolute path");
+    assert.equal(await readFile(docPath, "utf8"), drifted, "a check leaves the target's bytes exactly as it found them");
+    assert.equal((await stat(docPath, { bigint: true })).mtimeNs, before, "and never touches its modification time");
+  });
+
+  test("a check over prepare-chrome's multi-file plan names every drifted target, one line each", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
+    const seed = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-chrome", "docChrome.mjs" ], cwd, sourceRoot, stderr: seed.stderr }), 0,
+      "the seeding run must succeed; stderr: " + seed.chunks());
+
+    // Some of the planned targets drift and the rest stay current, so the answer has to name the drifted ones and not the whole plan.
+    const readmePath = join(cwd, "README.md");
+    const docPath = join(cwd, "docs", "BestPractices.md");
+
+    await writeFile(readmePath, (await readFile(readmePath, "utf8")).replace("# Example Plugin", "# Hand-edited Plugin"));
+    await writeFile(docPath, (await readFile(docPath, "utf8")).replace("# Example Plugin", "# Hand-edited Plugin"));
+
+    const capture = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-chrome", "docChrome.mjs", "--check" ], cwd, sourceRoot, stderr: capture.stderr }), 1);
+
+    // The plan is a Map built README-first and then in manifest-nav order, and the differencing pass preserves that order, so the reported order is deterministic.
+    assert.equal(capture.chunks(), "homebridge-plugin-utils prepare-chrome: " + readmePath + " is out of date.\n" +
+      "homebridge-plugin-utils prepare-chrome: " + docPath + " is out of date.\n");
+  });
+
+  test("a write-mode run over an already-current tree rewrites no target", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
+    const readmePath = join(cwd, "README.md");
+    const targets = [ readmePath, join(cwd, "docs", "BestPractices.md"), join(cwd, "docs", "Changelog.md"), join(cwd, "docs", "FeatureOptions.md"),
+      join(cwd, "docs", "MQTT.md"), join(cwd, "homebridge-ui", "public", "index.html") ];
+
+    // Drive one verb in write mode and require it to succeed, folding any stderr into the failure message so a broken fixture reads as itself rather than as drift.
+    const run = async (argv: readonly string[]): Promise<void> => {
+
+      const capture = captureStderr();
+
+      assert.equal(await runCli({ argv, cwd, sourceRoot, stderr: capture.stderr }), 0, argv.join(" ") + " must succeed; stderr: " + capture.chunks());
+    };
+
+    // Nanosecond modification times for every target the docs verbs between them plan, read in one pass so a before and an after reading compare directly.
+    const mtimes = async (): Promise<readonly bigint[]> => Promise.all(targets.map(async (target) => (await stat(target, { bigint: true })).mtimeNs));
+
+    await run([ "prepare-docs", "dist/options.js" ]);
+    await run([ "prepare-mqtt", "dist/topics.mjs" ]);
+    await run([ "prepare-chrome", "docChrome.mjs" ]);
+
+    const before = await mtimes();
+
+    await run([ "prepare-docs", "dist/options.js" ]);
+    await run([ "prepare-mqtt", "dist/topics.mjs" ]);
+    await run([ "prepare-chrome", "docChrome.mjs" ]);
+
+    assert.deepEqual(await mtimes(), before, "a target already carrying what the verb would write keeps its modification time");
+
+    /* The control that keeps the assertion above from passing on timestamp resolution alone: drift one target, run its verb once more, and require that this target
+     * DID move. A regression that wrote every planned target unconditionally would otherwise read as green whenever successive writes landed in the same tick.
+     */
+    await writeFile(readmePath, (await readFile(readmePath, "utf8")).replace("# Example Plugin", "# Hand-edited Plugin"));
+
+    const drifted = (await stat(readmePath, { bigint: true })).mtimeNs;
+
+    await run([ "prepare-chrome", "docChrome.mjs" ]);
+
+    assert.notEqual((await stat(readmePath, { bigint: true })).mtimeNs, drifted, "the probe does see a write when one actually happens");
+  });
+
+  test("a hand-edited MQTT document makes its check exit 1 naming the document", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
+    const docPath = join(cwd, "docs", "MQTT.md");
+    const seed = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-mqtt", "dist/topics.mjs" ], cwd, sourceRoot, stderr: seed.stderr }), 0,
+      "the seeding run must succeed; stderr: " + seed.chunks());
+
+    // The edit lands in the subscribed region, which this verb splices after the published one, so the answer also proves both splices feed the one comparison.
+    await writeFile(docPath, (await readFile(docPath, "utf8")).replace("`true` to lock, `false` to unlock.", "Hand-edited prose."));
+
+    const capture = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-mqtt", "dist/topics.mjs", "--check" ], cwd, sourceRoot, stderr: capture.stderr }), 1);
+    assert.equal(capture.chunks(), "homebridge-plugin-utils prepare-mqtt: " + docPath + " is out of date.\n");
+  });
+
+  test("an unrecognized option rejects out of runCli rather than reaching a subcommand", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const capture = captureStderr();
+
+    // parseArgs runs in strict mode and its throw is deliberately left uncaught, so a typo'd flag surfaces as a rejected promise at the entry point rather than as
+    // the default case's usage banner. Recorded here because the distinction is the designed behavior, not an accident of where the call sits.
+    await assert.rejects(runCli({ argv: [ "prepare-docs", "dist/options.js", "--nope" ], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr }),
+      { code: "ERR_PARSE_ARGS_UNKNOWN_OPTION" });
+
+    assert.equal(capture.chunks(), "", "nothing is written: the throw happens before any case runs");
+  });
+
+  test("a target whose begin marker was removed fails a check exactly as it fails a write", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
+    const docPath = join(cwd, "docs", "FeatureOptions.md");
+
+    // Strip the begin marker. The splice refuses upstream of the comparison, so the check inherits the write path's failure rather than reporting a broken document
+    // as one that is merely out of date - which is what a differencing pass wrapped in a catch-all would do.
+    await writeFile(docPath, (await readFile(docPath, "utf8")).replace(FEATURE_OPTIONS_DOC_BEGIN, ""));
+
+    const checked = captureStderr();
+    const checkCode = await runCli({ argv: [ "prepare-docs", "dist/options.js", "--check" ], cwd, sourceRoot, stderr: checked.stderr });
+    const written = captureStderr();
+    const writeCode = await runCli({ argv: [ "prepare-docs", "dist/options.js" ], cwd, sourceRoot, stderr: written.stderr });
+
+    assert.equal(checkCode, 1);
+    assert.equal(checkCode, writeCode, "both modes fail the same way");
+    assert.equal(checked.chunks(), written.chunks(), "and say the same thing");
+    assert.equal(checked.chunks(), "homebridge-plugin-utils prepare-docs: spliceMarkedRegion: begin marker not found in source: \"" +
+      FEATURE_OPTIONS_DOC_BEGIN + "\".\n");
+    assert.equal(checked.chunks().includes("is out of date"), false, "a broken document is never reported as drift");
   });
 });
 

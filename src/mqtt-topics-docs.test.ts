@@ -309,7 +309,7 @@ describe("renderMqttTopicsReference - parameterized topics", () => {
 
 describe("renderMqttTopicsReference - ordering and joining", () => {
 
-  test("sorts rows by their raw topic rather than by declaration order", () => {
+  test("orders rows as the topic tree reads rather than by declaration order", () => {
 
     // The declaration below is deliberately out of order, so an implementation that printed declaration order would fail on the first line index.
     const catalog = mqttTopicCatalog({
@@ -322,10 +322,38 @@ describe("renderMqttTopicsReference - ordering and joining", () => {
 
     const lines = renderMqttTopicsReference(catalog).published.split("\n");
 
-    assert.ok(lines[2]?.startsWith("| `alpha`"), "the first row is the lowest raw topic, observed: " + String(lines[2]));
+    assert.ok(lines[2]?.startsWith("| `alpha`"), "the tree's first topic leads, observed: " + String(lines[2]));
     assert.ok(lines[3]?.startsWith("| `light`"), "a parent sorts ahead of its own child topic, observed: " + String(lines[3]));
     assert.ok(lines[4]?.startsWith("| `light/brightness`"), "the child follows its parent, observed: " + String(lines[4]));
-    assert.ok(lines[5]?.startsWith("| `zulu`"), "the highest raw topic is last, observed: " + String(lines[5]));
+    assert.ok(lines[5]?.startsWith("| `zulu`"), "the tree's last topic trails, observed: " + String(lines[5]));
+  });
+
+  test("lists a topic's own get and set rows before the rows of the topics beneath it, and a hyphenated sibling after its base", () => {
+
+    // The shapes a comparison of the printed child topic reads wrong: a hyphen sorts below a slash, so `leak-external/get` would lead `leak/get`, and a child's
+    // own segment sorts below the get suffix, so `light/brightness/get` would lead `light/get`. A whole-string comparison of the entry's own topic reads a further
+    // shape wrong for the same reason as the first: `light-external` would lead `light/brightness`, where the tree reads `light` and everything beneath it first.
+    // Keying each row on its entry's topic, segment by segment, reads each of them as the tree.
+    const catalog = mqttTopicCatalog({
+
+      externalLeak: { get: "`true` will trigger a publish event of the current external leak state.", label: "external leak", topic: "leak-external" },
+      externalLight: { get: "`true` will trigger a publish event of the current external light state.", label: "external light", topic: "light-external" },
+      leak: { get: "`true` will trigger a publish event of the current leak state.", label: "leak", topic: "leak" },
+      light: { get: "`true` or `false` when the light is on or off.", label: "light", set: "`true` or `false` to turn the light on or off.", topic: "light" },
+      lightBrightness: { get: "The brightness level, as a percentage.", label: "light brightness", set: "A number between 0 and 100.", topic: "light/brightness" }
+    });
+
+    const reference = renderMqttTopicsReference(catalog);
+    const lines = reference.subscribed.split("\n");
+
+    assert.ok(lines[2]?.startsWith("| `leak/get`"), "a base topic's row leads its hyphenated sibling, observed: " + String(lines[2]));
+    assert.ok(lines[3]?.startsWith("| `leak-external/get`"), "the hyphenated sibling follows it, observed: " + String(lines[3]));
+    assert.ok(lines[4]?.startsWith("| `light/get`"), "a topic's own get row leads the rows beneath it, observed: " + String(lines[4]));
+    assert.ok(lines[5]?.startsWith("| `light/set`"), "its set row follows its get row, observed: " + String(lines[5]));
+    assert.ok(lines[6]?.startsWith("| `light/brightness/get`"), "the topic beneath it follows both, observed: " + String(lines[6]));
+    assert.ok(lines[7]?.startsWith("| `light/brightness/set`"), "and its set row trails, observed: " + String(lines[7]));
+    assert.ok(lines[8]?.startsWith("| `light-external/get`"), "a hyphenated sibling of a topic with children trails all of its rows, observed: " + String(lines[8]));
+    assert.equal(reference.published, "", "a catalog whose entries declare no publish text renders no published section at all");
   });
 
   test("joins device labels in the vocabulary's declared order, not the entry's", () => {

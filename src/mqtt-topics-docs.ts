@@ -82,13 +82,14 @@ const MESSAGE_DIVIDER_WIDTH = 34;
 // What joins the device labels inside one cell.
 const LABEL_SEPARATOR = ", ";
 
-// One rendered row: the cells its table prints in column order, the group it renders under, and the raw topic it sorts on. The raw topic is kept beside the rendered
-// cells because sorting on the cell would sort on its markup, putting every parameterized topic in a block of its own.
+// One rendered row: the cells its table prints in column order, the group it renders under, and the segments the section sorts it on. The row keeps its entry's own
+// topic, as segments, beside the rendered cells because the sort walks the topic tree rather than the printed text: markup would sort every parameterized topic into
+// a block of its own, and the printed child of one topic would sort behind the printed child of a topic beneath it.
 interface TopicRow {
 
   readonly cells: readonly string[];
   readonly group?: string;
-  readonly rawTopic: string;
+  readonly segments: readonly string[];
 }
 
 // Neutralize the column separator in author-owned markdown. A bare "|" would open a phantom column, while backticks, links, and alert markup have to reach the
@@ -101,16 +102,16 @@ function escapeColumnSeparator(text: string): string {
 // Render a raw topic as the document shows it. A plain tail sits in a backtick code span; a template becomes an HTML code span so each placeholder can be italicized
 // in place, which markdown offers no way to do inside a backtick span. The substitution goes through the resolver, so the markup form and the wire form are produced
 // by one statement of what a placeholder is.
-function renderTopicCell(rawTopic: string): string {
+function renderTopicCell(topic: string): string {
 
-  const placeholders = mqttTopicPlaceholders(rawTopic);
+  const placeholders = mqttTopicPlaceholders(topic);
 
   if(placeholders.length === 0) {
 
-    return "`" + rawTopic + "`";
+    return "`" + topic + "`";
   }
 
-  return "<CODE>" + resolveMqttTopic(rawTopic, Object.fromEntries(placeholders.map((name) => [ name, "<I>" + name + "</I>" ]))) + "</CODE>";
+  return "<CODE>" + resolveMqttTopic(topic, Object.fromEntries(placeholders.map((name) => [ name, "<I>" + name + "</I>" ]))) + "</CODE>";
 }
 
 // Validate an entry's device declaration against the catalog's column and render its cell. The column and the lists are one decision, so both directions are checked
@@ -148,31 +149,47 @@ function renderDeviceCell({ column, entry, key }: { column: MqttTopicDeviceColum
 
 // Build one row from an entry's declaration. The message text and the device labels are author-owned markdown and receive only the separator escape; the topic cell
 // is this module's own markup.
-function buildRow({ deviceCell, group, message, rawTopic, withColumn }: {
+function buildRow({ deviceCell, group, message, segments, topic, withColumn }: {
 
   deviceCell: string;
   group?: string;
   message: string;
-  rawTopic: string;
+  segments: readonly string[];
+  topic: string;
   withColumn: boolean;
 }): TopicRow {
 
-  const cells = withColumn ? [ renderTopicCell(rawTopic), deviceCell, escapeColumnSeparator(message) ] :
-    [ renderTopicCell(rawTopic), escapeColumnSeparator(message) ];
+  const cells = withColumn ? [ renderTopicCell(topic), deviceCell, escapeColumnSeparator(message) ] :
+    [ renderTopicCell(topic), escapeColumnSeparator(message) ];
 
-  return { cells, group, rawTopic };
+  return { cells, group, segments };
 }
 
-// Order two rows by their raw topic, ascending by code unit. Sorting on the raw topic rather than on declaration order is what puts a get child beside its set child
-// and `light` ahead of `light/brightness`, which is how every shipped document in the family already reads.
-function byRawTopic(left: TopicRow, right: TopicRow): number {
+// Order two rows as the topic tree reads: at the first segment where two topics differ the lower segment comes first, and a topic that is the prefix of another comes
+// ahead of it, so a topic precedes every topic that extends it. Comparing the printed text would sort a hyphenated sibling ahead of its base topic's rows, because a
+// hyphen sorts below a slash, and it would sort a topic's own get and set rows behind the rows of the topics beneath it. Two rows on one topic tie, and the tie needs
+// no second key: the traversal pushes an entry's get row before its set row and `toSorted` is stable, so one entry's two subscribed rows keep that order, and two
+// entries that produce one wire topic keep their declared order.
+function byTopicTree(left: TopicRow, right: TopicRow): number {
 
-  if(left.rawTopic < right.rawTopic) {
+  for(const [ index, leftSegment ] of left.segments.entries()) {
 
-    return -1;
+    const rightSegment = right.segments[index];
+
+    // Every segment so far matched and the right topic has run out, so it is the shorter of two topics on one branch and belongs ahead of this one.
+    if(rightSegment === undefined) {
+
+      return 1;
+    }
+
+    if(leftSegment !== rightSegment) {
+
+      return (leftSegment < rightSegment) ? -1 : 1;
+    }
   }
 
-  return (left.rawTopic > right.rawTopic) ? 1 : 0;
+  // The left topic matched through its whole length, so it is either the same topic or the prefix of a longer one, which it precedes.
+  return (left.segments.length < right.segments.length) ? -1 : 0;
 }
 
 // Render one section: a single table for an ungrouped catalog, or one table per group that has rows in this section, each under its own H4 heading. Nothing to list
@@ -220,8 +237,9 @@ function renderSection(rows: readonly TopicRow[], groups: readonly string[], hea
  * carries no types, so the checks a declaration's shape would otherwise make at compile time are made here instead, and a documentation mistake fails the docs
  * build rather than a plugin's startup. Every message names the offending entry by key.
  *
- * Rows are sorted by their raw topic, grouped when the catalog declares groups, and given a device column when the catalog declares one, with each entry's labels
- * joined in the order the vocabulary declares them. A section the catalog has no rows for is an empty string.
+ * Rows are ordered as the topic tree reads - a topic before every topic that extends it, siblings in plain order, and a topic's own get and set rows before the rows
+ * of the topics beneath it - grouped when the catalog declares groups, and given a device column when the catalog declares one, with each entry's labels joined in
+ * the order the vocabulary declares them. A section the catalog has no rows for is an empty string.
  *
  * @param catalog - The catalog to project, as {@link mqtt-topics!mqttTopicCatalog | mqttTopicCatalog} returned it.
  *
@@ -265,6 +283,7 @@ export function renderMqttTopicsReference(catalog: MqttTopicCatalog): MqttTopics
   for(const [ key, entry ] of Object.entries(catalog)) {
 
     const deviceCell = renderDeviceCell({ column, entry, key });
+    const segments = entry.topic.split("/");
     const grouped = entry.group !== undefined;
 
     expectation ??= { grouped, key };
@@ -284,17 +303,17 @@ export function renderMqttTopicsReference(catalog: MqttTopicCatalog): MqttTopics
 
     if(entry.publish !== undefined) {
 
-      published.push(buildRow({ deviceCell, group: entry.group, message: entry.publish, rawTopic: entry.topic, withColumn }));
+      published.push(buildRow({ deviceCell, group: entry.group, message: entry.publish, segments, topic: entry.topic, withColumn }));
     }
 
     if(entry.get !== undefined) {
 
-      subscribed.push(buildRow({ deviceCell, group: entry.group, message: entry.get, rawTopic: mqttGetTopic(entry.topic), withColumn }));
+      subscribed.push(buildRow({ deviceCell, group: entry.group, message: entry.get, segments, topic: mqttGetTopic(entry.topic), withColumn }));
     }
 
     if(entry.set !== undefined) {
 
-      subscribed.push(buildRow({ deviceCell, group: entry.group, message: entry.set, rawTopic: mqttSetTopic(entry.topic), withColumn }));
+      subscribed.push(buildRow({ deviceCell, group: entry.group, message: entry.set, segments, topic: mqttSetTopic(entry.topic), withColumn }));
     }
   }
 
@@ -302,7 +321,7 @@ export function renderMqttTopicsReference(catalog: MqttTopicCatalog): MqttTopics
 
   return {
 
-    published: renderSection(published.toSorted(byRawTopic), groups, [ ...leadingHeadings, "Message Published" ]),
-    subscribed: renderSection(subscribed.toSorted(byRawTopic), groups, [ ...leadingHeadings, "Message Expected" ])
+    published: renderSection(published.toSorted(byTopicTree), groups, [ ...leadingHeadings, "Message Published" ]),
+    subscribed: renderSection(subscribed.toSorted(byTopicTree), groups, [ ...leadingHeadings, "Message Expected" ])
   };
 }

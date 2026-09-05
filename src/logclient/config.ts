@@ -22,8 +22,8 @@
  * @module
  */
 import { DEFAULT_HOST, DEFAULT_PORT } from "./settings.ts";
+import { formatErrorMessage, hasErrorCode } from "../util.ts";
 import type { Nullable } from "../util.ts";
-import { formatErrorMessage } from "../util.ts";
 
 /**
  * The default path of the optional config file, relative to the user's home directory. Home-dir only (no project-local file) so a config carrying a password or token is
@@ -175,10 +175,11 @@ async function defaultStat(path: string): Promise<{ readonly mode: number }> {
 }
 
 // Test whether a thrown filesystem error denotes a missing file. Node's `readFile`/`stat` reject with an error carrying `code: "ENOENT"` when the path does not exist;
-// that is the silent "no config file" case rather than a failure. We read `code` defensively off an unknown error shape.
+// that is the silent "no config file" case rather than a failure. The library's `hasErrorCode` owns the shape check, so every site that asks whether a rejection
+// carries a given errno asks it the same way.
 function isFileNotFound(error: unknown): boolean {
 
-  return (typeof error === "object") && (error !== null) && ("code" in error) && (error.code === "ENOENT");
+  return hasErrorCode(error, "ENOENT");
 }
 
 // Narrow an unknown parsed JSON value to a plain record (a JSON object) so individual fields can be read without unsafe member access. An array is excluded: a config

@@ -12,6 +12,7 @@ export * from "./docChrome.ts";
 export * from "./featureOptions.ts";
 export * from "./featureOptions-docs.ts";
 export * from "./homebridge-enums.ts";
+export * from "./http-listener.ts";
 export * from "./mqtt-publish.ts";
 export * from "./mqtt-topics.ts";
 export * from "./mqtt-topics-docs.ts";

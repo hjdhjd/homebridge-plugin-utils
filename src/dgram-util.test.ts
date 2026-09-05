@@ -1,12 +1,15 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * dgram-util.test.ts: Unit tests for the IP-family translation tables and dgram-socket factory in dgram-util.ts - loopbackAddress, createDgramSocket,
- * and the IpFamily union's exhaustive coverage at the type level.
+ * dgram-util.test.ts: Unit tests for the IP-family translation tables, the dgram-socket factory, and the connected-datagram route probe in dgram-util.ts -
+ * loopbackAddress, createDgramSocket, localAddressFor, and the IpFamily union's exhaustive coverage at the type level.
  */
-import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
+import { createDgramSocket, localAddressFor, loopbackAddress } from "./dgram-util.ts";
 import { describe, test } from "node:test";
 import type { Socket } from "node:dgram";
 import assert from "node:assert/strict";
+import { assertNoUnhandledRejections } from "./testing/index.ts";
+import { createSocket } from "node:dgram";
+import { hasErrorCode } from "./util.ts";
 import { once } from "node:events";
 
 // Bring `socket` up on the loopback interface and resolve once `"listening"` fires (or reject on `"error"`). Awaiting the listening event before inspecting
@@ -105,5 +108,109 @@ describe("createDgramSocket", () => {
     const _socketType: FactoryParam = "udp4";
     // @ts-expect-error - undefined is not in the IpFamily union.
     const _badUndef: FactoryParam = undefined;
+  });
+});
+
+/* The local address this machine's routing table would send toward a host, computed inline so an arm can compare the module's answer against an independent one.
+ * The port differs from the module's own, which is what shows the answer does not depend on it: no datagram is ever sent either way.
+ *
+ * @param host - The host to route toward.
+ *
+ * @returns The local address, or null when this machine has no route toward that host.
+ */
+async function probeRoute(host: string): Promise<string | null> {
+
+  const socket = createSocket("udp4");
+
+  socket.unref();
+
+  try {
+
+    const connected = once(socket, "connect");
+
+    socket.connect(443, host);
+    await connected;
+
+    return socket.address().address;
+  } catch {
+
+    return null;
+  } finally {
+
+    socket.close();
+  }
+}
+
+describe("localAddressFor", () => {
+
+  test("a loopback address answers itself, in either family", async () => {
+
+    assert.equal(await localAddressFor("127.0.0.1"), "127.0.0.1");
+    assert.equal(await localAddressFor("::1"), "::1", "an IPv6 host is probed over an IPv6 socket, so the answer is the IPv6 loopback");
+  });
+
+  test("a name answers an address literal rather than the name it was asked about", async () => {
+
+    // A stand-in that handed the input back would pass a weaker assertion than this one: the answer has to be an address, and it has to be a loopback one.
+    const named = await localAddressFor("localhost");
+
+    assert.ok(named.startsWith("127.") || (named === "::1"), "a loopback peer is reached over loopback, and the answer is an address rather than a name");
+  });
+
+  test("a host that does not resolve rejects with the lookup's own error", async () => {
+
+    /* The reserved suffix never resolves, so this is the failure a user's mistyped or unreachable address produces. The rejection carries the lookup's own code,
+     * which is what a caller needs to tell an unreachable host from anything else - and what a probe that ignored its failure would replace with an address meaning
+     * nothing.
+     */
+    await assert.rejects(localAddressFor("no-such-host.invalid"), (error: unknown) => hasErrorCode(error, "ENOTFOUND"));
+  });
+
+  test("the answer is the operating system's own routing rather than an assumed loopback", async (t) => {
+
+    /* The documentation range. Nothing is sent to it and nothing needs to answer, but the kernel still picks the interface it would leave from, and the inline probe
+     * computes that same answer independently over a different port - so this arm fails an implementation that hardcoded a loopback address, and shows the port the
+     * probe connects toward does not enter into the answer.
+     *
+     * A machine with no route toward it fails both sides identically, which would prove nothing, so that case skips with its reason recorded.
+     */
+    const expected = await probeRoute("192.0.2.1");
+
+    if(expected === null) {
+
+      t.skip("this machine has no route toward the documentation range, so both sides of the comparison would fail identically");
+
+      return;
+    }
+
+    assert.equal(await localAddressFor("192.0.2.1"), expected);
+  });
+
+  test("a lifetime that has already ended rejects before any socket exists", async () => {
+
+    const controller = new AbortController();
+    const reason = new Error("the caller went away");
+
+    controller.abort(reason);
+
+    await assert.rejects(localAddressFor("127.0.0.1", { signal: controller.signal }), (error: unknown) => error === reason);
+  });
+
+  test("a lifetime that ends during a pending lookup rejects with that lifetime's reason", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const controller = new AbortController();
+      const reason = new Error("the caller went away");
+
+      /* The call runs to its first await before returning here, so the lookup is in flight by the time the abort lands. What it rejects with is the assertion: the
+       * signal's own reason, rather than the platform's `AbortError` or the lookup's own failure, which is what the wait would surface if it were awaited bare.
+       */
+      const pending = localAddressFor("no-such-host.invalid", { signal: controller.signal });
+
+      controller.abort(reason);
+
+      await assert.rejects(pending, (error: unknown) => error === reason);
+    });
   });
 });

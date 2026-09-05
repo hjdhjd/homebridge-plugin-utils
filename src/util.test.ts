@@ -1,14 +1,15 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, onAbort, waitWithSignal,
+ * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, hasErrorCode, onAbort,
+ * waitWithSignal,
  * markHandled, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
  * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
  * formatPercent, formatErrorMessage, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes, formatErrorMessage,
-  formatMs, formatPercent, formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, membershipDelta,
-  onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
-  takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
+  formatMs, formatPercent, formatSeconds, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled,
+  membershipDelta, onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream, takeLast, toStartCase, validateName,
+  waitWithSignal } from "./util.ts";
 import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { RetryBackoff } from "./util.ts";
@@ -179,6 +180,52 @@ describe("isHbpuAbortReason", () => {
     }
 
     assert.fail("expected the type predicate to accept an HbpuAbortError(\"failed\")");
+  });
+});
+
+describe("hasErrorCode", () => {
+
+  test("returns true for an Error carrying the code, and narrows it", () => {
+
+    const error: unknown = Object.assign(new Error("address already in use"), { code: "EADDRINUSE" });
+
+    assert.equal(hasErrorCode(error, "EADDRINUSE"), true);
+
+    // The narrowing is the second half of the contract: inside the guard the code reads as the literal that was matched rather than as a widened string.
+    if(hasErrorCode(error, "EADDRINUSE")) {
+
+      const code: "EADDRINUSE" = error.code;
+
+      assert.equal(code, "EADDRINUSE");
+
+      return;
+    }
+
+    assert.fail("expected the type predicate to accept an Error carrying the code");
+  });
+
+  test("returns false for an Error carrying a different code", () => {
+
+    assert.equal(hasErrorCode(Object.assign(new Error("no such file"), { code: "ENOENT" }), "EADDRINUSE"), false);
+  });
+
+  test("returns false for an Error carrying no code at all", () => {
+
+    assert.equal(hasErrorCode(new Error("plain"), "EADDRINUSE"), false);
+  });
+
+  test("returns false for a plain object carrying the code", () => {
+
+    // The `instanceof` term is what refuses this one. A rejection that is not an Error but happens to spell the field is not the failure the caller is asking about.
+    assert.equal(hasErrorCode({ code: "EADDRINUSE" }, "EADDRINUSE"), false);
+  });
+
+  test("returns false for values carrying nothing at all", () => {
+
+    for(const value of [ undefined, null, "EADDRINUSE", 0 ]) {
+
+      assert.equal(hasErrorCode(value, "EADDRINUSE"), false);
+    }
   });
 });
 

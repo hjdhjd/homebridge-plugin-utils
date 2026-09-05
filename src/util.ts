@@ -166,6 +166,48 @@ export function isHbpuAbortReason<R extends HbpuAbortReason>(error: unknown, rea
 }
 
 /**
+ * Test whether an unknown thrown value is an `Error` carrying a specific string `code`, narrowing it so the caller can read that code without a cast.
+ *
+ * Two error families spell a string `code` and both are thrown as `unknown` into a `catch`: Node's own errno errors, where `code` is the platform's symbolic name
+ * (`"EADDRINUSE"` for a port already bound, `"ENOENT"` for a path that does not exist, `"ENOTFOUND"` for a name that does not resolve), and library errors that adopt
+ * the same convention to give callers something stable to branch on. Asking "is this that failure?" is a three-part check - an `Error`, an own `code` property, and the
+ * value itself - and writing it inline at each site is what lets one site quietly drop a part and start matching a plain object that merely carries the field.
+ *
+ * The generic keeps the caller's literal code in the narrowed type, the way {@link isHbpuAbortReason} keeps its reason, so a branch that matched `"EADDRINUSE"` reads
+ * `error.code` as that literal rather than as a widened `string`.
+ *
+ * @typeParam C - The specific code being matched. Defaulted by inference from `code`.
+ * @param error - The value to test, typically a `catch` binding.
+ * @param code  - The code to match, compared with strict equality.
+ *
+ * @returns `true` when `error` is an `Error` whose `code` property is exactly `code`.
+ *
+ * @example
+ *
+ * ```ts
+ * import { hasErrorCode } from "homebridge-plugin-utils";
+ *
+ * try {
+ *
+ *   await bind();
+ * } catch(error: unknown) {
+ *
+ *   // A port somebody else holds is worth waiting out; anything else is a real failure and is rethrown.
+ *   if(!hasErrorCode(error, "EADDRINUSE")) {
+ *
+ *     throw error;
+ *   }
+ * }
+ * ```
+ *
+ * @category Utilities
+ */
+export function hasErrorCode<C extends string>(error: unknown, code: C): error is Error & { code: C } {
+
+  return (error instanceof Error) && ("code" in error) && (error.code === code);
+}
+
+/**
  * Test whether an abort reason indicates a timeout. Matches both the canonical {@link HbpuAbortError} with `"timeout"` name - produced by project watchdogs
  * ({@link Watchdog}, the inactivity monitors on `FfmpegProcess` / `RtpDemuxer` / `Mp4SegmentAssembler`) - and the platform {@link DOMException}/`Error` whose
  * `.name === "TimeoutError"` - produced by `AbortSignal.timeout()`. Consumers branch on a single predicate regardless of which code path originated the timeout.

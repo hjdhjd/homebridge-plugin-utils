@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * dgram-util.ts: Shared UDP socket helpers - the IP-family translation tables and the socket factory.
+ * dgram-util.ts: Shared UDP socket helpers - the IP-family translation tables, the socket factory, and the connected-datagram route probe.
  */
 
 /**
@@ -11,12 +11,18 @@
  * types, SO_REUSEADDR flags, alternative loopback addresses in constrained test environments) has exactly one file to update, and consumers - production or
  * test - share the same vocabulary. The FFmpeg subsystem's `rtp.ts` and `stream.ts` and the test fixtures beside them are examples of that traffic.
  *
- * This module imports `node:dgram` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve that import.
+ * {@link localAddressFor} lives here for the same reason: it is a datagram helper, answering which local address the operating system would route toward a host by
+ * connecting a socket and reading what the kernel bound, and the translation tables above are what it opens that socket through.
+ *
+ * This module imports `node:dgram` and `node:net` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve those imports.
  *
  * @module
  */
 import type { Socket } from "node:dgram";
 import { createSocket } from "node:dgram";
+import { isIP } from "node:net";
+import { once } from "node:events";
+import { waitWithSignal } from "./util.ts";
 
 /**
  * The two IP families the library's datagram helpers support. Centralized here so consumers - the FFmpeg subsystem's `rtp.ts` and `stream.ts`, the test fixtures
@@ -33,6 +39,10 @@ const DGRAM_SOCKET_TYPE = { ipv4: "udp4", ipv6: "udp6" } as const;
 // Loopback addresses keyed by IP family. Note that `"::1"` is the IPv6 loopback specifically, not the any-address form - sockets bound here accept only local-host
 // traffic, which matches every current consumer's intent (health probes, port reservations, test fixtures).
 const LOOPBACK_ADDRESS = { ipv4: "127.0.0.1", ipv6: "::1" } as const;
+
+// The destination the route probe connects toward: the discard service port. Nothing is ever sent, so which port it is has no effect on the answer - the port exists
+// only to give the kernel a destination to consult its routing table about. Port zero cannot serve: `connect` refuses it outright.
+const ROUTE_PROBE_PORT = 9;
 
 /**
  * Resolve the loopback address string for the supplied IP family. The returned literal is suitable for passing to `socket.bind(port, address)` or
@@ -62,4 +72,72 @@ export function loopbackAddress(ipFamily: IpFamily): (typeof LOOPBACK_ADDRESS)[I
 export function createDgramSocket(ipFamily: IpFamily): Socket {
 
   return createSocket(DGRAM_SOCKET_TYPE[ipFamily]);
+}
+
+/**
+ * The local address the operating system routes toward a host, which is the interface a peer at that host can reach this process on.
+ *
+ * A datagram socket is connected and its local address read. No packet is sent: connecting a datagram socket only fixes its default destination, and fixing that
+ * destination is what makes the kernel consult its routing table and bind the local address it would send from. That is a more honest answer than enumerating the
+ * host's interfaces and guessing which one faces the peer, because a host with several interfaces has no single right answer to guess at.
+ *
+ * The `connect` event is awaited rather than a callback passed, because the platform declares that callback to take no arguments: a callback shape that reads an
+ * error argument types only by declaring a parameter the contract does not promise, and then reads past it at runtime. With no callback, the runtime emits `connect`
+ * on success and `error` on failure, which `events.once` turns into a rejection carrying the lookup or family code - so a host that does not resolve, or one whose
+ * family the socket cannot reach, is a failure the caller sees rather than an address that means nothing.
+ *
+ * The socket is unreferenced, so it never holds the process open. A name lookup already in flight is a threadpool request no API cancels, so it holds the process
+ * until the resolver answers however this call ends; `signal` ends the caller's wait at once and the lookup drains on its own, completing against a closed socket
+ * and emitting nothing.
+ *
+ * @param host            - The peer's address or hostname.
+ * @param options         - Optional inputs.
+ * @param options.signal  - The caller's lifetime. Aborting it rejects with the signal's reason, whether it had already fired or fires while the lookup is pending.
+ *
+ * @returns The local address the route toward that host would leave from.
+ *
+ * @throws The lookup or address-family error when the host cannot be reached, and `signal.reason` when the caller's lifetime ends first.
+ *
+ * @example
+ *
+ * ```ts
+ * import { localAddressFor } from "homebridge-plugin-utils";
+ *
+ * // The address to hand a controller as the endpoint it should post back to.
+ * const endpoint = await localAddressFor(controllerHost, { signal: this.signal });
+ * ```
+ *
+ * @category Utilities
+ */
+export async function localAddressFor(host: string, options: { signal?: AbortSignal } = {}): Promise<string> {
+
+  // A lifetime that has already ended opens no socket at all, rather than opening one and tearing it down a line later.
+  options.signal?.throwIfAborted();
+
+  const socket = createDgramSocket((isIP(host) === 6) ? "ipv6" : "ipv4");
+
+  // Excluded from Node's reference counting, so a probe in flight never keeps the process alive on its own account.
+  socket.unref();
+
+  try {
+
+    // Registered before the connect is asked for, so an outcome arriving in the same turn as the request has a listener waiting for it.
+    const connected = once(socket, "connect");
+
+    socket.connect(ROUTE_PROBE_PORT, host);
+
+    /* `waitWithSignal` is the library's one combinator for a wait a caller's signal may end: it rejects with the signal's reason rather than a bare `AbortError`,
+     * and it marks the underlying promise handled, so a `connect` or `error` that settles against the closed socket after an abort lands somewhere. That is why
+     * `once` above takes no signal of its own and no catch is hand-rolled here.
+     */
+    await ((options.signal === undefined) ? connected : waitWithSignal(connected, options.signal));
+
+    return socket.address().address;
+  } finally {
+
+    /* Closed on every path, including both failure paths. A second close is the only thing `close()` throws on and this function performs none, so the swallowing
+     * catch a defensive version would carry here would only hide a real defect.
+     */
+    socket.close();
+  }
 }

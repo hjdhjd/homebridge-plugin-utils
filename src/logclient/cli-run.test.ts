@@ -6,6 +6,7 @@ import type { CliStream, RunHblogOptions } from "./cli-run.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
 import { describe, test } from "node:test";
 import { LogSocket } from "./socket.ts";
+import { TestClock } from "../clock-double.ts";
 import { TestLogSocketFactory } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
@@ -707,16 +708,13 @@ describe("runHblog - time range", () => {
     assert.match(stdout.text, /--until <when>/, "the help must document --until");
   });
 
-  test("a one-shot --since filters history to the window, carries continuations, and honors the injected now", async (t) => {
+  test("a one-shot --since filters history to the window, carries continuations, and honors the injected clock", async () => {
 
-    // The engine's `window` channel now owns the time-bounded selection, and a one-shot's upper bound is `Date.now()` (the snapshot horizon). We pin BOTH clocks to
-    // 2026-06-29 13:00 local: `mock.timers` fixes `Date.now()` (the engine horizon) while the same epoch is injected as the CLI `now` (which resolves `--since 1h` to
-    // 12:00). The window is therefore `[12:00, 13:00]`: the 10:00 line and its null-timestamp continuation are dropped; the 12:30 line and its continuation are kept (the
-    // continuation inherits its in-window parent's instant). An empty socket (no seed) lets the immediate download win the gate, so the one-shot serves the filtered
-    // download and ends.
+    // The engine's `window` channel owns the time-bounded selection, and a one-shot's upper bound is the snapshot horizon the channel reads from its clock. ONE clock
+    // seeded at 2026-06-29 13:00 local therefore fixes both ends: the engine's horizon and the instant `--since 1h` resolves against (12:00). The window is
+    // `[12:00, 13:00]`: the 10:00 line and its null-timestamp continuation are dropped; the 12:30 line and its continuation are kept (the continuation inherits its
+    // in-window parent's instant). An empty socket (no seed) lets the immediate download win the gate, so the one-shot serves the filtered download and ends.
     const now = new Date(2026, 5, 29, 13, 0, 0).getTime();
-
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now });
 
     const lines = [
 
@@ -727,7 +725,8 @@ describe("runHblog - time range", () => {
     ];
 
     const { fetch } = fakeFetch({ lines });
-    const { options, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1h" ], fetch, now: () => now, socketFactory: new TestLogSocketFactory() });
+    const { options, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1h" ], clock: new TestClock(now), fetch,
+      socketFactory: new TestLogSocketFactory() });
 
     const code = await runHblog(options);
 
@@ -741,18 +740,17 @@ describe("runHblog - time range", () => {
     assert.ok(!text.includes("cont-before"), "a continuation of an out-of-window line must be dropped");
   });
 
-  test("a bare --since keeps until null and never raises a since-after-until error for a future --since (no implicit until = now)", async (t) => {
+  test("a bare --since keeps until null and never raises a since-after-until error for a future --since (no implicit until = now)", async () => {
 
-    // The regression guard for the implicit-`until = now` hazard. With `now` pinned to 2026-06-29 03:00, `--since 7am` resolves to 07:00 - in the FUTURE relative to now.
-    // A bare `--since` must keep `until: null` (NOT an implicit `until = now`), so this is NOT a `since > until` usage error; it is a valid one-shot whose engine horizon
-    // (03:00) is below `since` (07:00), yielding empty output and a clean exit 0 rather than exit 2.
+    // The regression guard for the implicit-`until = now` hazard. With the injected clock seeded at 2026-06-29 03:00, `--since 7am` resolves to 07:00 - in the FUTURE
+    // relative to that instant. A bare `--since` must keep `until: null` (NOT an implicit `until = now`), so this is NOT a `since > until` usage error; it is a valid
+    // one-shot whose engine horizon (03:00) is below `since` (07:00), yielding empty output and a clean exit 0 rather than exit 2.
     const now = new Date(2026, 5, 29, 3, 0, 0).getTime();
-
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now });
 
     const lines = [ "[6/29/2026, 1:00:00 AM] [P] one", "[6/29/2026, 2:00:00 AM] [P] two" ];
     const { fetch } = fakeFetch({ lines });
-    const { options, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "7am" ], fetch, now: () => now, socketFactory: new TestLogSocketFactory() });
+    const { options, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "7am" ], clock: new TestClock(now), fetch,
+      socketFactory: new TestLogSocketFactory() });
 
     const code = await runHblog(options);
 
@@ -799,7 +797,7 @@ describe("runHblog - time range", () => {
 
     const { fetch, resolveHistory } = deferredFetch(history);
     const stdout = new CaptureStream();
-    const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1h", "--follow" ], fetch, now: () => now, socketFactory, stdout });
+    const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1h", "--follow" ], clock: new TestClock(now), fetch, socketFactory, stdout });
 
     const run = runHblog(options);
 

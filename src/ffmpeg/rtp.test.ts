@@ -10,6 +10,7 @@ import { bindReceiver, probePortAvailable, sendDatagram } from "./udp.helpers.ts
 import { describe, test } from "node:test";
 import type { PortReservation } from "./rtp.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
+import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { waitUntil } from "../testing/index.ts";
@@ -388,6 +389,38 @@ describe("RtpDemuxer - inactivity watchdog", () => {
 
       assert.equal(demuxer.isTimedOut, true, "inactivity watchdog must abort the demuxer with a timeout reason");
       assert.equal(isHbpuAbortReason(demuxer.signal.reason, "timeout"), true);
+    } finally {
+
+      await demuxer[Symbol.asyncDispose]();
+    }
+  });
+
+  test("an injected clock drives the inactivity window in virtual time, in both directions", async () => {
+
+    await using rtpReceiver = await bindReceiver();
+    await using rtcpReceiver = await bindReceiver();
+
+    const clock = new TestClock();
+    const demuxer = new RtpDemuxer({ clock, inactivityTimeout: 1000, inputPort: 0, rtcpPort: rtcpReceiver.port, rtpPort: rtpReceiver.port });
+
+    try {
+
+      await demuxer.ready;
+
+      // The re-arm and the forward happen in the SAME synchronous message handler, so a forwarded datagram landing on the receiving socket is proof the window has
+      // been re-armed at the clock's current virtual time. Synchronizing on that existing observable is what lets the two advances below be exact rather than
+      // approximate, and it is why this row needs no real-time buffer at all.
+      await sendDatagram(demuxer.inputPort, makeRtpDatagram());
+      await waitUntil(() => rtpReceiver.received.length === 1, { description: "the first datagram is forwarded, so the inactivity window is armed" });
+
+      clock.advance(999);
+
+      assert.equal(demuxer.aborted, false, "one millisecond short of the window, nothing has fired");
+
+      clock.advance(1);
+
+      assert.equal(demuxer.isTimedOut, true, "the full window elapsing on the injected clock aborts the demuxer");
+      assert.equal(isHbpuAbortReason(demuxer.signal.reason, "timeout"), true, "and it aborts with the timeout reason, not some other cause");
     } finally {
 
       await demuxer[Symbol.asyncDispose]();

@@ -24,6 +24,7 @@
  */
 import { AudioRecordingCodecType, H264Level, H264Profile } from "./hap-enums.ts";
 import { HOMEKIT_STREAMING_HEADROOM, RPI4_GPU_MINIMUM, RPI4_HW_TRANSCODE_MAX_PIXELS } from "./settings.ts";
+import type { Clock } from "../clock.ts";
 import type { FfmpegCodecs } from "./codecs.ts";
 import type { Logger } from "../util.ts";
 
@@ -47,6 +48,13 @@ const H264_PROFILE_NAMES = {
 /**
  * Configuration options for `FfmpegOptions`, defining transcoding, decoding, logging, and hardware acceleration settings.
  *
+ * @property clock                - Optional time source for the callback timers every process built from these options, and every resource those processes compose,
+ *                                  arm: the streaming health watchdog and the segment assembler's inter-segment watchdog. Left undefined, each of those falls back to
+ *                                  `systemClock` on its own, so the options object carries the choice unresolved exactly as any other composer does. The clock lives
+ *                                  here, beside `log` and `debug`, because these options ARE the per-session substrate a consumer configures once and every process,
+ *                                  recording, and livestream is then built from, where an init carries per-construction lifetimes instead. The startup timeout and
+ *                                  the codec probe are deadline signals rather than callback timers: they read the platform's `AbortSignal.timeout` directly and do
+ *                                  not observe this clock.
  * @property codecSupport         - FFmpeg codec capabilities and hardware support.
  * @property crop                 - Optional. Cropping rectangle for output video.
  * @property debug                - Optional. Enable debug logging.
@@ -81,6 +89,7 @@ const H264_PROFILE_NAMES = {
  */
 export interface FfmpegOptionsConfig {
 
+  clock?: Clock;
   codecSupport: FfmpegCodecs;
   crop?: { height: number; width: number; x: number; y: number };
   debug?: boolean;
@@ -354,6 +363,15 @@ export class FfmpegOptions {
 
     // Configure our hardware acceleration support.
     this.#configureHwAccel();
+  }
+
+  /**
+   * The time source the callback timers of this session's processes are armed on, or `undefined` when the consumer configured none. Handed on unresolved, so each
+   * primitive that arms a timer applies the `systemClock` default in the one place that default belongs.
+   */
+  public get clock(): Clock | undefined {
+
+    return this.config.clock;
   }
 
   /**

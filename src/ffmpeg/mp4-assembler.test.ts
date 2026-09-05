@@ -8,6 +8,7 @@ import { describe, test } from "node:test";
 import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Mp4SegmentAssembler } from "./mp4-assembler.ts";
 import { PassThrough } from "node:stream";
+import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeBox } from "./fmp4-builders.ts";
@@ -270,6 +271,35 @@ describe("Mp4SegmentAssembler - watchdog timeout", () => {
     await assertDone(iter, "generator must terminate when the watchdog fires");
 
     assert.equal(assembler.isTimedOut, true, "isTimedOut must be true for an HbpuAbortError(\"timeout\") reason");
+    assert.equal(isHbpuAbortReason(assembler.signal.reason, "timeout"), true);
+  });
+
+  test("an injected clock drives the inter-segment window in virtual time, in both directions", async () => {
+
+    const source = new PassThrough();
+    const clock = new TestClock();
+    const assembler = new Mp4SegmentAssembler(source, { clock, segmentTimeout: 1000 });
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat"));
+
+    const iter = assembler.segments();
+
+    // The re-arm follows the parse of the very segment this await yields, so holding that segment is proof the window is armed at the clock's current virtual time.
+    // Synchronizing on that existing observable is what lets the two advances below be exact, with no real-time buffer anywhere in the row.
+    await nextSegment(iter, "first segment, whose delivery proves the inter-segment window is armed");
+
+    clock.advance(999);
+
+    assert.equal(assembler.aborted, false, "one millisecond short of the window, nothing has fired");
+
+    clock.advance(1);
+
+    await assertDone(iter, "the full window elapsing on the injected clock ends the generator");
+
+    assert.equal(assembler.isTimedOut, true, "and aborts the assembler with a timeout reason");
     assert.equal(isHbpuAbortReason(assembler.signal.reason, "timeout"), true);
   });
 

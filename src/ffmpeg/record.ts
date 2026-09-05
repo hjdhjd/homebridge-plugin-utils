@@ -627,7 +627,7 @@ export abstract class FfmpegFMp4Process extends FfmpegProcess {
 
     super(options, init);
 
-    this.#assembler = new Mp4SegmentAssembler(this._stdout, { segmentTimeout, signal: this.signal });
+    this.#assembler = new Mp4SegmentAssembler(this._stdout, { clock: this.options.clock, segmentTimeout, signal: this.signal });
 
     bridgeAssemblerToProcess(this, this.#assembler);
   }

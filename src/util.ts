@@ -24,11 +24,18 @@ const NEVER_ABORTED_SIGNAL = new AbortController().signal;
 // reaction is a single function-reference pass rather than a fresh closure allocation per call.
 const MARK_HANDLED_NOOP = (): void => { /* Intentionally empty. */ };
 
-// Shared no-op `Disposable` returned by {@link onAbort} on the pre-aborted branch (where no listener was registered and there is nothing to remove). Hoisted to
-// module scope so every pre-aborted call reuses one instance instead of allocating a fresh object + arrow pair - matching the established pattern for other shared
-// module-scope constants in this file (`NEVER_ABORTED_SIGNAL`, `MARK_HANDLED_NOOP`). Safe to share because the disposer is stateless, repeatable, and side-effect
-// free: `[Symbol.dispose]()` can be invoked any number of times from any call site without interference.
-const NO_OP_DISPOSABLE: Disposable = { [Symbol.dispose]: (): void => { /* No listener was registered on the pre-aborted path - nothing to remove. */ } };
+/**
+ * The shared inert `Disposable` an API answers with when there is nothing to cancel: {@link onAbort}'s pre-aborted branch, which registered no listener, and the
+ * timer registry's inert registrations, which armed no timer. A caller holds it exactly as it holds a live handle, so the nothing-to-cancel case needs no branch of
+ * its own at any call site.
+ *
+ * One module-scope instance serves every such call rather than allocating a fresh object and arrow pair per call, matching the other shared constants in this file.
+ * Sharing is safe because the disposer is stateless, repeatable, and side-effect free: `[Symbol.dispose]()` can be invoked any number of times from any call site
+ * without interference. It is frozen so that a holder cannot reassign the disposer out from under every other caller.
+ *
+ * @category Utilities
+ */
+export const NO_OP_DISPOSABLE: Disposable = Object.freeze({ [Symbol.dispose]: (): void => { /* Nothing was registered, so there is nothing to release. */ } });
 
 /**
  * The canonical set of abort reasons used across `homebridge-plugin-utils`.
@@ -1515,17 +1522,21 @@ export async function runWithAbort<T>(fn: (signal: AbortSignal) => Promise<T>, o
 /**
  * Construction-time options for {@link Watchdog}.
  *
+ * @property clock     - Optional time source the inactivity window is armed on. Defaults to {@link systemClock}, whose `schedule` IS the global `setTimeout`, so the
+ *                       default path is that same platform call with one indirection in front of it and no behavior change. A test injects a `TestClock` so the
+ *                       window runs on virtual time alongside whatever else that clock drives.
  * @property onFire    - Callback invoked when the watchdog window lapses without a re-arm. Typically aborts an owning controller (`() => this.#controller.abort(new
  *                       HbpuAbortError("timeout"))`) but the watchdog itself is agnostic about what the fire does. Runs only when the observed signal has not already
  *                       aborted; if the signal fires before the timer, `onFire` is skipped entirely.
  * @property signal    - The lifetime signal the watchdog observes. When the signal aborts for any reason the pending timer is cleared and no further arms take effect.
  *                       Typically the consumer's composed lifetime signal (`this.signal`) so both parent-initiated and internal aborts wind the watchdog down.
- * @property timeoutMs - Inactivity window in milliseconds. The first `arm()` schedules a fire at now + `timeoutMs`; each subsequent `arm()` restarts the clock.
+ * @property timeoutMs - Inactivity window in milliseconds. The first `arm()` schedules a fire at now + `timeoutMs`; each subsequent `arm()` restarts the window.
  *
  * @category Utilities
  */
 export interface WatchdogInit {
 
+  clock?: Clock;
   onFire: () => void;
   signal: AbortSignal;
   timeoutMs: number;
@@ -1548,6 +1559,9 @@ export interface WatchdogInit {
  *   - `[Symbol.dispose]` clears the pending fire and marks the watchdog permanently dead: subsequent `arm()` calls are no-ops. This matches the scope-bound semantics
  *     callers expect from `using` - the resource is dead when the block exits, not merely quiescent.
  *
+ * The window is armed on the injected {@link Clock} - {@link systemClock} unless a caller supplies one - so a consumer that drives its waits on a controllable clock
+ * drives this deadline from the same lever, and a composer between that consumer and this class passes its optional clock through without resolving it.
+ *
  * This is a `Disposable` (synchronous) rather than `AsyncDisposable` because cancelling a timer is synchronous; there is no background work to await.
  *
  * @example
@@ -1569,10 +1583,11 @@ export interface WatchdogInit {
  */
 export class Watchdog implements Disposable {
 
+  readonly #clock: Clock;
   readonly #onFire: () => void;
   readonly #signal: AbortSignal;
   readonly #timeoutMs: number;
-  #timer: NodeJS.Timeout | undefined;
+  #timer: Disposable | undefined;
 
   // Set to `true` exactly once when `[Symbol.dispose]` runs. Tracks "caller is done with this watchdog" as a distinct concept from "the observed signal aborted" - the
   // latter can happen without disposal (normal lifetime end), and disposal can happen without signal abort (scope-bound `using` inside a longer-lived context). Both
@@ -1590,6 +1605,7 @@ export class Watchdog implements Disposable {
    */
   public constructor(init: WatchdogInit) {
 
+    this.#clock = init.clock ?? systemClock;
     this.#onFire = init.onFire;
     this.#signal = init.signal;
     this.#timeoutMs = init.timeoutMs;
@@ -1613,14 +1629,14 @@ export class Watchdog implements Disposable {
       return;
     }
 
-    if(this.#timer !== undefined) {
+    // Cancel the pending window, if one is outstanding. The very first `arm()` finds none, and disposing a handle is the whole cancellation, so there is no kind of
+    // timer to reason about here.
+    this.#timer?.[Symbol.dispose]();
 
-      clearTimeout(this.#timer);
-    }
+    this.#timer = this.#clock.schedule(() => {
 
-    this.#timer = setTimeout(() => {
-
-      // Null the handle first so a re-entrant `clear()` inside `onFire` is a cheap no-op and so observers inspecting `#timer` post-fire see the correct state.
+      // Null the handle first, before the fire, for three reasons: a re-entrant `clear()` inside `onFire` stays a cheap no-op, observers inspecting `#timer` post-fire
+      // see the correct state, and an `arm()` issued from inside `onFire` installs a fresh handle that nothing later on this fire path overwrites.
       this.#timer = undefined;
 
       // Lose a tight race against a concurrent abort cleanly: if the signal fired between timer scheduling and the callback running, the aborted state already
@@ -1640,11 +1656,8 @@ export class Watchdog implements Disposable {
    */
   public clear(): void {
 
-    if(this.#timer !== undefined) {
-
-      clearTimeout(this.#timer);
-      this.#timer = undefined;
-    }
+    this.#timer?.[Symbol.dispose]();
+    this.#timer = undefined;
   }
 
   /**

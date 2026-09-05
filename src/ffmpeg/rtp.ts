@@ -32,6 +32,7 @@
 import { HbpuAbortError, Watchdog, composeSignals, isTimeoutReason, markHandled, onAbort } from "../util.ts";
 import type { HomebridgePluginLogging, Nullable } from "../util.ts";
 import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
+import type { Clock } from "../clock.ts";
 import { DisposableStack } from "../disposable-stack.ts";
 import type { IpFamily } from "./dgram-util.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
@@ -47,6 +48,9 @@ const RESERVE_MAX_ATTEMPTS = 10;
 /**
  * Construction-time options for {@link RtpDemuxer}.
  *
+ * @property clock             - Optional time source for both of the demuxer's watchdog windows, the RTCP-replay heartbeat and the inbound-packet inactivity
+ *                               timeout. Passed through to each watchdog unresolved, so the `systemClock` default is applied in the one place it belongs and a
+ *                               demuxer keeps one time source for both windows.
  * @property inactivityTimeout - Optional inactivity watchdog window, in milliseconds. The timer arms during construction (immediately after the bind call is issued)
  *                               and re-arms on every received datagram. When the window lapses without traffic, the demuxer aborts with `HbpuAbortError("timeout")`.
  *                               Omit to disable the watchdog entirely.
@@ -67,6 +71,7 @@ const RESERVE_MAX_ATTEMPTS = 10;
  */
 export interface RtpDemuxerInit {
 
+  clock?: Clock;
   inactivityTimeout?: number;
   inputPort: number;
   ipFamily?: IpFamily;
@@ -318,6 +323,7 @@ export class RtpDemuxer implements AsyncDisposable {
     // arm it from the constructor because heartbeats are RTCP-replays and there is nothing meaningful to replay before the first RTCP.
     this.#heartbeat = new Watchdog({
 
+      clock: init.clock,
       onFire: (): void => {
 
         if((this.#lastRtcp !== undefined) && !this.aborted) {
@@ -336,6 +342,7 @@ export class RtpDemuxer implements AsyncDisposable {
     // The watchdog composes against `this.signal` so a parent abort (or any other internal abort) self-cleans the pending timer without explicit teardown.
     this.#inactivityWatchdog = (inactivityTimeout !== undefined) ? new Watchdog({
 
+      clock: init.clock,
       onFire: (): void => {
 
         this.#log?.debug("RtpDemuxer inactivity watchdog fired after %d ms with no inbound packets on port %d.", inactivityTimeout, this.inputPort);

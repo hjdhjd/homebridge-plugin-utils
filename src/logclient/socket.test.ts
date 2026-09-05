@@ -6,6 +6,7 @@ import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { LogSocket, reconnectBackoff } from "./socket.ts";
 import { describe, test } from "node:test";
 import type { LogSocketInit } from "./socket.ts";
+import { TestClock } from "../clock-double.ts";
 import type { TestWebSocket } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
@@ -317,13 +318,12 @@ describe("LogSocket - permanent auth failure veto", () => {
 
 describe("LogSocket - watchdog liveness", () => {
 
-  test("fires the watchdog and reconnects when pings stop", async (t) => {
+  test("fires the watchdog and reconnects when pings stop", async () => {
 
-    t.mock.timers.enable({ apis: ["setTimeout"] });
-
+    const clock = new TestClock();
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using _socket = new LogSocket(makeInit(factory, { clock }));
 
     await tick();
 
@@ -334,8 +334,9 @@ describe("LogSocket - watchdog liveness", () => {
     await completeHandshake(ws0);
 
     // Advance past the watchdog window (pingInterval 25000 + pingTimeout 20000 + MARGIN_MS 5000 = 50000) with no ping. The watchdog must fire, abort the session, and
-    // close the WebSocket.
-    t.mock.timers.tick(50001);
+    // close the WebSocket. The reconnect that follows succeeds on its first attempt against this row's zero backoff, and `retry` waits only BETWEEN failed attempts,
+    // so no further advance is owed for a backoff wait.
+    clock.advance(50001);
     await tick(3);
 
     assert.deepEqual(ws0.closeCodes, [1000], "the watchdog fire must close the wedged session with a normal-closure code");
@@ -345,13 +346,12 @@ describe("LogSocket - watchdog liveness", () => {
     assert.ok(ws1 !== undefined, "a watchdog-fired session end must trigger a reconnect");
   });
 
-  test("does not fire while pings keep arriving", async (t) => {
+  test("does not fire while pings keep arriving", async () => {
 
-    t.mock.timers.enable({ apis: ["setTimeout"] });
-
+    const clock = new TestClock();
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using _socket = new LogSocket(makeInit(factory, { clock }));
 
     await tick();
 
@@ -361,11 +361,13 @@ describe("LogSocket - watchdog liveness", () => {
 
     await completeHandshake(ws0);
 
-    // Advance most of the window, then deliver a ping to re-arm; the cumulative time exceeds one window but no single gap does, so the watchdog must not fire.
-    t.mock.timers.tick(40000);
+    // Advance most of the window, then deliver a ping to re-arm; the cumulative time exceeds one window but no single gap does, so the watchdog must not fire. Every
+    // ping re-arms through this same clock, so `clock.requested` interleaves the watchdog windows with anything else the socket asks the clock for - read it by value
+    // rather than at a fixed index if a row ever asserts on it.
+    clock.advance(40000);
     ws0.emitMessage("2");
     await tick();
-    t.mock.timers.tick(40000);
+    clock.advance(40000);
     await tick();
 
     assert.equal(factory.sockets.length, 1, "a re-armed watchdog must not fire, so no reconnect occurs");

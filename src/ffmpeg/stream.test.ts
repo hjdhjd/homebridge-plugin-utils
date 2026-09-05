@@ -5,19 +5,23 @@
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import { holdPort, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
+import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegStreamingProcess } from "./stream.ts";
 import type { HomebridgePluginLogging } from "../util.ts";
+import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";
 import { silentLog } from "../testing/index.ts";
+import { waitUntil } from "../testing/index.ts";
 
-function makeOptions(logger: HomebridgePluginLogging = silentLog()): FfmpegOptions {
+function makeOptions(logger: HomebridgePluginLogging = silentLog(), clock?: Clock): FfmpegOptions {
 
   return new FfmpegOptions({
 
+    clock,
     codecSupport: makeCodecs({ ffmpegExec: process.execPath, ffmpegVersion: "test" }),
     debug: false,
     hardwareDecoding: false,
@@ -148,6 +152,33 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
 
     assert.equal(proc.isTimedOut, true, "after the first packet arms the watchdog, a gap longer than the window with no further packets must abort with a timeout");
     assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true);
+  });
+
+  test("a clock carried on the options drives the health window in virtual time, in both directions", async () => {
+
+    const clock = new TestClock();
+
+    await using proc = new FfmpegStreamingProcess(makeOptions(silentLog(), clock), { args: stderrThenIdle(), healthTimeout: 1000,
+      returnPort: { ipFamily: "ipv4", port: 0 } });
+
+    await proc.ready;
+
+    assert.ok(proc.returnPort, "fixture pre-condition: returnPort must be set because we configured it");
+
+    // The health socket's message handler does exactly one thing - arm the watchdog - so the arm's own effect on the injected clock IS the observable that follows
+    // it. A pending entry appearing on the clock is therefore proof both that the first datagram reached the handler and that the handler armed on THIS clock rather
+    // than on the platform, which is what makes the two advances below exact and what makes this row impossible to pass against an unwired composer.
+    await sendDatagram(proc.returnPort.port, HEALTH_PAYLOAD);
+    await waitUntil(() => clock.pending > 0, { description: "the first inbound packet arms the health window on the injected clock" });
+
+    clock.advance(999);
+
+    assert.equal(proc.aborted, false, "one millisecond short of the window, nothing has fired");
+
+    clock.advance(1);
+
+    assert.equal(proc.isTimedOut, true, "the full window elapsing on the injected clock aborts the process");
+    assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true, "and it aborts with the timeout reason, not some other cause");
   });
 });
 

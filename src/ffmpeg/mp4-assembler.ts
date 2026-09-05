@@ -23,6 +23,7 @@
  */
 import { BOX_TYPE_MDAT, BOX_TYPE_MOOF, Mp4BoxParser } from "./mp4-parser.ts";
 import { HbpuAbortError, Watchdog, composeSignals, isTimeoutReason, markHandled, onAbort, waitWithSignal } from "../util.ts";
+import type { Clock } from "../clock.ts";
 import type { Mp4Box } from "./mp4-parser.ts";
 import type { Readable } from "node:stream";
 import { on } from "node:events";
@@ -30,6 +31,9 @@ import { on } from "node:events";
 /**
  * Construction-time options for {@link Mp4SegmentAssembler}.
  *
+ * @property clock            - Optional time source for the inter-segment watchdog's window. Passed through to the watchdog unresolved, so the `systemClock`
+ *                              default is applied in the one place it belongs. A caller that drives its media pacing on a controllable clock drives the segment
+ *                              timeout from the same lever.
  * @property segmentTimeout   - Optional watchdog window, in milliseconds. The timer arms when the initialization segment resolves (we begin expecting media segments)
  *                              and re-arms on each completed media segment. If no segment arrives within the window, the assembler aborts with
  *                              `HbpuAbortError("timeout")` and the generator terminates cleanly. Typical value for HKSV is a little under five seconds.
@@ -40,6 +44,7 @@ import { on } from "node:events";
  */
 export interface Mp4SegmentAssemblerInit {
 
+  clock?: Clock;
   segmentTimeout?: number;
   signal?: AbortSignal;
 }
@@ -163,7 +168,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
    */
   public constructor(source: Readable, init: Mp4SegmentAssemblerInit = {}) {
 
-    const { signal: parentSignal, segmentTimeout } = init;
+    const { clock, segmentTimeout, signal: parentSignal } = init;
 
     this.#controller = new AbortController();
     this.signal = composeSignals(parentSignal, this.#controller.signal);
@@ -175,6 +180,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
     // becomes a cheap `?.` no-op. The watchdog self-cleans when the composed signal aborts, so nothing else in this class needs to know about it.
     this.#watchdog = (segmentTimeout !== undefined) ? new Watchdog({
 
+      clock,
       onFire: (): void => {
 
         this.#controller.abort(new HbpuAbortError("timeout"));

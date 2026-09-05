@@ -179,6 +179,7 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
     // so the teardown listener below only has to close the socket.
     const watchdog = new Watchdog({
 
+      clock: this.options.clock,
       onFire: (): void => {
 
         this.log.debug("Streaming process inactivity watchdog fired after %d ms with no inbound packets.", timeoutMs);

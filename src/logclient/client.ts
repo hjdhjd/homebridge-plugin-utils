@@ -36,10 +36,12 @@ import type { HomebridgePluginLogging, Nullable } from "../util.ts";
 import type { LogClientCredentials, LogQuantity, LogRecord, TailRequest } from "./types.ts";
 import type { LogSocketFactory, LogSocketLike, TokenProvider } from "./socket.ts";
 import { SeedGate, parseLogLine, parseLogTimestamp } from "./parser.ts";
+import type { Clock } from "../clock.ts";
 import { acquireToken } from "./auth.ts";
 import { downloadLog } from "./rest.ts";
 import { logSocketFactory } from "./socket.ts";
 import { stitchLive } from "./stitch.ts";
+import { systemClock } from "../clock.ts";
 import { timeWindow } from "./time-window.ts";
 
 /**
@@ -57,6 +59,9 @@ export interface LogStream extends AsyncIterable<LogRecord>, AsyncDisposable {}
 /**
  * Construction-time options for {@link HomebridgeLogClient}.
  *
+ * @property clock         - Optional time source for the window channel's deadlines and for every socket this client creates. Defaults to {@link systemClock}, whose
+ *                           members ARE the platform primitives, so the default path is behavior-neutral. A test injects a `TestClock` seeded at the horizon it wants
+ *                           and drives the whole channel - the settle floor, the quiescence terminator, the hard cap, and the gate deadline - by advancing it.
  * @property credentials   - The credentials used to authenticate. See {@link LogClientCredentials}.
  * @property fetch         - Optional `fetch` implementation for the auth and REST transports. Defaults to the global `fetch`. Injected so the client is testable without
  *                           a live server.
@@ -72,6 +77,7 @@ export interface LogStream extends AsyncIterable<LogRecord>, AsyncDisposable {}
  */
 export interface HomebridgeLogClientOptions {
 
+  readonly clock?: Clock;
   readonly credentials: LogClientCredentials;
   readonly fetch?: typeof fetch;
   readonly host?: string;
@@ -129,6 +135,10 @@ export class HomebridgeLogClient implements AsyncDisposable {
   // The private controller whose signal is composed into `this.signal`. Owned internally so the only teardown verb is disposal.
   readonly #controller: AbortController;
 
+  // The client's time source, RESOLVED here rather than passed on unresolved as a pure composer would. This class is not a pure composer: it reads `now()` and arms
+  // the window channel's own timers itself, so it needs a definite clock, and the sockets it builds inherit that same one.
+  readonly #clock: Clock;
+
   readonly #credentials: LogClientCredentials;
   readonly #fetch: typeof fetch | undefined;
   readonly #host: string;
@@ -158,6 +168,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
    */
   public constructor(options: HomebridgeLogClientOptions) {
 
+    this.#clock = options.clock ?? systemClock;
     this.#credentials = options.credentials;
     this.#fetch = options.fetch;
     this.#host = options.host ?? DEFAULT_HOST;
@@ -480,13 +491,13 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
   // Windowed channel implementation - the hedged-seed time-bounded query. Connects the socket, captures the one-shot snapshot horizon, and wraps the merged record stream
   // in the engine-owned `timeWindow` transform so the whole output is filtered to `[since, until]` in one pass (the carry-forward survives the seed -> live and
-  // the stitch -> live boundaries). The raw merged stream - the hedge, the strict-coverage gate, the seed-served-vs-download decision, and the wall-clock one-shot
+  // the stitch -> live boundaries). The raw merged stream - the hedge, the strict-coverage gate, the seed-served-vs-download decision, and the clock-driven one-shot
   // termination - is produced by `#windowRecords`; this wrapper owns only the socket lifetime and the time-window upper bound. `effectiveUntil` fills a null `until` with
   // the snapshot horizon for a one-shot (so a bare `--since` is bounded at "now") but leaves an explicit `until` and a `follow` window's `until` untouched, so a future
   // `--until` is never narrowed into emptiness.
   async *#window(request: WindowRequest, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
 
-    const horizonNow = Date.now();
+    const horizonNow = this.#clock.now();
     const effectiveUntil = request.follow ? request.until : (request.until ?? horizonNow);
     const socket = this.#createSocket(callSignal);
 
@@ -495,14 +506,14 @@ export class HomebridgeLogClient implements AsyncDisposable {
       yield* timeWindow(this.#windowRecords(request, horizonNow, socket, callSignal), { since: request.since, until: effectiveUntil });
     } finally {
 
-      // Dispose the per-call socket on every exit path. `#windowRecords` has already cleared its own wall-clock timers in its own finally by the time this runs, so no
-      // `setTimeout` outlives the channel.
+      // Dispose the per-call socket on every exit path. `#windowRecords` has already disposed its own timers in its own finally by the time this runs, so no timer
+      // outlives the channel.
       await socket[Symbol.asyncDispose]();
     }
   }
 
   // The raw (pre-time-window) record stream for the windowed channel: the hedge setup, the bounded multi-phase coverage gate, the seed-vs-download branch, and the
-  // wall-clock one-shot terminator. Separate from `#window` so the gate's exit semantics - which diverge from `#followHistory` and ARE the channel's essence - read as
+  // clock-driven one-shot terminator. Separate from `#window` so the gate's exit semantics - which diverge from `#followHistory` and ARE the channel's essence - read as
   // their own dedicated race loops rather than being forced behind a shared callback; only the small buffer-and-carry primitive (`#bufferLine`), the download collector
   // (`#collectHistory`), and the `Watchdog` are reused. `socket` is owned by `#window`; this method owns the download child controller and the terminator timers.
   async *#windowRecords(request: WindowRequest, horizonNow: number, socket: LogSocketLike, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
@@ -536,10 +547,10 @@ export class HomebridgeLogClient implements AsyncDisposable {
     let pendingNext = liveIterator.next();
     let liveDone = false;
 
-    // The terminator state for a seed-served one-shot (armed only there). Held here so the finally clears both timers on every exit path - no `setTimeout` outlives
-    // the channel.
+    // The terminator state for a seed-served one-shot (armed only there). Held here so the finally disposes both timers on every exit path - no timer outlives the
+    // channel.
     let watchdog: Watchdog | undefined;
-    let capTimer: ReturnType<typeof setTimeout> | undefined;
+    let capTimer: Disposable | undefined;
 
     try {
 
@@ -633,25 +644,22 @@ export class HomebridgeLogClient implements AsyncDisposable {
         // single source with no overlap, so a stitch would manufacture a spurious gap). The download is aborted (seed-covers) or failed (Phase 2) and is not awaited.
         if(!follow) {
 
-          // Arm the wall-clock one-shot terminator: a re-armable quiescence `Watchdog` (held off until the settle floor so a sub-floor stall cannot truncate the
-          // seed) plus a hard cap, both ending the channel by aborting the socket so the live pull resolves `done`. Both timers are cleared in the finally.
+          // Arm the one-shot terminator on the client's clock: a re-armable quiescence `Watchdog` (held off until the settle floor so a sub-floor stall cannot
+          // truncate the seed) plus a hard cap, both ending the channel by aborting the socket so the live pull resolves `done`. Both are disposed in the finally.
           const terminate = (): void => {
 
-            if(capTimer !== undefined) {
-
-              clearTimeout(capTimer);
-              capTimer = undefined;
-            }
+            capTimer?.[Symbol.dispose]();
+            capTimer = undefined;
 
             watchdog?.[Symbol.dispose]();
             socket.abort(new HbpuAbortError("timeout"));
           };
 
-          watchdog = new Watchdog({ onFire: (): void => {
+          watchdog = new Watchdog({ clock: this.#clock, onFire: (): void => {
 
             // Hold the terminator off until the settle floor so an intra-burst stall shorter than the floor cannot be mistaken for the end of the seed burst; past
             // the floor, a full quiescence gap with no new source line ends the one-shot.
-            if(Date.now() < (horizonNow + SEED_SETTLE_MS)) {
+            if(this.#clock.now() < (horizonNow + SEED_SETTLE_MS)) {
 
               watchdog?.arm();
 
@@ -663,7 +671,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
           // The hard cap fires SEED_WINDOW_MAX_MS after the horizon regardless of activity, so a perpetually-chatty log (whose post-horizon lines are filtered out
           // of the window but still re-arm quiescence) cannot keep the one-shot open forever.
-          capTimer = setTimeout(terminate, Math.max(0, (horizonNow + SEED_WINDOW_MAX_MS) - Date.now()));
+          capTimer = this.#scheduleAtHardCap(horizonNow, terminate);
 
           watchdog.arm();
         }
@@ -705,7 +713,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
         }
 
         // A `follow` window continues live from the iterator; a one-shot ends here - the finite download already carries `[since, ~now]`, so the generator ends
-        // naturally once the stitched records are served, and there is no live tail to wall-clock-bound.
+        // naturally once the stitched records are served, and there is no live tail for a clock-driven terminator to bound.
         if(follow && !liveDone) {
 
           let result = await pendingNext;
@@ -721,19 +729,15 @@ export class HomebridgeLogClient implements AsyncDisposable {
       }
     } finally {
 
-      // Clear BOTH wall-clock timers on every exit path - normal completion, the terminator firing, an early break, a thrown error, or call teardown - so no `setTimeout`
-      // survives to fire onto a torn-down channel. Disposal is safe to repeat, so a timer the terminator already cleared is harmless to clear again.
-      if(capTimer !== undefined) {
-
-        clearTimeout(capTimer);
-      }
-
+      // Dispose BOTH timers on every exit path - normal completion, the terminator firing, an early break, a thrown error, or call teardown - so none survives to fire
+      // onto a torn-down channel. Disposal is safe to repeat, so a timer the terminator already disposed is harmless to dispose again.
+      capTimer?.[Symbol.dispose]();
       watchdog?.[Symbol.dispose]();
     }
   }
 
   // Phase 2 of the windowed gate, reached ONLY after the speculative download has failed: the seed is now the sole hope, so await the SAME outstanding pull alone (the
-  // settled download tag has been dropped from the race - a single-consumer iterator forbids a second concurrent `next()`), bounded by a wall-clock gate deadline set
+  // settled download tag has been dropped from the race - a single-consumer iterator forbids a second concurrent `next()`), bounded by a gate deadline set
   // a hard cap (`SEED_WINDOW_MAX_MS`) past the snapshot horizon. A parseable seed line that strictly covers the window serves from the seed (returning the carried pull);
   // a line that cannot cover, the deadline firing, or the socket ending with no parseable line all THROW the latched error (so an all-null / non-en-US seed against a
   // dead download cannot hang). The deciding line is consumed into `bufferedSeed`.
@@ -745,9 +749,9 @@ export class HomebridgeLogClient implements AsyncDisposable {
     // Continue with the outstanding pull Phase 1 left in flight; re-issue locally as the scan advances.
     let pendingNext = state.pendingNext;
 
-    // The wall-clock gate deadline: bound the seed-only wait to the same hard cap, measured from the snapshot horizon, so a never-arriving parseable line cannot hang.
+    // The gate deadline: bound the seed-only wait to the same hard cap, measured from the snapshot horizon, so a never-arriving parseable line cannot hang.
     const deadline: PromiseWithResolvers<"deadline"> = Promise.withResolvers();
-    const deadlineTimer = setTimeout((): void => deadline.resolve("deadline"), Math.max(0, (horizonNow + SEED_WINDOW_MAX_MS) - Date.now()));
+    const deadlineTimer = this.#scheduleAtHardCap(horizonNow, (): void => deadline.resolve("deadline"));
 
     try {
 
@@ -794,8 +798,16 @@ export class HomebridgeLogClient implements AsyncDisposable {
       }
     } finally {
 
-      clearTimeout(deadlineTimer);
+      deadlineTimer[Symbol.dispose]();
     }
+  }
+
+  // Arm `callback` at the hard cap: SEED_WINDOW_MAX_MS past the snapshot horizon, clamped at zero so a horizon already that old fires immediately rather than
+  // reaching backward. Both places that need this deadline - the seed-served one-shot's cap and the Phase 2 gate - go through here, so the arithmetic and the clock
+  // it reads have one home and the two deadlines cannot drift apart.
+  #scheduleAtHardCap(horizonNow: number, callback: () => void): Disposable {
+
+    return this.#clock.schedule(callback, Math.max(0, (horizonNow + SEED_WINDOW_MAX_MS) - this.#clock.now()));
   }
 
   // Buffer a resolved live line into `buffer` (oldest-first) and issue the next pull, returning the in-flight `next()`. The single primitive shared between
@@ -849,7 +861,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
   // fails fast instead of retrying the same doomed token forever).
   #createSocket(callSignal: AbortSignal): LogSocketLike {
 
-    return this.#socketFactory.create({ host: this.#host, log: this.#log, port: this.#port, refreshable: this.#refreshable, signal: callSignal, tls: this.#tls,
-      tokenProvider: this.#tokenProvider });
+    return this.#socketFactory.create({ clock: this.#clock, host: this.#host, log: this.#log, port: this.#port, refreshable: this.#refreshable, signal: callSignal,
+      tls: this.#tls, tokenProvider: this.#tokenProvider });
   }
 }

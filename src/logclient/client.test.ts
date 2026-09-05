@@ -10,6 +10,7 @@ import { describe, test } from "node:test";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogRecord } from "./types.ts";
 import { LogSocket } from "./socket.ts";
+import { TestClock } from "../clock-double.ts";
 import { TestLogSocketFactory } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
@@ -177,6 +178,26 @@ describe("HomebridgeLogClient - tail channel selection", () => {
     assert.deepEqual(records.map((record) => record.message), [ "live one", "live two" ], "follow mode must deliver the socket's live lines");
     assert.equal(factory.createCalls.length, 1, "follow mode must construct exactly one socket");
     assert.equal(calls.filter((call) => call.url.includes("/log/download")).length, 0, "follow mode must never hit the REST download endpoint");
+  });
+
+  test("every socket the client creates inherits the client's clock", async () => {
+
+    const socketLines = ["[6/29/2026, 12:00:00 PM] [P] live one"];
+    const { fetch } = immediateFetch();
+    const clock = new TestClock();
+
+    const { TestLogSocket } = await import("./socket-double.ts");
+    const preset = new TestLogSocket({ lines: socketLines });
+    const factory = new TestLogSocketFactory(preset);
+
+    await using client = new HomebridgeLogClient({ clock, credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
+
+    await collect(client.tail({ mode: "follow" }), 1);
+
+    // This row is the only check on the line that forwards the client's clock into every socket it builds, so it asserts IDENTITY rather than mere presence: the
+    // socket's liveness window and its reconnect backoff have to run on the very clock the caller handed the client, not on some other one.
+    assert.equal(factory.createCalls.length, 1, "follow mode must construct exactly one socket");
+    assert.equal(factory.createCalls[0]?.init.clock, clock, "the socket is built with the client's own clock, by identity");
   });
 
   test("follow mode drops the byte-seeded seed's leading fragment and preamble, starting at the first real entry", async () => {
@@ -521,12 +542,12 @@ describe("HomebridgeLogClient - token lifecycle", () => {
   });
 });
 
-// The fixed snapshot horizon for the windowed-channel tests: 2026-06-29 12:00:00 local. Each test enables `mock.timers` with this as `now`, so the engine's
-// `horizonNow = Date.now()` and a one-shot's upper bound resolve to noon, while log-line timestamps (parsed from explicit M/D/YYYY strings, which `mock.timers` does NOT
-// rewrite) are authored relative to it. A bare `--since` therefore filters to `[since, noon]`.
+// The fixed snapshot horizon for the windowed-channel tests: 2026-06-29 12:00:00 local. Each row seeds its `TestClock` here, so the engine's `horizonNow` and a
+// one-shot's upper bound both resolve to noon, while log-line timestamps (parsed from explicit M/D/YYYY strings, which the injected clock has no bearing on) are
+// authored relative to it. A bare `--since` therefore filters to `[since, noon]`.
 const WINDOW_HORIZON = new Date(2026, 5, 29, 12, 0, 0).getTime();
 
-// The wall-clock terminator constants, mirrored from settings.ts so the timing assertions read against named values rather than magic numbers.
+// The one-shot terminator's constants, mirrored from settings.ts so the timing assertions read against named values rather than magic numbers.
 const SEED_SETTLE_MS = 1000;
 const SEED_WINDOW_MAX_MS = 5000;
 
@@ -736,24 +757,24 @@ function windowFetch(options: { gate?: Promise<void>; historyLines?: readonly st
 }
 
 // Build a HomebridgeLogClient wired to a fixed windowed-channel socket and `fetch` double, using a static-token credential so no auth round-trip is needed.
-function windowClient(fetchImpl: typeof fetch, socket: LogSocketLike): HomebridgeLogClient {
+function windowClient(fetchImpl: typeof fetch, socket: LogSocketLike, clock: TestClock): HomebridgeLogClient {
 
-  return new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch: fetchImpl, log: silentLog(),
+  return new HomebridgeLogClient({ clock, credentials: { kind: "token", token: "raw.jwt" }, fetch: fetchImpl, log: silentLog(),
     socketFactory: { create: (): LogSocketLike => socket } });
 }
 
 describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
-  test("seed-covers serves the window from the seed, aborts the download, and continues live", async (t) => {
+  test("seed-covers serves the window from the seed, aborts the download, and continues live", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // The seed's oldest line (10:00) strictly precedes `since` (11:00), so the seed covers `[11:00, noon]`. The never-closing, distinctively-tagged download must be
     // aborted and must never reach the output; the in-window seed line and a later live line are served, the pre-window seed line filtered out.
     const socket = new ScriptedSocket([ line(10, 0, "pre"), line(11, 30, "in-window"), line(11, 45, "live-new") ], { end: true });
     const download = windowFetch({ historyLines: [line(9, 0, "DOWNLOAD-LEAK")], mode: "open" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const records = await collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
@@ -767,16 +788,16 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       "the seed-covers decision must abort the speculative download with the supersession reason, not merely tear it down at the end");
   });
 
-  test("a completed download before any seed decision is used (no spin, no hang)", async (t) => {
+  test("a completed download before any seed decision is used (no spin, no hang)", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // An empty socket parks immediately, so no seed line ever decides; the completing download therefore wins the gate's race and is used as the no-cover basis. The
     // one-shot ends after the download is served (no live continuation), so the run completes without the terminator firing.
     const socket = new ScriptedSocket([]);
     const download = windowFetch({ historyLines: [ line(8, 30, "h-0830"), line(9, 30, "h-0930"), line(10, 0, "h-1000") ], mode: "complete" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const records = await collect(client.tail({ follow: false, mode: "window", since: epochAt(9, 0), until: null }));
 
@@ -787,9 +808,9 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     assert.ok(!((reason instanceof HbpuAbortError) && (reason.name === "replaced")), "a used (no-cover) download must NOT be superseded by a seed-covers abort");
   });
 
-  test("a deep (no-cover) one-shot stitches the download with the FULL buffered seed, no spurious gap marker", async (t) => {
+  test("a deep (no-cover) one-shot stitches the download with the FULL buffered seed, no spurious gap marker", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // `since` (9:00) precedes the seed's oldest line (10:00), so the seed does NOT cover the window - the download (reaching back before 9:00) is the basis. The gate
     // must buffer the FULL seed (10:00, 10:30, 11:00) so `stitchLive` aligns on the three-line overlap rather than manufacturing a gap marker from a single-line buffer.
@@ -799,7 +820,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const gate: PromiseWithResolvers<void> = Promise.withResolvers();
     const download = windowFetch({ gate: gate.promise, historyLines: history, mode: "complete" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(9, 0), until: null }));
 
@@ -814,16 +835,16 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     assert.ok(!records.some((record) => record.message.includes("could not be aligned")), "the full-seed stitch must NOT manufacture a gap marker");
   });
 
-  test("a quiet seed-covers one-shot terminates at the settle floor, not the hard cap", async (t) => {
+  test("a quiet seed-covers one-shot terminates at the settle floor, not the hard cap", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
-    // The seed covers `[11:00, noon]` and the socket then goes quiet (parks). The wall-clock terminator must end the one-shot at roughly the settle floor - below the
+    // The seed covers `[11:00, noon]` and the socket then goes quiet (parks). The terminator must end the one-shot at roughly the settle floor - below the
     // hard cap - so advancing past the floor (plus a quiescence interval) terminates while advancing only a fraction of the cap.
     const socket = new ScriptedSocket([ line(10, 0, "pre"), line(11, 30, "in-window") ]);
     const download = windowFetch({ mode: "open" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
@@ -831,7 +852,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     await tick(10);
 
     // Advance past the settle floor plus a quiescence interval (still far below the cap); the quiescence terminator must fire and end the one-shot.
-    t.mock.timers.tick(SEED_SETTLE_MS + 300);
+    clock.advance(SEED_SETTLE_MS + 300);
 
     const records = await collected;
 
@@ -839,31 +860,31 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     assert.equal(socket.aborted, true, "the terminator must have aborted the socket");
   });
 
-  test("a window whose socket ends before any decision falls back to the download", async (t) => {
+  test("a window whose socket ends before any decision falls back to the download", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // The socket ends immediately (no seed), so no coverage decision is reached; the channel awaits the download and serves it filtered to the window.
     const socket = new ScriptedSocket([], { end: true });
     const download = windowFetch({ historyLines: [ line(8, 30, "h-0830"), line(11, 0, "h-1100") ], mode: "complete" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const records = await collect(client.tail({ follow: false, mode: "window", since: epochAt(10, 0), until: null }));
 
     assert.deepEqual(records.map((record) => record.message), ["h-1100"], "the download fallback serves, filtered to the window (h-0830 precedes since)");
   });
 
-  test("a download that fails before the seed decides does not pre-empt a seed-servable window (Phase 2)", async (t) => {
+  test("a download that fails before the seed decides does not pre-empt a seed-servable window (Phase 2)", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // The download FAILS (a systemd/custom 400) before the seed's first parseable line arrives, so the gate latches the failure and hands off to the bounded seed-only
     // Phase 2. The seed (fed after the failure) covers the window, which Phase 2 must serve: a failed download must not throw away a seed-servable window.
     const socket = new ScriptedSocket([]);
     const download = windowFetch({ mode: "reject" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
@@ -882,16 +903,16 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       "Phase 2 must serve the covering seed despite the failed download, with the orphan gate-dropped");
   });
 
-  test("a deep window whose download fails AFTER the seed is shown not to cover surfaces the actionable error", async (t) => {
+  test("a deep window whose download fails AFTER the seed is shown not to cover surfaces the actionable error", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // The download fails before any seed line, so the gate enters Phase 2; the fed seed line (11:00) does NOT reach back to `since` (10:00), so the seed cannot cover
     // the deep window either. With neither source able to serve, Phase 2 surfaces the download's actionable error rather than serving a partial window.
     const socket = new ScriptedSocket([]);
     const download = windowFetch({ mode: "reject" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const stream = client.tail({ follow: false, mode: "window", since: epochAt(10, 0), until: null });
 
@@ -909,16 +930,16 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     await rejection;
   });
 
-  test("a window whose download fails and whose socket then ends in Phase 2 surfaces the actionable error", async (t) => {
+  test("a window whose download fails and whose socket then ends in Phase 2 surfaces the actionable error", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // The download fails before any seed line (the gate enters Phase 2), then the socket ENDS with no parseable line. Phase 2 must surface the actionable error, not
     // hang on a pull that will never resolve.
     const socket = new ScriptedSocket([]);
     const download = windowFetch({ mode: "reject" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const stream = client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null });
 
@@ -936,16 +957,16 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     await rejection;
   });
 
-  test("an undecidable seed against a failed download surfaces the actionable error at the gate deadline without hanging", async (t) => {
+  test("an undecidable seed against a failed download surfaces the actionable error at the gate deadline without hanging", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // The download fails AND the only seed line is a null-timestamp orphan (which the seed gate drops upstream) AND the socket never ends, so no parseable line ever
-    // reaches Phase 2. Phase 2 must NOT hang: at its wall-clock deadline it surfaces the download's actionable error rather than awaiting a line that never comes.
+    // reaches Phase 2. Phase 2 must NOT hang: at its gate deadline it surfaces the download's actionable error rather than awaiting a line that never comes.
     const socket = new ScriptedSocket(["    an orphan continuation line with no timestamp"]);
     const download = windowFetch({ mode: "reject" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const stream = client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null });
 
@@ -957,16 +978,16 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       return true;
     });
 
-    // Let the download fail and Phase 2 park on a pull that never resolves (the gate drops the orphan and the socket never ends), then fire the wall-clock gate deadline.
+    // Let the download fail and Phase 2 park on a pull that never resolves (the gate drops the orphan and the socket never ends), then fire the gate deadline.
     await tick(10);
-    t.mock.timers.tick(SEED_WINDOW_MAX_MS + 1);
+    clock.advance(SEED_WINDOW_MAX_MS + 1);
 
     await rejection;
   });
 
-  test("a --until-only (since === null) one-shot buffers until the download, serves it stitched, and terminates", async (t) => {
+  test("a --until-only (since === null) one-shot buffers until the download, serves it stitched, and terminates", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // `since === null` (a bare `--until`) is never covered by the recent seed, so the channel buffers seed-plus-live until the download resolves, stitches, and serves
     // filtered to `[.., until]`. The socket ends after its seed so the one-shot completes naturally.
@@ -976,7 +997,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const gate: PromiseWithResolvers<void> = Promise.withResolvers();
     const download = windowFetch({ gate: gate.promise, historyLines: history, mode: "complete" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: null, until: epochAt(10, 15) }));
 
@@ -989,9 +1010,9 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       "the --until-only window serves the download stitched with the seed, filtered at until (s-1030 at 10:30 exceeds the 10:15 bound)");
   });
 
-  test("a no-cover follow window stitches the download then continues live", async (t) => {
+  test("a no-cover follow window stitches the download then continues live", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     // The seed's oldest line (11:00) does not reach back to `since` (10:00), so the window is deep (no-cover): the download is the basis, stitched with the full seed,
     // the live stream then continues.
@@ -1001,7 +1022,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const gate: PromiseWithResolvers<void> = Promise.withResolvers();
     const download = windowFetch({ gate: gate.promise, historyLines: history, mode: "complete" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: true, mode: "window", since: epochAt(10, 0), until: null }), 4);
 
@@ -1019,26 +1040,26 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       "a no-cover follow window serves the stitched window then continues live in order (h-0900 precedes since)");
   });
 
-  test("a quiet seed-covers one-shot does not truncate on a sub-settle intra-burst gap", async (t) => {
+  test("a quiet seed-covers one-shot does not truncate on a sub-settle intra-burst gap", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     const socket = new ScriptedSocket([ line(10, 0, "pre"), line(11, 30, "in-window") ]);
     const download = windowFetch({ mode: "open" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
     await tick(10);
 
     // A gap shorter than the settle floor must NOT terminate the one-shot: advance 600 ms (below the 1000 ms floor), then a late in-window line arrives and is served.
-    t.mock.timers.tick(600);
+    clock.advance(600);
     socket.feed(line(11, 50, "late-in-window"));
     await tick(5);
 
     // Now go quiet well past the floor; the one-shot terminates, having kept the post-gap line.
-    t.mock.timers.tick(SEED_SETTLE_MS + 500);
+    clock.advance(SEED_SETTLE_MS + 500);
 
     const records = await collected;
 
@@ -1046,14 +1067,14 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       "a line arriving after a sub-settle gap must NOT be truncated by a premature terminator");
   });
 
-  test("a busy seed-covers one-shot terminates at the hard cap", async (t) => {
+  test("a busy seed-covers one-shot terminates at the hard cap", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     const socket = new ScriptedSocket([ line(10, 0, "pre"), line(11, 30, "in-window") ]);
     const download = windowFetch({ mode: "open" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
@@ -1067,10 +1088,10 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       // eslint-disable-next-line no-await-in-loop
       await tick(2);
 
-      t.mock.timers.tick(200);
+      clock.advance(200);
     }
 
-    t.mock.timers.tick(400);
+    clock.advance(400);
     await tick(5);
 
     const records = await collected;
@@ -1080,21 +1101,21 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     assert.equal(socket.aborted, true, "the hard cap must have aborted the socket to terminate the run");
   });
 
-  test("a follow window arms no terminator and continues live past the hard cap", async (t) => {
+  test("a follow window arms no terminator and continues live past the hard cap", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     const socket = new ScriptedSocket([ line(10, 0, "pre"), line(11, 30, "in-window") ]);
     const download = windowFetch({ mode: "open" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
     const collected = collect(client.tail({ follow: true, mode: "window", since: epochAt(11, 0), until: null }), 3);
 
     await tick(10);
 
     // Advance well past the hard cap; a follow window arms no terminator, so the socket must stay alive and keep delivering live lines.
-    t.mock.timers.tick(SEED_WINDOW_MAX_MS * 3);
+    clock.advance(SEED_WINDOW_MAX_MS * 3);
     await tick(5);
 
     assert.equal(socket.aborted, false, "a follow window must arm no terminator, so the socket survives past the cap");
@@ -1108,9 +1129,9 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       "the follow window continues serving live lines indefinitely (until null means no upper bound)");
   });
 
-  test("a seed-covers run and a no-cover failed-download run each produce no unhandled rejection", async (t) => {
+  test("a seed-covers run and a no-cover failed-download run each produce no unhandled rejection", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     await assertNoUnhandledRejections(async () => {
 
@@ -1118,7 +1139,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       const seedSocket = new ScriptedSocket([ line(10, 0, "pre"), line(11, 30, "in-window") ], { end: true });
       const seedDownload = windowFetch({ mode: "open" });
 
-      await using seedClient = windowClient(seedDownload.fetch, seedSocket);
+      await using seedClient = windowClient(seedDownload.fetch, seedSocket, clock);
 
       await collect(seedClient.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
@@ -1126,32 +1147,32 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       const deepSocket = new ScriptedSocket([line(11, 0, "s-11")], { end: true });
       const deepDownload = windowFetch({ mode: "reject" });
 
-      await using deepClient = windowClient(deepDownload.fetch, deepSocket);
+      await using deepClient = windowClient(deepDownload.fetch, deepSocket, clock);
 
       await assert.rejects(collect(deepClient.tail({ follow: false, mode: "window", since: epochAt(10, 0), until: null })), /no log file/i);
     });
   });
 
-  test("no wall-clock timer survives the channel's disposal", async (t) => {
+  test("no timer survives the channel's disposal", async () => {
 
-    t.mock.timers.enable({ apis: [ "Date", "setTimeout" ], now: WINDOW_HORIZON });
+    const clock = new TestClock(WINDOW_HORIZON);
 
     const socket = new ScriptedSocket([ line(10, 0, "pre"), line(11, 30, "in-window") ]);
     const download = windowFetch({ mode: "open" });
 
-    await using client = windowClient(download.fetch, socket);
+    await using client = windowClient(download.fetch, socket, clock);
 
-    // Serve one in-window record, then break - disposing the stream mid-serve while the one-shot terminator is armed. The finally must clear both wall-clock timers.
+    // Serve one in-window record, then break - disposing the stream mid-serve while the one-shot terminator is armed. The finally must dispose both of its timers.
     await collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }), 1);
 
     const reasonsAfterDisposal = socket.abortReasons.length;
 
     // Advancing far past the hard cap must NOT re-abort the socket via a stale terminator timer.
-    t.mock.timers.tick(SEED_WINDOW_MAX_MS * 2);
+    clock.advance(SEED_WINDOW_MAX_MS * 2);
     await tick(5);
 
-    assert.equal(socket.abortReasons.length, reasonsAfterDisposal, "no stale wall-clock timer may fire after the channel is disposed");
+    assert.equal(socket.abortReasons.length, reasonsAfterDisposal, "no stale timer may fire after the channel is disposed");
     assert.ok(!socket.abortReasons.some((reason) => (reason instanceof HbpuAbortError) && (reason.name === "timeout")),
-      "the one-shot terminator must not fire after disposal (its timers were cleared)");
+      "the one-shot terminator must not fire after disposal (its timers were disposed)");
   });
 });

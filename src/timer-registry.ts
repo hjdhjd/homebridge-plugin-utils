@@ -12,12 +12,15 @@
  * reads the key as already gone; an anonymous one-shot self-removes on fire; and `dispose()`, or an aborted lifetime signal, drains every pending timer and makes every
  * later registration inert, so a timer can never outlive the owner it was armed against.
  *
- * This is the callback-timer half of the library's time mechanisms: `Clock` owns awaited, promise-shaped delays, and this registry owns callback timers - one mechanism
- * per shape, neither reaching into the other's territory.
+ * Every timer the registry arms goes through its {@link Clock}, so the whole surface is what the registry adds ON TOP of that one time source: keyed identity,
+ * replace-on-register, anonymous tracking, and the lifetime drain. A consumer that injects a clock therefore drives these deadlines on the same timeline as its awaited
+ * waits, rather than reaching for a second lever.
  *
  * @module
  */
-import { onAbort } from "./util.ts";
+import { NO_OP_DISPOSABLE, onAbort } from "./util.ts";
+import type { Clock } from "./clock.ts";
+import { systemClock } from "./clock.ts";
 
 /**
  * Construction options for {@link TimerRegistry}.
@@ -25,6 +28,13 @@ import { onAbort } from "./util.ts";
  * @category Utilities
  */
 export interface TimerRegistryOptions {
+
+  /**
+   * The time source every timer this registry arms goes through. Defaults to {@link systemClock}, whose `schedule` IS the global `setTimeout` / `setInterval`, so the
+   * default path is that same platform call with one indirection in front of it and no behavior change. A test injects a `TestClock` so the registry's deadlines share
+   * the consumer's virtual timeline with its awaited delays, and one `advance` drives both.
+   */
+  clock?: Clock;
 
   /**
    * A lifetime signal. When it aborts, the registry drains every pending timer and every later registration becomes inert; a signal already aborted at construction time
@@ -41,7 +51,7 @@ export interface TimerRegistryOptions {
  *   - `setTimeout(key, callback, delay)` / `setInterval(key, callback, interval)` arm a keyed timer. Registering under a key that already holds a timer - of either
  *     kind - clears the prior timer first, so the newest intent for a key wins. A keyed one-shot removes its entry before firing; a keyed interval repeats until cleared.
  *   - `schedule(callback, delay)` arms an anonymous one-shot: tracked for disposal, self-removing on fire, never replacing anything, so concurrent anonymous timers
- *     coexist.
+ *     coexist. It answers the same cancel-on-dispose handle {@link Clock.schedule} answers.
  *   - `clear(key)` cancels and removes a keyed timer; `has(key)` reports whether one is currently armed.
  *   - `clearAll()` drains every pending timer, keyed and anonymous alike, and leaves the registry armed: the shape for an owner whose pending work must all cancel on a
  *     state change while the re-arms that follow still need to take.
@@ -64,11 +74,15 @@ export interface TimerRegistryOptions {
  */
 export class TimerRegistry implements Disposable {
 
+  // The time source every timer here is armed on, resolved once at construction. Every registration reads this one field, so the registry never touches a platform
+  // timer directly and a consumer's injected clock reaches every deadline it owns.
+  readonly #clock: Clock;
+
   // Keyed timers, one-shots and intervals alike: a key holds at most one live timer, so registering under a key replaces whatever it held.
-  readonly #keyed = new Map<string, NodeJS.Timeout>();
+  readonly #keyed = new Map<string, Disposable>();
 
   // Anonymous one-shots, tracked only so disposal can drain them: no key, no replacement, each self-removing when it fires.
-  readonly #anonymous = new Set<NodeJS.Timeout>();
+  readonly #anonymous = new Set<Disposable>();
 
   // Flipped once by `dispose()`. A disposed registry drains nothing further and arms nothing further.
   #disposed = false;
@@ -89,6 +103,7 @@ export class TimerRegistry implements Disposable {
    */
   public constructor(options: TimerRegistryOptions = {}) {
 
+    this.#clock = options.clock ?? systemClock;
     this.#signal = options.signal;
 
     // Wire the abort handler last, against fully-initialized fields, because `onAbort` runs the handler inline for an already-aborted signal - that inline call disposes
@@ -117,11 +132,11 @@ export class TimerRegistry implements Disposable {
 
     this.clear(key);
 
-    // Call the GLOBAL `setTimeout`, not the `node:timers` binding, so any harness that replaces the globals - including `node:test` `mock.timers` - observes every timer
-    // this registry arms.
-    const handle = setTimeout(() => {
+    // Arm through the registry's clock, as every registration here does, and hold the handle it answers with: that handle is the whole cancellation story, so the
+    // containers below carry `Disposable`s rather than platform timer objects. Removing the entry before running the callback is what lets a fired one-shot read as
+    // absent to the callback and to anything the callback triggers.
+    const handle = this.#clock.schedule(() => {
 
-      // Remove the entry before running the callback, so a fired one-shot reads as absent to the callback and to anything the callback triggers.
       this.#keyed.delete(key);
       callback();
     }, delay);
@@ -146,9 +161,8 @@ export class TimerRegistry implements Disposable {
 
     this.clear(key);
 
-    // The GLOBAL `setInterval`, for the same harness-visibility reason as the keyed one-shot. The entry is not removed on fire: an interval repeats until it is cleared
-    // or drained.
-    const handle = setInterval(callback, interval);
+    // The repeating arm of the same clock member. The entry is not removed on fire: an interval repeats until it is cleared or drained.
+    const handle = this.#clock.schedule(callback, interval, { repeat: true });
 
     this.#keyed.set(key, handle);
   }
@@ -157,25 +171,44 @@ export class TimerRegistry implements Disposable {
    * Arm an anonymous one-shot: tracked for disposal, self-removing on fire, and never replacing anything. Concurrent anonymous timers coexist; this is the shape for
    * fire-and-forget work that has no identity to replace. A no-op once the registry is disposed or its lifetime signal has aborted.
    *
+   * The name, the shape, and the cancel-on-dispose meaning are deliberately {@link Clock.schedule}'s, because this IS that verb with lifetime tracking added: the
+   * handle cancels the timer, and the registry additionally guarantees the timer cannot outlive the owner.
+   *
    * @param callback - The function to run once, after `delay`.
    * @param delay    - The delay, in milliseconds.
+   *
+   * @returns A handle whose `[Symbol.dispose]` cancels the timer and stops tracking it. A registry that is disposed, or whose lifetime signal has aborted, arms nothing
+   * and answers the shared {@link NO_OP_DISPOSABLE}, so a caller holds a handle either way and never branches on whether the registration took.
    */
-  public schedule(callback: () => void, delay: number): void {
+  public schedule(callback: () => void, delay: number): Disposable {
 
     if(this.#disposed || (this.#signal?.aborted ?? false)) {
 
-      return;
+      return NO_OP_DISPOSABLE;
     }
 
-    // The GLOBAL `setTimeout`, for the same harness-visibility reason as the keyed timers. The handle self-removes before the callback runs, matching the keyed
-    // one-shot's ordering; an anonymous timer has no key or handle to query, so that ordering carries no public observable and is stated here rather than pinned by test.
-    const handle = setTimeout(() => {
+    /* One object plays all three roles - the handle the caller holds, the membership the drain walks, and the entry the fire path removes - so those three can never
+     * drift apart. Its disposer removes it from the tracking set AND cancels the underlying timer, which is why the caller's cancel and the registry's drain converge
+     * on one code path.
+     *
+     * The timer's callback closes over `handle`, declared on the statement below it. That is safe by construction: the callback runs on a later turn of the event
+     * loop, long after this method's statements have all run, so it can never observe the binding before it is initialized.
+     */
+    const timer = this.#clock.schedule(() => {
 
       this.#anonymous.delete(handle);
       callback();
     }, delay);
 
+    const handle: Disposable = { [Symbol.dispose]: (): void => {
+
+      this.#anonymous.delete(handle);
+      timer[Symbol.dispose]();
+    } };
+
     this.#anonymous.add(handle);
+
+    return handle;
   }
 
   /**
@@ -189,8 +222,7 @@ export class TimerRegistry implements Disposable {
 
     if(handle !== undefined) {
 
-      // `clearTimeout` cancels both one-shots and intervals - Node holds them in a single pool - so one call clears whichever kind the key held.
-      clearTimeout(handle);
+      handle[Symbol.dispose]();
       this.#keyed.delete(key);
     }
   }
@@ -217,14 +249,16 @@ export class TimerRegistry implements Disposable {
 
     for(const handle of this.#keyed.values()) {
 
-      clearTimeout(handle);
+      handle[Symbol.dispose]();
     }
 
     this.#keyed.clear();
 
+    // An anonymous handle's disposer removes itself from this set, so the walk empties the set as it goes - deleting the entry a Set iterator is standing on is
+    // well-defined and skips nothing. The clear that follows states the drain's post-state rather than leaving it to be inferred from that self-removal.
     for(const handle of this.#anonymous) {
 
-      clearTimeout(handle);
+      handle[Symbol.dispose]();
     }
 
     this.#anonymous.clear();

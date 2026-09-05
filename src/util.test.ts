@@ -9,8 +9,8 @@ import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, de
   formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, membershipDelta, onAbort, prefixedLog,
   retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
-import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import { assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry } from "./testing/index.ts";
+import { describe, test } from "node:test";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -1871,21 +1871,17 @@ describe("guardedDispatch", () => {
 
 describe("Watchdog - arming and firing", () => {
 
-  // Watchdog uses `setTimeout` for the inactivity window. Mocking that primitive lets the tests advance virtual time deterministically via `mock.timers.tick`,
-  // which removes the real-time waits that would otherwise make these tests both slow and flake-prone under CI variability.
-  beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
-  afterEach(() => mock.timers.reset());
-
   test("fires onFire once the timeout elapses without a re-arm", async () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
-    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog.arm();
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 1, "onFire must run exactly once when the window lapses without a re-arm");
   });
@@ -1895,33 +1891,82 @@ describe("Watchdog - arming and firing", () => {
     // This test covers the dormancy rule: constructing a Watchdog without calling `arm()` schedules nothing and fires nothing. Disposal is not the subject here -
     // a `using` binding would pull `[Symbol.dispose]` into the test's observable surface, which is the domain of the dispose-specific tests further down. Using `void`
     // on the construction expression (rather than binding it to `_watchdog` or similar) keeps the test's focus on the side-effect count, not the handle lifetime.
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
-    void new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    void new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 0, "a watchdog that was never armed must stay dormant");
   });
 
-  test("re-arming restarts the window", async () => {
+  test("a watchdog built with no clock arms the global timer", (t) => {
+
+    // The one Watchdog row that injects NO clock: it proves the default path is still the platform timer, so a consumer that drives its suite on mock timers keeps
+    // observing this window. The per-test enable is auto-restored when the row ends.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
 
     const controller = new AbortController();
     let fired = 0;
 
-    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 50 });
+    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+
+    watchdog.arm();
+
+    t.mock.timers.tick(80);
+
+    assert.equal(fired, 1, "a watchdog with no injected clock fires on the global timer the harness replaced");
+  });
+
+  test("a re-arm issued from inside onFire installs a handle a later clear() can cancel", () => {
+
+    // The ordering this row is the only check on: `arm()` nulls its handle field BEFORE running onFire, so a re-arm issued from inside onFire installs a fresh handle
+    // that nothing later on the fire path overwrites. Null it after the fire instead and the re-armed handle is lost, leaving `clear()` with nothing to cancel and the
+    // second window free to fire. The RTP heartbeat re-arms itself from inside its own onFire, so this is its ordering too.
+    const clock = new TestClock();
+    const controller = new AbortController();
+    let fired = 0;
+
+    using watchdog = new Watchdog({ clock, onFire: (): void => {
+
+      fired++;
+      watchdog.arm();
+    }, signal: controller.signal, timeoutMs: 30 });
+
+    watchdog.arm();
+
+    clock.advance(30);
+
+    assert.equal(fired, 1, "the first window fires and the callback re-arms a second one");
+
+    // Cancel the re-armed window partway through it. This can only work if `clear()` can reach the handle the re-arm installed.
+    clock.advance(10);
+    watchdog.clear();
+    clock.advance(100);
+
+    assert.equal(fired, 1, "clear() cancelled the re-armed window, so no second fire ever lands");
+  });
+
+  test("re-arming restarts the window", async () => {
+
+    const clock = new TestClock();
+    const controller = new AbortController();
+    let fired = 0;
+
+    using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 50 });
 
     // Arm, wait part of the window, re-arm, wait part of the new window. If re-arm did not restart, the first arm's timer would fire around the 60ms mark.
     watchdog.arm();
 
-    mock.timers.tick(25);
+    clock.advance(25);
     watchdog.arm();
-    mock.timers.tick(35);
+    clock.advance(35);
 
     assert.equal(fired, 0, "re-arming must cancel the pending fire and restart from the new arm");
 
-    mock.timers.tick(40);
+    clock.advance(40);
 
     assert.equal(fired, 1, "fires after the re-armed window lapses");
   });
@@ -1929,53 +1974,53 @@ describe("Watchdog - arming and firing", () => {
 
 describe("Watchdog - signal-driven termination", () => {
 
-  beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
-  afterEach(() => mock.timers.reset());
-
   test("signal abort clears the pending fire and suppresses onFire", async () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
-    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog.arm();
     controller.abort(new HbpuAbortError("shutdown"));
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 0, "abort must suppress a pending onFire - the aborted guard is the contract");
   });
 
   test("arm() is a no-op when the signal is already aborted", async () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
     controller.abort(new HbpuAbortError("shutdown"));
 
-    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog.arm();
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 0, "arming a watchdog on a pre-aborted signal must schedule no fire");
   });
 
   test("onFire is skipped when the signal aborts between scheduling and fire", async () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
-    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog.arm();
 
     // Abort just before the timer fires. The setTimeout callback's aborted-guard is what closes this race, independent of the self-clean listener.
-    mock.timers.tick(20);
+    clock.advance(20);
     controller.abort(new HbpuAbortError("replaced"));
-    mock.timers.tick(40);
+    clock.advance(40);
 
     assert.equal(fired, 0, "the fire-time aborted guard must honor a last-moment abort even if self-clean did not race first");
   });
@@ -1983,20 +2028,18 @@ describe("Watchdog - signal-driven termination", () => {
 
 describe("Watchdog - clear (re-armable)", () => {
 
-  beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
-  afterEach(() => mock.timers.reset());
-
   test("clear() cancels a pending fire without aborting anything", async () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
-    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog.arm();
     watchdog.clear();
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 0);
     assert.equal(controller.signal.aborted, false, "clear() must not touch the observed signal");
@@ -2004,8 +2047,9 @@ describe("Watchdog - clear (re-armable)", () => {
 
   test("clear() is safe to call more than once", () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
-    const watchdog = new Watchdog({ onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });
+    const watchdog = new Watchdog({ clock, onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog.clear();
     watchdog.clear();
@@ -2016,16 +2060,17 @@ describe("Watchdog - clear (re-armable)", () => {
 
     // Regression guard: clear() is semantically different from dispose(). Post-clear, `arm()` must still work so callers can re-enter the inactivity window after a
     // deliberate pause - for example, when a producer knows it is going to go quiet for a known interval and wants to defer the watchdog from firing during that gap.
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
-    using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog.arm();
     watchdog.clear();
     watchdog.arm();
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 1, "clear() must not disable the watchdog - a subsequent arm() must schedule and fire normally");
   });
@@ -2033,22 +2078,20 @@ describe("Watchdog - clear (re-armable)", () => {
 
 describe("Watchdog - dispose (permanently inert)", () => {
 
-  beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
-  afterEach(() => mock.timers.reset());
-
   test("[Symbol.dispose] clears a pending fire", async () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
     {
 
-      using watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+      using watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
       watchdog.arm();
     }
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 0, "scope-bound `using` must cancel the pending fire when the block exits");
   });
@@ -2057,14 +2100,15 @@ describe("Watchdog - dispose (permanently inert)", () => {
 
     // Regression guard: a post-dispose `arm()` must NOT schedule a timer. The `using` declaration's entire value proposition is that the resource is dead when the
     // block exits; a re-armable post-dispose watchdog would silently violate that, producing fires after the scope the caller believes owns the resource has exited.
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
-    const watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    const watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog[Symbol.dispose]();
     watchdog.arm();
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 0, "arm() after dispose must be a no-op - the Disposable contract demands the resource is dead");
   });
@@ -2073,9 +2117,10 @@ describe("Watchdog - dispose (permanently inert)", () => {
 
     // Hardening: cycle dispose -> arm -> dispose several times. Each arm must remain a no-op. This guards against a hypothetical regression where someone adds a
     // `#disposed = false` reset to dispose (so repeat disposal stops being a no-op) or to arm (breaking the contract).
+    const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
-    const watchdog = new Watchdog({ onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 20 });
+    const watchdog = new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 20 });
 
     for(let i = 0; i < 3; i++) {
 
@@ -2083,15 +2128,16 @@ describe("Watchdog - dispose (permanently inert)", () => {
       watchdog.arm();
     }
 
-    mock.timers.tick(80);
+    clock.advance(80);
 
     assert.equal(fired, 0, "repeated dispose/arm cycles must never resurrect the watchdog");
   });
 
   test("[Symbol.dispose] is safe to call more than once", () => {
 
+    const clock = new TestClock();
     const controller = new AbortController();
-    const watchdog = new Watchdog({ onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });
+    const watchdog = new Watchdog({ clock, onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog[Symbol.dispose]();
     watchdog[Symbol.dispose]();
@@ -2102,9 +2148,10 @@ describe("Watchdog - dispose (permanently inert)", () => {
 
     // Contract boundary: the watchdog does not own the signal, so disposing the watchdog must not abort the signal. Consumers who want teardown to propagate to the
     // signal wire that through their own controllers - the watchdog is a pure observer.
+    const clock = new TestClock();
     const controller = new AbortController();
 
-    using watchdog = new Watchdog({ onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });
+    using watchdog = new Watchdog({ clock, onFire: (): void => { /* irrelevant */ }, signal: controller.signal, timeoutMs: 30 });
 
     watchdog[Symbol.dispose]();
 

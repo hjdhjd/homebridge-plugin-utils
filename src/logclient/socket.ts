@@ -28,8 +28,9 @@
  *   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
  *
  * Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, and settles
- * the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. The class
- * introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
+ * the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. One optional
+ * {@link Clock} carries both of the socket's timing concerns - the per-session liveness window and the reconnect backoff - so a test injects a `TestClock` and drives
+ * the whole reconnect-and-liveness story from one lever, while the backoff shape stays independently steerable through the injected `backoff` policy.
  *
  * @module
  */
@@ -37,6 +38,7 @@ import { DEFAULT_PORT, JITTER_FRACTION, LOG_NAMESPACE, MARGIN_MS, PTY_COLUMNS, P
 import { HbpuAbortError, Watchdog, composeSignals, formatErrorMessage, onAbort, retry } from "../util.ts";
 import { LOG_NAMESPACE_PATH, decodeFrame, encodeFrame } from "./frame.ts";
 import { LogAuthError, isPermanentAuthError } from "./auth.ts";
+import type { Clock } from "../clock.ts";
 import type { HomebridgePluginLogging } from "../util.ts";
 import { LogLineSplitter } from "./parser.ts";
 import { socketUrl } from "./endpoints.ts";
@@ -120,6 +122,8 @@ export const webSocketFactory: WebSocketFactory = (url: string): WebSocketLike =
  *                              milliseconds. Defaults to the log client's own jittered exponential curve - a `RECONNECT_BASE_MS` base doubling each attempt and
  *                              capped at `RECONNECT_CAP_MS`, plus up to `JITTER_FRACTION` upward jitter. Overridden in tests with a near-zero delay so the
  *                              reconnect loop runs without real waits.
+ * @property clock            - Optional time source for the session liveness window and the reconnect backoff waits. Passed through unresolved, so `systemClock` is
+ *                              applied by the primitives that consume it. A test injects a `TestClock` to drive both without real waits.
  * @property host             - The hostname or IP of the homebridge-config-ui-x server.
  * @property log              - Logger for connection lifecycle and overflow diagnostics.
  * @property port             - The TCP port the server listens on. Defaults to `8581`.
@@ -138,6 +142,7 @@ export const webSocketFactory: WebSocketFactory = (url: string): WebSocketLike =
 export interface LogSocketInit {
 
   readonly backoff?: (attempt: number) => number;
+  readonly clock?: Clock;
   readonly host: string;
   readonly log: HomebridgePluginLogging;
   readonly port?: number;
@@ -293,6 +298,11 @@ export class LogSocket implements LogSocketLike {
   readonly #controller: AbortController;
 
   readonly #backoff: (attempt: number) => number;
+
+  // The socket's time source, held UNRESOLVED so the `systemClock` default is applied by the watchdog and by `retry`, each in the one place that default belongs.
+  // Both of this socket's timing concerns read this one field, so a session's liveness window and its reconnect backoff can never end up on different timelines.
+  readonly #clock: Clock | undefined;
+
   readonly #host: string;
   readonly #log: HomebridgePluginLogging;
   readonly #port: number;
@@ -328,6 +338,7 @@ export class LogSocket implements LogSocketLike {
    */
   public constructor(init: LogSocketInit) {
 
+    this.#clock = init.clock;
     this.#host = init.host;
     this.#log = init.log;
     this.#port = init.port ?? DEFAULT_PORT;
@@ -493,6 +504,7 @@ export class LogSocket implements LogSocketLike {
 
           attempts: Infinity,
           backoff: this.#backoff,
+          clock: this.#clock,
           shouldRetry: (error) => !isPermanentAuthError(error),
           signal: this.signal
         });
@@ -639,8 +651,8 @@ export class LogSocket implements LogSocketLike {
 
   // Streaming phase. The session is connected; split `stdout` chunks into lines and route them into the bounded queue, answer pings with pongs and re-arm the liveness
   // watchdog, and end the session on close / error / watchdog timeout. Resolves when the session's signal aborts - which the outer loop reads to decide whether to
-  // reconnect. The watchdog window is sized from the server's advertised ping cadence plus a margin; the watchdog uses real timers (no injected `Clock`), so tests
-  // drive it with `mock.timers`.
+  // reconnect. The watchdog window is sized from the server's advertised ping cadence plus a margin and is armed on the socket's clock, so a test drives the window
+  // by advancing that clock.
   async #stream(session: Session): Promise<void> {
 
     this.#session = session;
@@ -654,10 +666,11 @@ export class LogSocket implements LogSocketLike {
 
     // The liveness watchdog, sized from the server's advertised ping cadence captured during the connect handshake: one ping interval plus the ping timeout plus a fixed
     // margin, so a single late ping does not trip it. A zero/absent cadence (malformed handshake) falls back to the margin alone. Each inbound ping re-arms it; if the
-    // window lapses with no ping, it aborts the SESSION (not the whole socket), so the outer loop reconnects. The watchdog uses real timers (no injected `Clock`), so
-    // tests drive its firing with `node:test` `mock.timers`.
+    // window lapses with no ping, it aborts the SESSION (not the whole socket), so the outer loop reconnects. It is armed on the socket's clock, the same one the
+    // reconnect backoff waits on, so a test that injects a `TestClock` drives the liveness window and the reconnect curve together.
     const windowMs = ((session.pingInterval > 0) ? session.pingInterval : 0) + ((session.pingTimeout > 0) ? session.pingTimeout : 0) + MARGIN_MS;
-    const watchdog = new Watchdog({ onFire: (): void => session.controller.abort(new HbpuAbortError("timeout")), signal: composed, timeoutMs: windowMs });
+    const watchdog = new Watchdog({ clock: this.#clock, onFire: (): void => session.controller.abort(new HbpuAbortError("timeout")), signal: composed,
+      timeoutMs: windowMs });
 
     // A single resolver settled when the session ends so this method awaits the session lifetime without a busy loop. `onAbort` settles it on session abort; the message
     // and close handlers drive the session controller, which aborts the composed signal, which fires this.

@@ -21,6 +21,7 @@ import type { HblogConnectionFlags, HblogEnv, ResolvedConnection } from "./confi
 import type { LogClientCredentials, LogQuantity, LogRecord, TailRequest } from "./types.ts";
 import { formatErrorMessage, onAbort } from "../util.ts";
 import { loadConfigFile, resolveConfigPath, resolveConnection } from "./config.ts";
+import type { Clock } from "../clock.ts";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogSocketFactory } from "./socket.ts";
 import type { Nullable } from "../util.ts";
@@ -113,12 +114,13 @@ export interface CliStream {
  * Options accepted by {@link runHblog}. Every external dependency the CLI touches is passed in as an argument, so the whole flow runs deterministically in tests.
  *
  * @property argv          - The argument vector (typically `process.argv.slice(2)`).
+ * @property clock         - Optional time source. It resolves the `--since`/`--until` expressions against a single deterministic instant AND is handed to the engine,
+ *                           whose window channel arms its own deadlines on it. Defaults to {@link systemClock}; a test injects a `TestClock` seeded at a fixed instant
+ *                           so a windowed run's bounds and its terminators are reproducible together. One process, one time source.
  * @property cwd           - The current working directory. Reserved for future relative-path resolution; the home directory is the config-file anchor today.
  * @property env           - The environment map (typically `process.env`).
  * @property fetch         - Optional `fetch` implementation forwarded to the engine's auth and REST transports. Defaults to the global `fetch`.
  * @property homedir       - The user's home directory, used to locate `~/.hblog.json` unless `HBLOG_CONFIG` overrides the path.
- * @property now           - Optional wall-clock epoch source (milliseconds) used to resolve the `--since`/`--until` time-range expressions against a single deterministic
- *                           instant. Defaults to `systemClock.now`; a test injects a fixed clock so a windowed run's bounds are reproducible.
  * @property readFile      - Optional file-read implementation forwarded to the config loader and used to read the package version. Defaults to `node:fs/promises`
  *                           `readFile`.
  * @property socketFactory - Optional socket-factory implementation forwarded to the engine, so a test drives the live tail without a WebSocket. Defaults to the real
@@ -132,11 +134,11 @@ export interface CliStream {
 export interface RunHblogOptions {
 
   readonly argv: readonly string[];
+  readonly clock?: Clock;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly fetch?: typeof fetch;
   readonly homedir: string;
-  readonly now?: () => number;
   readonly readFile?: (path: string) => Promise<string>;
   readonly socketFactory?: LogSocketFactory;
   readonly stat?: (path: string) => Promise<{ readonly mode: number }>;
@@ -618,10 +620,10 @@ export async function runHblog(options: RunHblogOptions): Promise<number> {
     connection = resolveConnection({ env: environmentSlice(env), file, flags: connectionFlags(flags) });
     credentials = deriveCredentials(connection);
 
-    // Evaluate the wall-clock source EXACTLY ONCE so both time-range bounds resolve against a single instant (no cross-flag drift), then derive the window and the
-    // request. The window's bounds are consumed only here (to build the request); the engine's `window` channel owns the time-bounded selection, so nothing downstream
-    // re-filters.
-    const now = (options.now ?? systemClock.now)();
+    // Read the time source EXACTLY ONCE so both time-range bounds resolve against a single instant (no cross-flag drift), then derive the window and the request. It is
+    // the same clock the engine below is built with, so the bounds and that channel's own deadlines are measured on one timeline. The window's bounds are consumed only
+    // here (to build the request); the engine's `window` channel owns the time-bounded selection, so nothing downstream re-filters.
+    const now = (options.clock ?? systemClock).now();
     const windowBounds = deriveWindow(flags, now);
 
     request = deriveRequest(flags, windowBounds);
@@ -764,6 +766,7 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
 
     await using client = new HomebridgeLogClient({
 
+      clock: options.clock,
       credentials,
       fetch: options.fetch,
       host: connection.host,

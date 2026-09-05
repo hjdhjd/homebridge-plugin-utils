@@ -10,22 +10,27 @@ import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
 import type { CapturingLog } from "../testing/index.ts";
+import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
+import { HKSV_TIMEOUT } from "./settings.ts";
 import type { Readable } from "node:stream";
+import { TestClock } from "../clock-double.ts";
 import type { VideoEncoderOptions } from "./options.ts";
 import assert from "node:assert/strict";
 import { capturingLog } from "../testing/index.ts";
 import { makeBox } from "./fmp4-builders.ts";
 import { makeCodecs } from "./codecs.helpers.ts";
+import { waitUntil } from "../testing/index.ts";
 
 // Minimal FfmpegOptions stand-in. The record subclasses call `options.videoDecoder`, `options.recordEncoder`, and `options.audioEncoder` during command-line
 // assembly, so the stub returns trivial placeholder args (empty for videoDecoder, a fixed two-token vector for the encoders) - the exact encoder args do not matter
 // here since we never actually invoke a real ffmpeg binary.
-function makeOptions(logger: CapturingLog = capturingLog()): FfmpegOptions {
+function makeOptions(logger: CapturingLog = capturingLog(), clock?: Clock): FfmpegOptions {
 
   return {
 
     audioEncoder: (): string[] => [ "-codec:a", "aac" ],
+    clock,
     config: {
 
       codecSupport: makeCodecs({ ffmpegExec: process.execPath, ffmpegVersion: "7.0" }),
@@ -311,6 +316,31 @@ describe("FfmpegRecordingProcess - abort propagation between assembler and proce
 
     assert.equal(proc.isTimedOut, true);
     assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true);
+  });
+
+  test("a clock carried on the options reaches the assembler's inter-segment window", async () => {
+
+    const clock = new TestClock();
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(capturingLog(), clock), { args: buildInitOnlyIdleScript(),
+      recordingConfig: makeRecordingConfig() });
+
+    // This row is the only check on the one line that hands the options clock to the assembler, so it has to be impossible to pass against an unwired recording
+    // process: a pending entry on THIS clock can only appear if the assembler's watchdog was armed on it. The script emits its whole burst up front and then idles,
+    // so every arm lands at virtual time zero and the window's deadline is exactly HKSV_TIMEOUT however many times the drain re-armed.
+    await proc.getInitSegment();
+    await waitUntil(() => clock.pending > 0, { description: "the assembler arms its inter-segment window on the options clock" });
+
+    clock.advance(HKSV_TIMEOUT - 1);
+
+    assert.equal(proc.aborted, false, "one millisecond short of the HKSV window, nothing has fired");
+
+    clock.advance(1);
+
+    await proc.exited;
+
+    assert.equal(proc.isTimedOut, true, "the full window elapsing on the injected clock aborts the recording");
+    assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true, "and it aborts with the timeout reason, not some other cause");
   });
 
   test("a recording timeout teardown logs the reap at debug, not warn", async () => {

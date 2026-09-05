@@ -4,14 +4,13 @@
  */
 import { HbpuAbortError, onAbort } from "../util.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
+import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
 import { assertNoUnhandledRejections, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogRecord } from "./types.ts";
 import { LogSocket } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
-import { TestLogSocketFactory } from "./socket-double.ts";
-import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 

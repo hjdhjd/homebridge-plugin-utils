@@ -7,12 +7,11 @@
  * first-write-wins rule for duplicate entries in configuredOptions, the scope hierarchy's "device overrides controller overrides global overrides default" contract,
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
-import { ALL_CHOICES, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId, enumerateConfiguredEntries, expandOption,
+import { ALL_CHOICES, FeatureOptions, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId, enumerateConfiguredEntries, expandOption,
   formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists,
   parseValueList, resolveScope, scopeSafeId, selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
 import { describe, test } from "node:test";
-import { FeatureOptions } from "./featureOptions.ts";
 import assert from "node:assert/strict";
 import { capturingLog } from "./testing/index.ts";
 import { readFile } from "node:fs/promises";

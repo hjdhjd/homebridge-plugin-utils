@@ -7,6 +7,7 @@ import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profi
 import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit } from "./record.ts";
 import { FfmpegLivestreamProcess, FfmpegRecordingProcess } from "./record.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
+import { capturingLog, waitUntil } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
 import type { CapturingLog } from "../testing/index.ts";
@@ -17,10 +18,8 @@ import type { Readable } from "node:stream";
 import { TestClock } from "../clock-double.ts";
 import type { VideoEncoderOptions } from "./options.ts";
 import assert from "node:assert/strict";
-import { capturingLog } from "../testing/index.ts";
 import { makeBox } from "./fmp4-builders.ts";
 import { makeCodecs } from "./codecs.helpers.ts";
-import { waitUntil } from "../testing/index.ts";
 
 // Minimal FfmpegOptions stand-in. The record subclasses call `options.videoDecoder`, `options.recordEncoder`, and `options.audioEncoder` during command-line
 // assembly, so the stub returns trivial placeholder args (empty for videoDecoder, a fixed two-token vector for the encoders) - the exact encoder args do not matter

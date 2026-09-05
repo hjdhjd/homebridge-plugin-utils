@@ -5,6 +5,7 @@
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import { holdPort, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
+import { silentLog, waitUntil } from "../testing/index.ts";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegStreamingProcess } from "./stream.ts";
@@ -14,8 +15,6 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";
-import { silentLog } from "../testing/index.ts";
-import { waitUntil } from "../testing/index.ts";
 
 function makeOptions(logger: HomebridgePluginLogging = silentLog(), clock?: Clock): FfmpegOptions {
 

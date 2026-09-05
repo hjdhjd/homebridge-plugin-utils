@@ -171,6 +171,8 @@ const commonRules = {
   "logical-assignment-operators": [ "warn", "always", { "enforceForIfStatements": true } ],
   "no-await-in-loop": "warn",
   "no-console": "warn",
+  // Requires one declaration per module for each kind of import, with the option admitting the type-beside-value pair the house style calls for.
+  "no-duplicate-imports": [ "warn", { "allowSeparateTypeImports": true } ],
   "no-restricted-syntax": [ "warn", "TemplateLiteral" ],
   "no-var": "error",
   "prefer-arrow-callback": "warn",

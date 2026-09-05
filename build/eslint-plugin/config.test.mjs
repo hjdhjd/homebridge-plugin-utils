@@ -28,6 +28,17 @@ function severityOf(config, rule) {
   return config.rules?.[rule]?.[0];
 }
 
+// Reading a resolved severity says the rule is configured; linting a fixture says what it does with its option, which is what the rows below assert. The text
+// is linted under an existing project file's path because the preset declares no default project, so a virtual path has no project membership to lint
+// against - the source is linted in memory and nothing is written to disk. Counting only this rule's messages keeps the assertion clear of the fixture's
+// unused bindings, which belong to another rule.
+async function duplicateImportCount(source) {
+
+  const [result] = await eslint.lintText(source, { filePath: "src/util.ts" });
+
+  return result.messages.filter((message) => message.ruleId === "no-duplicate-imports").length;
+}
+
 describe("flat config composition", () => {
 
   // The compatibility overlay belongs to the TypeScript file set: the base rules it silences are ones the compiler reports itself, so a TypeScript path
@@ -76,5 +87,18 @@ describe("flat config composition", () => {
 
     assert.equal(globals.document, "readonly");
     assert.equal(globals.process, "readonly");
+  });
+
+  // Two value declarations of one module are what the rule exists to catch, and their member lists make no difference to it.
+  it("flags a second value import of one module", async () => {
+
+    assert.equal(await duplicateImportCount("import { a } from \"x\";\nimport { b } from \"x\";\n"), 1);
+  });
+
+  // The house style asks for a type-only declaration beside the value one, and `allowSeparateTypeImports` is what keeps the rule from contradicting the style
+  // it serves: without the option every one of those pairs reads as a duplicate.
+  it("admits the type-beside-value pair the house style requires", async () => {
+
+    assert.equal(await duplicateImportCount("import type { T } from \"x\";\nimport { a } from \"x\";\n"), 0);
   });
 });

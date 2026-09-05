@@ -4,11 +4,10 @@
  */
 import type { CliStream, RunHblogOptions } from "./cli-run.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
+import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
 import { describe, test } from "node:test";
 import { LogSocket } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
-import { TestLogSocketFactory } from "./socket-double.ts";
-import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
 import { runHblog } from "./cli-run.ts";
 import { settle } from "../testing/index.ts";

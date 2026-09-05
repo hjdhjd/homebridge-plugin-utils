@@ -2,12 +2,11 @@
  *
  * logclient/socket-double.test.ts: Unit tests for the socket test doubles - the WebSocket double's emit/capture contract and the LogSocket double's line/abort behavior.
  */
+import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { TestLogSocket, TestLogSocketFactory, TestWebSocket, TestWebSocketFactory } from "./socket-double.ts";
 import { describe, test } from "node:test";
-import { HbpuAbortError } from "../util.ts";
 import type { LogSocketInit } from "./socket.ts";
 import assert from "node:assert/strict";
-import { isHbpuAbortReason } from "../util.ts";
 import { silentLog } from "../testing/index.ts";
 
 // A minimal LogSocketInit for the factory tests; the double ignores everything but records it.

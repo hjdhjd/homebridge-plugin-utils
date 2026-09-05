@@ -29,6 +29,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [clock](clock.md) | An injectable wall-clock interface. |
 | [clock-double](clock-double.md) | A reusable, controllable [Clock](clock.md#clock) test double. |
 | [coalesce](coalesce.md) | One asynchronous pass at a time, with a burst of triggers collapsing into a single follow-up. |
+| [delivery-supervisor](delivery-supervisor.md) | Windows of named slots that each settle exactly once, under one deadline armed on the injected clock. |
 | [dgram-util](dgram-util.md) | Single source of truth for the `"ipv4"` / `"ipv6"` -> `node:dgram` translations every datagram consumer in the library needs. |
 | [disposable-stack](disposable-stack.md) | A drop-in implementation of the TC39 Explicit Resource Management `DisposableStack`. |
 | [doc-markdown](doc-markdown.md) | The markdown mechanics every documentation generator in the family composes over: the in-place splice of a marked region, and the markdown table with padded columns. |

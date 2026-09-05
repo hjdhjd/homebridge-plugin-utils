@@ -15,7 +15,7 @@ import { systemClock } from "./clock.ts";
 
 // Flush the microtask queue so a delay that became due during a synchronous `advance` has run its `resolve`/`reject` continuation before the test inspects the outcome.
 // `advance` settles each due entry synchronously, but the awaiting code runs on a later microtask; a bare `await Promise.resolve()` yields long enough for those to run.
-async function settle(): Promise<void> {
+async function flushMicrotasks(): Promise<void> {
 
   await Promise.resolve();
 }
@@ -168,7 +168,7 @@ describe("TestClock - delay resolution and ordering", () => {
     });
 
     clock.advance(50);
-    await settle();
+    await flushMicrotasks();
     assert.equal(resolved, false, "a delay must NOT resolve before its deadline is crossed");
     assert.equal(clock.pending, 1, "the unresolved delay must still be pending");
 
@@ -247,7 +247,7 @@ describe("TestClock - delay resolution and ordering", () => {
 
     // Move time backward; the delay's deadline (1100) is not reached, so it must stay pending.
     clock.advance(-500);
-    await settle();
+    await flushMicrotasks();
 
     assert.equal(clock.now(), 500, "the negative advance must move the virtual time backward");
     assert.equal(clock.pending, 1, "a not-yet-due delay must remain pending after a negative advance");
@@ -314,7 +314,7 @@ describe("TestClock - abort and no-leak", () => {
 
     // Aborting the signal after the listener was detached must be inert: the promise already resolved, and the detached listener cannot fire a late rejection.
     controller.abort();
-    await settle();
+    await flushMicrotasks();
 
     assert.equal(clock.pending, 0, "a post-resolution abort must remain a no-op with the listener detached");
   });

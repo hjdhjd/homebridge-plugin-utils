@@ -10,8 +10,8 @@ import { TestClock } from "../clock-double.ts";
 import { TestLogSocketFactory } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
-import { setImmediate as flushImmediate } from "node:timers/promises";
 import { runHblog } from "./cli-run.ts";
+import { settle } from "../testing/index.ts";
 
 // A capturing CliStream double. Records every chunk written so a test asserts the exact output, exposes a settable `isTTY`, and supports `on`/`off` hooks for the stdout
 // `error` trap and the backpressure `drain` wait. Optional behaviors drive the run's non-happy paths, each fired at most once (on the first write):
@@ -219,16 +219,6 @@ function makeOptions(overrides: Partial<RunHblogOptions> & { argv: readonly stri
   return { options, stderr, stdout };
 }
 
-// Yield to the microtask/immediate queue so the run's async steps settle before a test drives a signal or inspects output.
-async function tick(times = 1): Promise<void> {
-
-  for(let index = 0; index < times; index++) {
-
-    // eslint-disable-next-line no-await-in-loop
-    await flushImmediate();
-  }
-}
-
 describe("runHblog - help and version", () => {
 
   test("--help prints usage to stdout and exits 0", async () => {
@@ -369,7 +359,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
     // A live follow opens a socket and tails indefinitely; we drive a SIGINT to end it cleanly. The real socket composes the client signal, so the abort tears it down.
     const run = runHblog(options);
 
-    await tick(4);
+    await settle(4);
     process.emit("SIGINT");
 
     const code = await run;
@@ -599,7 +589,7 @@ describe("runHblog - failures, EPIPE, and signals", () => {
 
     const run = runHblog(options);
 
-    await tick(4);
+    await settle(4);
     process.emit("SIGTERM");
 
     const code = await run;
@@ -802,7 +792,7 @@ describe("runHblog - time range", () => {
     const run = runHblog(options);
 
     // Let the socket buffer its full seed before history resolves, so the stitch overlaps at the shared 12:30 line rather than carrying the seed into the continuation.
-    await tick(10);
+    await settle(10);
     resolveHistory();
 
     const code = await run;

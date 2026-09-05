@@ -4,8 +4,7 @@
  */
 import { HbpuAbortError, onAbort } from "../util.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
-import { assertNoUnhandledRejections, silentLog } from "../testing/index.ts";
-import { setTimeout as delay, setImmediate as flushImmediate } from "node:timers/promises";
+import { assertNoUnhandledRejections, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogRecord } from "./types.ts";
@@ -14,21 +13,12 @@ import { TestClock } from "../clock-double.ts";
 import { TestLogSocketFactory } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
+import { setTimeout as delay } from "node:timers/promises";
 
 // A captured fetch call: the URL the auth or REST transport produced. Enough to assert which transport ran.
 interface FetchCall {
 
   url: string;
-}
-
-// Yield to the microtask/immediate queue so the client's async steps (token acquisition, socket buffering, history download) settle before assertion.
-async function tick(times = 1): Promise<void> {
-
-  for(let index = 0; index < times; index++) {
-
-    // eslint-disable-next-line no-await-in-loop
-    await flushImmediate();
-  }
 }
 
 // Build a server-shaped auth success body carrying an access token, assembled with bracket-notation keys so the snake_case wire field names do not trip the camelcase
@@ -250,7 +240,7 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
 
     // Let the socket yield its full seed into the buffer before history resolves, so the seed is buffered (not carried into the live continuation) and the ordering is
     // deterministic.
-    await tick(10);
+    await settle(10);
 
     resolveHistory();
 
@@ -301,10 +291,10 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
 
     // Buffer the seed (B, C), then finish history while the next pull is outstanding (the socket is suspended on the release gate). The buffering loop must break with
     // that pull in flight and carry it into the continuation.
-    await tick(6);
+    await settle(6);
 
     resolveHistory();
-    await tick(6);
+    await settle(6);
 
     // Release the continuation so the carried in-flight pull resolves to D, followed by E.
     release.resolve();
@@ -334,7 +324,7 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
     const stream = client.tail({ mode: "follow-history", quantity: 2 });
     const collected = collect(stream, 3);
 
-    await tick(10);
+    await settle(10);
 
     resolveHistory();
 
@@ -375,7 +365,7 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
     const collected = collect(stream, 3);
 
     // Let the socket yield B, C and then END (its generator returns), so the buffering loop breaks on the done result before history is released.
-    await tick(6);
+    await settle(6);
     resolveHistory();
 
     const records = await collected;
@@ -449,7 +439,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
     await using stream = client.follow();
     const drained = collect(stream, 1);
 
-    await tick(2);
+    await settle(2);
 
     // The socket is constructed with a token provider; invoking it must re-authenticate via the login endpoint and return a fresh token. We invoke it twice (modeling two
     // connect attempts) and assert each one re-hits the auth endpoint - i.e., there is no static caching that would skip re-auth on reconnect.
@@ -481,7 +471,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
     await using stream = client.follow();
     const drained = collect(stream, 1);
 
-    await tick(2);
+    await settle(2);
 
     const created = factory.createCalls[0];
 
@@ -522,7 +512,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
       }
     })();
 
-    await flushImmediate();
+    await settle();
 
     const ws0 = wsFactory.sockets[0];
 
@@ -531,7 +521,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
     // Complete the Engine.IO open handshake, then reject the namespace join with a CONNECT_ERROR. With a non-refreshable static token this is permanent.
     ws0.emitOpen();
     ws0.emitMessage("0{\"sid\":\"s1\",\"pingInterval\":25000,\"pingTimeout\":20000}");
-    await flushImmediate();
+    await settle();
     ws0.emitMessage("44/log,{\"message\":\"unauthorized\"}");
 
     // A short real delay lets the connect-phase `retry` settle its veto and the socket abort; then the follow stream's iteration unwinds.
@@ -825,7 +815,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(9, 0), until: null }));
 
     // Let the full seed buffer (the socket ends, so the gate loop drains it and parks on `await downloadPromise`) before releasing the download.
-    await tick(10);
+    await settle(10);
     gate.resolve();
 
     const records = await collected;
@@ -849,7 +839,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
     // Let the gate decide and the seed serve, so the continuation parks with the terminator armed.
-    await tick(10);
+    await settle(10);
 
     // Advance past the settle floor plus a quiescence interval (still far below the cap); the quiescence terminator must fire and end the one-shot.
     clock.advance(SEED_SETTLE_MS + 300);
@@ -890,11 +880,11 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     // Let the download fail and the gate enter Phase 2 (awaiting the parked seed pull), then feed a leading null-timestamp orphan and a covering seed line. The seed
     // gate drops the orphan upstream, so Phase 2's first parked pull resolves to the covering line directly; `pre` (10:00) is out of the window and `in-window` is kept.
-    await tick(10);
+    await settle(10);
     socket.feed("    an orphan continuation with no timestamp");
     socket.feed(line(10, 0, "pre"));
     socket.feed(line(11, 30, "in-window"));
-    await tick(5);
+    await settle(5);
     socket.end();
 
     const records = await collected;
@@ -924,7 +914,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       return true;
     });
 
-    await tick(10);
+    await settle(10);
     socket.feed(line(11, 0, "s-11"));
 
     await rejection;
@@ -951,7 +941,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       return true;
     });
 
-    await tick(10);
+    await settle(10);
     socket.end();
 
     await rejection;
@@ -979,7 +969,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     });
 
     // Let the download fail and Phase 2 park on a pull that never resolves (the gate drops the orphan and the socket never ends), then fire the gate deadline.
-    await tick(10);
+    await settle(10);
     clock.advance(SEED_WINDOW_MAX_MS + 1);
 
     await rejection;
@@ -1001,7 +991,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: null, until: epochAt(10, 15) }));
 
-    await tick(10);
+    await settle(10);
     gate.resolve();
 
     const records = await collected;
@@ -1027,11 +1017,11 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const collected = collect(client.tail({ follow: true, mode: "window", since: epochAt(10, 0), until: null }), 4);
 
     // Buffer the full seed, release the download (no-cover serve of the stitch), then feed two genuinely-new live lines the follow continuation must deliver in order.
-    await tick(10);
+    await settle(10);
     gate.resolve();
-    await tick(5);
+    await settle(5);
     socket.feed(line(11, 45, "live-new"));
-    await tick(2);
+    await settle(2);
     socket.feed(line(11, 50, "live-later"));
 
     const records = await collected;
@@ -1051,12 +1041,12 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
-    await tick(10);
+    await settle(10);
 
     // A gap shorter than the settle floor must NOT terminate the one-shot: advance 600 ms (below the 1000 ms floor), then a late in-window line arrives and is served.
     clock.advance(600);
     socket.feed(line(11, 50, "late-in-window"));
-    await tick(5);
+    await settle(5);
 
     // Now go quiet well past the floor; the one-shot terminates, having kept the post-gap line.
     clock.advance(SEED_SETTLE_MS + 500);
@@ -1078,7 +1068,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     const collected = collect(client.tail({ follow: false, mode: "window", since: epochAt(11, 0), until: null }));
 
-    await tick(10);
+    await settle(10);
 
     // Keep feeding post-horizon source lines closer together than the quiescence interval, so quiescence keeps re-arming and never fires; the hard cap must terminate.
     for(let elapsed = 0; elapsed < SEED_WINDOW_MAX_MS; elapsed += 200) {
@@ -1086,13 +1076,13 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
       socket.feed(line(12, 30, "post-horizon"));
 
       // eslint-disable-next-line no-await-in-loop
-      await tick(2);
+      await settle(2);
 
       clock.advance(200);
     }
 
     clock.advance(400);
-    await tick(5);
+    await settle(5);
 
     const records = await collected;
 
@@ -1112,11 +1102,11 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     const collected = collect(client.tail({ follow: true, mode: "window", since: epochAt(11, 0), until: null }), 3);
 
-    await tick(10);
+    await settle(10);
 
     // Advance well past the hard cap; a follow window arms no terminator, so the socket must stay alive and keep delivering live lines.
     clock.advance(SEED_WINDOW_MAX_MS * 3);
-    await tick(5);
+    await settle(5);
 
     assert.equal(socket.aborted, false, "a follow window must arm no terminator, so the socket survives past the cap");
 
@@ -1169,7 +1159,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     // Advancing far past the hard cap must NOT re-abort the socket via a stale terminator timer.
     clock.advance(SEED_WINDOW_MAX_MS * 2);
-    await tick(5);
+    await settle(5);
 
     assert.equal(socket.abortReasons.length, reasonsAfterDisposal, "no stale timer may fire after the channel is disposed");
     assert.ok(!socket.abortReasons.some((reason) => (reason instanceof HbpuAbortError) && (reason.name === "timeout")),

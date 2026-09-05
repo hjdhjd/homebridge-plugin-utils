@@ -9,12 +9,11 @@ import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, de
   formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, membershipDelta, onAbort, prefixedLog,
   retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
-import { assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry } from "./testing/index.ts";
+import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { setImmediate as tick } from "node:timers/promises";
 import util from "node:util";
 
 // Block until `signal` aborts, then throw its reason. Models a signal-aware operation - `fetch(url, { signal })`, `events.once(emitter, event, { signal })`, etc. -
@@ -26,28 +25,6 @@ async function waitForAbort(signal: AbortSignal): Promise<never> {
   await once(signal, "abort");
 
   throw signal.reason;
-}
-
-// Yield to the macrotask queue, which drains the entire microtask cascade first. A retry gap is built from promise continuations - the attempt's own rejection, the
-// budget and predicate checks, and the clock registration that follows - so one macrotask boundary is enough to bring the whole cascade to rest.
-async function settle(): Promise<void> {
-
-  await tick();
-}
-
-// Walk virtual time across a backoff schedule, letting the queue come to rest before each step. An attempt registers its backoff wait only after the attempt before it
-// has settled, so a single large advance would move past deadlines that had not been registered yet and strand every attempt after the first; stepping releases one
-// wait at a time. The trailing settle lets the attempt the last step released run to completion.
-async function advanceThroughSchedule(clock: TestClock, waits: readonly number[]): Promise<void> {
-
-  for(const wait of waits) {
-
-    // eslint-disable-next-line no-await-in-loop
-    await settle();
-    clock.advance(wait);
-  }
-
-  await settle();
 }
 
 describe("HbpuAbortError", () => {

@@ -1,12 +1,14 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, silentLog, capturingLog, formatLogEntry, loggedAt, logCount,
- * assertNoUnhandledRejections, waitUntil. Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every
- * error path, every async outcome - because a bug in a shared helper cascades into every test that consumes it.
+ * assertNoUnhandledRejections, waitUntil, settle, advanceThroughSchedule, drainClock. Helpers earn the same enumerated-criteria coverage as production code per the
+ * testing convention - every branch, every error path, every async outcome - because a bug in a shared helper cascades into every test that consumes it.
  */
 import type { CapturingLog, TestLogEntry } from "./index.ts";
-import { assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, logCount, loggedAt, silentLog, waitUntil } from "./index.ts";
+import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, drainClock, expectAt, formatLogEntry, logCount, loggedAt, settle, silentLog,
+  waitUntil } from "./index.ts";
 import { describe, test } from "node:test";
+import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 
 describe("expectAt", () => {
@@ -313,5 +315,205 @@ describe("waitUntil", () => {
     await assert.rejects(async () => waitUntil(() => false, { description: "a condition that never holds", pollMs: 1, timeoutMs: 20 }),
       { message: "waitUntil: a condition that never holds did not hold within 20 ms." },
       "an expired deadline must throw with the caller's description and the deadline it was given");
+  });
+});
+
+describe("settle", () => {
+
+  test("yields one macrotask by default, so a continuation chain queued before the call has run when it resolves", async () => {
+
+    // The two flags are the two queues the helper has to clear. A macrotask callback only runs once the loop reaches the immediate phase, and a promise chain only
+    // unwinds as its microtasks drain...one turn of the yield reaches both, which is the whole reason a suite awaits this instead of a bare promise.
+    let fired = false;
+    let chained = false;
+
+    setImmediate(() => {
+
+      fired = true;
+    });
+
+    void Promise.resolve().then(() => "first").then(() => "second").then(() => {
+
+      chained = true;
+    });
+
+    await settle();
+
+    assert.equal(fired, true, "one turn must cross the macrotask boundary, so a queued immediate has run");
+    assert.equal(chained, true, "one turn must drain the microtask cascade, so a chained continuation has run");
+  });
+
+  test("yields one macrotask per turn", async () => {
+
+    // A cascade that schedules its next step from inside the last one crosses a boundary per step, which is the case a caller names more turns for. Chaining three
+    // immediates and counting them after two turns and then a third is what tells a per-turn yield apart from one that always crosses a single boundary.
+    let turns = 0;
+
+    const chain = (remaining: number): void => {
+
+      if(remaining === 0) {
+
+        return;
+      }
+
+      setImmediate(() => {
+
+        turns++;
+        chain(remaining - 1);
+      });
+    };
+
+    chain(3);
+
+    await settle(2);
+
+    assert.equal(turns, 2, "two turns must cross two macrotask boundaries, running two links of the chain");
+
+    await settle();
+
+    assert.equal(turns, 3, "a further turn must run the link the second turn released");
+  });
+});
+
+describe("advanceThroughSchedule", () => {
+
+  test("releases a chain of waits one step at a time", async () => {
+
+    // The reason the walk exists: the second wait is registered only when the first one resolves, so a single advance across the whole schedule would move past a
+    // deadline nothing had asked for yet and strand the body at its second await. Stepping with a yield between the steps releases them in order.
+    const clock = new TestClock();
+
+    let done = false;
+
+    void (async (): Promise<void> => {
+
+      await clock.delay(100);
+      await clock.delay(200);
+
+      done = true;
+    })();
+
+    await advanceThroughSchedule(clock, [ 100, 200 ]);
+
+    assert.equal(done, true, "the walk must release every wait in the schedule, leaving the body finished");
+    assert.equal(clock.now(), 300, "virtual time must land on the sum of the schedule");
+  });
+
+  test("lets the attempt the last step released run to completion", async () => {
+
+    // The trailing yield is what separates a released wait from a finished body. Without it the last advance resolves the delay and the walk returns before the
+    // continuation waiting on it has run, and the caller reads state its own call already produced.
+    const clock = new TestClock();
+
+    let finished = false;
+
+    void (async (): Promise<void> => {
+
+      await clock.delay(50);
+
+      // A real attempt's continuation chain runs more than one microtask deep before it acts, which is exactly what the trailing yield exists to cover.
+      await Promise.resolve();
+
+      finished = true;
+    })();
+
+    await advanceThroughSchedule(clock, [50]);
+
+    assert.equal(finished, true, "the trailing yield must let the continuation the last step released run before the walk answers");
+  });
+});
+
+describe("drainClock", () => {
+
+  test("steps to each pending deadline until the clock is idle and answers the step count", async () => {
+
+    // The drain is the walk for a caller that does not know the schedule: it asks the clock where the next deadline is rather than being told. Two sequential waits
+    // are two deadlines, and an idle clock at the end is what proves the loop stopped because there was nothing left rather than because it gave up.
+    const clock = new TestClock();
+
+    let done = false;
+
+    void (async (): Promise<void> => {
+
+      await clock.delay(100);
+      await clock.delay(200);
+
+      done = true;
+    })();
+
+    const steps = await drainClock(clock);
+
+    assert.equal(steps, 2, "each deadline the drain steps to must count once");
+    assert.equal(done, true, "the drain must leave the body finished");
+    assert.equal(clock.pending, 0, "the drain must end with nothing pending");
+  });
+
+  test("answers zero for an idle clock", async () => {
+
+    // A clock with nothing registered is the boundary case the loop's first check owns: the drain must answer immediately rather than advancing time nobody asked
+    // it to move.
+    const steps = await drainClock(new TestClock());
+
+    assert.equal(steps, 0, "a clock with nothing pending must cost no steps at all");
+  });
+
+  test("throws naming the limit when a repeating timer keeps the clock busy", async () => {
+
+    // A repeating timer re-arms itself on every fire, so the pending list never empties and an unbounded drain would spin until the runner killed the suite. The
+    // bound turns that hang into a message that names what happened and how far the drain got.
+    const clock = new TestClock();
+    const handle = clock.schedule(() => undefined, 10, { repeat: true });
+
+    try {
+
+      await assert.rejects(async () => drainClock(clock, 3), { message: "drainClock: the clock still had entries pending after 3 steps.", name: "Error" },
+        "a drain that exceeds its bound must throw naming the limit rather than spinning");
+    } finally {
+
+      handle[Symbol.dispose]();
+    }
+  });
+
+  test("lets the continuation after the last deadline run before answering", async () => {
+
+    // The same contract the walk's trailing yield carries, in the drain's shape: the pass that finds nothing pending yields before it looks, so the work released
+    // by the last deadline has run by the time the count comes back.
+    const clock = new TestClock();
+
+    let finished = false;
+
+    void (async (): Promise<void> => {
+
+      await clock.delay(10);
+
+      finished = true;
+    })();
+
+    await drainClock(clock);
+
+    assert.equal(finished, true, "the drain must answer only once the work its last step released has run");
+  });
+
+  test("yields before the first step, so a body that reaches the clock a microtask late still drains", async () => {
+
+    // A subject does not always register its first wait synchronously...a body that awaits anything at all on its way to the clock registers a turn later. The
+    // yield at the top of the pass is what lets the drain see that wait, rather than reading an empty list and deciding the clock was idle all along.
+    const clock = new TestClock();
+
+    let finished = false;
+
+    void (async (): Promise<void> => {
+
+      await Promise.resolve();
+      await clock.delay(10);
+
+      finished = true;
+    })();
+
+    const steps = await drainClock(clock);
+
+    assert.equal(steps, 1, "the leading yield must let a late registration reach the clock before the drain asks for a deadline");
+    assert.equal(finished, true, "the drain must leave the body finished");
+    assert.equal(clock.pending, 0, "the drain must end with nothing pending");
   });
 });

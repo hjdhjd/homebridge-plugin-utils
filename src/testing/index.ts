@@ -8,8 +8,8 @@
  *
  * The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
  * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
- * finders, the unhandled-rejection assertion, and the shared poll-with-deadline - the runtime-floor guard machinery in
- * `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
+ * finders, the unhandled-rejection assertion, the shared poll-with-deadline, and the macrotask yield with the two `TestClock` walks built on it - the runtime-floor
+ * guard machinery in `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
  *
  * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
  * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
@@ -24,6 +24,7 @@
  */
 import { setTimeout as delay, setImmediate as flushImmediate } from "node:timers/promises";
 import type { HomebridgePluginLogging } from "../util.ts";
+import type { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { format } from "node:util";
 import { noOpLog } from "../util.ts";
@@ -298,7 +299,7 @@ export async function assertNoUnhandledRejections<T>(body: () => Promise<T>): Pr
     const value = await body();
 
     // Drain one event-loop turn so any pending `unhandledRejection` events surface before we inspect the channel.
-    await flushImmediate();
+    await settle();
 
     assert.deepEqual(unhandled, [], "body triggered unhandled rejection(s)");
 
@@ -351,5 +352,120 @@ export async function waitUntil(predicate: () => boolean, { description, pollMs 
     // standard ESLint guidance against `await` in loops applies to throughput-sensitive batches; this is an upper-bounded synchronization helper, not a workload.
     // eslint-disable-next-line no-await-in-loop
     await delay(pollMs);
+  }
+}
+
+/**
+ * Yield to the macrotask queue `turns` times, so the continuations a test has already released have run by the time it looks at what they did.
+ *
+ * Each turn yields one macrotask, which drains the entire microtask cascade first: a chain of promise continuations - an attempt's rejection, the checks that follow it,
+ * the clock registration those checks arm - comes to rest before the caller looks. One turn is the default, and it is enough for any cascade that stays in promise-land;
+ * a caller names more turns only when its subject's cascade crosses more than one macrotask boundary of its own, a handshake whose steps each schedule the next being
+ * the usual case. A `turns` of zero yields nothing at all.
+ *
+ * @param turns - How many macrotask boundaries to cross. Defaults to 1.
+ *
+ * @example
+ *
+ * ```ts
+ * clock.advance(100);
+ * await settle();
+ *
+ * assert.equal(attempts.length, 2);
+ * ```
+ *
+ * @category Testing
+ */
+export async function settle(turns = 1): Promise<void> {
+
+  for(let turn = 0; turn < turns; turn++) {
+
+    // The yield is the whole point of the loop, so its awaits cannot be batched...each turn has to reach the queue before the next one is crossed.
+    // eslint-disable-next-line no-await-in-loop
+    await flushImmediate();
+  }
+}
+
+/**
+ * Walk `clock` through a schedule of waits, letting the queue come to rest before each step and once more after the last.
+ *
+ * A subject registers its next wait only after the one before it has settled, so a single advance across the whole schedule moves past deadlines that were never
+ * registered and strands every wait after the first; stepping releases one wait at a time. The trailing yield lets whatever the last step released run to completion, so
+ * the caller reads a finished body rather than one still mid-continuation.
+ *
+ * @param clock - The clock whose virtual time the walk moves.
+ * @param waits - The waits to step through, in the order the subject registers them.
+ *
+ * @example
+ *
+ * ```ts
+ * // An operation whose backoff schedule is 100 ms and then 200 ms, walked to completion.
+ * await advanceThroughSchedule(clock, [ 100, 200 ]);
+ *
+ * assert.equal(clock.now(), 300);
+ * ```
+ *
+ * @category Testing
+ */
+export async function advanceThroughSchedule(clock: TestClock, waits: readonly number[]): Promise<void> {
+
+  for(const wait of waits) {
+
+    // Each step has to let the wait it released register its successor before virtual time moves again, so these awaits are sequential by design.
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+    clock.advance(wait);
+  }
+
+  await settle();
+}
+
+/**
+ * Step `clock` to each pending deadline until nothing is pending, and answer how many steps that took.
+ *
+ * The bound is what separates a finished drain from a spinning one: a repeating timer never empties the list, and a suite that hangs on one is a far worse failure than
+ * a suite that throws naming the limit it was given. Every step is followed by a yield before the clock is asked for the next deadline, so the continuations a step
+ * released have registered their own waits before the drain decides it is finished...which is also what lets the work after the last deadline run before the count comes
+ * back.
+ *
+ * @param clock - The clock to drain.
+ * @param limit - The maximum number of steps to take. Defaults to 1000.
+ *
+ * @returns The number of deadlines stepped to, which is zero for a clock that had nothing pending.
+ *
+ * @throws `Error` when the clock still has entries pending after `limit` steps.
+ *
+ * @example
+ *
+ * ```ts
+ * // A body awaiting two delays in sequence, drained to completion.
+ * const steps = await drainClock(clock);
+ *
+ * assert.equal(steps, 2);
+ * ```
+ *
+ * @category Testing
+ */
+export async function drainClock(clock: TestClock, limit = 1000): Promise<number> {
+
+  let steps = 0;
+
+  for(;;) {
+
+    // Each pass has to let the continuations the last step released register their next deadline before the clock is asked for it, so these awaits are sequential too.
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+
+    if(!clock.advanceToNext()) {
+
+      return steps;
+    }
+
+    steps++;
+
+    if(steps > limit) {
+
+      throw new Error("drainClock: the clock still had entries pending after " + limit.toString() + " steps.");
+    }
   }
 }

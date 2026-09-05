@@ -4,31 +4,19 @@
  */
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { LogSocket, reconnectBackoff } from "./socket.ts";
+import { capturingLog, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import type { LogSocketInit } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
 import type { TestWebSocket } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
-import { capturingLog } from "../testing/index.ts";
-import { setImmediate as flushImmediate } from "node:timers/promises";
-import { silentLog } from "../testing/index.ts";
 
 // The Engine.IO open handshake frame advertising a ping cadence. The socket reads `pingInterval`/`pingTimeout` to size its liveness watchdog.
 const OPEN_FRAME = "0{\"sid\":\"s1\",\"pingInterval\":25000,\"pingTimeout\":20000}";
 
 // The Socket.IO namespace CONNECT acknowledgement for the `/log` namespace.
 const NS_CONNECT_FRAME = "40/log,{\"sid\":\"n1\"}";
-
-// Yield to the microtask/immediate queue so the socket's async connect steps (token acquisition, listener registration, handshake handling) settle before assertion.
-async function tick(times = 1): Promise<void> {
-
-  for(let index = 0; index < times; index++) {
-
-    // eslint-disable-next-line no-await-in-loop
-    await flushImmediate();
-  }
-}
 
 // Build the standard socket init with a synchronous token provider and the supplied WebSocket factory. A near-zero backoff drives the reconnect loop without real waits.
 function makeInit(factory: TestWebSocketFactory, overrides: Partial<LogSocketInit> = {}): LogSocketInit {
@@ -51,9 +39,9 @@ async function completeHandshake(ws: TestWebSocket): Promise<void> {
 
   ws.emitOpen();
   ws.emitMessage(OPEN_FRAME);
-  await tick();
+  await settle();
   ws.emitMessage(NS_CONNECT_FRAME);
-  await tick();
+  await settle();
 }
 
 describe("LogSocket - handshake sequence", () => {
@@ -64,7 +52,7 @@ describe("LogSocket - handshake sequence", () => {
 
     await using _socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws = factory.sockets[0];
 
@@ -95,7 +83,7 @@ describe("LogSocket - handshake sequence", () => {
       return token;
     } }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -119,7 +107,7 @@ describe("LogSocket - ping/pong liveness", () => {
 
     await using _socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws = factory.sockets[0];
 
@@ -128,7 +116,7 @@ describe("LogSocket - ping/pong liveness", () => {
     await completeHandshake(ws);
 
     ws.emitMessage("2");
-    await tick();
+    await settle();
 
     assert.equal(ws.sent.at(-1), "3", "a server ping must be answered with a bare Engine.IO pong");
   });
@@ -159,7 +147,7 @@ describe("LogSocket - stdout routing", () => {
       return collected;
     })();
 
-    await tick();
+    await settle();
 
     const ws = factory.sockets[0];
 
@@ -198,7 +186,7 @@ describe("LogSocket - stdout routing", () => {
       return collected;
     })();
 
-    await tick();
+    await settle();
 
     const ws = factory.sockets[0];
 
@@ -208,7 +196,7 @@ describe("LogSocket - stdout routing", () => {
 
     // A complete first line and a tail line ending on a lone line-feed - the splitter withholds the tail pending a possible cross-chunk pair.
     ws.emitMessage("42/log,[\"stdout\",\"complete line\\ntail line\\n\"]");
-    await tick();
+    await settle();
 
     // Closing the session must flush the splitter so the withheld tail line surfaces rather than being stranded.
     ws.emitClose(1000);
@@ -227,7 +215,7 @@ describe("LogSocket - reconnect", () => {
 
     await using _socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -252,7 +240,7 @@ describe("LogSocket - reconnect", () => {
 
     await using _socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -281,7 +269,7 @@ describe("LogSocket - permanent auth failure veto", () => {
     } }));
 
     // The permanent failure must veto a retry and abort the socket; no WebSocket is ever constructed because the token acquisition fails first.
-    await tick(3);
+    await settle(3);
 
     assert.equal(socket.aborted, true, "a permanent auth failure must abort the socket rather than loop forever");
     assert.equal(factory.sockets.length, 0, "a token failure must short-circuit before any WebSocket is constructed");
@@ -325,7 +313,7 @@ describe("LogSocket - watchdog liveness", () => {
 
     await using _socket = new LogSocket(makeInit(factory, { clock }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -337,7 +325,7 @@ describe("LogSocket - watchdog liveness", () => {
     // close the WebSocket. The reconnect that follows succeeds on its first attempt against this row's zero backoff, and `retry` waits only BETWEEN failed attempts,
     // so no further advance is owed for a backoff wait.
     clock.advance(50001);
-    await tick(3);
+    await settle(3);
 
     assert.deepEqual(ws0.closeCodes, [1000], "the watchdog fire must close the wedged session with a normal-closure code");
 
@@ -353,7 +341,7 @@ describe("LogSocket - watchdog liveness", () => {
 
     await using _socket = new LogSocket(makeInit(factory, { clock }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -366,9 +354,9 @@ describe("LogSocket - watchdog liveness", () => {
     // rather than at a fixed index if a row ever asserts on it.
     clock.advance(40000);
     ws0.emitMessage("2");
-    await tick();
+    await settle();
     clock.advance(40000);
-    await tick();
+    await settle();
 
     assert.equal(factory.sockets.length, 1, "a re-armed watchdog must not fire, so no reconnect occurs");
     assert.deepEqual(ws0.closeCodes, [], "a live session must not be closed while pings keep arriving");
@@ -408,7 +396,7 @@ describe("LogSocket - CONNECT_ERROR", () => {
     // Refreshable credentials (password/noauth) re-authenticate on each connect, so a handshake rejection is transient: the loop must retry with a fresh WebSocket.
     await using _socket = new LogSocket(makeInit(factory, { refreshable: true }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -416,7 +404,7 @@ describe("LogSocket - CONNECT_ERROR", () => {
 
     ws0.emitOpen();
     ws0.emitMessage(OPEN_FRAME);
-    await tick();
+    await settle();
 
     // The server rejects the namespace join with a Socket.IO CONNECT_ERROR (44/log,). This is a connect-phase failure, so the loop must retry with a fresh WebSocket.
     ws0.emitMessage("44/log,{\"message\":\"unauthorized\"}");
@@ -435,7 +423,7 @@ describe("LogSocket - CONNECT_ERROR", () => {
     // PERMANENT failure that the connect-phase `shouldRetry` veto makes terminal - no infinite spin against a doomed token.
     const socket = new LogSocket(makeInit(factory, { refreshable: false }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -443,12 +431,12 @@ describe("LogSocket - CONNECT_ERROR", () => {
 
     ws0.emitOpen();
     ws0.emitMessage(OPEN_FRAME);
-    await tick();
+    await settle();
 
     // The server rejects the namespace join with a CONNECT_ERROR. With a non-refreshable credential this is permanent: the socket must abort terminally rather than
     // retry, and no second WebSocket is ever constructed.
     ws0.emitMessage("44/log,{\"message\":\"unauthorized\"}");
-    await tick(3);
+    await settle(3);
 
     assert.equal(socket.aborted, true, "a CONNECT_ERROR with a static token must abort the socket rather than retry forever");
     assert.equal(factory.sockets.length, 1, "a permanent handshake rejection must not construct a second WebSocket");
@@ -473,7 +461,7 @@ describe("LogSocket - streaming-phase faults", () => {
 
     await using _socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -496,7 +484,7 @@ describe("LogSocket - streaming-phase faults", () => {
 
     await using _socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -508,7 +496,7 @@ describe("LogSocket - streaming-phase faults", () => {
 
     // A binary (non-string) frame is not part of the text protocol; the streaming handler must ignore it without sending anything or tearing down.
     ws0.emitMessage(new ArrayBuffer(4));
-    await tick();
+    await settle();
 
     assert.equal(ws0.sent.length, sentBefore, "a non-string frame must be ignored, producing no outbound frame");
     assert.equal(factory.sockets.length, 1, "a non-string frame must not end the session");
@@ -522,7 +510,7 @@ describe("LogSocket - streaming-phase faults", () => {
     // WebSocket, keeping ws0 the only socket in play for the closeCodes assertion and the manual abort/dispose that follow.
     const socket = new LogSocket(makeInit(factory, { backoff: () => 60000 }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -530,7 +518,7 @@ describe("LogSocket - streaming-phase faults", () => {
 
     // An error event carrying no structured `error` field (the bare DOM shape) during the connect handshake must still reject the connect with a failed reason.
     ws0.emitError({});
-    await tick();
+    await settle();
 
     assert.ok(ws0.closeCodes.includes(1000), "a handshake error must close the WebSocket");
 
@@ -548,7 +536,7 @@ describe("LogSocket - teardown and abort", () => {
     // A large backoff so the reconnect loop is parked in its backoff wait when we abort, exercising the abort-during-backoff path.
     await using socket = new LogSocket(makeInit(factory, { backoff: () => 60000 }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -556,10 +544,10 @@ describe("LogSocket - teardown and abort", () => {
 
     // Fail the first connect so the loop enters its backoff wait, then abort while it is parked there.
     ws0.emitError();
-    await tick();
+    await settle();
 
     socket.abort();
-    await tick(2);
+    await settle(2);
 
     assert.equal(socket.aborted, true, "abort during backoff must abort the socket");
     assert.equal(factory.sockets.length, 1, "abort during backoff must not start a new connect attempt");
@@ -583,7 +571,7 @@ describe("LogSocket - teardown and abort", () => {
       return true;
     })();
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -608,7 +596,7 @@ describe("LogSocket - teardown and abort", () => {
 
     const socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -633,7 +621,7 @@ describe("LogSocket - teardown and abort", () => {
 
     const socket = new LogSocket(makeInit(factory));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -644,11 +632,11 @@ describe("LogSocket - teardown and abort", () => {
     // Simulate the peer half-closing the connection (readyState -> CLOSED) on ws0 before our teardown. The reconnect loop then opens a fresh socket, and the assertion
     // below pins the always-close guarantee: teardown issues close(1000) on the live reconnected socket regardless of the prior socket's state.
     ws0.emitClose(1006);
-    await tick(2);
+    await settle(2);
 
     // After the peer close the reconnect loop opens a new socket; abort the whole socket and confirm the live one is closed.
     socket.abort();
-    await tick(2);
+    await settle(2);
 
     const ws1 = factory.sockets[1];
 
@@ -670,7 +658,7 @@ describe("LogSocket - bounded stdout queue", () => {
     // A tiny high-water mark so a handful of lines overflows it. The consumer never pulls, so every line stays queued until the bound is hit.
     await using socket = new LogSocket(makeInit(factory, { log, stdoutHighWater: 3 }));
 
-    await tick();
+    await settle();
 
     const ws0 = factory.sockets[0];
 
@@ -681,7 +669,7 @@ describe("LogSocket - bounded stdout queue", () => {
     // Feed six complete lines into a queue bounded at three, with a trailing partial seventh so all six lines are emitted (the splitter withholds only the unterminated
     // partial, not a terminated line). The oldest three of the six must be dropped.
     ws0.emitMessage("42/log,[\"stdout\",\"l1\\nl2\\nl3\\nl4\\nl5\\nl6\\npartial\"]");
-    await tick();
+    await settle();
 
     const warnings = log.entries.filter((entry) => entry.level === "warn");
 
@@ -716,7 +704,7 @@ describe("LogSocket - pre-aborted construction", () => {
 
     await using socket = new LogSocket(makeInit(factory, { signal: controller.signal }));
 
-    await tick();
+    await settle();
 
     assert.equal(socket.aborted, true, "a pre-aborted parent signal must leave the socket aborted");
     assert.equal(factory.sockets.length, 0, "a pre-aborted socket must never construct a WebSocket");

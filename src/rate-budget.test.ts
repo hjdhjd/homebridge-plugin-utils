@@ -10,14 +10,7 @@ import type { Clock } from "./clock.ts";
 import { RateBudget } from "./rate-budget.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
-
-// Yield to the macrotask queue, which drains the entire microtask cascade first. A budget's queue is built from promise continuations - the turn chain, each turn's own
-// awaits, and the continuations a `TestClock.advance` releases - so one macrotask boundary is enough to bring the whole cascade to rest, however deep it ran.
-async function settle(): Promise<void> {
-
-  await tick();
-}
+import { settle } from "./testing/index.ts";
 
 // Walk virtual time forward in `steps` increments of `ms`, letting the queue come to rest between each. Successive waiters register their own delays only after their
 // predecessors wake, so a single large advance would move past deadlines that had not been registered yet; stepping releases one waiter's window at a time.

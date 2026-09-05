@@ -6,19 +6,10 @@
  * The count is the whole subject here, which is why every scenario drives SEVERAL triggers rather than one. A naive implementation that simply ran the callback on every
  * schedule passes a single-trigger test and fails every one of these; so does one that queued each trigger and drained them in turn.
  */
-import { assertNoUnhandledRejections, capturingLog, expectAt, silentLog } from "./testing/index.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, settle, silentLog } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import { CoalescingTask } from "./coalesce.ts";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
-
-// Yield to the macrotask queue, which drains the entire microtask cascade first. A coalescing task arms no timers at all - a pass, the guarded dispatch around it, and
-// the drain loop between passes are promise continuations and nothing else - so one macrotask boundary brings the whole cascade to rest however deep it ran, and no
-// scenario here has to wait on real time.
-async function settle(): Promise<void> {
-
-  await tick();
-}
 
 // A task whose pass parks until the scenario releases it, so triggers can be delivered while a pass is demonstrably still running rather than hopefully so.
 function gatedTask(): { held: () => number; passes: () => number; release: () => void; task: CoalescingTask } {

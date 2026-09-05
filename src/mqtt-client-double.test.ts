@@ -28,7 +28,7 @@
  *   named, whether nothing of the kind was ever registered or the registration was released by its own signal; and the class example's call shape running as
  *   written.
  */
-import { assertNoUnhandledRejections, capturingLog, expectAt } from "./testing/index.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
 import { HbpuAbortError } from "./util.ts";
@@ -36,7 +36,6 @@ import { MqttOfflineError } from "./mqtt-publish.ts";
 import { TestMqttClient } from "./mqtt-client-double.ts";
 import assert from "node:assert/strict";
 import { format } from "node:util";
-import { setImmediate as tick } from "node:timers/promises";
 
 // Render every captured line at `level` the way the logger itself would, so a scenario asserts on the finished sentence rather than on the format string and its
 // arguments separately.
@@ -117,7 +116,7 @@ describe("TestMqttClient - publishGuarded", () => {
 
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [{ payload: "on", topic: "device1/status" }]);
       assert.deepEqual(log.entries, []);
@@ -134,7 +133,7 @@ describe("TestMqttClient - publishGuarded", () => {
       mqtt.publishRejection = new Error("broker refused the message");
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
       assert.deepEqual(linesAt(log, "debug"), []);
@@ -152,7 +151,7 @@ describe("TestMqttClient - publishGuarded", () => {
       mqtt.publishRejection = new HbpuAbortError("shutdown");
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
@@ -171,7 +170,7 @@ describe("TestMqttClient - publishGuarded", () => {
       mqtt.publishRejection = refusal;
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
@@ -188,7 +187,7 @@ describe("TestMqttClient - publishGuarded", () => {
       mqtt.publishRejection = new MqttOfflineError();
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
@@ -209,7 +208,7 @@ describe("TestMqttClient - publishGuarded", () => {
       perPublish.abort(new Error("device disposed"));
       mqtt.publishGuarded("device1/status", "on", { signal: perPublish.signal });
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
@@ -228,7 +227,7 @@ describe("TestMqttClient - publishGuarded", () => {
       mqtt.abort(new Error("platform shutting down"));
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
@@ -250,13 +249,13 @@ describe("TestMqttClient - the change gate", () => {
       const mqtt = new TestMqttClient();
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "off", topic: TOPIC } ]);
       assert.equal(mqtt.rejectedPublishes, 0, "suppressing a publish is not refusing it");
@@ -265,7 +264,7 @@ describe("TestMqttClient - the change gate", () => {
       await mqtt.publish(TOPIC, "on");
 
       mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "off", topic: TOPIC }, { payload: "on", topic: TOPIC } ]);
     });
@@ -279,19 +278,19 @@ describe("TestMqttClient - the change gate", () => {
       const scratch = Buffer.from("on");
 
       mqtt.publishGuarded(TOPIC, scratch, { ifChanged: true });
-      await tick();
+      await settle();
 
       scratch.write("no");
       mqtt.publishGuarded(TOPIC, Buffer.from("on"), { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.equal(mqtt.published.length, 1, "a fresh buffer carrying the recorded bytes must be suppressed even after the caller rewrote its own buffer");
 
       mqtt.publishGuarded(OTHER, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       mqtt.publishGuarded(OTHER, Buffer.from("on"), { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published.map((entry) => entry.topic), [ TOPIC, OTHER, OTHER ],
         "a Buffer carrying a remembered string's bytes is a different kind of payload and must be recorded");
@@ -307,7 +306,7 @@ describe("TestMqttClient - the change gate", () => {
 
       mqtt.publishRejection = new Error("broker refused the message.");
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [], "a refused publish records nothing");
       assert.equal(mqtt.rejectedPublishes, 1);
@@ -315,7 +314,7 @@ describe("TestMqttClient - the change gate", () => {
 
       mqtt.publishRejection = null;
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "the refusal wrote nothing, so the retry of the same payload must record");
     });
@@ -328,13 +327,13 @@ describe("TestMqttClient - the change gate", () => {
       const mqtt = new TestMqttClient();
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       // The client's connect fires once per session rather than on every reading of the connection, so re-asserting a lever that already reads true is not a session
       // event and must not wipe what the session delivered.
       mqtt.connected = true;
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "a lever write that moves nothing is not a session event");
 
@@ -351,7 +350,7 @@ describe("TestMqttClient - the change gate", () => {
 
       mqtt.connected = true;
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "on", topic: TOPIC } ],
         "a session restored begins with nothing remembered, so the current value records again");
@@ -366,7 +365,7 @@ describe("TestMqttClient - the change gate", () => {
       const mqtt = new TestMqttClient({ log });
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       // A cancelled publish is answered by the signal rather than by the gate, and the per-publish signal is what shows it: the double's own abort empties the
       // memory, so after that nothing is remembered and the gate falls through whatever its position. A signal that cancels one publish leaves the memory
@@ -383,7 +382,7 @@ describe("TestMqttClient - the change gate", () => {
       await assert.rejects(mqtt.publish(TOPIC, "on", { ifChanged: true }), (error: unknown) => error === mqtt.signal.reason);
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "a torn-down double records nothing, whatever the memory holds");
@@ -400,18 +399,18 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [], "both calls park before either is recorded");
 
       release();
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "on", topic: TOPIC } ],
         "the memory takes a payload only once the publish is recorded, so neither parked call could suppress the other");
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.equal(mqtt.published.length, 2, "a call issued after the release has a recorded payload to weigh against and must be suppressed");
     });
@@ -425,10 +424,10 @@ describe("TestMqttClient - the change gate", () => {
       const mqtt = new TestMqttClient({ log });
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
-      await tick();
+      await settle();
 
       assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }]);
       assert.equal(mqtt.rejectedPublishes, 0);
@@ -465,7 +464,7 @@ describe("TestMqttClient - connection state", () => {
       mqtt.publishRejection = null;
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
@@ -516,7 +515,7 @@ describe("TestMqttClient - the publish hold", () => {
     const release = mqtt.holdPublishes();
     const parked = mqtt.publish("device1/status", "held");
 
-    await tick();
+    await settle();
 
     assert.deepEqual(mqtt.published, [{ payload: "before", topic: "device1/status" }], "a parked publish records nothing while it waits");
 
@@ -533,7 +532,7 @@ describe("TestMqttClient - the publish hold", () => {
     const release = mqtt.holdPublishes();
     const parked = mqtt.publish("device1/status", "on");
 
-    await tick();
+    await settle();
 
     // Tearing the double down onto a parked publish is the race the hold exists to force. The second admission is what answers it: the composed signal the first
     // admission read is the same one read at release, so the publish rejects rather than recording into a double that is already down.
@@ -555,14 +554,14 @@ describe("TestMqttClient - the publish hold", () => {
 
       mqtt.publishGuarded("device1/status", "on");
 
-      await tick();
+      await settle();
 
       assert.deepEqual(log.entries, [], "a parked guarded publish says nothing while it waits");
 
       mqtt.abort();
       release();
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(linesAt(log, "error"), []);
@@ -577,7 +576,7 @@ describe("TestMqttClient - the publish hold", () => {
     const release = mqtt.holdPublishes();
     const parked = mqtt.publish("device1/status", "on");
 
-    await tick();
+    await settle();
 
     assert.equal(mqtt.rejectedPublishes, 0, "a parked publish has been refused nothing yet");
 
@@ -596,7 +595,7 @@ describe("TestMqttClient - the publish hold", () => {
     const release = mqtt.holdPublishes();
     const parked = mqtt.publish("device1/status", "on");
 
-    await tick();
+    await settle();
 
     mqtt.connected = false;
     release();
@@ -622,7 +621,7 @@ describe("TestMqttClient - the publish hold", () => {
     assert.equal(mqtt.rejectedPublishes, 1);
 
     release();
-    await tick();
+    await settle();
 
     assert.deepEqual(mqtt.published, []);
     assert.equal(mqtt.rejectedPublishes, 1, "nothing was parked, so the release refuses nothing a second time");
@@ -641,7 +640,7 @@ describe("TestMqttClient - the publish hold", () => {
     assert.equal(mqtt.rejectedPublishes, 1);
 
     release();
-    await tick();
+    await settle();
 
     assert.deepEqual(mqtt.published, []);
     assert.equal(mqtt.rejectedPublishes, 1, "nothing was parked, so the release refuses nothing a second time");
@@ -655,7 +654,7 @@ describe("TestMqttClient - the publish hold", () => {
     const releaseSecond = mqtt.holdPublishes();
     const second = mqtt.publish("device1/second", "2");
 
-    await tick();
+    await settle();
 
     assert.deepEqual(mqtt.published, []);
 
@@ -667,7 +666,7 @@ describe("TestMqttClient - the publish hold", () => {
     // The second hold is still the active one, so a publish issued after the first release parks rather than recording - the ownership guard the release makes.
     const third = mqtt.publish("device1/third", "3");
 
-    await tick();
+    await settle();
 
     assert.deepEqual(mqtt.published, [{ payload: "1", topic: "device1/first" }], "the first release did not stand the second hold down");
 
@@ -687,7 +686,7 @@ describe("TestMqttClient - the publish hold", () => {
     const release = mqtt.holdPublishes();
     const invoked = mqtt.invokeGet("device1/status/get");
 
-    await tick();
+    await settle();
 
     assert.deepEqual(mqtt.published, [], "the republish is parked, so the driver has not answered yet");
 
@@ -836,7 +835,7 @@ describe("TestMqttClient - teardown", () => {
     mqtt.unsubscribe("device1", "status");
     mqtt.publishGuarded("device1/status", "off");
 
-    await tick();
+    await settle();
 
     assert.deepEqual(mqtt.subscriptions, []);
     assert.equal(mqtt.unsubscribes.length, 1, "the aborted guard short-circuits before anything is recorded");
@@ -944,7 +943,7 @@ describe("TestMqttClient - drivers", () => {
     // An asynchronous handler settles before delivery resolves, so a consumer whose handler awaits its own work is observable by the time the driver returns.
     mqtt.subscribe("device1/status", async (payload: Buffer) => {
 
-      await tick();
+      await settle();
       seen.push("second:" + payload.toString());
     });
 
@@ -1163,7 +1162,7 @@ describe("TestMqttClient - the unresolved-placeholder refusal", () => {
 
       assert.doesNotThrow(() => mqtt.publishGuarded(UNRESOLVED, "on"));
 
-      await tick();
+      await settle();
 
       assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic relay/{output}/state: TestMqttClient: the topic " +
         "\"relay/{output}/state\" carries a brace; a placeholder must be resolved through resolveMqttTopic before the topic is used."]);

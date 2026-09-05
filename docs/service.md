@@ -10,6 +10,20 @@ Homebridge service helper utilities.
 
 ## Accessory
 
+### NotRespondingOptions
+
+The facts about a device that [notResponding](#notresponding) binds once: the class a refusal is constructed from, the status it carries, and the predicate it reads.
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="errorclass"></a> `errorClass` | `readonly` | (`status`) => `Error` | The plugin's `api.hap.HapStatusError`, typed by its constructor shape so a plugin's own status-error double fits it as readily as the HAP class does. The type describes the constructor and not what it does with what it is handed, so a class that ignores the status satisfies it too...the tests assert the status a refusal carries rather than only the class it is an instance of. |
+| <a id="status"></a> `status?` | `readonly` | `HAPStatus` | The HAP status a refusal carries. Defaults to `HAPStatus.SERVICE_COMMUNICATION_FAILURE`, the status HomeKit renders as Not Responding, so a consumer names one only when it means a different status. |
+| <a id="unavailable"></a> `unavailable` | `readonly` | () => `boolean` | The plugin's own availability composition, answering `true` while the device cannot be reached. It is read on each wrapped read rather than captured when the wrapper is built: a device that goes offline refuses on the very next read, and one that comes back answers on it. |
+
+***
+
 ### AcquireServiceTarget
 
 ```ts
@@ -170,6 +184,54 @@ The configured or display name of the service, or `undefined` if neither charact
 #### See
 
 setServiceName - to update the current name on a service.
+
+***
+
+### notResponding()
+
+```ts
+function notResponding(options): <T>(read) => () => T;
+```
+
+Binds a device's Not Responding rule once and returns a wrapper that makes any characteristic reader refuse to answer while the device is unavailable.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | [`NotRespondingOptions`](#notrespondingoptions) | The error class, the status, and the availability predicate every wrapped read answers by. See [NotRespondingOptions](#notrespondingoptions). |
+
+#### Returns
+
+A wrapper that takes a characteristic reader and returns a reader of the same shape, throwing while `unavailable()` is true and reading through to the
+         wrapped reader otherwise.
+
+\<`T`\>(`read`) => () => `T`
+
+#### Remarks
+
+HomeKit renders a get handler that throws a HAP status error as Not Responding, and renders whatever a handler returns as fact. A readable characteristic wired
+around this rule therefore answers a stale value while its device cannot be reached, which is the dishonest display the rule exists to avoid...wiring every
+readable characteristic through the wrapper leaves exactly one place that decides whether the device can answer at all.
+
+The error class is injected rather than imported because this library holds `homebridge` and `@homebridge/hap-nodejs` as development dependencies alone and
+carries no HAP dependency at runtime: `HapStatusError` reaches a plugin as a member of the runtime `api.hap` namespace, and the plugin is the only holder of it.
+The class, the status, and the predicate are facts about a device, while a reader is a fact about one characteristic, so the two bind at different moments - the
+device binds the rule once, then wraps each reader as it wires it.
+
+#### Example
+
+```typescript
+// Bind the rule once, where the device composes its own availability.
+this.answering = notResponding({ errorClass: api.hap.HapStatusError, unavailable: () => this.offline || this.unreachable });
+
+// Wire a characteristic through it. The reader answers while the device is reachable, and never runs while it is not.
+service.getCharacteristic(Characteristic.On).onGet(this.answering(() => this.active));
+```
+
+#### See
+
+capabilityGate - the same bind-once shape, applied to whether a service should exist at all.
 
 ***
 

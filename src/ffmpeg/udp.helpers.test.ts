@@ -75,7 +75,6 @@ describe("probePortAvailable", () => {
 
     await using _holder = await holdPort(port);
 
-    void _holder;
     await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" }, "probe must reject with EADDRINUSE when the port is held by another socket");
 
     t.diagnostic("verified probePortAvailable surfaces the kernel error for a held port");
@@ -92,8 +91,6 @@ describe("holdPort", () => {
     {
 
       await using _holder = await holdPort(port);
-
-      void _holder;
 
       // While held, probing must fail with EADDRINUSE.
       await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" }, "while holdPort is in scope, the port must be unavailable");
@@ -122,7 +119,6 @@ describe("holdPort", () => {
 
     await using _holder = await holdPort(port, "ipv6");
 
-    void _holder;
     await assert.rejects(probePortAvailable(port, "ipv6"), { code: "EADDRINUSE" }, "IPv6 hold must produce EADDRINUSE on a same-family probe");
   });
 

@@ -20,11 +20,12 @@ function widened(topic: string): string {
   return topic;
 }
 
-/* Compile-time shape exercises for the catalog and the composers. These never run - the function is voided at module scope rather than called - so they add nothing
- * to the runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a shape regression fails the build here rather than silently at a
- * consuming plugin. Every negative case uses `@ts-expect-error`, which fails the build if the error it expects ever stops occurring.
+/* Compile-time shape exercises for the catalog and the composers. These never run - the function is never called, and its leading underscore marks it, with its
+ * bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during
+ * `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming plugin. Every negative case uses `@ts-expect-error`, which
+ * fails the build if the error it expects ever stops occurring.
  */
-const catalogShapeExercises = (): void => {
+const _catalogShapeExercises = (): void => {
 
   const id = "AABBCCDDEEFF";
 
@@ -35,68 +36,68 @@ const catalogShapeExercises = (): void => {
   }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
 
   // The positive controls. A plain tail composes, a topic the caller computed at runtime composes, and a template resolves against the names it spells.
-  const composed = mqttTopic(id, catalog.lock.topic);
-  const computed = mqttTopic(id, widened("device1/status"));
-  const resolved = resolveMqttTopic(catalog.smartMotion.topic, { object: "person" });
+  const _composed = mqttTopic(id, catalog.lock.topic);
+  const _computed = mqttTopic(id, widened("device1/status"));
+  const _resolved = resolveMqttTopic(catalog.smartMotion.topic, { object: "person" });
 
   // A near miss of a real field IS caught by the excess-property check, which is the positive control for the type-level half of the field guard.
   // @ts-expect-error - `lable` is not a field an entry declares.
-  const nearMiss = mqttTopicCatalog({ lock: { lable: "lock", publish: "The lock state.", topic: "lock" } });
+  const _nearMiss = mqttTopicCatalog({ lock: { lable: "lock", publish: "The lock state.", topic: "lock" } });
 
   // @ts-expect-error - the record names a parameter the template does not.
-  const wrongParameter = resolveMqttTopic(catalog.smartMotion.topic, { objekt: "person" });
+  const _wrongParameter = resolveMqttTopic(catalog.smartMotion.topic, { objekt: "person" });
 
   // @ts-expect-error - the record is missing the parameter the template names.
-  const missingParameter = resolveMqttTopic(catalog.smartMotion.topic, {});
+  const _missingParameter = resolveMqttTopic(catalog.smartMotion.topic, {});
 
   // @ts-expect-error - an unresolved template never reaches the identity composer.
-  const unresolvedIdentity = mqttTopic(id, catalog.smartMotion.topic);
+  const _unresolvedIdentity = mqttTopic(id, catalog.smartMotion.topic);
 
   // @ts-expect-error - an unresolved template never reaches the child composer either.
-  const unresolvedChild = mqttGetTopic(catalog.smartMotion.topic);
+  const _unresolvedChild = mqttGetTopic(catalog.smartMotion.topic);
 
   // @ts-expect-error - an entry names a device kind the column's vocabulary does not declare.
-  const unknownDevice = mqttTopicCatalog({ lock: { devices: ["nope"], label: "lock", publish: "p", topic: "lock" } },
+  const _unknownDevice = mqttTopicCatalog({ lock: { devices: ["nope"], label: "lock", publish: "p", topic: "lock" } },
     { heading: "Protect Device Type", vocabulary: { camera: "Camera" } });
 
   // @ts-expect-error - an empty devices tuple names nothing.
-  const emptyDevices = mqttTopicCatalog({ lock: { devices: [], label: "lock", publish: "p", topic: "lock" } },
+  const _emptyDevices = mqttTopicCatalog({ lock: { devices: [], label: "lock", publish: "p", topic: "lock" } },
     { heading: "Protect Device Type", vocabulary: { camera: "Camera" } });
 
   // @ts-expect-error - under a column, every entry carries a devices list.
-  const missingDevices = mqttTopicCatalog({ lock: { label: "lock", publish: "p", topic: "lock" } },
+  const _missingDevices = mqttTopicCatalog({ lock: { label: "lock", publish: "p", topic: "lock" } },
     { heading: "Protect Device Type", vocabulary: { camera: "Camera" } });
 
   // @ts-expect-error - without a column, no entry carries one.
-  const strayDevices = mqttTopicCatalog({ lock: { devices: ["camera"], label: "lock", publish: "p", topic: "lock" } });
+  const _strayDevices = mqttTopicCatalog({ lock: { devices: ["camera"], label: "lock", publish: "p", topic: "lock" } });
 
   // The positive controls for a verb's narrowing. The first names a kind its entry lists; the second names one the vocabulary declares and the entry does not,
   // which compiles because the vocabulary is the line this type draws, and which the renderer refuses at the docs build.
-  const narrowedGet = mqttTopicCatalog({
+  const _narrowedGet = mqttTopicCatalog({
 
     lock: { devices: ["camera"], get: "A request to publish the state.", getDevices: ["camera"], label: "lock", publish: "The lock state.",
       set: "The state to set.", topic: "lock" },
     smartMotion: { devices: [ "camera", "sensor" ], label: "smart motion", publish: "The smart detection event.", topic: "motion/smart/{object}" }
   }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
 
-  const narrowedToVocabulary = mqttTopicCatalog({
+  const _narrowedToVocabulary = mqttTopicCatalog({
 
     lock: { devices: ["camera"], get: "A request to publish the state.", getDevices: ["sensor"], label: "lock", publish: "The lock state.", topic: "lock" }
   }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
 
   // @ts-expect-error - a narrowing names a device kind the column's vocabulary does not declare.
-  const unknownNarrowing = mqttTopicCatalog({ lock: { devices: ["camera"], get: "A request.", getDevices: ["nope"], label: "lock", topic: "lock" } },
+  const _unknownNarrowing = mqttTopicCatalog({ lock: { devices: ["camera"], get: "A request.", getDevices: ["nope"], label: "lock", topic: "lock" } },
     { heading: "Protect Device Type", vocabulary: { camera: "Camera" } });
 
   // @ts-expect-error - an empty narrowing names nothing.
-  const emptyNarrowing = mqttTopicCatalog({ lock: { devices: ["camera"], get: "A request.", getDevices: [], label: "lock", topic: "lock" } },
+  const _emptyNarrowing = mqttTopicCatalog({ lock: { devices: ["camera"], get: "A request.", getDevices: [], label: "lock", topic: "lock" } },
     { heading: "Protect Device Type", vocabulary: { camera: "Camera" } });
 
   // @ts-expect-error - without a column, no entry carries a narrowing either.
-  const strayNarrowing = mqttTopicCatalog({ lock: { get: "A request.", getDevices: ["camera"], label: "lock", topic: "lock" } });
+  const _strayNarrowing = mqttTopicCatalog({ lock: { get: "A request.", getDevices: ["camera"], label: "lock", topic: "lock" } });
 
   // @ts-expect-error - an empty placeholder names no parameter, so nothing could ever resolve it.
-  const emptyPlaceholder = resolveMqttTopic("power{}/state", { "": "x" });
+  const _emptyPlaceholder = resolveMqttTopic("power{}/state", { "": "x" });
 
   // Groups declared `as const` and spread into the call keep every topic's literal type, so the guard holds through the assembled catalog.
   const doorGroup = { lock: { label: "lock", publish: "The lock state.", topic: "lock" } } as const;
@@ -104,21 +105,15 @@ const catalogShapeExercises = (): void => {
   const fromConstGroups = mqttTopicCatalog({ ...doorGroup, ...motionGroup });
 
   // @ts-expect-error - the `as const` form still refuses an unresolved template.
-  const constGroupUnresolved = mqttTopic(id, fromConstGroups.smartMotion.topic);
+  const _constGroupUnresolved = mqttTopic(id, fromConstGroups.smartMotion.topic);
 
   // The same groups without `as const` widen every topic to `string`, which silences the guard. This composes with no directive at all, and it is exactly the case
   // the runtime refusal covers: the rows above drive that throw through the client, the double, and the resolver.
   const plainDoorGroup = { lock: { label: "lock", publish: "The lock state.", topic: "lock" } };
   const plainMotionGroup = { smartMotion: { label: "smart motion", publish: "The smart detection event.", topic: "motion/smart/{object}" } };
   const fromPlainGroups = mqttTopicCatalog({ ...plainDoorGroup, ...plainMotionGroup });
-  const widenedUnresolved = mqttTopic(id, fromPlainGroups.smartMotion.topic);
-
-  void [ composed, computed, resolved, nearMiss, wrongParameter, missingParameter, unresolvedIdentity, unresolvedChild, unknownDevice, emptyDevices, missingDevices,
-    strayDevices, narrowedGet, narrowedToVocabulary, unknownNarrowing, emptyNarrowing, strayNarrowing, emptyPlaceholder, fromConstGroups, constGroupUnresolved,
-    fromPlainGroups, widenedUnresolved ];
+  const _widenedUnresolved = mqttTopic(id, fromPlainGroups.smartMotion.topic);
 };
-
-void catalogShapeExercises;
 
 describe("mqttTopic - device-scoped topic composition", () => {
 

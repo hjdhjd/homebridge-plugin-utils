@@ -65,28 +65,25 @@ const SCOPED_OPTIONS: Record<string, FeatureOptionEntry[]> = {
   ]
 };
 
-/* Compile-time shape exercises for the scopes declaration. These never run - the function is voided at module scope rather than called - so they add nothing to the
- * runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming
- * plugin. The negative cases use `@ts-expect-error`, which fails the build if the error it expects ever stops occurring.
+/* Compile-time shape exercises for the scopes declaration. These never run - the function is never called, and its leading underscore marks it, with its bindings, as
+ * a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a
+ * shape regression fails the build here rather than silently at a consuming plugin. The negative cases use `@ts-expect-error`, which fails the build if the error it
+ * expects ever stops occurring.
  */
-const scopeDeclarationShapeExercises = (): void => {
+const _scopeDeclarationShapeExercises = (): void => {
 
   // A declaration names one level or several, in any combination.
-  const deviceOnly: FeatureOptionEntry = { default: false, description: "Device-only.", name: "DeviceOnly", scopes: ["device"] };
-  const controllerAndDevice: FeatureOptionEntry = { default: false, description: "Controller and device.", name: "Local", scopes: [ "controller", "device" ] };
+  const _deviceOnly: FeatureOptionEntry = { default: false, description: "Device-only.", name: "DeviceOnly", scopes: ["device"] };
+  const _controllerAndDevice: FeatureOptionEntry = { default: false, description: "Controller and device.", name: "Local", scopes: [ "controller", "device" ] };
 
   // An option declaring no level at all would render nowhere and resolve nowhere, so the non-empty tuple puts that state out of reach.
   // @ts-expect-error - an empty scopes declaration is rejected.
-  const nowhere: FeatureOptionEntry = { default: false, description: "Nothing declared.", name: "Nowhere", scopes: [] };
+  const _nowhere: FeatureOptionEntry = { default: false, description: "Nothing declared.", name: "Nowhere", scopes: [] };
 
   // "none" is what resolution reports when nothing matched, not a level an entry can be written at, so the declaration vocabulary excludes it.
   // @ts-expect-error - "none" is not a member of FeatureOptionScope.
-  const resolutionOutcome: FeatureOptionEntry = { default: false, description: "Not a level.", name: "Outcome", scopes: ["none"] };
-
-  void [ deviceOnly, controllerAndDevice, nowhere, resolutionOutcome ];
+  const _resolutionOutcome: FeatureOptionEntry = { default: false, description: "Not a level.", name: "Outcome", scopes: ["none"] };
 };
-
-void scopeDeclarationShapeExercises;
 
 describe("FeatureOptions - construction and defaults", () => {
 

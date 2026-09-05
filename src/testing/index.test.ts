@@ -131,7 +131,7 @@ describe("capturingLog", () => {
     assert.equal(log.entries.length, 1, "the underlying array still mutates from inside the factory");
 
     // @ts-expect-error - entries is readonly TestLogEntry[]; tests must not push directly.
-    void log.entries.push;
+    const _push: unknown = log.entries.push;
   });
 
   test("returns a fresh logger per call (no shared entries across consumers)", () => {

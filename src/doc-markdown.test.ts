@@ -12,22 +12,19 @@ import { describe, test } from "node:test";
 import { renderMarkdownTable, spliceMarkedRegion } from "./doc-markdown.ts";
 import assert from "node:assert/strict";
 
-/* Compile-time shape exercises for the splice's marker pair. These never run - the function is voided at module scope rather than called - so they add nothing to the
- * runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming
- * generator. The negative case uses `@ts-expect-error`, which fails the build if the error it expects ever stops occurring.
+/* Compile-time shape exercises for the splice's marker pair. These never run - the function is never called, and its leading underscore marks it, with its bindings,
+ * as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a
+ * shape regression fails the build here rather than silently at a consuming generator. The negative case uses `@ts-expect-error`, which fails the build if the error
+ * it expects ever stops occurring.
  */
-const docMarkdownShapeExercises = (): void => {
+const _docMarkdownShapeExercises = (): void => {
 
   // A caller names the pair framing its own region, because a domain-free splice has no document's convention to fall back on.
-  const framed = spliceMarkedRegion("BEGIN\nold\nEND", "new", { beginMarker: "BEGIN", endMarker: "END" });
+  const _framed = spliceMarkedRegion("BEGIN\nold\nEND", "new", { beginMarker: "BEGIN", endMarker: "END" });
 
   // @ts-expect-error - the marker pair is required.
-  const unframed = spliceMarkedRegion("BEGIN\nold\nEND", "new");
-
-  void [ framed, unframed ];
+  const _unframed = spliceMarkedRegion("BEGIN\nold\nEND", "new");
 };
-
-void docMarkdownShapeExercises;
 
 describe("renderMarkdownTable - layout", () => {
 

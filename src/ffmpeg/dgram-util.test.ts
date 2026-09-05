@@ -35,20 +35,18 @@ describe("loopbackAddress", () => {
   test("rejects values outside the IpFamily union at the type level", () => {
 
     // Type-level rejection only - no runtime invocation, since calling loopbackAddress with an unknown family would return undefined off the lookup table and that
-    // is not the contract this test pins. The assignments below exercise the parameter type at typecheck time; `void` marks each binding as deliberately read so the
-    // IDE does not flag them as unused. The `@ts-expect-error` directives fail typecheck if the IpFamily union ever widens, so the contract is policed by
-    // `tsc --noEmit` rather than by the runner.
+    // is not the contract this test holds. The assignments below exercise the parameter type at typecheck time; the leading underscore on each binding marks it as
+    // compile-time-only so the IDE does not flag it as unused. The `@ts-expect-error` directives fail typecheck if the IpFamily union ever widens, so the contract
+    // is policed by `tsc --noEmit` rather than by the runner.
     type LoopbackParam = Parameters<typeof loopbackAddress>[0];
 
-    const ipv4: LoopbackParam = "ipv4";
-    const ipv6: LoopbackParam = "ipv6";
+    const _ipv4: LoopbackParam = "ipv4";
+    const _ipv6: LoopbackParam = "ipv6";
 
     // @ts-expect-error - "ipv7" is not in the IpFamily union.
-    const badStr: LoopbackParam = "ipv7";
+    const _badStr: LoopbackParam = "ipv7";
     // @ts-expect-error - undefined is not in the IpFamily union.
-    const badUndef: LoopbackParam = undefined;
-
-    void ipv4; void ipv6; void badStr; void badUndef;
+    const _badUndef: LoopbackParam = undefined;
   });
 });
 
@@ -100,14 +98,12 @@ describe("createDgramSocket", () => {
     // factory, and the dgram socket-type literal ("udp4" / "udp6") is the *table value* the factory hands back to `node:dgram`, never an accepted caller input.
     type FactoryParam = Parameters<typeof createDgramSocket>[0];
 
-    const ipv4: FactoryParam = "ipv4";
-    const ipv6: FactoryParam = "ipv6";
+    const _ipv4: FactoryParam = "ipv4";
+    const _ipv6: FactoryParam = "ipv6";
 
     // @ts-expect-error - "udp4" is the table value, not an IpFamily input.
-    const socketType: FactoryParam = "udp4";
+    const _socketType: FactoryParam = "udp4";
     // @ts-expect-error - undefined is not in the IpFamily union.
-    const badUndef: FactoryParam = undefined;
-
-    void ipv4; void ipv6; void socketType; void badUndef;
+    const _badUndef: FactoryParam = undefined;
   });
 });

@@ -79,15 +79,15 @@ function makeRecordingConfig(): CameraRecordingConfiguration {
   } as CameraRecordingConfiguration;
 }
 
-/* Compile-time shape exercises for the two fMP4 init literals. These never run - the function is voided at module scope rather than called - so they add nothing to the
- * runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming
- * plugin. The negative cases use `@ts-expect-error`, which fails the build if the error it expects ever stops occurring. Every negative literal supplies `url` so the
- * excess-property rejection is the only error on its line.
+/* Compile-time shape exercises for the two fMP4 init literals. These never run - the function is never called, and its leading underscore marks it, with its bindings,
+ * as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a
+ * shape regression fails the build here rather than silently at a consuming plugin. The negative cases use `@ts-expect-error`, which fails the build if the error it
+ * expects ever stops occurring. Every negative literal supplies `url` so the excess-property rejection is the only error on its line.
  */
-const livestreamInitShapeExercises = (): void => {
+const _livestreamInitShapeExercises = (): void => {
 
   // Recording is the fMP4 mode that transcodes, so a recording literal carries every field describing the transcode.
-  const recordingCarriesTranscodeFields: FfmpegRecordingInit = {
+  const _recordingCarriesTranscodeFields: FfmpegRecordingInit = {
 
     recording: {
 
@@ -101,28 +101,23 @@ const livestreamInitShapeExercises = (): void => {
   };
 
   // A livestream copies both streams through, so its literal describes the input and nothing about transcoding.
-  const livestreamCarriesSourceOnly: FfmpegLivestreamInit = { livestream: { url: "rtsp://test/stream" } };
+  const _livestreamCarriesSourceOnly: FfmpegLivestreamInit = { livestream: { url: "rtsp://test/stream" } };
 
   // @ts-expect-error - audioFilters describes a transcode, which a livestream does not perform.
-  const livestreamAudioFilters: FfmpegLivestreamInit = { livestream: { audioFilters: ["highpass=f=200"], url: "rtsp://test/stream" } };
+  const _livestreamAudioFilters: FfmpegLivestreamInit = { livestream: { audioFilters: ["highpass=f=200"], url: "rtsp://test/stream" } };
 
   // @ts-expect-error - hardwareDecoding describes a transcode, which a livestream does not perform.
-  const livestreamHardwareDecoding: FfmpegLivestreamInit = { livestream: { hardwareDecoding: true, url: "rtsp://test/stream" } };
+  const _livestreamHardwareDecoding: FfmpegLivestreamInit = { livestream: { hardwareDecoding: true, url: "rtsp://test/stream" } };
 
   // @ts-expect-error - hardwareTranscoding describes a transcode, which a livestream does not perform.
-  const livestreamHardwareTranscoding: FfmpegLivestreamInit = { livestream: { hardwareTranscoding: true, url: "rtsp://test/stream" } };
+  const _livestreamHardwareTranscoding: FfmpegLivestreamInit = { livestream: { hardwareTranscoding: true, url: "rtsp://test/stream" } };
 
   // @ts-expect-error - transcodeAudio describes a transcode, which a livestream does not perform.
-  const livestreamTranscodeAudio: FfmpegLivestreamInit = { livestream: { transcodeAudio: false, url: "rtsp://test/stream" } };
+  const _livestreamTranscodeAudio: FfmpegLivestreamInit = { livestream: { transcodeAudio: false, url: "rtsp://test/stream" } };
 
   // @ts-expect-error - videoFilters describes a transcode, which a livestream does not perform.
-  const livestreamVideoFilters: FfmpegLivestreamInit = { livestream: { url: "rtsp://test/stream", videoFilters: ["hflip"] } };
-
-  void [ recordingCarriesTranscodeFields, livestreamCarriesSourceOnly, livestreamAudioFilters, livestreamHardwareDecoding, livestreamHardwareTranscoding,
-    livestreamTranscodeAudio, livestreamVideoFilters ];
+  const _livestreamVideoFilters: FfmpegLivestreamInit = { livestream: { url: "rtsp://test/stream", videoFilters: ["hflip"] } };
 };
-
-void livestreamInitShapeExercises;
 
 // String-to-box adapter over the shared `makeBox` fixture. The emission-script builders below construct their boxes from ASCII-string payloads (easier to read
 // inline in test source) whereas `makeBox` takes a `Buffer`; this thin wrapper does the conversion so call sites stay readable as `box("ftyp", "isomavc1")` without

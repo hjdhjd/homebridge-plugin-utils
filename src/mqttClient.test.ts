@@ -1819,23 +1819,24 @@ interface PluginMeta {
   icon: string;
 }
 
-/* Compile-time assignability proof for the group's meta channel and its category name. These never run - the function is voided at module scope rather than called -
- * so they add nothing to the runtime totals; TypeScript still type-checks the body during `npm run typecheck`, so a return type that drops the generic or widens the
- * category name to `string` fails the build here rather than silently at a consuming plugin.
+/* Compile-time assignability proof for the group's meta channel and its category name. These never run - the function is never called, and its leading underscore
+ * marks it, with its bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body
+ * during `npm run typecheck`, so a return type that drops the generic or widens the category name to `string` fails the build here rather than silently at a
+ * consuming plugin.
  */
-const mqttGroupShapeExercises = (): void => {
+const _mqttGroupShapeExercises = (): void => {
 
   const typed = mqttFeatureOptions<PluginMeta>({ defaultTopic: "hydrawise" });
 
   // A plugin whose catalog is typed over its own meta channel names that type at the call and assigns both halves of the group straight in. A return typed over the
   // `unknown` forms is not assignable to either of these, which is the bridge the generic removes from the plugin side.
-  const category: FeatureCategoryEntry<PluginMeta> = typed.category;
-  const options: FeatureOptionEntry<PluginMeta>[] = typed.options;
+  const _category: FeatureCategoryEntry<PluginMeta> = typed.category;
+  const _options: FeatureOptionEntry<PluginMeta>[] = typed.options;
 
   /* The category name is the literal `"Mqtt"`, so a catalog record keyed on literal category names takes it as a computed key and stays keyed on those literals. A
    * `name: string` would contribute a string index signature instead, leaving the record's `Mqtt` key unsatisfied.
    */
-  const catalog: Record<"Device" | "Mqtt", FeatureOptionEntry<PluginMeta>[]> = {
+  const _catalog: Record<"Device" | "Mqtt", FeatureOptionEntry<PluginMeta>[]> = {
 
     Device: [],
     [typed.category.name]: typed.options
@@ -1843,13 +1844,9 @@ const mqttGroupShapeExercises = (): void => {
 
   // An un-parameterized call resolves to the `unknown` forms and assigns into an untyped catalog, so every existing consumer compiles unchanged.
   const bare = mqttFeatureOptions({ defaultTopic: "ratgdo" });
-  const bareCategory: FeatureCategoryEntry = bare.category;
-  const bareOptions: FeatureOptionEntry[] = bare.options;
-
-  void [ category, options, catalog, bareCategory, bareOptions ];
+  const _bareCategory: FeatureCategoryEntry = bare.category;
+  const _bareOptions: FeatureOptionEntry[] = bare.options;
 };
-
-void mqttGroupShapeExercises;
 
 describe("mqttFeatureOptions - canonical MQTT feature-option group", () => {
 

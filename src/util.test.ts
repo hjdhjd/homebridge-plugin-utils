@@ -1866,13 +1866,13 @@ describe("Watchdog - arming and firing", () => {
   test("does not fire if no arm was scheduled", async () => {
 
     // This test covers the dormancy rule: constructing a Watchdog without calling `arm()` schedules nothing and fires nothing. Disposal is not the subject here -
-    // a `using` binding would pull `[Symbol.dispose]` into the test's observable surface, which is the domain of the dispose-specific tests further down. Using `void`
-    // on the construction expression (rather than binding it to `_watchdog` or similar) keeps the test's focus on the side-effect count, not the handle lifetime.
+    // a `using` binding would pull `[Symbol.dispose]` into the test's observable surface, which is the domain of the dispose-specific tests further down. The
+    // construction below is deliberately unbound for that reason, which keeps the test's focus on the side-effect count rather than the handle lifetime.
     const clock = new TestClock();
     const controller = new AbortController();
     let fired = 0;
 
-    void new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
+    new Watchdog({ clock, onFire: (): void => { fired++; }, signal: controller.signal, timeoutMs: 30 });
 
     clock.advance(80);
 

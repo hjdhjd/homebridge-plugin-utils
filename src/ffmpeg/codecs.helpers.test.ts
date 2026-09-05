@@ -157,8 +157,6 @@ describe("makeCodecs - type contract", () => {
   test("CodecsInit rejects unknown fields at the type level", () => {
 
     // @ts-expect-error - "unknownField" is not in CodecsInit; future widening would silence this directive and surface the loosened contract during typecheck.
-    const init: CodecsInit = { unknownField: 42 };
-
-    void init;
+    const _init: CodecsInit = { unknownField: 42 };
   });
 });

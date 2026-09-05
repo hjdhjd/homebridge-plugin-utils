@@ -10,8 +10,9 @@
  */
 import * as hap from "@homebridge/hap-nodejs";
 import type { Characteristic, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { acquireService, capabilityGate, getServiceName, setAccessoryName, setServiceName, validService } from "./service.ts";
+import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, validService } from "./service.ts";
 import { describe, test } from "node:test";
+import { HAPStatus } from "./homebridge-enums.ts";
 import assert from "node:assert/strict";
 
 // The HAP static-Characteristic shape: every Characteristic class ships with a `UUID` static and satisfies `new () => Characteristic`. That is the exact type HAP's
@@ -127,6 +128,41 @@ function optionalCount(service: Service, slot: NamedCharacteristicSlot): number 
 
   return target ? service.optionalCharacteristics.filter((c) => c.UUID === target.UUID).length : 0;
 }
+
+/* The status-error class the notResponding tests inject, standing in for a plugin's `api.hap.HapStatusError`: an Error subclass carrying the numeric status it was
+ * constructed with, which is what a refusal is read for. Declared here rather than imported so the suite keeps the same posture the module under test has - no
+ * runtime edge to HAP for a class the library never imports - and so the injected shape is exactly the shape a plugin's own double has.
+ */
+class StatusError extends Error {
+
+  public readonly hapStatus: number;
+
+  public constructor(status: number) {
+
+    super("HAP Status Error: " + status.toString());
+
+    this.hapStatus = status;
+    this.name = "HapStatusError";
+  }
+}
+
+/* Compile-time shape exercises for the reader type notResponding accepts. These never run - the function is never called, and its leading underscore marks it, with
+ * its bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during
+ * `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming plugin. The negative case uses `@ts-expect-error`, which fails
+ * the build if the error it expects ever stops occurring.
+ */
+const _readerShapeExercises = (): void => {
+
+  const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+
+  // A reader of each primitive HomeKit carries is accepted, and each answers a reader of its own type back rather than a widened one.
+  const _number: () => number = wrap((): number => 42);
+  const _string: () => string = wrap((): string => "Stopped");
+  const _boolean: () => boolean = wrap((): boolean => true);
+
+  // @ts-expect-error - a symbol is not a CharacteristicValue, so a reader answering one is not a characteristic reader.
+  const _symbol = wrap((): symbol => Symbol("not a characteristic value"));
+};
 
 describe("acquireService - creation path", () => {
 
@@ -600,5 +636,104 @@ describe("setAccessoryName", () => {
     assert.equal(hapAccessory.displayName, "Garden Shed", "the HAP accessory keeps it too");
     assert.equal(readNamedCharacteristic(information, "Name"), "Garden Shed", "the information service is not blanked either");
     assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Garden Shed");
+  });
+});
+
+describe("notResponding", () => {
+
+  test("refuses every read with the injected status error while unavailable", () => {
+
+    let reads = 0;
+    const wrap = notResponding({ errorClass: StatusError, unavailable: () => true });
+
+    const read = wrap((): number => {
+
+      reads++;
+
+      return 42;
+    });
+
+    assert.throws(read, (error: unknown) => {
+
+      assert.ok(error instanceof StatusError, "the refusal is an instance of the injected class, not a plain Error");
+      assert.equal(error.hapStatus, HAPStatus.SERVICE_COMMUNICATION_FAILURE, "the refusal carries the status HomeKit renders as Not Responding");
+
+      return true;
+    });
+
+    // The refusal happens before the read, not after it: a reader that reaches the device would pay for a call whose answer is thrown away, and one with side
+    // effects would perform them while the device is unreachable.
+    assert.equal(reads, 0, "the wrapped reader never runs while the device is unavailable");
+  });
+
+  test("answers the reader while available", () => {
+
+    let reads = 0;
+    const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+
+    const read = wrap((): number => {
+
+      reads++;
+
+      return 42;
+    });
+
+    assert.equal(read(), 42, "an available device answers with what its reader answers");
+    assert.equal(reads, 1, "one read runs the reader once");
+    assert.equal(read(), 42);
+    assert.equal(reads, 2, "and a second read runs it again, rather than answering from anything the wrapper remembered");
+  });
+
+  test("carries a named status", () => {
+
+    const read = notResponding({ errorClass: StatusError, status: HAPStatus.RESOURCE_BUSY, unavailable: () => true })((): boolean => true);
+
+    assert.throws(read, (error: unknown) => {
+
+      assert.ok(error instanceof StatusError);
+      assert.equal(error.hapStatus, HAPStatus.RESOURCE_BUSY, "a named status is the one the refusal carries");
+      assert.notEqual(error.hapStatus, HAPStatus.SERVICE_COMMUNICATION_FAILURE, "and it replaces the default rather than joining it");
+
+      return true;
+    });
+  });
+
+  test("reads the predicate on every call", () => {
+
+    let unavailable = true;
+    const read = notResponding({ errorClass: StatusError, unavailable: () => unavailable })((): string => "Open");
+
+    assert.throws(read, StatusError, "a device that is away when the characteristic is read refuses");
+
+    unavailable = false;
+
+    // Availability flips between reads, which is the whole of the recovery path: nothing rewires the characteristic when a device comes back, so the next read has
+    // to consult the predicate again to answer.
+    assert.equal(read(), "Open", "the very next read answers once the device is reachable again");
+
+    unavailable = true;
+
+    assert.throws(read, StatusError, "and a device that goes away again refuses on the read after that");
+  });
+
+  test("binds the class facts once and wraps many readers", () => {
+
+    let unavailable = false;
+    const wrap = notResponding({ errorClass: StatusError, unavailable: () => unavailable });
+    const currentPosition = wrap((): number => 40);
+    const positionState = wrap((): string => "Stopped");
+    const on = wrap((): boolean => true);
+
+    assert.equal(currentPosition(), 40);
+    assert.equal(positionState(), "Stopped");
+    assert.equal(on(), true);
+
+    unavailable = true;
+
+    // One factory call holds the class facts for every characteristic a device authors, so the readers it wrapped answer and refuse together rather than each
+    // carrying its own copy of the rule.
+    assert.throws(currentPosition, StatusError, "every reader bound by one factory call refuses together");
+    assert.throws(positionState, StatusError);
+    assert.throws(on, StatusError);
   });
 });

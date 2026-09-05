@@ -98,6 +98,21 @@ const ffmpegOpts = new FfmpegOptions(optionsConfig);
 
 #### Accessors
 
+##### clock
+
+###### Get Signature
+
+```ts
+get clock(): Clock | undefined;
+```
+
+The time source the callback timers of this session's processes are armed on, or `undefined` when the consumer configured none. Handed on unresolved, so each
+primitive that arms a timer applies the `systemClock` default in the one place that default belongs.
+
+###### Returns
+
+[`Clock`](../clock.md#clock) \| `undefined`
+
 ##### cropFilter
 
 ###### Get Signature
@@ -393,6 +408,7 @@ FfmpegOptions
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="clock-1"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional time source for the callback timers every process built from these options, and every resource those processes compose, arm: the streaming health watchdog and the segment assembler's inter-segment watchdog. Left undefined, each of those falls back to `systemClock` on its own, so the options object carries the choice unresolved exactly as any other composer does. The clock lives here, beside `log` and `debug`, because these options ARE the per-session substrate a consumer configures once and every process, recording, and livestream is then built from, where an init carries per-construction lifetimes instead. The startup timeout and the codec probe are deadline signals rather than callback timers: they read the platform's `AbortSignal.timeout` directly and do not observe this clock. |
 | <a id="codecsupport"></a> `codecSupport` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | FFmpeg codec capabilities and hardware support. |
 | <a id="crop"></a> `crop?` | \{ `height`: `number`; `width`: `number`; `x`: `number`; `y`: `number`; \} | Optional. Cropping rectangle for output video. |
 | `crop.height` | `number` | - |

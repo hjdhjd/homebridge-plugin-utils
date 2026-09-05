@@ -381,6 +381,7 @@ Construction-time options for [RtpDemuxer](#rtpdemuxer).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="clock"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional time source for both of the demuxer's watchdog windows, the RTCP-replay heartbeat and the inbound-packet inactivity timeout. Passed through to each watchdog unresolved, so the `systemClock` default is applied in the one place it belongs and a demuxer keeps one time source for both windows. |
 | <a id="inactivitytimeout"></a> `inactivityTimeout?` | `number` | Optional inactivity watchdog window, in milliseconds. The timer arms during construction (immediately after the bind call is issued) and re-arms on every received datagram. When the window lapses without traffic, the demuxer aborts with `HbpuAbortError("timeout")`. Omit to disable the watchdog entirely. |
 | <a id="inputport-1"></a> `inputPort` | `number` | Required. The UDP port to bind to. Typically a value previously reserved via [RtpPortAllocator.reserve](#reserve). Pass `0` to request kernel-assigned ephemeral allocation: the bind succeeds atomically against whichever port the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The assigned port is then observable via [RtpDemuxer.inputPort](#inputport) once [RtpDemuxer.ready](#ready) resolves. |
 | <a id="ipfamily-2"></a> `ipFamily?` | [`IpFamily`](dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |

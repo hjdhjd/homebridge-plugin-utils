@@ -216,6 +216,7 @@ Construction-time options for [HomebridgeLogClient](#homebridgelogclient).
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
+| <a id="clock"></a> `clock?` | `readonly` | [`Clock`](../clock.md#clock) | Optional time source for the window channel's deadlines and for every socket this client creates. Defaults to [systemClock](../clock.md#systemclock), whose members ARE the platform primitives, so the default path is behavior-neutral. A test injects a `TestClock` seeded at the horizon it wants and drives the whole channel - the settle floor, the quiescence terminator, the hard cap, and the gate deadline - by advancing it. |
 | <a id="credentials"></a> `credentials` | `readonly` | [`LogClientCredentials`](types.md#logclientcredentials) | The credentials used to authenticate. See [LogClientCredentials](types.md#logclientcredentials). |
 | <a id="fetch"></a> `fetch?` | `readonly` | \{ (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; \} | Optional `fetch` implementation for the auth and REST transports. Defaults to the global `fetch`. Injected so the client is testable without a live server. |
 | <a id="host"></a> `host?` | `readonly` | `string` | The hostname or IP of the homebridge-config-ui-x server. Defaults to `localhost`. |

@@ -263,6 +263,7 @@ Construction-time options for [Mp4SegmentAssembler](#mp4segmentassembler).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="clock"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional time source for the inter-segment watchdog's window. Passed through to the watchdog unresolved, so the `systemClock` default is applied in the one place it belongs. A caller that drives its media pacing on a controllable clock drives the segment timeout from the same lever. |
 | <a id="segmenttimeout"></a> `segmentTimeout?` | `number` | Optional watchdog window, in milliseconds. The timer arms when the initialization segment resolves (we begin expecting media segments) and re-arms on each completed media segment. If no segment arrives within the window, the assembler aborts with `HbpuAbortError("timeout")` and the generator terminates cleanly. Typical value for HKSV is a little under five seconds. |
 | <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the assembler's internal controller. When the parent aborts, the assembler tears down and the segment generator exits. |
 

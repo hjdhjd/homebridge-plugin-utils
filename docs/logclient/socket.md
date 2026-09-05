@@ -30,8 +30,9 @@ Lifecycle, in one pass:
   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
 
 Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, and settles
-the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. The class
-introduces NO `Clock` dependency - reconnect timing is exercised in tests by injecting a near-zero `backoff`, and the watchdog by `node:test` `mock.timers`.
+the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. One optional
+[Clock](../clock.md#clock) carries both of the socket's timing concerns - the per-session liveness window and the reconnect backoff - so a test injects a `TestClock` and drives
+the whole reconnect-and-liveness story from one lever, while the backoff shape stays independently steerable through the injected `backoff` policy.
 
 ## Log Client
 
@@ -248,6 +249,7 @@ Construction-time options for [LogSocket](#logsocket).
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
 | <a id="backoff"></a> `backoff?` | `readonly` | (`attempt`) => `number` | Optional override for the connect-phase backoff policy, invoked with the 1-indexed attempt about to run and returning the delay in milliseconds. Defaults to the log client's own jittered exponential curve - a `RECONNECT_BASE_MS` base doubling each attempt and capped at `RECONNECT_CAP_MS`, plus up to `JITTER_FRACTION` upward jitter. Overridden in tests with a near-zero delay so the reconnect loop runs without real waits. |
+| <a id="clock"></a> `clock?` | `readonly` | [`Clock`](../clock.md#clock) | Optional time source for the session liveness window and the reconnect backoff waits. Passed through unresolved, so `systemClock` is applied by the primitives that consume it. A test injects a `TestClock` to drive both without real waits. |
 | <a id="host"></a> `host` | `readonly` | `string` | The hostname or IP of the homebridge-config-ui-x server. |
 | <a id="log"></a> `log` | `readonly` | [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) | Logger for connection lifecycle and overflow diagnostics. |
 | <a id="port"></a> `port?` | `readonly` | `number` | The TCP port the server listens on. Defaults to `8581`. |

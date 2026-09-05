@@ -14,8 +14,9 @@ all three under one disposal story. Arming a keyed timer replaces any prior time
 reads the key as already gone; an anonymous one-shot self-removes on fire; and `dispose()`, or an aborted lifetime signal, drains every pending timer and makes every
 later registration inert, so a timer can never outlive the owner it was armed against.
 
-This is the callback-timer half of the library's time mechanisms: `Clock` owns awaited, promise-shaped delays, and this registry owns callback timers - one mechanism
-per shape, neither reaching into the other's territory.
+Every timer the registry arms goes through its [Clock](clock.md#clock), so the whole surface is what the registry adds ON TOP of that one time source: keyed identity,
+replace-on-register, anonymous tracking, and the lifetime drain. A consumer that injects a clock therefore drives these deadlines on the same timeline as its awaited
+waits, rather than reaching for a second lever.
 
 ## Utilities
 
@@ -28,7 +29,7 @@ The surface is minimal on purpose:
   - `setTimeout(key, callback, delay)` / `setInterval(key, callback, interval)` arm a keyed timer. Registering under a key that already holds a timer - of either
     kind - clears the prior timer first, so the newest intent for a key wins. A keyed one-shot removes its entry before firing; a keyed interval repeats until cleared.
   - `schedule(callback, delay)` arms an anonymous one-shot: tracked for disposal, self-removing on fire, never replacing anything, so concurrent anonymous timers
-    coexist.
+    coexist. It answers the same cancel-on-dispose handle [Clock.schedule](clock.md#schedule) answers.
   - `clear(key)` cancels and removes a keyed timer; `has(key)` reports whether one is currently armed.
   - `clearAll()` drains every pending timer, keyed and anonymous alike, and leaves the registry armed: the shape for an owner whose pending work must all cancel on a
     state change while the re-arms that follow still need to take.
@@ -161,11 +162,14 @@ Whether a keyed timer is currently armed under `key`.
 ##### schedule()
 
 ```ts
-schedule(callback, delay): void;
+schedule(callback, delay): Disposable;
 ```
 
 Arm an anonymous one-shot: tracked for disposal, self-removing on fire, and never replacing anything. Concurrent anonymous timers coexist; this is the shape for
 fire-and-forget work that has no identity to replace. A no-op once the registry is disposed or its lifetime signal has aborted.
+
+The name, the shape, and the cancel-on-dispose meaning are deliberately [Clock.schedule](clock.md#schedule)'s, because this IS that verb with lifetime tracking added: the
+handle cancels the timer, and the registry additionally guarantees the timer cannot outlive the owner.
 
 ###### Parameters
 
@@ -176,7 +180,10 @@ fire-and-forget work that has no identity to replace. A no-op once the registry 
 
 ###### Returns
 
-`void`
+[`Disposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose)
+
+A handle whose `[Symbol.dispose]` cancels the timer and stops tracking it. A registry that is disposed, or whose lifetime signal has aborted, arms nothing
+and answers the shared [NO\_OP\_DISPOSABLE](util.md#no_op_disposable), so a caller holds a handle either way and never branches on whether the registration took.
 
 ##### setInterval()
 
@@ -237,4 +244,5 @@ Construction options for [TimerRegistry](#timerregistry).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | The time source every timer this registry arms goes through. Defaults to [systemClock](clock.md#systemclock), whose `schedule` IS the global `setTimeout` / `setInterval`, so the default path is that same platform call with one indirection in front of it and no behavior change. A test injects a `TestClock` so the registry's deadlines share the consumer's virtual timeline with its awaited delays, and one `advance` drives both. |
 | <a id="signal"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | A lifetime signal. When it aborts, the registry drains every pending timer and every later registration becomes inert; a signal already aborted at construction time means the registry is born disposed. Omit it for a registry whose only lifetime bound is an explicit `dispose()`. |

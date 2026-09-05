@@ -17,9 +17,10 @@ region of its own - [MQTT\_PUBLISHED\_DOC\_BEGIN](#mqtt_published_doc_begin) and
 H3 headings, their lead sentences, and every hand-written section around and between the two tables. A section the catalog declares no rows for renders as an
 empty fragment: a publish-only plugin's subscribed region carries no table, and the plugin writes no heading above a region it declares nothing for.
 
-What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when
-it declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. The column layout, the width pass,
-and the divider are [renderMarkdownTable](doc-markdown.md#rendermarkdowntable)'s; this module owns which cells go into it and how each one reads.
+What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when it
+declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. A row credits the kinds its verb's narrowing
+names, and the entry's whole list when the verb has none. The column layout, the width pass, and the divider are
+[renderMarkdownTable](doc-markdown.md#rendermarkdowntable)'s; this module owns which cells go into it and how each one reads.
 
 The renderer is pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading the document and writing it back - belongs to the
 `prepare-mqtt` verb that drives it. This module is therefore browser-safe and trivially testable, but it is a tooling concern and is deliberately NOT mirrored
@@ -95,8 +96,10 @@ One traversal validates the catalog and emits both sections' rows. The validatio
 carries no types, so the checks a declaration's shape would otherwise make at compile time are made here instead, and a documentation mistake fails the docs
 build rather than a plugin's startup. Every message names the offending entry by key.
 
-Rows are sorted by their raw topic, grouped when the catalog declares groups, and given a device column when the catalog declares one, with each entry's labels
-joined in the order the vocabulary declares them. A section the catalog has no rows for is an empty string.
+Rows are ordered as the topic tree reads - a topic before every topic that extends it, siblings in plain order, and a topic's own get and set rows before the rows
+of the topics beneath it - grouped when the catalog declares groups, and given a device column when the catalog declares one, with each entry's labels joined in
+the order the vocabulary declares them. A row's device cell names the kinds its verb's narrowing lists, or the entry's whole list when the verb declares none. A
+section the catalog has no rows for is an empty string.
 
 #### Parameters
 
@@ -113,5 +116,6 @@ The two fragments, one per marked region.
 #### Throws
 
 `Error` naming the offending entry when the catalog declares a column without a string heading or a vocabulary object, when a column is declared and an
-        entry carries no devices list or names a kind the vocabulary does not declare, when no column is declared and an entry carries a devices list, or when
-        some entries declare a group and others do not.
+        entry carries no devices list or names a kind the vocabulary does not declare, when no column is declared and an entry carries a devices list or a verb's
+        narrowing, when a narrowing is declared without its verb's own message text, when a narrowing is empty or names a kind the entry's devices list does not
+        carry, when a kind the entry lists is credited by none of the verbs it declares, or when some entries declare a group and others do not.

@@ -50,7 +50,9 @@ One topic a plugin declares: its tail, the name its verbs log under, the documen
 
 The presence of `publish`, `get`, and `set` is the declaration that the plugin performs that verb. A consumer publishes an entry only when it declares `publish`,
 and the renderer emits exactly the rows the entry declares, so one declaration answers both what the code does and what the document says. Author-owned markdown
-in the three message texts reaches the document verbatim, except the column separator, which the renderer escapes.
+in the three message texts reaches the document verbatim, except the column separator, which the renderer escapes. A verb's narrowing - `getDevices`,
+`publishDevices`, `setDevices` - names the listed kinds that perform that verb when fewer than all of them do; a verb without one is performed by every listed
+kind. Like `devices`, a narrowing is documentation the renderer projects and the runtime never reads.
 
 #### Type Parameters
 
@@ -64,10 +66,13 @@ in the three message texts reaches the document verbatim, except the column sepa
 | ------ | ------ | ------ | ------ |
 | <a id="devices"></a> `devices?` | `readonly` | readonly \[`TDevice`, `TDevice`\] | Optional. The device kinds the topic belongs to, named by key into the catalog's column vocabulary, as a non-empty tuple. Present only when the catalog declares a column, which the builder's two overloads make a compile-time pair wherever the entries' literal type survives. |
 | <a id="get"></a> `get?` | `readonly` | `string` | Optional. The message text the document prints for the topic's get child. Its presence declares that the plugin subscribes to that child. |
+| <a id="getdevices"></a> `getDevices?` | `readonly` | readonly \[`TDevice`, `TDevice`\] | Optional. The listed kinds that answer the get child, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the same keys. Documentation only. |
 | <a id="group"></a> `group?` | `readonly` | `string` | Optional. The heading the entry's rows render under. A catalog groups all of its entries or none of them. |
 | <a id="label"></a> `label` | `readonly` | `string` | The name the get and set verbs log under, handed to `subscribeGet` and `subscribeSet` as their `type` argument. |
 | <a id="publish"></a> `publish?` | `readonly` | `string` | Optional. The message text the document prints for the published topic. Its presence declares that the plugin publishes it. |
+| <a id="publishdevices"></a> `publishDevices?` | `readonly` | readonly \[`TDevice`, `TDevice`\] | Optional. The listed kinds that publish the topic, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the same keys. Documentation only. |
 | <a id="set"></a> `set?` | `readonly` | `string` | Optional. The message text the document prints for the topic's set child. Its presence declares that the plugin subscribes to that child. |
+| <a id="setdevices"></a> `setDevices?` | `readonly` | readonly \[`TDevice`, `TDevice`\] | Optional. The listed kinds that answer the set child, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the same keys. Documentation only. |
 | <a id="topic"></a> `topic` | `readonly` | `string` | The tail relative to the identity the caller composes with, or the whole topic after the prefix for a plugin that composes no identity. A template when it carries placeholders. |
 
 ***
@@ -427,8 +432,9 @@ is named where it can be seen rather than carried forward.
 
 Two overloads, because the column and the entries' device lists are one decision. Without a column, an entry declaring `devices` fails to compile. With one, the
 vocabulary's keys are inferred from the declaration, so an entry missing its list, an empty list, and a list naming an undeclared kind each fail to compile. The
-runtime reads nothing from the column beyond attaching it: the document's own checks - a missing or stray list, an unknown key, mixed groups - belong to the
-renderer, because the compiled JavaScript the CLI loads carries no types and a documentation mistake should fail the docs build rather than a plugin's startup.
+runtime reads nothing from the column beyond attaching it: the document's own checks - a missing or stray list, an unknown key, mixed groups, a narrowing that
+names an unlisted kind or a verb the entry does not declare - belong to the renderer, because the compiled JavaScript the CLI loads carries no types and a
+documentation mistake should fail the docs build rather than a plugin's startup.
 
 The authoring rule the compile-time half depends on: TypeScript keeps a topic's literal type while the entries literal reaches this builder inline, or through
 group constants declared `as const` and spread into the call. An intermediate constant without `as const`, a spread of plain constants, or an explicit type
@@ -456,8 +462,8 @@ A fresh catalog carrying every entry. The caller's own literal is never mutated.
 
 ##### Throws
 
-`Error` naming the offending key when the catalog declares no entries, when an entry declares a field outside the seven, an empty topic, none of
-        `publish`, `get`, or `set`, or a brace outside a well-formed placeholder, and naming both keys when two entries produce the same wire topic.
+`Error` naming the offending key when the catalog declares no entries, when an entry declares a field the entry type does not admit, an empty topic,
+        none of `publish`, `get`, or `set`, or a brace outside a well-formed placeholder, and naming both keys when two entries produce the same wire topic.
 
 ##### Example
 

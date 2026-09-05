@@ -101,6 +101,9 @@ The semantics are minimal on purpose:
   - `[Symbol.dispose]` clears the pending fire and marks the watchdog permanently dead: subsequent `arm()` calls are no-ops. This matches the scope-bound semantics
     callers expect from `using` - the resource is dead when the block exits, not merely quiescent.
 
+The window is armed on the injected [Clock](clock.md#clock) - [systemClock](clock.md#systemclock) unless a caller supplies one - so a consumer that drives its waits on a controllable clock
+drives this deadline from the same lever, and a composer between that consumer and this class passes its optional clock through without resolving it.
+
 This is a `Disposable` (synchronous) rather than `AsyncDisposable` because cancelling a timer is synchronous; there is no background work to await.
 
 #### Example
@@ -264,9 +267,10 @@ Construction-time options for [Watchdog](#watchdog).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="clock-1"></a> `clock?` | [`Clock`](clock.md#clock) | Optional time source the inactivity window is armed on. Defaults to [systemClock](clock.md#systemclock), whose `schedule` IS the global `setTimeout`, so the default path is that same platform call with one indirection in front of it and no behavior change. A test injects a `TestClock` so the window runs on virtual time alongside whatever else that clock drives. |
 | <a id="onfire"></a> `onFire` | () => `void` | Callback invoked when the watchdog window lapses without a re-arm. Typically aborts an owning controller (`() => this.#controller.abort(new HbpuAbortError("timeout"))`) but the watchdog itself is agnostic about what the fire does. Runs only when the observed signal has not already aborted; if the signal fires before the timer, `onFire` is skipped entirely. |
 | <a id="signal-1"></a> `signal` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The lifetime signal the watchdog observes. When the signal aborts for any reason the pending timer is cleared and no further arms take effect. Typically the consumer's composed lifetime signal (`this.signal`) so both parent-initiated and internal aborts wind the watchdog down. |
-| <a id="timeoutms"></a> `timeoutMs` | `number` | Inactivity window in milliseconds. The first `arm()` schedules a fire at now + `timeoutMs`; each subsequent `arm()` restarts the clock. |
+| <a id="timeoutms"></a> `timeoutMs` | `number` | Inactivity window in milliseconds. The first `arm()` schedules a fire at now + `timeoutMs`; each subsequent `arm()` restarts the window. |
 
 ***
 
@@ -515,6 +519,22 @@ const feed = new StatusFeed({ controller, log: consoleLog });
 
 consoleLog.info("Watching %s for status updates.", controller.name);
 ```
+
+***
+
+### NO\_OP\_DISPOSABLE
+
+```ts
+const NO_OP_DISPOSABLE: Disposable;
+```
+
+The shared inert `Disposable` an API answers with when there is nothing to cancel: [onAbort](#onabort)'s pre-aborted branch, which registered no listener, and the
+timer registry's inert registrations, which armed no timer. A caller holds it exactly as it holds a live handle, so the nothing-to-cancel case needs no branch of
+its own at any call site.
+
+One module-scope instance serves every such call rather than allocating a fresh object and arrow pair per call, matching the other shared constants in this file.
+Sharing is safe because the disposer is stateless, repeatable, and side-effect free: `[Symbol.dispose]()` can be invoked any number of times from any call site
+without interference. It is frozen so that a holder cannot reassign the disposer out from under every other caller.
 
 ***
 

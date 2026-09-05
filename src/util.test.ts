@@ -3,14 +3,15 @@
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, onAbort, waitWithSignal,
  * markHandled, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
  * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
- * formatPercent, formatErrorMessage, defaultRetryBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
+ * formatPercent, formatErrorMessage, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
-import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent,
-  formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, membershipDelta, onAbort, prefixedLog,
-  retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
+import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes, formatErrorMessage,
+  formatMs, formatPercent, formatSeconds, guardedDispatch, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled, membershipDelta,
+  onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
   takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
+import type { RetryBackoff } from "./util.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -2615,6 +2616,70 @@ describe("defaultRetryBackoff", () => {
     assert.equal(defaultRetryBackoff(7), 30000);
     assert.equal(defaultRetryBackoff(10), 30000);
     assert.equal(defaultRetryBackoff(100), 30000);
+  });
+});
+
+describe("exponentialBackoff", () => {
+
+  test("answers the default retry ladder at its defaults", () => {
+
+    // The literal schedule, asserted against the numbers themselves rather than against defaultRetryBackoff - which derives from this same factory, so comparing the
+    // two would assert nothing about either.
+    const ladder: RetryBackoff = exponentialBackoff();
+
+    assert.deepEqual([ 2, 3, 4, 5, 6, 7, 100 ].map(ladder), [ 1000, 2000, 4000, 8000, 16000, 30000, 30000 ],
+      "the default ladder seeds at 1000 for attempt 2, doubles, and holds the 30000 ceiling");
+  });
+
+  test("answers the log client's reconnect schedule from a custom seed and ceiling", () => {
+
+    const ladder = exponentialBackoff({ ceilingMs: 5000, seedMs: 500 });
+
+    assert.deepEqual([ 2, 3, 4, 5, 6, 7 ].map(ladder), [ 500, 1000, 2000, 4000, 5000, 5000 ],
+      "a 500 ms seed under a 5000 ms ceiling is the log client's curve before its jitter");
+  });
+
+  test("holds a ceiling below the seed from the second attempt", () => {
+
+    // A ceiling under the seed is a caller's deliberate flat wait, so the clamp answers the ceiling from the very first retry rather than the seed.
+    const ladder = exponentialBackoff({ ceilingMs: 250, seedMs: 1000 });
+
+    assert.equal(ladder(2), 250, "the ceiling wins at the seed attempt");
+    assert.equal(ladder(3), 250, "and at every attempt after it");
+  });
+
+  test("rejects a non-finite or non-positive option at construction", () => {
+
+    // The boundary answers where the policy is declared, so a caller sees the mistake without waiting for a first retry that may be minutes away.
+    assert.throws(() => exponentialBackoff({ seedMs: 0 }), /seedMs.*finite and positive/);
+    assert.throws(() => exponentialBackoff({ ceilingMs: -1 }), /seedMs.*finite and positive/);
+    assert.throws(() => exponentialBackoff({ ceilingMs: Infinity }), /seedMs.*finite and positive/);
+    assert.throws(() => exponentialBackoff({ seedMs: Number.NaN }), /seedMs.*finite and positive/);
+  });
+
+  test("drives retry's waits", async () => {
+
+    const clock = new TestClock();
+    let calls = 0;
+    const attempt = retry(async () => {
+
+      calls++;
+
+      if(calls < 4) {
+
+        throw new Error("transient");
+      }
+
+      return "done";
+    }, { attempts: 4, backoff: exponentialBackoff({ ceilingMs: 300, seedMs: 100 }), clock });
+
+    // Walk the ladder's own gaps on virtual time: the seed, its double, then the ceiling clamping what would otherwise be 400. A ladder answering any other delay
+    // strands the run on a wait this walk never releases, so the walk itself is the assertion.
+    await advanceThroughSchedule(clock, [ 100, 200, 300 ]);
+
+    assert.equal(await attempt, "done", "the fourth attempt succeeded once the ladder's waits had run");
+    assert.equal(calls, 4, "every attempt in the budget ran");
+    assert.equal(clock.now(), 600, "the waits summed to the seed, its double, and the ceiling");
   });
 });
 

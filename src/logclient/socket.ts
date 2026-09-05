@@ -35,7 +35,7 @@
  * @module
  */
 import { DEFAULT_PORT, JITTER_FRACTION, LOG_NAMESPACE, MARGIN_MS, PTY_COLUMNS, PTY_ROWS, RECONNECT_BASE_MS, RECONNECT_CAP_MS } from "./settings.ts";
-import { HbpuAbortError, Watchdog, composeSignals, formatErrorMessage, onAbort, retry } from "../util.ts";
+import { HbpuAbortError, Watchdog, composeSignals, exponentialBackoff, formatErrorMessage, onAbort, retry } from "../util.ts";
 import { LOG_NAMESPACE_PATH, decodeFrame, encodeFrame } from "./frame.ts";
 import { LogAuthError, isPermanentAuthError } from "./auth.ts";
 import type { Clock } from "../clock.ts";
@@ -163,6 +163,9 @@ function withJitter(base: number, random: () => number): number {
   return Math.round(base + (base * JITTER_FRACTION * random()));
 }
 
+// The log client's curve is the library's exponential ladder at the log client's own constants, built once at module scope so every reconnect wait consults one policy.
+const reconnectLadder = exponentialBackoff({ ceilingMs: RECONNECT_CAP_MS, seedMs: RECONNECT_BASE_MS });
+
 /**
  * The log client's connect-phase reconnect backoff policy: a dev-tuned jittered exponential curve with a low ceiling.
  *
@@ -172,8 +175,8 @@ function withJitter(base: number, random: () => number): number {
  * `JITTER_FRACTION` of the computed base is added as upward jitter so a fleet of clients does not reconnect in lockstep after a shared outage.
  *
  * It is exported (rather than left inline in the constructor) so the bare schedule is a directly unit-testable function: with `random` pinned to `0` the curve yields the
- * exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. `retry` invokes the socket's backoff 1-indexed with the attempt about to run and never with
- * `attempt === 1` (the first attempt runs immediately), so `attempt - 2` is the zero-based exponent for the second-and-later attempts.
+ * exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. The curve itself is {@link exponentialBackoff}'s ladder built from `RECONNECT_BASE_MS` and
+ * `RECONNECT_CAP_MS`, so the attempt numbering is the one that factory documents.
  *
  * @param attempt - The 1-indexed connect attempt about to run. Called only for the second and later attempts (the first runs with no wait).
  * @param random  - Source of `[0, 1)` randomness for the jitter. Defaults to `Math.random`; pinned in tests for a deterministic schedule.
@@ -184,7 +187,7 @@ function withJitter(base: number, random: () => number): number {
  */
 export function reconnectBackoff(attempt: number, random: () => number = Math.random): number {
 
-  return withJitter(Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * (2 ** (attempt - 2))), random);
+  return withJitter(reconnectLadder(attempt), random);
 }
 
 // A single connected session: the live WebSocket, the per-session controller whose signal ends the streaming phase, the ping cadence the Engine.IO open handshake

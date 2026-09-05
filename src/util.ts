@@ -777,7 +777,84 @@ export function formatErrorMessage(error: unknown): string {
 }
 
 /**
- * The default backoff policy used by {@link retry}: exponential with a 30-second ceiling, starting at 1 second for the second attempt (`attempt = 2`).
+ * The shape of a backoff policy: the function {@link retry} consults between attempts to learn how long to wait before the next one.
+ *
+ * `attempt` is the 1-indexed number of the attempt about to run, and it is never 1 - the first attempt runs immediately - so a policy's seed delay is the one it
+ * answers for attempt 2. The answer is the delay, in milliseconds, to wait before running that attempt.
+ *
+ * @category Utilities
+ */
+export type RetryBackoff = (attempt: number) => number;
+
+/**
+ * Options accepted by {@link exponentialBackoff}.
+ *
+ * @category Utilities
+ */
+export interface ExponentialBackoffOptions {
+
+  /**
+   * The largest delay, in milliseconds, the ladder ever answers: once the doubling reaches this value the ladder holds here for every later attempt. Must be finite
+   * and positive. Defaults to 30000.
+   */
+  ceilingMs?: number;
+
+  /**
+   * The delay, in milliseconds, before attempt 2 - the first retry - doubled for each attempt after it. Must be finite and positive. Defaults to 1000.
+   */
+  seedMs?: number;
+}
+
+/**
+ * Build an exponential backoff policy: a seed delay doubled for each successive attempt, never above a ceiling.
+ *
+ * This is the one exponential ladder in the library...the default retry policy ({@link defaultRetryBackoff}) and the log client's reconnect curve both derive from
+ * it, so the formula and its attempt numbering live in one place. The numbering is {@link RetryBackoff}'s: {@link retry} consults the policy with the 1-indexed
+ * attempt about to run and never with `attempt === 1`, so `seedMs` is the delay before attempt 2 and `attempt - 2` is the zero-based exponent. What comes back is
+ * exactly what {@link RetryOptions.backoff} accepts. Jitter is deliberately the caller's, composed on top of the ladder rather than offered as an option here: the
+ * useful jitter models differ in kind - a fraction of the computed delay, an absolute millisecond spread a user configures - so the ladder answers the bare curve
+ * and each caller spreads it the way its own fleet needs.
+ *
+ * @param options - The ladder's seed and ceiling. See {@link ExponentialBackoffOptions}.
+ *
+ * @returns A backoff policy answering the delay, in milliseconds, to wait before the attempt it is given.
+ *
+ * @throws `Error` if `seedMs` or `ceilingMs` is not a finite, positive number.
+ *
+ * @example
+ *
+ * ```ts
+ * import { exponentialBackoff, retry } from "homebridge-plugin-utils";
+ *
+ * // A ladder with a one-minute ceiling, handed to retry as its policy.
+ * const device = await retry(async (signal) => fetchDevice(id, { signal }), { attempts: 5, backoff: exponentialBackoff({ ceilingMs: 60000 }) });
+ *
+ * // Jitter composed on top of the same ladder.
+ * const ladder = exponentialBackoff({ ceilingMs: 60000 });
+ * const spread = (attempt: number): number => ladder(attempt) + Math.round(Math.random() * 250);
+ * ```
+ *
+ * @category Utilities
+ */
+export function exponentialBackoff({ ceilingMs = 30000, seedMs = 1000 }: ExponentialBackoffOptions = {}): RetryBackoff {
+
+  // Reject a nonsensical ladder where it is declared rather than clamping it into something plausible. A non-finite seed or ceiling describes a ladder that never
+  // ends, and a non-positive one describes a wait that runs backwards; both are caller mistakes, and surfacing them at construction beats surfacing them at the
+  // first retry, when the caller is furthest from the declaration that caused them.
+  if(!Number.isFinite(seedMs) || (seedMs <= 0) || !Number.isFinite(ceilingMs) || (ceilingMs <= 0)) {
+
+    throw new Error("exponentialBackoff: `seedMs` and `ceilingMs` must be finite and positive.");
+  }
+
+  return (attempt: number): number => Math.min(ceilingMs, seedMs * (2 ** (attempt - 2)));
+}
+
+// The default retry policy is the ladder at its defaults, built once here so `defaultRetryBackoff` stays a plain function declaration on the public surface.
+const defaultRetryLadder = exponentialBackoff();
+
+/**
+ * The default backoff policy used by {@link retry}: {@link exponentialBackoff} at its defaults - exponential with a 30-second ceiling, starting at 1 second for the
+ * second attempt (`attempt = 2`).
  *
  * @param attempt - The attempt number about to be run (1-indexed; never called with `attempt === 1`, since the first attempt runs immediately).
  *
@@ -787,7 +864,7 @@ export function formatErrorMessage(error: unknown): string {
  */
 export function defaultRetryBackoff(attempt: number): number {
 
-  return Math.min(30000, 1000 * (2 ** (attempt - 2)));
+  return defaultRetryLadder(attempt);
 }
 
 /**
@@ -804,10 +881,11 @@ export interface RetryOptions {
   attempts?: number;
 
   /**
-   * Backoff policy, invoked with the attempt number (1-indexed) about to be run. The returned value is the delay in milliseconds before running that attempt. Called
-   * only between attempts (i.e., never with `attempt === 1`). Defaults to {@link defaultRetryBackoff} (exponential with a 30-second ceiling).
+   * Backoff policy, invoked with the attempt number (1-indexed) about to be run. The returned value is the delay in milliseconds before running that attempt. See
+   * {@link RetryBackoff} for the attempt-numbering convention. Defaults to {@link defaultRetryBackoff} (exponential with a 30-second ceiling); build a curve with a
+   * different seed or ceiling through {@link exponentialBackoff}.
    */
-  backoff?: (attempt: number) => number;
+  backoff?: RetryBackoff;
 
   /**
    * Optional time source for the between-attempt backoff waits. Defaults to {@link systemClock}, whose `delay` IS the platform `node:timers/promises` `setTimeout`, so

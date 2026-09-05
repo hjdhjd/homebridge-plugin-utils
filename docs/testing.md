@@ -586,6 +586,18 @@ Re-exports [TestClock](clock-double.md#testclock)
 
 ***
 
+### TestHttpListener
+
+Re-exports [TestHttpListener](http-listener-double.md#testhttplistener)
+
+***
+
+### TestHttpListenerRoute
+
+Re-exports [TestHttpListenerRoute](http-listener-double.md#testhttplistenerroute-1)
+
+***
+
 ### TestLogSocket
 
 Re-exports [TestLogSocket](logclient/socket-double.md#testlogsocket)

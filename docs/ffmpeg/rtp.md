@@ -336,7 +336,7 @@ explicit dispose (for example, on an error path that releases early and then fal
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
 | <a id="count"></a> `count` | `readonly` | `1` \| `2` | `1` or `2`. A two-port reservation guarantees `port` and `port + 1` are both reserved. |
-| <a id="ipfamily"></a> `ipFamily` | `readonly` | [`IpFamily`](dgram-util.md#ipfamily) | `"ipv4"` or `"ipv6"`. |
+| <a id="ipfamily"></a> `ipFamily` | `readonly` | [`IpFamily`](../dgram-util.md#ipfamily) | `"ipv4"` or `"ipv6"`. |
 | <a id="port"></a> `port` | `readonly` | `number` | The first (and, for single-port reservations, only) reserved UDP port. |
 
 #### Methods
@@ -368,7 +368,7 @@ Construction-time options for [RtpPortAllocator.reserve](#reserve).
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="count-1"></a> `count?` | `1` \| `2` | Optional. The number of consecutive UDP ports to reserve. `1` yields a single port, `2` yields the reserved port plus the next port so FFmpeg's "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`. |
-| <a id="ipfamily-1"></a> `ipFamily?` | [`IpFamily`](dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
+| <a id="ipfamily-1"></a> `ipFamily?` | [`IpFamily`](../dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
 | <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional caller [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). Cancels in-flight bind-retry attempts. If the signal aborts while `reserve()` is still looking for consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. |
 
 ***
@@ -384,7 +384,7 @@ Construction-time options for [RtpDemuxer](#rtpdemuxer).
 | <a id="clock"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional time source for both of the demuxer's watchdog windows, the RTCP-replay heartbeat and the inbound-packet inactivity timeout. Passed through to each watchdog unresolved, so the `systemClock` default is applied in the one place it belongs and a demuxer keeps one time source for both windows. |
 | <a id="inactivitytimeout"></a> `inactivityTimeout?` | `number` | Optional inactivity watchdog window, in milliseconds. The timer arms during construction (immediately after the bind call is issued) and re-arms on every received datagram. When the window lapses without traffic, the demuxer aborts with `HbpuAbortError("timeout")`. Omit to disable the watchdog entirely. |
 | <a id="inputport-1"></a> `inputPort` | `number` | Required. The UDP port to bind to. Typically a value previously reserved via [RtpPortAllocator.reserve](#reserve). Pass `0` to request kernel-assigned ephemeral allocation: the bind succeeds atomically against whichever port the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The assigned port is then observable via [RtpDemuxer.inputPort](#inputport) once [RtpDemuxer.ready](#ready) resolves. |
-| <a id="ipfamily-2"></a> `ipFamily?` | [`IpFamily`](dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
+| <a id="ipfamily-2"></a> `ipFamily?` | [`IpFamily`](../dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
 | <a id="log"></a> `log?` | [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) | Optional logger. Used for debug tracing of socket lifecycle and heartbeat events, and for error-path diagnostics. The signal's reason on abort remains the authoritative notification channel; logging is a convenience for operators. |
 | <a id="rtcpport"></a> `rtcpPort` | `number` | Required. The destination UDP port (on the loopback interface) for classified RTCP packets. Typically FFmpeg's RTCP input port. |
 | <a id="rtpport"></a> `rtpPort` | `number` | Required. The destination UDP port (on the loopback interface) for classified RTP packets. Typically FFmpeg's RTP input port. The heartbeat replay also targets this port - FFmpeg ignores the RTCP shape on its RTP input, but the arriving traffic keeps that input fed during quiet periods. |

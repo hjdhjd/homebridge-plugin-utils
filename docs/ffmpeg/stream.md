@@ -297,5 +297,5 @@ UDP return-port descriptor for the stream-health monitor.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="ipfamily"></a> `ipFamily` | [`IpFamily`](dgram-util.md#ipfamily) | The IP family: `"ipv4"` binds to `127.0.0.1`, `"ipv6"` binds to `::1`. Shares the [IpFamily](dgram-util.md#ipfamily) alias with `RtpDemuxerInit`, `PortReservationInit`, and `PortReservation` so every UDP-aware init type in the FFmpeg subsystem reads from the same vocabulary. |
+| <a id="ipfamily"></a> `ipFamily` | [`IpFamily`](../dgram-util.md#ipfamily) | The IP family: `"ipv4"` binds to `127.0.0.1`, `"ipv6"` binds to `::1`. Shares the [IpFamily](../dgram-util.md#ipfamily) alias with `RtpDemuxerInit`, `PortReservationInit`, and `PortReservation` so every UDP-aware init type in the FFmpeg subsystem reads from the same vocabulary. |
 | <a id="port"></a> `port` | `number` | The UDP port to bind to. Pass `0` to request kernel-assigned ephemeral allocation: the bind succeeds atomically against whichever port the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The assigned port is then observable via [FfmpegStreamingProcess.returnPort](#returnport) once [FfmpegStreamingProcess.ready](process.md#ready) resolves. |

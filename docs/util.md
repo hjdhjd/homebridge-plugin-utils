@@ -871,6 +871,61 @@ public updateRecordingActive(active: boolean): void {
 
 ***
 
+### hasErrorCode()
+
+```ts
+function hasErrorCode<C>(error, code): error is Error & { code: C };
+```
+
+Test whether an unknown thrown value is an `Error` carrying a specific string `code`, narrowing it so the caller can read that code without a cast.
+
+Two error families spell a string `code` and both are thrown as `unknown` into a `catch`: Node's own errno errors, where `code` is the platform's symbolic name
+(`"EADDRINUSE"` for a port already bound, `"ENOENT"` for a path that does not exist, `"ENOTFOUND"` for a name that does not resolve), and library errors that adopt
+the same convention to give callers something stable to branch on. Asking "is this that failure?" is a three-part check - an `Error`, an own `code` property, and the
+value itself - and writing it inline at each site is what lets one site quietly drop a part and start matching a plain object that merely carries the field.
+
+The generic keeps the caller's literal code in the narrowed type, the way [isHbpuAbortReason](#ishbpuabortreason) keeps its reason, so a branch that matched `"EADDRINUSE"` reads
+`error.code` as that literal rather than as a widened `string`.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `C` *extends* `string` | The specific code being matched. Defaulted by inference from `code`. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `error` | `unknown` | The value to test, typically a `catch` binding. |
+| `code` | `C` | The code to match, compared with strict equality. |
+
+#### Returns
+
+`error is Error & { code: C }`
+
+`true` when `error` is an `Error` whose `code` property is exactly `code`.
+
+#### Example
+
+```ts
+import { hasErrorCode } from "homebridge-plugin-utils";
+
+try {
+
+  await bind();
+} catch(error: unknown) {
+
+  // A port somebody else holds is worth waiting out; anything else is a real failure and is rethrown.
+  if(!hasErrorCode(error, "EADDRINUSE")) {
+
+    throw error;
+  }
+}
+```
+
+***
+
 ### isHbpuAbortError()
 
 ```ts

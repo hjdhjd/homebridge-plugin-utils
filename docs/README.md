@@ -29,13 +29,13 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [clock](clock.md) | An injectable wall-clock interface. |
 | [clock-double](clock-double.md) | A reusable, controllable [Clock](clock.md#clock) test double. |
 | [coalesce](coalesce.md) | One asynchronous pass at a time, with a burst of triggers collapsing into a single follow-up. |
+| [dgram-util](dgram-util.md) | Single source of truth for the `"ipv4"` / `"ipv6"` -> `node:dgram` translations every datagram consumer in the library needs. |
 | [disposable-stack](disposable-stack.md) | A drop-in implementation of the TC39 Explicit Resource Management `DisposableStack`. |
 | [doc-markdown](doc-markdown.md) | The markdown mechanics every documentation generator in the family composes over: the in-place splice of a marked region, and the markdown table with padded columns. |
 | [docChrome](docChrome.md) | A shared documentation-chrome renderer for the family's plugins. |
 | [featureOptions](featureOptions.md) | A hierarchical feature option system for plugins and applications. |
 | [featureOptions-docs](featureOptions-docs.md) | A shared documentation renderer for the [FeatureOptions](featureOptions.md#featureoptions) catalog. |
 | [ffmpeg/codecs](ffmpeg/codecs.md) | Probe FFmpeg capabilities and codecs on the host system. |
-| [ffmpeg/dgram-util](ffmpeg/dgram-util.md) | Single source of truth for the `"ipv4"` / `"ipv6"` -> `node:dgram` translations the FFmpeg subsystem needs. |
 | [ffmpeg/exec](ffmpeg/exec.md) | One-shot FFmpeg execution with composed signal lifetime. |
 | [ffmpeg/fmp4](ffmpeg/fmp4.md) | ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data. |
 | [ffmpeg/fmp4-builders](ffmpeg/fmp4-builders.md) | Shared ISO BMFF (fMP4) byte-level construction builders. |
@@ -52,6 +52,8 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [ffmpeg/stream](ffmpeg/stream.md) | HomeKit livestreaming FFmpeg process with a signal-driven internal stream-health monitor. |
 | [formatters](formatters.md) | **Why this file exists.** `featureOptions.ts` ships into `dist/ui/` for the browser to load (via the browser-module copy step). The catalog's built-in formatter registry needs `formatBps`, `formatBytes`, `formatMs`, `formatPercent`, and `formatSeconds` at runtime - and pulling them from `util.ts` would drag in `util.ts`'s `node:timers/promises` import, which the browser cannot resolve. This module is the SSOT for the magnitude-rendering policy. It has zero runtime imports of any kind, so shipping it alongside `featureOptions.js` is safe in any runtime that can execute ES2024+ JavaScript. |
 | [homebridge-enums](homebridge-enums.md) | Mirrors the const enum values every Homebridge plugin needs at value-side runtime, sourced from the "homebridge" module surface: `APIEvent` from homebridge-core's `api.d.ts`, and `Categories` from hap-nodejs's `Accessory.d.ts` and `HAPStatus` from its `HAPServer.d.ts` as "homebridge" re-exports them. `verbatimModuleSyntax` disallows value imports of ambient const enums, so those contracts are re-declared here at value-side. This is the plugin-facing counterpart of the camera-protocol mirrors in `ffmpeg/hap-enums.ts`: every plugin registers for the `api` lifecycle events, any plugin that registers an accessory names its category, and any plugin that reports a device fault to HomeKit names a status code, so centralizing the mirrors gives every consumer a single import path and a single update point. |
+| [http-listener](http-listener.md) | One plugin-hosted HTTP listener, shaped to the library's own lifecycle model. |
+| [http-listener-double](http-listener-double.md) | A socket-free [HttpListener](http-listener.md#httplistener) test double. |
 | [logclient/auth](logclient/auth.md) | Token acquisition for the Homebridge UI log client. |
 | [logclient/cli](logclient/cli.md) | The `hblog` command-line bin. |
 | [logclient/cli-run](logclient/cli-run.md) | The `hblog` command-line logic, written pure-by-injection. |

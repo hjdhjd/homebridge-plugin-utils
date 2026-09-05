@@ -3,7 +3,6 @@
  * ffmpeg/index.ts: FFmpeg classes.
  */
 export * from "./codecs.ts";
-export * from "./dgram-util.ts";
 export * from "./exec.ts";
 export * from "./fmp4.ts";
 export * from "./hap-enums.ts";

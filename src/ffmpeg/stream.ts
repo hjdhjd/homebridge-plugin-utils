@@ -22,11 +22,11 @@
  * @module
  */
 import { HbpuAbortError, Watchdog, onAbort } from "../util.ts";
-import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
+import { createDgramSocket, loopbackAddress } from "../dgram-util.ts";
 import type { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessInit } from "./process.ts";
-import type { IpFamily } from "./dgram-util.ts";
+import type { IpFamily } from "../dgram-util.ts";
 import { STREAM_HEALTH_TIMEOUT } from "./settings.ts";
 
 /**

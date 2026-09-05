@@ -28,8 +28,8 @@
  * @module
  */
 import type { RemoteInfo, Socket } from "node:dgram";
-import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
-import type { IpFamily } from "./dgram-util.ts";
+import { createDgramSocket, loopbackAddress } from "../dgram-util.ts";
+import type { IpFamily } from "../dgram-util.ts";
 import type { Nullable } from "../util.ts";
 import { once } from "node:events";
 

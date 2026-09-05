@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/dgram-util.test.ts: Unit tests for the IP-family translation tables and dgram-socket factory in dgram-util.ts - loopbackAddress, createDgramSocket,
+ * dgram-util.test.ts: Unit tests for the IP-family translation tables and dgram-socket factory in dgram-util.ts - loopbackAddress, createDgramSocket,
  * and the IpFamily union's exhaustive coverage at the type level.
  */
 import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
@@ -27,7 +27,7 @@ describe("loopbackAddress", () => {
 
   test("returns the IPv6 loopback string for ipFamily \"ipv6\"", () => {
 
-    // The IPv6 mapping is "::1" specifically (the IPv6 loopback), not "::" (the any-address). The test pins the literal so a future refactor that swaps to the
+    // The IPv6 mapping is "::1" specifically (the IPv6 loopback), not "::" (the any-address). The test holds the literal so a future refactor that swaps to the
     // any-address - which would silently widen the bind surface - fails here.
     assert.equal(loopbackAddress("ipv6"), "::1", "ipv6 must map to the IPv6 loopback address exactly");
   });
@@ -94,7 +94,7 @@ describe("createDgramSocket", () => {
 
   test("rejects values outside the IpFamily union at the type level", () => {
 
-    // Type-level rejection only - see the parallel comment in the loopbackAddress describe. The directional contract this test pins: callers pass IpFamily into the
+    // Type-level rejection only - see the parallel comment in the loopbackAddress describe. The directional contract this test holds: callers pass IpFamily into the
     // factory, and the dgram socket-type literal ("udp4" / "udp6") is the *table value* the factory hands back to `node:dgram`, never an accepted caller input.
     type FactoryParam = Parameters<typeof createDgramSocket>[0];
 

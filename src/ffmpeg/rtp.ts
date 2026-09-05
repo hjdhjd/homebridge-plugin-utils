@@ -31,10 +31,10 @@
  */
 import { HbpuAbortError, Watchdog, composeSignals, isTimeoutReason, markHandled, onAbort } from "../util.ts";
 import type { HomebridgePluginLogging, Nullable } from "../util.ts";
-import { createDgramSocket, loopbackAddress } from "./dgram-util.ts";
+import { createDgramSocket, loopbackAddress } from "../dgram-util.ts";
 import type { Clock } from "../clock.ts";
 import { DisposableStack } from "../disposable-stack.ts";
-import type { IpFamily } from "./dgram-util.ts";
+import type { IpFamily } from "../dgram-util.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import { RtpPacketParser } from "./rtp-parser.ts";
 import type { Socket } from "node:dgram";

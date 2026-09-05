@@ -13,8 +13,11 @@ import { mqttTopicCatalog } from "./mqtt-topics.ts";
 
 // The documented column form as a plugin writes it: an exported constant. This module's own typecheck is the gate, so an overload whose return type a consumer's
 // declaration emitter cannot name fails here exactly as it failed the first plugin that adopted the column.
-export const declarationEmittedCatalog = mqttTopicCatalog({ lock: { devices: ["camera"], label: "lock", publish: "The lock state.", topic: "lock" } },
-  { heading: "Device Type", vocabulary: { camera: "Camera" } });
+export const declarationEmittedCatalog = mqttTopicCatalog({
+
+  lock: { devices: [ "camera", "sensor" ], get: "A request to publish the state.", getDevices: ["sensor"], label: "lock", publish: "The lock state.",
+    topic: "lock" }
+}, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
 
 describe("mqttTopicCatalog - the declaration-emit contract", () => {
 
@@ -24,6 +27,7 @@ describe("mqttTopicCatalog - the declaration-emit contract", () => {
 
     assert.deepEqual(Object.keys(declarationEmittedCatalog), ["lock"]);
     assert.equal(declarationEmittedCatalog.lock.topic, "lock");
+    assert.deepEqual(declarationEmittedCatalog.lock.getDevices, ["sensor"]);
     assert.equal(Object.getOwnPropertySymbols(declarationEmittedCatalog).length, 1);
   });
 });

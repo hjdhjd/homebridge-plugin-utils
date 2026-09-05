@@ -200,6 +200,22 @@ const VOCABULARY_ORDER_PUBLISHED = [
   ""
 ].join("\n");
 
+const NARROWED_PUBLISHED = [
+
+  "| Topic           | Protect Device Type  | Message Published",
+  "|-----------------|----------------------|----------------------------------",
+  "| `ambientlight`  | Camera, Sensor       | The ambient light level, in lux.",
+  ""
+].join("\n");
+
+const NARROWED_SUBSCRIBED = [
+
+  "| Topic               | Protect Device Type  | Message Expected",
+  "|---------------------|----------------------|----------------------------------",
+  "| `ambientlight/get`  | Sensor               | `true` will trigger a publish event of the ambient light level, in lux.",
+  ""
+].join("\n");
+
 const EMPTY_GROUP_PUBLISHED = [
 
   "#### Door",
@@ -407,6 +423,42 @@ describe("renderMqttTopicsReference - ordering and joining", () => {
   });
 });
 
+describe("renderMqttTopicsReference - per-verb device narrowing", () => {
+
+  test("credits a verb's row to the kinds its narrowing names and every other row to the entry's whole list", () => {
+
+    // Protect's ambient light: the camera and the sensor both publish it, and the sensor alone answers its get child. The published row credits both kinds while
+    // the get row credits the sensor, so the document credits the camera with the publish alone and never with a request it does not answer.
+    const catalog = mqttTopicCatalog({
+
+      ambientlight: { devices: [ "camera", "sensor" ], get: "`true` will trigger a publish event of the ambient light level, in lux.", getDevices: ["sensor"],
+        label: "ambient light", publish: "The ambient light level, in lux.", topic: "ambientlight" }
+    }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    const reference = renderMqttTopicsReference(catalog);
+
+    assert.equal(reference.published, NARROWED_PUBLISHED);
+    assert.equal(reference.subscribed, NARROWED_SUBSCRIBED);
+  });
+
+  test("narrows each verb independently and joins a narrowing's labels in the vocabulary's order", () => {
+
+    // Each verb reads its own field and nothing else, and the publish narrowing is declared out of the vocabulary's order to show which order the cell follows.
+    const catalog = mqttTopicCatalog({
+
+      thing: { devices: [ "a", "b", "c" ], get: "A get.", getDevices: ["b"], label: "thing", publish: "A publish.", publishDevices: [ "b", "a" ], set: "A set.",
+        setDevices: ["c"], topic: "thing" }
+    }, { heading: "Kind", vocabulary: { a: "A", b: "B", c: "C" } });
+
+    const reference = renderMqttTopicsReference(catalog);
+    const deviceCell = (line: string): string => (line.split("|")[2] ?? "").trim();
+
+    assert.equal(deviceCell(reference.published.split("\n")[2] ?? ""), "A, B", "the published row credits its own narrowing, in the vocabulary's order");
+    assert.equal(deviceCell(reference.subscribed.split("\n")[2] ?? ""), "B", "the get row credits its own narrowing alone");
+    assert.equal(deviceCell(reference.subscribed.split("\n")[3] ?? ""), "C", "and the set row credits its own");
+  });
+});
+
 describe("renderMqttTopicsReference - refusals", () => {
 
   test("throws when the column declares no heading text", () => {
@@ -475,6 +527,51 @@ describe("renderMqttTopicsReference - refusals", () => {
       lock: { label: "lock", publish: "The lock state.", topic: "lock" },
       telemetry: { group: "Telemetry", label: "telemetry", publish: "The raw realtime feed.", topic: "telemetry" }
     })), /^Error: renderMqttTopicsReference: the entry telemetry declares a group while the entry lock declares none\.$/);
+  });
+
+  test("throws naming the entry and the field when it carries a verb's narrowing and the catalog declares no column", () => {
+
+    assert.throws(() => renderMqttTopicsReference(asCatalog({ lock: { get: "A request.", getDevices: ["camera"], label: "lock", topic: "lock" } })),
+      /^Error: renderMqttTopicsReference: the entry lock declares getDevices but the catalog declares no column\.$/);
+  });
+
+  test("throws naming the entry and the field when a narrowing is declared without its verb's own message text", () => {
+
+    const catalog = mqttTopicCatalog({
+
+      lock: { devices: [ "camera", "sensor" ], getDevices: ["sensor"], label: "lock", publish: "The lock state.", topic: "lock" }
+    }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    assert.throws(() => renderMqttTopicsReference(catalog), /^Error: renderMqttTopicsReference: the entry lock declares getDevices but no get\.$/);
+  });
+
+  test("throws naming the entry and the field when a narrowing carries nothing", () => {
+
+    assert.throws(() => renderMqttTopicsReference(asCatalog({ [MQTT_DEVICE_COLUMN]: { heading: "Protect Device Type", vocabulary: { camera: "Camera" } },
+      lock: { devices: ["camera"], get: "A request.", getDevices: [], label: "lock", publish: "p", topic: "lock" } })),
+    /^Error: renderMqttTopicsReference: the entry lock declares an empty getDevices list\.$/);
+  });
+
+  test("throws naming the entry, the kind, and the field when a narrowing names a kind the entry's devices list does not carry", () => {
+
+    const catalog = mqttTopicCatalog({
+
+      lock: { devices: ["camera"], get: "A request.", getDevices: ["sensor"], label: "lock", publish: "p", topic: "lock" }
+    }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    assert.throws(() => renderMqttTopicsReference(catalog),
+      /^Error: renderMqttTopicsReference: the entry lock names a device "sensor" in getDevices that its devices list does not carry\.$/);
+  });
+
+  test("throws naming the entry and the kind when a kind it lists is credited by none of its verbs", () => {
+
+    const catalog = mqttTopicCatalog({
+
+      lock: { devices: [ "camera", "sensor" ], label: "lock", publish: "p", publishDevices: ["camera"], topic: "lock" }
+    }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    assert.throws(() => renderMqttTopicsReference(catalog),
+      /^Error: renderMqttTopicsReference: the entry lock lists a device "sensor" that none of its verbs credits\.$/);
   });
 });
 

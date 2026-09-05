@@ -15,9 +15,10 @@
  * H3 headings, their lead sentences, and every hand-written section around and between the two tables. A section the catalog declares no rows for renders as an
  * empty fragment: a publish-only plugin's subscribed region carries no table, and the plugin writes no heading above a region it declares nothing for.
  *
- * What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when
- * it declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. The column layout, the width pass,
- * and the divider are {@link doc-markdown!renderMarkdownTable | renderMarkdownTable}'s; this module owns which cells go into it and how each one reads.
+ * What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when it
+ * declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. A row credits the kinds its verb's narrowing
+ * names, and the entry's whole list when the verb has none. The column layout, the width pass, and the divider are
+ * {@link doc-markdown!renderMarkdownTable | renderMarkdownTable}'s; this module owns which cells go into it and how each one reads.
  *
  * The renderer is pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading the document and writing it back - belongs to the
  * `prepare-mqtt` verb that drives it. This module is therefore browser-safe and trivially testable, but it is a tooling concern and is deliberately NOT mirrored
@@ -82,6 +83,18 @@ const MESSAGE_DIVIDER_WIDTH = 34;
 // What joins the device labels inside one cell.
 const LABEL_SEPARATOR = ", ";
 
+// The verbs a row can carry, the field each one reads its narrowing from, and the fields whose presence needs a column to mean anything. They are spelled once here
+// so the checks and the cells run from one list rather than from separate copies of the same names.
+const VERBS = [ "get", "publish", "set" ] as const;
+
+type TopicVerb = (typeof VERBS)[number];
+
+type NarrowingField = "getDevices" | "publishDevices" | "setDevices";
+
+const NARROWING_FIELDS: Readonly<Record<TopicVerb, NarrowingField>> = { get: "getDevices", publish: "publishDevices", set: "setDevices" };
+
+const COLUMN_FIELDS: readonly ("devices" | NarrowingField)[] = [ "devices", ...VERBS.map((verb) => NARROWING_FIELDS[verb]) ];
+
 // One rendered row: the cells its table prints in column order, the group it renders under, and the segments the section sorts it on. The row keeps its entry's own
 // topic, as segments, beside the rendered cells because the sort walks the topic tree rather than the printed text: markup would sort every parameterized topic into
 // a block of its own, and the printed child of one topic would sort behind the printed child of a topic beneath it.
@@ -114,19 +127,27 @@ function renderTopicCell(topic: string): string {
   return "<CODE>" + resolveMqttTopic(topic, Object.fromEntries(placeholders.map((name) => [ name, "<I>" + name + "</I>" ]))) + "</CODE>";
 }
 
-// Validate an entry's device declaration against the catalog's column and render its cell. The column and the lists are one decision, so both directions are checked
-// here: with a column every entry names at least one kind the vocabulary declares, and without one no entry names any. The labels are joined in the vocabulary's
-// declared order rather than the entry's, so one declaration fixes how every cell in the column reads.
-function renderDeviceCell({ column, entry, key }: { column: MqttTopicDeviceColumn | undefined; entry: MqttTopicEntry; key: string }): string {
+// Validate an entry's device declaration and every narrowing it carries against the catalog's column, then derive the cell each verb's row prints. The column and
+// the lists are one decision, so both directions are checked here: with a column every entry names at least one kind the vocabulary declares, and without one no
+// entry names any, its narrowings included. A verb's cell names the kinds its narrowing lists, or the entry's whole list when the verb declares no narrowing, and
+// the labels are joined in the vocabulary's declared order rather than the entry's, so one declaration fixes how every cell in the column reads.
+function renderDeviceCells({ column, entry, key }: {
+
+  column: MqttTopicDeviceColumn | undefined;
+  entry: MqttTopicEntry;
+  key: string;
+}): Readonly<Record<TopicVerb, string>> {
 
   if(column === undefined) {
 
-    if(entry.devices !== undefined) {
+    const strayField = COLUMN_FIELDS.find((field) => entry[field] !== undefined);
 
-      throw new Error("renderMqttTopicsReference: the entry " + key + " declares devices but the catalog declares no column.");
+    if(strayField !== undefined) {
+
+      throw new Error("renderMqttTopicsReference: the entry " + key + " declares " + strayField + " but the catalog declares no column.");
     }
 
-    return "";
+    return { get: "", publish: "", set: "" };
   }
 
   const devices = entry.devices;
@@ -144,7 +165,51 @@ function renderDeviceCell({ column, entry, key }: { column: MqttTopicDeviceColum
     }
   }
 
-  return escapeColumnSeparator(Object.entries(column.vocabulary).filter(([name]) => devices.includes(name)).map(([ , label ]) => label).join(LABEL_SEPARATOR));
+  for(const verb of VERBS) {
+
+    const field = NARROWING_FIELDS[verb];
+    const narrowing = entry[field];
+
+    if(narrowing === undefined) {
+
+      continue;
+    }
+
+    if(entry[verb] === undefined) {
+
+      throw new Error("renderMqttTopicsReference: the entry " + key + " declares " + field + " but no " + verb + ".");
+    }
+
+    if(narrowing.length === 0) {
+
+      throw new Error("renderMqttTopicsReference: the entry " + key + " declares an empty " + field + " list.");
+    }
+
+    const stray = narrowing.find((device) => !devices.includes(device));
+
+    if(stray !== undefined) {
+
+      throw new Error("renderMqttTopicsReference: the entry " + key + " names a device \"" + stray + "\" in " + field + " that its devices list does not carry.");
+    }
+  }
+
+  // A kind the entry lists but no verb it declares performs is a kind the document would print without ever saying what it does, which is the mistake the whole
+  // narrowing exists to let an author avoid rather than introduce.
+  const credited = new Set(VERBS.filter((verb) => entry[verb] !== undefined).flatMap((verb) => entry[NARROWING_FIELDS[verb]] ?? devices));
+  const uncredited = devices.find((device) => !credited.has(device));
+
+  if(uncredited !== undefined) {
+
+    throw new Error("renderMqttTopicsReference: the entry " + key + " lists a device \"" + uncredited + "\" that none of its verbs credits.");
+  }
+
+  const labels = Object.entries(column.vocabulary);
+  const cellFor = (kinds: readonly string[]): string => {
+
+    return escapeColumnSeparator(labels.filter(([name]) => kinds.includes(name)).map(([ , label ]) => label).join(LABEL_SEPARATOR));
+  };
+
+  return { get: cellFor(entry.getDevices ?? devices), publish: cellFor(entry.publishDevices ?? devices), set: cellFor(entry.setDevices ?? devices) };
 }
 
 // Build one row from an entry's declaration. The message text and the device labels are author-owned markdown and receive only the separator escape; the topic cell
@@ -239,15 +304,17 @@ function renderSection(rows: readonly TopicRow[], groups: readonly string[], hea
  *
  * Rows are ordered as the topic tree reads - a topic before every topic that extends it, siblings in plain order, and a topic's own get and set rows before the rows
  * of the topics beneath it - grouped when the catalog declares groups, and given a device column when the catalog declares one, with each entry's labels joined in
- * the order the vocabulary declares them. A section the catalog has no rows for is an empty string.
+ * the order the vocabulary declares them. A row's device cell names the kinds its verb's narrowing lists, or the entry's whole list when the verb declares none. A
+ * section the catalog has no rows for is an empty string.
  *
  * @param catalog - The catalog to project, as {@link mqtt-topics!mqttTopicCatalog | mqttTopicCatalog} returned it.
  *
  * @returns The two fragments, one per marked region.
  *
  * @throws `Error` naming the offending entry when the catalog declares a column without a string heading or a vocabulary object, when a column is declared and an
- *         entry carries no devices list or names a kind the vocabulary does not declare, when no column is declared and an entry carries a devices list, or when
- *         some entries declare a group and others do not.
+ *         entry carries no devices list or names a kind the vocabulary does not declare, when no column is declared and an entry carries a devices list or a verb's
+ *         narrowing, when a narrowing is declared without its verb's own message text, when a narrowing is empty or names a kind the entry's devices list does not
+ *         carry, when a kind the entry lists is credited by none of the verbs it declares, or when some entries declare a group and others do not.
  *
  * @category Utilities
  */
@@ -282,7 +349,7 @@ export function renderMqttTopicsReference(catalog: MqttTopicCatalog): MqttTopics
 
   for(const [ key, entry ] of Object.entries(catalog)) {
 
-    const deviceCell = renderDeviceCell({ column, entry, key });
+    const cells = renderDeviceCells({ column, entry, key });
     const segments = entry.topic.split("/");
     const grouped = entry.group !== undefined;
 
@@ -303,17 +370,17 @@ export function renderMqttTopicsReference(catalog: MqttTopicCatalog): MqttTopics
 
     if(entry.publish !== undefined) {
 
-      published.push(buildRow({ deviceCell, group: entry.group, message: entry.publish, segments, topic: entry.topic, withColumn }));
+      published.push(buildRow({ deviceCell: cells.publish, group: entry.group, message: entry.publish, segments, topic: entry.topic, withColumn }));
     }
 
     if(entry.get !== undefined) {
 
-      subscribed.push(buildRow({ deviceCell, group: entry.group, message: entry.get, segments, topic: mqttGetTopic(entry.topic), withColumn }));
+      subscribed.push(buildRow({ deviceCell: cells.get, group: entry.group, message: entry.get, segments, topic: mqttGetTopic(entry.topic), withColumn }));
     }
 
     if(entry.set !== undefined) {
 
-      subscribed.push(buildRow({ deviceCell, group: entry.group, message: entry.set, segments, topic: mqttSetTopic(entry.topic), withColumn }));
+      subscribed.push(buildRow({ deviceCell: cells.set, group: entry.group, message: entry.set, segments, topic: mqttSetTopic(entry.topic), withColumn }));
     }
   }
 

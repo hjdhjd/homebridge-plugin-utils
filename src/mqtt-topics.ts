@@ -90,7 +90,7 @@ const PLACEHOLDER = /\{([^{}]+)\}/g;
 
 // The fields an entry may declare, read once per entry when the catalog is built. The runtime is the guard for a stray field because TypeScript's excess-property
 // check does not reach an entry literal handed to a generic builder unless the stray name is a near miss of a real one.
-const ENTRY_FIELDS = new Set([ "devices", "get", "group", "label", "publish", "set", "topic" ]);
+const ENTRY_FIELDS = new Set([ "devices", "get", "getDevices", "group", "label", "publish", "publishDevices", "set", "setDevices", "topic" ]);
 
 /**
  * The parameter names a topic template carries, as a union of string literals, and `never` for a plain tail.
@@ -165,17 +165,25 @@ export interface MqttTopicDeviceColumn<V extends Readonly<Record<string, string>
  *
  * The presence of `publish`, `get`, and `set` is the declaration that the plugin performs that verb. A consumer publishes an entry only when it declares `publish`,
  * and the renderer emits exactly the rows the entry declares, so one declaration answers both what the code does and what the document says. Author-owned markdown
- * in the three message texts reaches the document verbatim, except the column separator, which the renderer escapes.
+ * in the three message texts reaches the document verbatim, except the column separator, which the renderer escapes. A verb's narrowing - `getDevices`,
+ * `publishDevices`, `setDevices` - names the listed kinds that perform that verb when fewer than all of them do; a verb without one is performed by every listed
+ * kind. Like `devices`, a narrowing is documentation the renderer projects and the runtime never reads.
  *
- * @property devices - Optional. The device kinds the topic belongs to, named by key into the catalog's column vocabulary, as a non-empty tuple. Present only when
- *                     the catalog declares a column, which the builder's two overloads make a compile-time pair wherever the entries' literal type survives.
- * @property get     - Optional. The message text the document prints for the topic's get child. Its presence declares that the plugin subscribes to that child.
- * @property group   - Optional. The heading the entry's rows render under. A catalog groups all of its entries or none of them.
- * @property label   - The name the get and set verbs log under, handed to `subscribeGet` and `subscribeSet` as their `type` argument.
- * @property publish - Optional. The message text the document prints for the published topic. Its presence declares that the plugin publishes it.
- * @property set     - Optional. The message text the document prints for the topic's set child. Its presence declares that the plugin subscribes to that child.
- * @property topic   - The tail relative to the identity the caller composes with, or the whole topic after the prefix for a plugin that composes no identity. A
- *                     template when it carries placeholders.
+ * @property devices        - Optional. The device kinds the topic belongs to, named by key into the catalog's column vocabulary, as a non-empty tuple. Present only when
+ *                            the catalog declares a column, which the builder's two overloads make a compile-time pair wherever the entries' literal type survives.
+ * @property get            - Optional. The message text the document prints for the topic's get child. Its presence declares that the plugin subscribes to that child.
+ * @property getDevices     - Optional. The listed kinds that answer the get child, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the
+ *                            same keys. Documentation only.
+ * @property group          - Optional. The heading the entry's rows render under. A catalog groups all of its entries or none of them.
+ * @property label          - The name the get and set verbs log under, handed to `subscribeGet` and `subscribeSet` as their `type` argument.
+ * @property publish        - Optional. The message text the document prints for the published topic. Its presence declares that the plugin publishes it.
+ * @property publishDevices - Optional. The listed kinds that publish the topic, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the same
+ *                            keys. Documentation only.
+ * @property set            - Optional. The message text the document prints for the topic's set child. Its presence declares that the plugin subscribes to that child.
+ * @property setDevices     - Optional. The listed kinds that answer the set child, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the
+ *                            same keys. Documentation only.
+ * @property topic          - The tail relative to the identity the caller composes with, or the whole topic after the prefix for a plugin that composes no identity. A
+ *                            template when it carries placeholders.
  *
  * @typeParam TDevice - The device-kind keys this entry may name, fixed by the catalog's column vocabulary.
  *
@@ -185,10 +193,13 @@ export interface MqttTopicEntry<TDevice extends string = string> {
 
   readonly devices?: readonly [TDevice, ...TDevice[]];
   readonly get?: string;
+  readonly getDevices?: readonly [TDevice, ...TDevice[]];
   readonly group?: string;
   readonly label: string;
   readonly publish?: string;
+  readonly publishDevices?: readonly [TDevice, ...TDevice[]];
   readonly set?: string;
+  readonly setDevices?: readonly [TDevice, ...TDevice[]];
   readonly topic: string;
 }
 
@@ -345,8 +356,9 @@ export function resolveMqttTopic<const T extends string>(topic: WellFormedMqttTo
  *
  * Two overloads, because the column and the entries' device lists are one decision. Without a column, an entry declaring `devices` fails to compile. With one, the
  * vocabulary's keys are inferred from the declaration, so an entry missing its list, an empty list, and a list naming an undeclared kind each fail to compile. The
- * runtime reads nothing from the column beyond attaching it: the document's own checks - a missing or stray list, an unknown key, mixed groups - belong to the
- * renderer, because the compiled JavaScript the CLI loads carries no types and a documentation mistake should fail the docs build rather than a plugin's startup.
+ * runtime reads nothing from the column beyond attaching it: the document's own checks - a missing or stray list, an unknown key, mixed groups, a narrowing that
+ * names an unlisted kind or a verb the entry does not declare - belong to the renderer, because the compiled JavaScript the CLI loads carries no types and a
+ * documentation mistake should fail the docs build rather than a plugin's startup.
  *
  * The authoring rule the compile-time half depends on: TypeScript keeps a topic's literal type while the entries literal reaches this builder inline, or through
  * group constants declared `as const` and spread into the call. An intermediate constant without `as const`, a spread of plain constants, or an explicit type
@@ -358,8 +370,8 @@ export function resolveMqttTopic<const T extends string>(topic: WellFormedMqttTo
  *
  * @returns A fresh catalog carrying every entry. The caller's own literal is never mutated.
  *
- * @throws `Error` naming the offending key when the catalog declares no entries, when an entry declares a field outside the seven, an empty topic, none of
- *         `publish`, `get`, or `set`, or a brace outside a well-formed placeholder, and naming both keys when two entries produce the same wire topic.
+ * @throws `Error` naming the offending key when the catalog declares no entries, when an entry declares a field the entry type does not admit, an empty topic,
+ *         none of `publish`, `get`, or `set`, or a brace outside a well-formed placeholder, and naming both keys when two entries produce the same wire topic.
  *
  * @example
  *

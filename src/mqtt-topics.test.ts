@@ -70,6 +70,31 @@ const catalogShapeExercises = (): void => {
   // @ts-expect-error - without a column, no entry carries one.
   const strayDevices = mqttTopicCatalog({ lock: { devices: ["camera"], label: "lock", publish: "p", topic: "lock" } });
 
+  // The positive controls for a verb's narrowing. The first names a kind its entry lists; the second names one the vocabulary declares and the entry does not,
+  // which compiles because the vocabulary is the line this type draws, and which the renderer refuses at the docs build.
+  const narrowedGet = mqttTopicCatalog({
+
+    lock: { devices: ["camera"], get: "A request to publish the state.", getDevices: ["camera"], label: "lock", publish: "The lock state.",
+      set: "The state to set.", topic: "lock" },
+    smartMotion: { devices: [ "camera", "sensor" ], label: "smart motion", publish: "The smart detection event.", topic: "motion/smart/{object}" }
+  }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+  const narrowedToVocabulary = mqttTopicCatalog({
+
+    lock: { devices: ["camera"], get: "A request to publish the state.", getDevices: ["sensor"], label: "lock", publish: "The lock state.", topic: "lock" }
+  }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+  // @ts-expect-error - a narrowing names a device kind the column's vocabulary does not declare.
+  const unknownNarrowing = mqttTopicCatalog({ lock: { devices: ["camera"], get: "A request.", getDevices: ["nope"], label: "lock", topic: "lock" } },
+    { heading: "Protect Device Type", vocabulary: { camera: "Camera" } });
+
+  // @ts-expect-error - an empty narrowing names nothing.
+  const emptyNarrowing = mqttTopicCatalog({ lock: { devices: ["camera"], get: "A request.", getDevices: [], label: "lock", topic: "lock" } },
+    { heading: "Protect Device Type", vocabulary: { camera: "Camera" } });
+
+  // @ts-expect-error - without a column, no entry carries a narrowing either.
+  const strayNarrowing = mqttTopicCatalog({ lock: { get: "A request.", getDevices: ["camera"], label: "lock", topic: "lock" } });
+
   // @ts-expect-error - an empty placeholder names no parameter, so nothing could ever resolve it.
   const emptyPlaceholder = resolveMqttTopic("power{}/state", { "": "x" });
 
@@ -89,7 +114,8 @@ const catalogShapeExercises = (): void => {
   const widenedUnresolved = mqttTopic(id, fromPlainGroups.smartMotion.topic);
 
   void [ composed, computed, resolved, nearMiss, wrongParameter, missingParameter, unresolvedIdentity, unresolvedChild, unknownDevice, emptyDevices, missingDevices,
-    strayDevices, emptyPlaceholder, fromConstGroups, constGroupUnresolved, fromPlainGroups, widenedUnresolved ];
+    strayDevices, narrowedGet, narrowedToVocabulary, unknownNarrowing, emptyNarrowing, strayNarrowing, emptyPlaceholder, fromConstGroups, constGroupUnresolved,
+    fromPlainGroups, widenedUnresolved ];
 };
 
 void catalogShapeExercises;
@@ -315,6 +341,27 @@ describe("mqttTopicCatalog - declaration", () => {
     assert.equal(MQTT_DEVICE_COLUMN in catalog, false, "a catalog declaring no column carries nothing under the symbol");
   });
 
+  test("hands back an entry carrying a verb's narrowing as it was written, and reads nothing from it", () => {
+
+    // Protect's ambient light: published by the camera and the sensor, answered on its get child by the sensor alone. The builder's job is to carry that
+    // declaration through untouched, since a narrowing is documentation the renderer projects rather than anything the runtime consults.
+    const catalog = mqttTopicCatalog({
+
+      ambientlight: { devices: [ "camera", "sensor" ], get: "A request to publish the ambient light level.", getDevices: ["sensor"], label: "ambient light",
+        publish: "The ambient light level, in lux.", topic: "ambientlight" }
+    }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    assert.deepEqual(catalog.ambientlight, { devices: [ "camera", "sensor" ], get: "A request to publish the ambient light level.", getDevices: ["sensor"],
+      label: "ambient light", publish: "The ambient light level, in lux.", topic: "ambientlight" }, "the entry must come back exactly as it was declared");
+
+    // The compiler checks a narrowing's kinds against the vocabulary, exactly as it does a devices list, and the builder checks nothing further: a narrowing naming
+    // a kind the entry does not list is the renderer's refusal to make at the docs build, not the builder's at a plugin's startup.
+    assert.doesNotThrow(() => mqttTopicCatalog({
+
+      lock: { devices: ["camera"], get: "A request to publish the state.", getDevices: ["sensor"], label: "lock", publish: "The lock state.", topic: "lock" }
+    }, { heading: "Protect Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } }));
+  });
+
   test("reads nothing out of the column beyond attaching it", () => {
 
     // The document's checks belong to the renderer, so the builder must not touch the vocabulary. A vocabulary that throws on any property read proves it.
@@ -337,7 +384,7 @@ describe("mqttTopicCatalog - refusals", () => {
     assert.throws(() => mqttTopicCatalog({}), /^Error: mqttTopicCatalog: the catalog declares no entries\.$/);
   });
 
-  test("throws naming the key and the field when an entry declares a field outside the seven", () => {
+  test("throws naming the key and the field when an entry declares a field the entry type does not admit", () => {
 
     // TypeScript's excess-property check does not reach an entry literal handed to a generic builder unless the stray name is a near miss of a real one, so the
     // runtime is the guard for anything else.

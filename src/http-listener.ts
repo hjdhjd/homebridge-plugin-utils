@@ -70,6 +70,10 @@ export interface HttpListenerOptions {
 
   /**
    * The largest request body a route will be handed, in bytes. A body that crosses it is refused with 413 and never reaches a handler. Defaults to 65536.
+   *
+   * Size is the only bound this class sets. The read is bounded in time by the platform: Node's request timeout covers the whole request, headers and body alike,
+   * defaults to five minutes, and is enforced on a thirty-second check, so a peer that stalls mid-body is answered 408 and dropped by the server itself. A deadline
+   * of this class's own would be a second mechanism for a bound that already exists underneath it.
    */
   bodyLimit?: number;
 
@@ -496,8 +500,9 @@ export class HttpListener implements AsyncDisposable {
       }
     } catch {
 
-      /* A request stream that ends before its body does - a client that reset the connection, or a teardown dropping the socket mid-upload - is answered with
-       * nothing at all and says nothing. The peer is untrusted, and anything that can be made to happen at will must not be able to write into the log at will.
+      /* A request stream that ends before its body does - a client that reset the connection, a teardown dropping the socket mid-upload, or the platform answering a
+       * peer that stalled past the request timeout with 408 and dropping it - is answered with nothing at all and says nothing. The peer is untrusted, and anything
+       * that can be made to happen at will must not be able to write into the log at will.
        */
       return;
     }

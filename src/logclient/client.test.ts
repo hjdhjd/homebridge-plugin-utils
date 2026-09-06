@@ -4,6 +4,7 @@
  */
 import { HbpuAbortError, onAbort } from "../util.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
+import { SEED_SETTLE_MS, SEED_WINDOW_MAX_MS } from "./settings.ts";
 import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
 import { assertNoUnhandledRejections, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
@@ -535,10 +536,6 @@ describe("HomebridgeLogClient - token lifecycle", () => {
 // one-shot's upper bound both resolve to noon, while log-line timestamps (parsed from explicit M/D/YYYY strings, which the injected clock has no bearing on) are
 // authored relative to it. A bare `--since` therefore filters to `[since, noon]`.
 const WINDOW_HORIZON = new Date(2026, 5, 29, 12, 0, 0).getTime();
-
-// The one-shot terminator's constants, mirrored from settings.ts so the timing assertions read against named values rather than magic numbers.
-const SEED_SETTLE_MS = 1000;
-const SEED_WINDOW_MAX_MS = 5000;
 
 // The epoch of a given local clock time on 2026-06-29, for authoring a window's `since`/`until` bounds relative to WINDOW_HORIZON.
 function epochAt(hour: number, minute: number): number {

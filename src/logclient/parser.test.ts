@@ -4,6 +4,7 @@
  */
 import { LogLineSplitter, SeedGate, isLogLineStart, normalizeClock, parseLogLine, parseLogTimestamp } from "./parser.ts";
 import { describe, test } from "node:test";
+import { SEED_GATE_MAX_SKIP } from "./settings.ts";
 import assert from "node:assert/strict";
 
 // The ANSI escape character, named for readability in the colored-line fixtures below.
@@ -403,7 +404,7 @@ describe("isLogLineStart", () => {
 describe("SeedGate", () => {
 
   // Drive a gate across an ordered list of lines, returning only the admitted ones so a test can assert exactly what survives the latch.
-  function admitAll(lines: readonly string[], maxSkip = 100): string[] {
+  function admitAll(lines: readonly string[], maxSkip = SEED_GATE_MAX_SKIP): string[] {
 
     const gate = new SeedGate(maxSkip);
 

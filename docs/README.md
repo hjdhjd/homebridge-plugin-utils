@@ -32,6 +32,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [delivery-supervisor](delivery-supervisor.md) | Windows of named slots that each settle exactly once, under one deadline armed on the injected clock. |
 | [dgram-util](dgram-util.md) | Single source of truth for the `"ipv4"` / `"ipv6"` -> `node:dgram` translations every datagram consumer in the library needs. |
 | [disposable-stack](disposable-stack.md) | A drop-in implementation of the TC39 Explicit Resource Management `DisposableStack`. |
+| [doc-json](doc-json.md) | The JSON counterpart to the family's marked-region splice: the in-place replacement of a single top-level string member's value in a document a human authors and reads. |
 | [doc-markdown](doc-markdown.md) | The markdown mechanics every documentation generator in the family composes over: the in-place splice of a marked region, and the markdown table with padded columns. |
 | [docChrome](docChrome.md) | A shared documentation-chrome renderer for the family's plugins. |
 | [featureOptions](featureOptions.md) | A hierarchical feature option system for plugins and applications. |

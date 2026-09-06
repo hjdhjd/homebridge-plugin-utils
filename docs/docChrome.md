@@ -13,11 +13,11 @@ ordered documentation index (each doc's title plus a one-line blurb) duplicated 
 drift - a badge label here, a blurb there, an href form that differs per surface. This module collapses all of it into one per-plugin [DocChromeManifest](#docchromemanifest) that a
 plugin authors once (as a typed module or a static JSON file), so each surface becomes a pure projection of a single source of truth.
 
-The module exports pure string renderers - [renderMasthead](#rendermasthead), [renderDocIndex](#renderdocindex), [renderDevBadges](#renderdevbadges), [renderLogo](#renderlogo), [renderProjects](#renderprojects) - and
-the marker constants each surface embeds, plus the [parseDocChromeManifest](#parsedocchromemanifest) / [parseProjectEntries](#parseprojectentries) validators. Like `featureOptions-docs.ts`, every
-function here is pure and isomorphic: no `node:` imports, no `fs`, no `fetch`. Reading the target files, resolving a remote project list, and writing the spliced
-result back are the CLI's concern; this module only ever renders already-resolved data. That keeps it browser-safe and trivially testable, though it is a tooling
-concern and is deliberately NOT mirrored into `dist/ui/`.
+The module exports pure string renderers - [renderMasthead](#rendermasthead), [renderDocIndex](#renderdocindex), [renderDevBadges](#renderdevbadges), [renderLogo](#renderlogo), [renderProjects](#renderprojects),
+[renderSchemaFooter](#renderschemafooter) - and the marker constants each surface embeds, plus the [parseDocChromeManifest](#parsedocchromemanifest) / [parseProjectEntries](#parseprojectentries) validators. Like
+`featureOptions-docs.ts`, every function here is pure and isomorphic: no `node:` imports, no `fs`, no `fetch`. Reading the target files, resolving a remote project
+list, and writing the spliced result back are the CLI's concern; this module only ever renders already-resolved data. That keeps it browser-safe and trivially
+testable, though it is a tooling concern and is deliberately NOT mirrored into `dist/ui/`.
 
 ## Doc Chrome
 
@@ -50,8 +50,9 @@ once per plugin (a typed TS module or a static JSON file) and consumed by the `p
 | <a id="nav"></a> `nav` | `readonly` | readonly [`NavSection`](#navsection)[] |
 | <a id="projects"></a> `projects?` | `readonly` | [`ExternalSource`](#externalsource)\<[`ProjectEntry`](#projectentry)\> |
 | <a id="repo"></a> `repo` | `readonly` | [`RepoCoordinates`](#repocoordinates) |
-| <a id="surfaces"></a> `surfaces?` | `readonly` | \{ `readme?`: `string`; `webui?`: `string`; \} |
+| <a id="surfaces"></a> `surfaces?` | `readonly` | \{ `readme?`: `string`; `schema?`: `string`; `webui?`: `string`; \} |
 | `surfaces.readme?` | `readonly` | `string` |
+| `surfaces.schema?` | `readonly` | `string` |
 | `surfaces.webui?` | `readonly` | `string` |
 
 ***
@@ -147,11 +148,13 @@ type DocEntry =
   footer?: boolean;
   kind: "doc";
   masthead?: boolean;
+  schema?: boolean;
   title: string;
 }
   | {
   blurb: string;
   kind: "external";
+  schema?: boolean;
   title: string;
   url: string;
 };
@@ -164,6 +167,11 @@ points at a destination outside the repository - a sibling project's documentati
 shape, so the same entry can render as an in-README anchor on the README and as an absolute blob URL everywhere else. An external entry is the one kind with nothing
 to derive: it names a complete destination, so its `url` renders verbatim on every surface, and the chrome stamper passes over it because there is no file of the
 plugin's own to stamp.
+
+A `"doc"` or an `"external"` entry may also carry `schema: true`, which names it in the configuration-schema footer [renderSchemaFooter](#renderschemafooter) renders. The flag is
+opt-in per entry because that footer is one sentence under a configuration form, where a plugin points at the few documents a reader configuring it wants rather than
+at everything the navigation lists. A README anchor carries no such flag: the footer's links are read from outside the repository, where an in-README anchor is not
+a destination of its own.
 
 ***
 
@@ -505,3 +513,30 @@ source - often a shared, remotely-fetched file every plugin points at - happens 
 `string`
 
 The rendered project list.
+
+***
+
+### renderSchemaFooter()
+
+```ts
+function renderSchemaFooter(manifest): string;
+```
+
+Render the configuration-schema footer - the one markdown sentence Homebridge prints beneath a plugin's settings form - naming the repository page and the entries
+flagged with `schema: true`. Every link is derived exactly as the documentation index derives it, so the sentence a user reads under the settings form points at the
+same destinations the README and the webUI do.
+
+A plugin opts in by declaring `surfaces.schema`, the path of the schema the `prepare-chrome` verb stamps this into; a plugin whose footer says something else of its
+own simply leaves that surface undeclared.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `manifest` | [`DocChromeManifest`](#docchromemanifest) | The documentation-chrome manifest. |
+
+#### Returns
+
+`string`
+
+The rendered sentence, a single line.

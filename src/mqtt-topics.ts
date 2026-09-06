@@ -324,7 +324,7 @@ export function resolveMqttTopic<const T extends string>(topic: WellFormedMqttTo
   const template = topic as string;
   const values = parameters as Readonly<Record<string, string>>;
 
-  const resolved = template.replace(PLACEHOLDER, (match: string, name: string): string => {
+  const resolved = template.replace(PLACEHOLDER, (_match: string, name: string): string => {
 
     const value = values[name];
 

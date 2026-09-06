@@ -76,7 +76,8 @@ const tsRules = {
   "@typescript-eslint/no-non-null-assertion": "warn",
   "@typescript-eslint/no-unnecessary-condition": "warn",
   "@typescript-eslint/no-unused-expressions": "warn",
-  "@typescript-eslint/no-unused-vars": [ "warn", { "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_", "varsIgnorePattern": "^_" } ],
+  "@typescript-eslint/no-unused-vars": [ "warn", { "args": "all", "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_",
+    "varsIgnorePattern": "^_" } ],
   "@typescript-eslint/prefer-nullish-coalescing": "warn",
   "@typescript-eslint/require-await": "off",
   "no-unused-expressions": "off",
@@ -97,7 +98,7 @@ const jsRules = {
 
   // Restates the "off" value that `disableTypeChecked` already assigns to this rule.
   "@typescript-eslint/no-floating-promises": "off",
-  "no-unused-vars": [ "warn", { "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_", "varsIgnorePattern": "^_" } ]
+  "no-unused-vars": [ "warn", { "args": "all", "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_", "varsIgnorePattern": "^_" } ]
 };
 
 /**

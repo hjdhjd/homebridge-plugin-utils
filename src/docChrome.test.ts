@@ -1,9 +1,8 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * docChrome.test.ts: Unit tests for the shared documentation-chrome renderers - the masthead, documentation index, dashboard badges, logo, project list, and
- * configuration-schema footer projections - plus the region plan a documentation entry answers and the manifest and project-entry validators. Coverage pins each
- * surface's canonical output byte-for-byte, proves the per-surface href derivation and HTML escaping, exercises the doc-footer self-omission, and asserts the
- * validators' framed diagnostics for every mis-shaped field.
+ * docChrome.test.ts: Unit tests for the shared documentation-chrome renderers, the region plan a documentation entry answers, and the manifest and
+ * project-entry validators. Coverage asserts each surface's canonical output byte-for-byte, proves the per-surface href derivation and HTML escaping,
+ * exercises the doc-footer self-omission, and asserts the validators' framed diagnostics for every mis-shaped field.
  */
 import type { DocChromeManifest, DocEntry, ProjectEntry } from "./docChrome.ts";
 import { LOGO_BEGIN, LOGO_END, MASTHEAD_BEGIN, MASTHEAD_END, docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex,

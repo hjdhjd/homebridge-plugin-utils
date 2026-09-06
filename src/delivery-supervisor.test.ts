@@ -288,6 +288,31 @@ describe("DeliverySupervisor", () => {
     assert.deepEqual([...scenario.supervisor.windows()], [], "and nothing was filed");
   });
 
+  test("a supervisor built against an ended lifetime refuses to open, disposes twice without a throw, and leaves no listener on the signal", () => {
+
+    /* The rig's lifetime is live at construction, so this row builds its own and ends it FIRST. A supervisor born on a dead signal takes the already-aborted
+     * path through `onAbort`, which runs the sweep inline and hands back a registration with nothing to detach - the shape a consumer reaches when it constructs
+     * one during its own teardown. Everything downstream of that path is asserted here: the refusal to open, a disposal that is quiet however many times it is
+     * called, and a signal left carrying nothing of ours.
+     */
+    const clock = new TestClock();
+    const controller = new AbortController();
+    const reason = new Error("teardown");
+
+    controller.abort(reason);
+
+    const supervisor = new DeliverySupervisor<string>({ clock, onError: (): void => undefined, signal: controller.signal });
+
+    assert.throws(() => {
+
+      supervisor.open("w", { deadline: 100, onDeadline: (): void => undefined, onSettle: (): void => undefined, slots: ["only"] });
+    }, (error: unknown): boolean => error === reason, "the throw must be the signal's own reason, by identity");
+
+    assert.doesNotThrow(() => supervisor[Symbol.dispose](), "disposing a supervisor that opened nothing answers nobody and throws nothing");
+    assert.doesNotThrow(() => supervisor[Symbol.dispose](), "and a second disposal is quiet too");
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0, "a supervisor built on a dead signal must leave no listener on it");
+  });
+
   test("invalidate answers the named windows, then every window, and each slot only once", () => {
 
     const scenario = rig<string>();

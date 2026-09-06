@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * service.test.ts: Unit tests for the HomeKit service helper utilities in service.ts - acquireService, validService, capabilityGate, getServiceName, setServiceName.
+ * service.test.ts: Unit tests for the HomeKit service helper utilities in service.ts.
  *
  * The fixture side uses real `@homebridge/hap-nodejs` primitives (Accessory, Service, Characteristic), declared as an explicit devDependency so the test-side
  * Accessory/Service/Characteristic identities match the same HAP package `homebridge` re-exports from its public type surface. The methods we exercise on the
@@ -440,7 +440,7 @@ describe("capabilityGate", () => {
   test("the user toggle is absolute: a false toggle removes the service across every capability and existence cell", () => {
 
     // The toggle is the absolute override. When the user disables the feature the predicate votes false across both (hasService) inputs and both capability values, so
-    // an existing service is pruned and a missing one is never created. This pins all four toggle-false cells.
+    // an existing service is pruned and a missing one is never created. This asserts every toggle-false cell.
     for(const capability of [ false, true ]) {
 
       const gate = capabilityGate({ capability, toggle: false });

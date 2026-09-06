@@ -327,18 +327,28 @@ class SupervisedWindow<T> implements DeliveryWindow<T> {
 
     this.#pending--;
 
-    this.#onSettle?.(name, settlement);
-
     /* The window is finished the moment its last slot answers, so its deadline is disarmed rather than left to fire against a window with nothing to decide, and it
-     * stops standing under its key.
+     * stops standing under its key. The `finally` is what makes that true of every settlement: the disarm and the retirement follow the consumer's callback whether
+     * it returns or throws, so a callback that throws while settling the last slot leaves behind neither an armed deadline nor a key still standing. That is also
+     * why `#runDeadline` needs no guard for a window that has already finished: every settlement disarms the deadline synchronously, this one included.
      *
      * Both acts run after the callback rather than before it, which is what lets a consumer open a fresh window for the same key from inside that callback: the
      * retirement below drops the map entry only while it still holds THIS window, so the newer one is never deleted out from under the consumer that just opened it.
+     *
+     * The throw itself is not caught. It belongs to the consumer's own callback and reaches the consumer that settled the slot, where swallowing it would hide a
+     * consumer's fault from the only side that can do anything about it; `onError` is the deadline callback's fault channel and speaks for a window nobody is
+     * standing over, which is not this case.
      */
-    if(this.#pending === 0) {
+    try {
 
-      this.#disarm();
-      this.#retire();
+      this.#onSettle?.(name, settlement);
+    } finally {
+
+      if(this.#pending === 0) {
+
+        this.#disarm();
+        this.#retire();
+      }
     }
 
     return true;

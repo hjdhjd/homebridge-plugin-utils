@@ -1,8 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * delivery-supervisor.test.ts: Unit tests for DeliverySupervisor - one answer per slot however many paths reach it, the deadline that runs only for a window still
- * waiting and is cleared the moment the last slot answers, the extra round `rearm` buys, same-key supersession, named and wholesale invalidation, the abort sweep and
- * the throw on an ended lifetime, the faulted callback that answers rather than orphans, and the throw after teardown that is swallowed.
+ * delivery-supervisor.test.ts: Unit tests for DeliverySupervisor, covering the windows it stands over, the slots each window answers, the deadlines those windows
+ * are armed with, and the lifetime that ends them all.
  *
  * Counting is the whole subject: almost every row asserts how MANY times a consumer was answered rather than merely that it was, because an implementation that
  * answered twice passes every presence check and fails every one of these.
@@ -367,6 +366,123 @@ describe("DeliverySupervisor", () => {
       assert.equal(expectSlot(window, "alpha").settle("confirmed"), false, "a later settle answers that nothing happened");
       assert.equal(scenario.answers.length, 2, "and fires no second callback");
     });
+  });
+
+  test("a settle callback that throws on the last slot still disarms the deadline and retires the window", async () => {
+
+    const scenario = rig<string>();
+    const boom = new Error("the consumer's settlement handler failed");
+    const rounds: number[] = [];
+    let calls = 0;
+    const window = scenario.supervisor.open("w", {
+
+      deadline: 100,
+
+      onDeadline: (): void => {
+
+        rounds.push(1);
+      },
+
+      onSettle: (slot: string, settlement: DeliverySettlement<string>): void => {
+
+        scenario.onSettle(slot, settlement);
+
+        calls++;
+
+        if(calls === 2) {
+
+          throw boom;
+        }
+      },
+
+      slots: [ "alpha", "beta" ]
+    });
+
+    assert.equal(expectSlot(window, "alpha").settle("confirmed"), true, "the first slot settles and its callback returns");
+
+    assert.throws(() => expectSlot(window, "beta").settle("confirmed"), (error: unknown): boolean => error === boom,
+      "the callback's own throw reaches the caller that settled the slot, by identity, rather than being swallowed here");
+
+    // A throw is the path where the disarm and the retirement are easiest to lose, so both sides of the bookkeeping are read: nothing is armed, and nothing stands.
+    assert.equal(scenario.clock.pending, 0, "the deadline is disarmed even though the callback threw on the way out");
+    assert.deepEqual([...scenario.supervisor.windows()], [], "and the window no longer stands under its key");
+    assert.equal(scenario.answers.length, 2, "both slots were answered");
+
+    await advanceThroughSchedule(scenario.clock, [1000]);
+
+    assert.deepEqual(rounds, [], "so no deadline ever comes due for a window that has nothing left to decide");
+  });
+
+  test("a settle callback that throws on a slot that is not the last leaves the window standing until its last slot settles", () => {
+
+    const scenario = rig<string>();
+    const boom = new Error("the consumer's settlement handler failed");
+    let calls = 0;
+    const window = scenario.supervisor.open("w", {
+
+      deadline: 100,
+      onDeadline: (): void => undefined,
+
+      onSettle: (slot: string, settlement: DeliverySettlement<string>): void => {
+
+        scenario.onSettle(slot, settlement);
+
+        calls++;
+
+        if(calls === 1) {
+
+          throw boom;
+        }
+      },
+
+      slots: [ "alpha", "beta" ]
+    });
+
+    assert.throws(() => expectSlot(window, "alpha").settle("confirmed"), (error: unknown): boolean => error === boom,
+      "the throw reaches the caller that settled the slot");
+
+    // The count is what decides when a window is finished, and a throw does not finish one: the second slot is still outstanding, so the deadline is still worth having.
+    assert.equal(scenario.clock.pending, 1, "the deadline still stands while a slot is outstanding");
+    assert.deepEqual([...scenario.supervisor.windows()].map((standing) => standing.key), ["w"], "and so does the window");
+
+    assert.equal(expectSlot(window, "beta").settle("confirmed"), true, "the last slot settles and its callback returns");
+    assert.equal(scenario.clock.pending, 0, "which clears the deadline");
+    assert.deepEqual([...scenario.supervisor.windows()], [], "and retires the window");
+  });
+
+  test("a settle callback on the last slot still sees its own window standing and may open the next one under the same key", () => {
+
+    const scenario = rig<string>();
+    let reopened: DeliveryWindow<string> | undefined;
+    const window = scenario.supervisor.open("w", {
+
+      deadline: 100,
+      onDeadline: (): void => undefined,
+
+      onSettle: (slot: string, settlement: DeliverySettlement<string>): void => {
+
+        scenario.onSettle(slot, settlement);
+
+        /* The disarm and the retirement run after this callback, not before it, and the assertions here are what hold that ordering: a consumer settling its last
+         * slot sees its own window exactly as it was, which is what makes opening the replacement below a well-defined act rather than a race with a deletion.
+         */
+        assert.deepEqual([...scenario.supervisor.windows()].map((standing) => standing.key), ["w"], "the window is still standing while its callback runs");
+        assert.equal(scenario.clock.pending, 1, "and its deadline is still armed");
+
+        reopened = scenario.supervisor.open("w", { deadline: 250, onDeadline: (): void => undefined, onSettle: scenario.onSettle, slots: ["only"] });
+      },
+
+      slots: ["only"]
+    });
+
+    assert.equal(expectSlot(window, "only").settle("confirmed"), true, "the last slot settles");
+    assert.equal(scenario.answers.length, 1, "the callback ran exactly once, so its assertions were reached");
+
+    const standing = [...scenario.supervisor.windows()];
+
+    assert.equal(standing.length, 1, "exactly one window stands under the key afterwards");
+    assert.equal(expectAt(standing, 0, "the standing window"), reopened, "and it is the one the callback opened, by identity");
+    assert.equal(scenario.clock.pending, 1, "the fresh window's deadline is the only one armed, so the retirement left the replacement alone");
   });
 
   test("windows enumerates the standing windows and drops each one as it settles", () => {

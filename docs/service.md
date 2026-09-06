@@ -216,8 +216,8 @@ Binds a device's Not Responding rule once and returns a wrapper that makes any c
 
 #### Returns
 
-A wrapper that takes a characteristic reader and returns a reader of the same shape, throwing while `unavailable()` is true and reading through to the
-         wrapped reader otherwise.
+A wrapper that takes any characteristic reader HAP's own get handler may be - one that answers a value, or one that answers null - and returns a reader
+         of the same shape, throwing while `unavailable()` is true and reading through to the wrapped reader otherwise.
 
 \<`T`\>(`read`) => () => `T`
 

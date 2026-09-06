@@ -12,7 +12,7 @@
  * The region carries, in boot order, a hidden status panel a screenshot turns into a complete support report; a boot monitor - a classic inline script, so
  * it runs during HTML parse ahead of any deferred module evaluation - that owns the on-page failure surface: it reveals the panel with a plain-language message
  * classified by the boot stage that failed, arms a ten-second watchdog for a boot that hangs, stands down when the app signals it rendered, and holds the bundle stamp
- * across boots so a page pinned to a bundle that has since been replaced says so instead of half-loading; and the loader - the importmap/cache-bust module script -
+ * across boots so a page whose bundle has since been replaced says so instead of half-loading; and the loader - the importmap/cache-bust module script -
  * stage-instrumented so a fetch, importmap, or entry-import failure routes to the monitor with the stage that failed. The classic-versus-module split is for execution
  * ordering alone, not old-engine compatibility: the classic script runs during parse while the module script is deferred.
  *
@@ -152,7 +152,7 @@ const BOOT_MESSAGE_BROWSER = "Your browser doesn't support features this interfa
 const BOOT_MESSAGE_DELIVERY = "The interface files couldn't be retrieved from the Homebridge server. Reload the page to try again. " +
   "If this keeps happening, log out of the Homebridge interface and log back in.";
 const BOOT_MESSAGE_GENERIC = "An unexpected error occurred while starting the interface.";
-const BOOT_MESSAGE_RELOAD = "The settings interface was updated while this page was open, so this page is pinned to a version that is no longer installed. " +
+const BOOT_MESSAGE_RELOAD = "The settings interface was updated while this page was open, so this page is still on a version that is no longer installed. " +
   "Reload the page to load the current version.";
 const BOOT_SLOW_NOTICE = "This is taking longer than expected. If nothing appears shortly, reload the page.";
 
@@ -182,7 +182,7 @@ const BOOT_STATUS_PANEL: readonly string[] = [
 // and report it on the page. Its whole body is an IIFE guarded against a second execution in the same window, exposing a frozen `window.webUiBoot` with `fail`,
 // `ready`, and `checkStamp`, window `error`/`unhandledrejection` listeners, and a ten-second watchdog. First failure wins; `ready()` from the app supersedes it, and a
 // stale-stamp verdict from `checkStamp` supersedes both. The block is static - no plugin fact reaches it - so it is a constant the renderer splices verbatim between
-// the panel and the loader. Because the guard makes the FIRST run's closure the only one in a window, that closure is where the loader's pinned bundle stamp lives:
+// the panel and the loader. Because the guard makes the FIRST run's closure the only one in a window, that closure is where the loader's locked bundle stamp lives:
 // a later boot in the same window compares against it through `checkStamp` and finds a regeneration that happened underneath the page.
 const BOOT_MONITOR: readonly string[] = [
 
@@ -210,8 +210,8 @@ const BOOT_MONITOR: readonly string[] = [
   "    let settled = false;",
   "    let watchdog;",
   "",
-  "    // The bundle stamp the first successful boot in this window pinned its importmap to. Undefined until a boot reports one; see checkStamp below.",
-  "    let pinnedStamp;",
+  "    // The bundle stamp the first successful boot in this window locked its importmap to. Undefined until a boot reports one; see checkStamp below.",
+  "    let lockedStamp;",
   "",
   "    // Set an element's display by id, tolerating an absent node so a stamped region missing a panel element never throws from the monitor.",
   "    const setDisplay = (id, value) => {",
@@ -307,28 +307,28 @@ const BOOT_MONITOR: readonly string[] = [
   "      setDisplay(\"pageBootError\", \"none\");",
   "    };",
   "",
-  "    /* Compare this boot's bundle stamp against the one an earlier boot in this window pinned its importmap to, and answer whether the boot may proceed.",
+  "    /* Compare this boot's bundle stamp against the one an earlier boot in this window locked its importmap to, and answer whether the boot may proceed.",
   "     *",
   "     * The settings frame outlives a single boot: a panel re-open runs the loader again in the same window, while the importmap the FIRST run injected is the one",
   "     * still in force - a browser applies the first map and every bare specifier resolves through it for the document's life. That is harmless until the bundle is",
-  "     * regenerated underneath the page, at which point the pinned subdir no longer exists on disk: the re-run would fetch the new manifest, inject a map nothing",
+  "     * regenerated underneath the page, at which point the locked subdir no longer exists on disk: the re-run would fetch the new manifest, inject a map nothing",
   "     * consults, and import an entry whose every bare-specifier request 404s, leaving the user on the previous bundle's already-loaded code with no sign anything",
   "     * was wrong. Stopping here is the only honest outcome, because no amount of retrying inside this document can reach the current bundle.",
   "     *",
-  "     * The first call pins and proceeds; a later call matching the pin proceeds too, which is the ordinary re-open. A later call that differs is terminal, and it",
+  "     * The first call locks the stamp in and proceeds; a later match proceeds too, which is the ordinary re-open. A later call that differs is terminal, and it",
   "     * deliberately overrides settled: the earlier boot's ready() is exactly what settles a window that then goes stale, so honoring it would suppress the one",
   "     * message the user needs.",
   "     */",
   "    const checkStamp = (stamp) => {",
   "",
-  "      if(pinnedStamp === undefined) {",
+  "      if(lockedStamp === undefined) {",
   "",
-  "        pinnedStamp = stamp;",
+  "        lockedStamp = stamp;",
   "",
   "        return true;",
   "      }",
   "",
-  "      if(pinnedStamp === stamp) {",
+  "      if(lockedStamp === stamp) {",
   "",
   "        return true;",
   "      }",
@@ -338,7 +338,7 @@ const BOOT_MONITOR: readonly string[] = [
   "      stop();",
   "",
   "      showBucket(\"reload\");",
-  "      writeDetails([ \"Loaded: \" + pinnedStamp, \"Available: \" + stamp ]);",
+  "      writeDetails([ \"Loaded: \" + lockedStamp, \"Available: \" + stamp ]);",
   "",
   "      setDisplay(\"bootSlowNotice\", \"none\");",
   "      setDisplay(\"pageBootError\", \"block\");",
@@ -373,7 +373,7 @@ const BOOT_MONITOR: readonly string[] = [
  * `cache: "no-store"` fetch of the manifest, an importmap, and a dynamic import of the entry, all wrapped in a stage-instrumented `try`/`catch` that routes a boot
  * failure to the monitor with the stage that failed, without adding any await or work to the happy path.
  *
- * Between reading the manifest and injecting anything, the loader hands the monitor the bundle stamp it is about to pin. The settings frame outlives a single boot, so
+ * Between reading the manifest and injecting anything, the loader hands the monitor the bundle stamp it is about to lock in. The settings frame outlives one boot, so
  * a re-open runs the loader again in a window whose importmap is already fixed to the first run's stamp; a stamp that no longer matches means the bundle was
  * regenerated underneath the document, and the boot stops on the monitor's needs-reload state rather than importing an entry whose bare specifiers all resolve into a
  * subdir that no longer exists.

@@ -252,7 +252,7 @@ describe("renderWebUiBootRegion", () => {
 describe("renderWebUiBootRegion - loader stage instrumentation (text-level)", () => {
 
   // The loader is a module script (top-level await, import.meta) that the test runner cannot execute without --experimental-vm-modules, so its stage progression and
-  // catch classification are pinned by text-level assertions against the rendered block. Behavioral verification of these branches lives in the live dogfood probes.
+  // catch classification are asserted at the text level against the rendered block. Behavioral verification of these branches lives in the live dogfood probes.
 
   test("the stage flips to \"import\" only immediately before the entry import", () => {
 
@@ -541,7 +541,7 @@ describe("boot monitor - bundle stamp across boots", () => {
   // The stale-stamp state is what a window that outlives a bundle regeneration lands on. A panel re-open runs the loader again in the same window while the FIRST
   // run's importmap stays in force, so a stamp that no longer matches means every bare specifier this boot imports would resolve into a subdir that is gone.
 
-  test("the first boot pins its stamp and proceeds, showing nothing", (t) => {
+  test("the first boot locks its stamp in and proceeds, showing nothing", (t) => {
 
     using _dom = createTestDom();
     const { calls, fake } = spinnerSpyHomebridge();
@@ -612,7 +612,7 @@ describe("boot monitor - bundle stamp across boots", () => {
     assert.equal(displayOf("pageBootError"), "block", "and it reveals the panel over a settled window");
   });
 
-  test("the details carry both stamps, so a screenshot says which bundle the page is pinned to", (t) => {
+  test("the details carry both stamps, so a screenshot says which bundle the page is locked to", (t) => {
 
     using _dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
@@ -626,13 +626,13 @@ describe("boot monitor - bundle stamp across boots", () => {
 
     const text = document.getElementById("bootErrorDetails")?.textContent ?? "";
 
-    assert.ok(text.includes("Loaded: a1b2c3"), "the pinned stamp is reported");
+    assert.ok(text.includes("Loaded: a1b2c3"), "the locked stamp is reported");
     assert.ok(text.includes("Available: d4e5f6"), "alongside the one now on disk");
   });
 
-  test("the stamp is pinned in the first run's closure, so a re-executed monitor script still compares against it", (t) => {
+  test("the stamp is locked into the first run's closure, so a re-executed monitor script still compares against it", (t) => {
 
-    // The monitor guards against a second execution in the same window, which is what makes the first run's closure the single home for the pin. A design that kept
+    // The monitor guards against a second execution in the same window, which is what makes the first run's closure the single home for that stamp. A design that kept
     // the stamp anywhere a re-execution could reset would silently answer true forever.
     using _dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
@@ -644,7 +644,7 @@ describe("boot monitor - bundle stamp across boots", () => {
     bootMonitor().checkStamp("a1b2c3");
     runInThisContext(monitorSource);
 
-    assert.equal(bootMonitor().checkStamp("d4e5f6"), false, "the re-executed script did not reset the pin");
+    assert.equal(bootMonitor().checkStamp("d4e5f6"), false, "the re-executed script did not reset the locked stamp");
   });
 });
 
@@ -656,7 +656,7 @@ describe("renderWebUiBootRegion - stale-stamp wiring (text-level)", () => {
     const manifestIndex = region.indexOf("const manifest = await response.json();");
     const mapIndex = region.indexOf("mapScript.type = \"importmap\";");
 
-    assert.ok(checkIndex >= 0, "the loader hands the monitor the stamp it is about to pin");
+    assert.ok(checkIndex >= 0, "the loader hands the monitor the stamp it is about to lock in");
     assert.ok((manifestIndex >= 0) && (manifestIndex < checkIndex), "the check reads the manifest it just fetched");
     assert.ok(checkIndex < mapIndex, "and it runs before anything is injected, so a stale boot injects nothing");
   });
@@ -672,7 +672,7 @@ describe("renderWebUiBootRegion - stale-stamp wiring (text-level)", () => {
 
   test("carries the needs-reload message verbatim, naming a reload as the remedy", () => {
 
-    assert.ok(region.includes("The settings interface was updated while this page was open, so this page is pinned to a version that is no longer installed. " +
+    assert.ok(region.includes("The settings interface was updated while this page was open, so this page is still on a version that is no longer installed. " +
       "Reload the page to load the current version."), "the reload-bucket message appears verbatim");
     assert.match(region, /<p data-boot-bucket="reload"/, "and it is pre-rendered as its own hidden bucket");
   });

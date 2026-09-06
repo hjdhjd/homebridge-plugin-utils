@@ -340,8 +340,8 @@ export interface NotRespondingOptions {
  *
  * @param options - The error class, the status, and the availability predicate every wrapped read answers by. See {@link NotRespondingOptions}.
  *
- * @returns A wrapper that takes a characteristic reader and returns a reader of the same shape, throwing while `unavailable()` is true and reading through to the
- *          wrapped reader otherwise.
+ * @returns A wrapper that takes any characteristic reader HAP's own get handler may be - one that answers a value, or one that answers null - and returns a reader
+ *          of the same shape, throwing while `unavailable()` is true and reading through to the wrapped reader otherwise.
  *
  * @remarks
  * HomeKit renders a get handler that throws a HAP status error as Not Responding, and renders whatever a handler returns as fact. A readable characteristic wired
@@ -366,9 +366,9 @@ export interface NotRespondingOptions {
  * @category Accessory
  */
 export function notResponding({ errorClass, status = HAPStatus.SERVICE_COMMUNICATION_FAILURE, unavailable }: NotRespondingOptions):
-<T extends CharacteristicValue>(read: () => T) => () => T {
+<T extends Nullable<CharacteristicValue>>(read: () => T) => () => T {
 
-  return <T extends CharacteristicValue>(read: () => T): () => T => {
+  return <T extends Nullable<CharacteristicValue>>(read: () => T): () => T => {
 
     return (): T => {
 

@@ -9,10 +9,11 @@
  * the thing we want to exercise.
  */
 import * as hap from "@homebridge/hap-nodejs";
-import type { Characteristic, PlatformAccessory, Service, WithUUID } from "homebridge";
+import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
 import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updateServices, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import { HAPStatus } from "./homebridge-enums.ts";
+import type { Nullable } from "./util.ts";
 import assert from "node:assert/strict";
 
 // The HAP static-Characteristic shape: every Characteristic class ships with a `UUID` static and satisfies `new () => Characteristic`. That is the exact type HAP's
@@ -159,6 +160,11 @@ const _readerShapeExercises = (): void => {
   const _number: () => number = wrap((): number => 42);
   const _string: () => string = wrap((): string => "Stopped");
   const _boolean: () => boolean = wrap((): boolean => true);
+
+  // HAP's own get handler may answer null, so a reader that does is accepted here too. Each line exercises the bound from a different end: one reader narrowed to
+  // a single nullable primitive, and one answering the whole HAP value union the bound itself names.
+  const _nullable: () => number | null = wrap((): number | null => null);
+  const _value: () => Nullable<CharacteristicValue> = wrap((): Nullable<CharacteristicValue> => null);
 
   // @ts-expect-error - a symbol is not a CharacteristicValue, so a reader answering one is not a characteristic reader.
   const _symbol = wrap((): symbol => Symbol("not a characteristic value"));
@@ -718,6 +724,24 @@ describe("notResponding", () => {
     assert.equal(reads, 1, "one read runs the reader once");
     assert.equal(read(), 42);
     assert.equal(reads, 2, "and a second read runs it again, rather than answering from anything the wrapper remembered");
+  });
+
+  test("passes a null answer through while available", () => {
+
+    let reads = 0;
+    const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+
+    const read = wrap((): Nullable<number> => {
+
+      reads++;
+
+      return null;
+    });
+
+    // HAP renders whatever a get handler answers, and null is one of the answers its own contract carries, so the wrapper hands it back rather than coalescing it
+    // to a value the device never reported or refusing a reader that has nothing to report yet.
+    assert.equal(read(), null, "a reader that answers null answers null through the wrapper");
+    assert.equal(reads, 1, "and the wrapped reader ran to produce it");
   });
 
   test("carries a named status", () => {

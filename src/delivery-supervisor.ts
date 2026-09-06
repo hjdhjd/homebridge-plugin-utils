@@ -27,6 +27,10 @@ import type { Clock } from "./clock.ts";
 import { TimerRegistry } from "./timer-registry.ts";
 import { onAbort } from "./util.ts";
 
+// What a close hands back when none of the settle callbacks it ran threw. One frozen array answers every such close, so a sweep that meets no fault allocates nothing
+// on its way out.
+const NO_FAULTS: readonly unknown[] = Object.freeze([]);
+
 /**
  * Why the supervisor closed a slot itself, rather than the consumer settling it with an outcome of its own.
  *
@@ -164,10 +168,11 @@ export interface DeliverySupervisorOptions<T = void> {
   readonly clock?: Clock;
 
   /**
-   * Where the error a deadline callback threw is reported, together with the window whose callback threw it, after every pending slot of that window has already
-   * been answered. The window is what lets a consumer name the subject of the fault from the key and slot names it opened the window with, rather than keeping a
-   * catch of its own alongside this one. The callback carries the consumer's entire fault policy - the logging, the wording, the recovery - which is why the
-   * supervisor itself stays logging-free.
+   * Where every fault the supervisor meets is reported: the error a deadline callback threw, and any error a settle callback threw while the supervisor was closing
+   * a window's slots. Each arrives together with the window it concerns, and always after every pending slot of that window has been answered. The window is what
+   * lets a consumer name the subject of the fault from the key and slot names it opened the window with, rather than keeping a catch of its own alongside this one.
+   * The callback carries the consumer's entire fault policy - the logging, the wording, the recovery - which is why the supervisor itself stays logging-free. A
+   * throw from this callback is not caught: it reaches whoever invoked the close, once that close has completed.
    */
   readonly onError: (error: unknown, window: DeliveryWindow<T>) => void;
 
@@ -301,13 +306,30 @@ class SupervisedWindow<T> implements DeliveryWindow<T> {
     this.#arm(delay);
   }
 
-  // Answer every slot of this window that is still pending with the reason the supervisor closed it. Slots that already settled keep the answer they were given.
-  public yieldPending(reason: DeliveryYield): void {
+  /* Answer every slot of this window that is still pending with the reason the supervisor closed it, and hand back whatever its settle callbacks threw on the way, in
+   * slot order. Slots that already settled keep the answer they were given.
+   *
+   * A close answers every slot before anything else happens, so a callback's throw is collected here and the walk carries on with the slots after it; the supervisor
+   * reports what this hands back once the whole close is complete. A consumer settling one slot of its own is not a close, and `#settle` below leaves that throw in
+   * the stack of whoever settled it.
+   */
+  public yieldPending(reason: DeliveryYield): readonly unknown[] {
+
+    let thrown: unknown[] | undefined;
 
     for(const name of this.#slots.keys()) {
 
-      this.#settle(name, { kind: "yielded", reason });
+      try {
+
+        this.#settle(name, { kind: "yielded", reason });
+      } catch(error: unknown) {
+
+        thrown ??= [];
+        thrown.push(error);
+      }
     }
+
+    return thrown ?? NO_FAULTS;
   }
 
   /* The one place a slot of this window settles, whatever asked for it.
@@ -335,9 +357,9 @@ class SupervisedWindow<T> implements DeliveryWindow<T> {
      * Both acts run after the callback rather than before it, which is what lets a consumer open a fresh window for the same key from inside that callback: the
      * retirement below drops the map entry only while it still holds THIS window, so the newer one is never deleted out from under the consumer that just opened it.
      *
-     * The throw itself is not caught. It belongs to the consumer's own callback and reaches the consumer that settled the slot, where swallowing it would hide a
-     * consumer's fault from the only side that can do anything about it; `onError` is the deadline callback's fault channel and speaks for a window nobody is
-     * standing over, which is not this case.
+     * The throw itself is not caught here. It belongs to the consumer's own callback, and a consumer settling one slot of its own window meets it in that consumer's
+     * own stack, where swallowing it would hide a fault from the only side that can do anything about it. A close the supervisor performs is the other case:
+     * `yieldPending` above collects the throw, keeps answering the slots after it, and the supervisor reports it through `onError` once the sweep is over.
      */
     try {
 
@@ -355,13 +377,25 @@ class SupervisedWindow<T> implements DeliveryWindow<T> {
   }
 }
 
+/* One fault a close met, paired with the window it belongs to, so the report phase after the sweep still knows which window each error speaks for.
+ *
+ * The pairing is what makes collect-then-report possible at all: a sweep across several windows loses the association the moment it stops reporting inline, and
+ * `onError` promises its consumer a window alongside every error.
+ */
+interface CollectedFault<T> {
+
+  readonly error: unknown;
+  readonly window: SupervisedWindow<T>;
+}
+
 /**
  * A supervisor of delivery windows: each window is a set of named slots that settle exactly once, under one deadline armed on the injected clock.
  *
  * A consumer opens a window under a key of its own choosing, names the slots the window is waiting on, and says how long to wait and what to do when that wait
  * lapses. From there it answers slots as its own evidence arrives, and the supervisor guarantees the rest: exactly one settlement per slot, one deadline per window
  * cleared the moment the last slot answers, a fresh window under a standing key yielding the old one, and every pending slot answered when the lifetime ends, when
- * the consumer invalidates, or when a deadline callback throws.
+ * the consumer invalidates, or when a deadline callback throws. Every one of those closes answers every slot it covers before it reports the faults its callbacks
+ * threw, so a consumer's own throw never leaves a sibling slot waiting.
  *
  * What the supervisor does NOT own is as deliberate as what it does. It has no notion of evidence, no re-send policy, no opinion about how many rounds a delivery is
  * worth, and no vocabulary for a successful outcome - every one of those is the consumer's, reached through the deadline callback and the slot handles. That division
@@ -485,7 +519,10 @@ export class DeliverySupervisor<T = void> implements Disposable {
     this.#windows.set(key, window);
     arm(options.deadline);
 
-    superseded?.yieldPending("superseded");
+    if(superseded !== undefined) {
+
+      this.#close([superseded], "superseded");
+    }
 
     return window;
   }
@@ -504,10 +541,19 @@ export class DeliverySupervisor<T = void> implements Disposable {
       return;
     }
 
+    const named: SupervisedWindow<T>[] = [];
+
     for(const key of keys) {
 
-      this.#windows.get(key)?.yieldPending("invalidated");
+      const window = this.#windows.get(key);
+
+      if(window !== undefined) {
+
+        named.push(window);
+      }
     }
+
+    this.#close(named, "invalidated");
   }
 
   /**
@@ -563,7 +609,8 @@ export class DeliverySupervisor<T = void> implements Disposable {
   /* One window's deadline, run inside the catch that is the whole reason this sits here rather than in the consumer's own callback.
    *
    * A throw escaping a timer callback has nowhere to go and would leave every slot of the window waiting for an answer that can never come, so the last resort is to
-   * answer them all. An aborted lifetime is the one exception: a throw that lands after the lifetime ended is the callback unwinding through a teardown this side
+   * close the window: every slot is answered first, then the deadline's own fault is reported, and any fault a settle callback threw during that close is reported
+   * after it. An aborted lifetime is the one exception: a throw that lands after the lifetime ended is the callback unwinding through a teardown this side
    * initiated, its slots were already yielded `"aborted"` by the sweep, and reporting it would name the consumer's own shutdown as a fault.
    *
    * There is no guard for an already-settled window at the top, and none is needed: every settlement disarms the deadline synchronously, and neither the platform
@@ -581,21 +628,42 @@ export class DeliverySupervisor<T = void> implements Disposable {
         return;
       }
 
-      window.yieldPending("faulted");
-      this.#onError(error, window);
+      this.#close([window], "faulted", [{ error, window }]);
     }
   }
 
-  /* Yield every pending slot of every standing window.
+  /* Close every standing window.
    *
    * The walk reads a snapshot rather than the live map, because settling a window's last slot retires that window from the map and a consumer's settlement callback
    * can open a fresh one while the sweep is still running. The snapshot answers exactly the windows that were standing when the sweep began.
    */
   #yieldAll(reason: DeliveryYield): void {
 
-    for(const window of [...this.#windows.values()]) {
+    this.#close([...this.#windows.values()], reason);
+  }
 
-      window.yieldPending(reason);
+  /* The one place a close runs, whichever verb asked for it: every window is swept first, and every fault the sweep met is reported afterwards, in the order it was
+   * collected. `faults` is the list the close begins with, so a close a fault caused - a deadline callback's throw - reports that fault ahead of anything its own
+   * sweep turns up; every other caller starts from nothing.
+   *
+   * Reporting after the sweep is the whole point: `onError` runs when there is no sweep left for it to end, which is why a throw from it needs no guard here. It
+   * reaches whoever invoked the close - the caller of `invalidate`, `dispose`, or `open`; the platform's unhandled-rejection report for a deadline; the abort
+   * dispatch for a lifetime's end - after every slot has already been answered. It also ends the report phase where it lands, because a fault channel that throws is
+   * the consumer's own reporting failing and there is nowhere further for this class to route it.
+   */
+  #close(windows: readonly SupervisedWindow<T>[], reason: DeliveryYield, faults: CollectedFault<T>[] = []): void {
+
+    for(const window of windows) {
+
+      for(const error of window.yieldPending(reason)) {
+
+        faults.push({ error, window });
+      }
+    }
+
+    for(const fault of faults) {
+
+      this.#onError(fault.error, fault.window);
     }
   }
 }

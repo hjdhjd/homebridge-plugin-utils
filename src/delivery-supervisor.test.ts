@@ -75,6 +75,42 @@ function expectSlot<T>(window: DeliveryWindow<T>, name: string): DeliverySlot<T>
   return slot;
 }
 
+/* Open two windows of two slots each, recording every settlement through `onSettle` and throwing `fault` from the first window's first settlement.
+ *
+ * Four of the close rows below read this same shape, because it is the arrangement a close has the most to lose in: when the throw lands, one slot of its own window
+ * and both slots of a sibling window are still unanswered, so a close that stops where the throw lands strands three consumers rather than one.
+ *
+ * @returns The first window, which is the one whose callback throws and the one every fault from this shape is reported against.
+ */
+function openTwoWindows(supervisor: DeliverySupervisor<string>, onSettle: (slot: string, settlement: DeliverySettlement<string>) => void,
+  fault: Error): DeliveryWindow<string> {
+
+  let calls = 0;
+  const first = supervisor.open("first", {
+
+    deadline: 100,
+    onDeadline: (): void => undefined,
+
+    onSettle: (slot: string, settlement: DeliverySettlement<string>): void => {
+
+      onSettle(slot, settlement);
+
+      calls++;
+
+      if(calls === 1) {
+
+        throw fault;
+      }
+    },
+
+    slots: [ "alpha", "beta" ]
+  });
+
+  supervisor.open("second", { deadline: 100, onDeadline: (): void => undefined, onSettle, slots: [ "gamma", "delta" ] });
+
+  return first;
+}
+
 describe("DeliverySupervisor", () => {
 
   test("a slot settles exactly once, whether or not the consumer carries an outcome", () => {
@@ -613,5 +649,176 @@ describe("DeliverySupervisor", () => {
       assert.deepEqual(scenario.faults, [], "and no window is named either");
       assert.equal(scenario.answers.length, 1, "and answers nothing a second time");
     });
+  });
+
+  test("a deadline fault answers every slot past a throwing settle callback and reports both faults with nothing left pending", async () => {
+
+    await assertNoUnhandledRejections(async (): Promise<void> => {
+
+      const answers: Answer<string>[] = [];
+      const boom = new Error("the delivery check failed");
+      const clock = new TestClock();
+      const controller = new AbortController();
+      const errors: unknown[] = [];
+      const faulted: DeliverySettlement<string> = { kind: "yielded", reason: "faulted" };
+      const faults: DeliveryWindow<string>[] = [];
+      const pendingAtReport: number[] = [];
+      const stumble = new Error("the consumer's settlement handler failed");
+      let calls = 0;
+
+      // The fault channel reads the window's own pending count as it is called, which is how this row tells a report issued after the close from one issued during it.
+      const supervisor = new DeliverySupervisor<string>({ clock, onError: (error: unknown, window: DeliveryWindow<string>): void => {
+
+        errors.push(error);
+        faults.push(window);
+        pendingAtReport.push(window.pending);
+      }, signal: controller.signal });
+
+      const window = supervisor.open("w", {
+
+        deadline: 100,
+
+        onDeadline: (): void => {
+
+          throw boom;
+        },
+
+        onSettle: (slot: string, settlement: DeliverySettlement<string>): void => {
+
+          answers.push({ settlement, slot });
+
+          calls++;
+
+          if(calls === 1) {
+
+            throw stumble;
+          }
+        },
+
+        slots: [ "alpha", "beta", "gamma" ]
+      });
+
+      await advanceThroughSchedule(clock, [100]);
+
+      assert.deepEqual(answers.map((answer) => answer.slot), [ "alpha", "beta", "gamma" ], "the slots behind the throwing callback are answered rather than orphaned");
+      assert.deepEqual(answers.map((answer) => answer.settlement), [ faulted, faulted, faulted ], "each of them with the reason this close carried");
+      assert.deepEqual(errors, [ boom, stumble ], "the deadline's own fault is reported first and the settle callback's after it, each unchanged");
+      assert.equal(faults.length, 2, "each fault is reported exactly once");
+      assert.equal(expectAt(faults, 0, "the first reported window"), window, "the deadline's fault names the window whose callback threw, by identity");
+      assert.equal(expectAt(faults, 1, "the second reported window"), window, "and the settle callback's fault names the same one");
+      assert.deepEqual(pendingAtReport, [ 0, 0 ], "and neither report ran while a slot of that window was still waiting");
+    });
+  });
+
+  test("an aborted lifetime answers every slot of every window past a throwing settle callback and reports the fault afterwards", () => {
+
+    const scenario = rig<string>();
+    const aborted: DeliverySettlement<string> = { kind: "yielded", reason: "aborted" };
+    const stumble = new Error("the consumer's settlement handler failed");
+    const first = openTwoWindows(scenario.supervisor, scenario.onSettle, stumble);
+
+    scenario.controller.abort(new Error("teardown"));
+
+    assert.deepEqual(scenario.answers.map((answer) => answer.settlement), [ aborted, aborted, aborted, aborted ],
+      "the throw ends neither its own window's sweep nor the sibling window's");
+    assert.deepEqual(scenario.errors, [stumble], "the settle callback's throw is reported once, unchanged");
+    assert.equal(scenario.faults.length, 1, "against exactly one window");
+    assert.equal(expectAt(scenario.faults, 0, "a reported window"), first, "which is the window whose callback threw, by identity");
+  });
+
+  test("invalidating answers every slot of every window past a throwing settle callback and reports the fault afterwards", () => {
+
+    const scenario = rig<string>();
+    const invalidated: DeliverySettlement<string> = { kind: "yielded", reason: "invalidated" };
+    const stumble = new Error("the consumer's settlement handler failed");
+    const first = openTwoWindows(scenario.supervisor, scenario.onSettle, stumble);
+
+    scenario.supervisor.invalidate();
+
+    assert.deepEqual(scenario.answers.map((answer) => answer.settlement), [ invalidated, invalidated, invalidated, invalidated ],
+      "the throw ends neither its own window's sweep nor the sibling window's");
+    assert.deepEqual(scenario.errors, [stumble], "the settle callback's throw is reported once, unchanged");
+    assert.equal(scenario.faults.length, 1, "against exactly one window");
+    assert.equal(expectAt(scenario.faults, 0, "a reported window"), first, "which is the window whose callback threw, by identity");
+  });
+
+  test("disposing answers every slot of every window past a throwing settle callback and reports the fault afterwards", () => {
+
+    const scenario = rig<string>();
+    const invalidated: DeliverySettlement<string> = { kind: "yielded", reason: "invalidated" };
+    const stumble = new Error("the consumer's settlement handler failed");
+    const first = openTwoWindows(scenario.supervisor, scenario.onSettle, stumble);
+
+    scenario.supervisor[Symbol.dispose]();
+
+    assert.deepEqual(scenario.answers.map((answer) => answer.settlement), [ invalidated, invalidated, invalidated, invalidated ],
+      "the throw ends neither its own window's sweep nor the sibling window's");
+    assert.equal(scenario.clock.pending, 0, "and no deadline outlives the disposal");
+    assert.deepEqual(scenario.errors, [stumble], "the settle callback's throw is reported once, unchanged");
+    assert.equal(scenario.faults.length, 1, "against exactly one window");
+    assert.equal(expectAt(scenario.faults, 0, "a reported window"), first, "which is the window whose callback threw, by identity");
+  });
+
+  test("opening over a standing window answers its slots past a throwing settle callback and reports the fault against the older window", () => {
+
+    const scenario = rig<string>();
+    const stumble = new Error("the consumer's settlement handler failed");
+    const superseded: DeliverySettlement<string> = { kind: "yielded", reason: "superseded" };
+    let calls = 0;
+    const first = scenario.supervisor.open("w", {
+
+      deadline: 100,
+      onDeadline: (): void => undefined,
+
+      onSettle: (slot: string, settlement: DeliverySettlement<string>): void => {
+
+        scenario.onSettle(slot, settlement);
+
+        calls++;
+
+        if(calls === 1) {
+
+          throw stumble;
+        }
+      },
+
+      slots: [ "alpha", "beta" ]
+    });
+
+    // The supersede runs inside this call, so a throw the close let through would land on the consumer opening the newer window and leave it holding nothing.
+    const second = scenario.supervisor.open("w", { deadline: 100, onDeadline: (): void => undefined, onSettle: scenario.onSettle, slots: [ "gamma", "delta" ] });
+
+    assert.deepEqual(scenario.answers.map((answer) => answer.settlement), [ superseded, superseded ], "both slots of the older window are answered");
+    assert.equal(scenario.supervisor.get("w"), second, "the newer window is the one standing under the key");
+    assert.equal(second.pending, 2, "with every slot of its own still pending");
+    assert.deepEqual(scenario.errors, [stumble], "the older window's settle callback threw once, and that throw is reported once");
+    assert.equal(scenario.faults.length, 1, "against exactly one window");
+    assert.equal(expectAt(scenario.faults, 0, "a reported window"), first, "which is the older window, by identity, rather than the one just opened");
+  });
+
+  test("a fault channel that throws reaches the caller that closed, with every slot already answered", () => {
+
+    const alarm = new Error("the consumer's fault channel failed");
+    const answers: Answer<string>[] = [];
+    const clock = new TestClock();
+    const controller = new AbortController();
+    const stumble = new Error("the consumer's settlement handler failed");
+
+    /* This is the row that tells reporting after the sweep from reporting inside it. The fault channel throws on the first error it is handed, and the count below
+     * reads how many slots had answered by then: a supervisor reporting mid-sweep would still have the second window's two slots waiting when this throw ended it.
+     */
+    const supervisor = new DeliverySupervisor<string>({ clock, onError: (): void => {
+
+      throw alarm;
+    }, signal: controller.signal });
+
+    openTwoWindows(supervisor, (slot: string, settlement: DeliverySettlement<string>): void => {
+
+      answers.push({ settlement, slot });
+    }, stumble);
+
+    assert.throws(() => supervisor.invalidate(), (error: unknown): boolean => error === alarm,
+      "the fault channel's own throw is not caught, and reaches the caller that invalidated");
+    assert.equal(answers.length, 4, "and every slot of both windows had already been answered when it did");
   });
 });

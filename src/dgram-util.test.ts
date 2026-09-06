@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 import { assertNoUnhandledRejections } from "./testing/index.ts";
 import { createSocket } from "node:dgram";
 import { hasErrorCode } from "./util.ts";
+import { isIP } from "node:net";
+import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 
 // Bring `socket` up on the loopback interface and resolve once `"listening"` fires (or reject on `"error"`). Awaiting the listening event before inspecting
@@ -155,6 +157,26 @@ describe("localAddressFor", () => {
     const named = await localAddressFor("localhost");
 
     assert.ok(named.startsWith("127.") || (named === "::1"), "a loopback peer is reached over loopback, and the answer is an address rather than a name");
+  });
+
+  test("the answered address is in the family the resolver named", async () => {
+
+    /* The property itself: whatever family the platform resolver puts first for a name, the probe answers in. On a machine whose resolver answers `localhost` with an
+     * IPv6 record first this row is exactly what a spelling-driven family fails, because the name carries no colon and would have been probed over IPv4 while the
+     * resolver was naming an IPv6 address. On a machine that answers IPv4 first both readings agree and the row asserts the property without telling them apart.
+     */
+    const { family } = await lookup("localhost");
+
+    assert.equal(isIP(await localAddressFor("localhost")), family, "the probe follows the resolver into the family it answered in");
+  });
+
+  test("a lifetime that stays open lets the probe answer", async () => {
+
+    /* The connect wait takes its signal arm whenever a caller supplies a lifetime, and the two abort rows below walk that arm only on its rejecting side - the
+     * unresolvable-host one rejects on the lookup wait rather than this one, because the resolution comes first. This row walks the same arm on a call that succeeds,
+     * which is what keeps this module's branch coverage whole. It exercises the arm rather than telling one implementation from another.
+     */
+    assert.equal(await localAddressFor("127.0.0.1", { signal: new AbortController().signal }), "127.0.0.1");
   });
 
   test("a host that does not resolve rejects with the lookup's own error", async () => {

@@ -14,13 +14,13 @@
  * {@link localAddressFor} lives here for the same reason: it is a datagram helper, answering which local address the operating system would route toward a host by
  * connecting a socket and reading what the kernel bound, and the translation tables above are what it opens that socket through.
  *
- * This module imports `node:dgram` and `node:net` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve those imports.
+ * This module imports `node:dgram` and `node:dns/promises` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve those imports.
  *
  * @module
  */
 import type { Socket } from "node:dgram";
 import { createSocket } from "node:dgram";
-import { isIP } from "node:net";
+import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import { waitWithSignal } from "./util.ts";
 
@@ -77,18 +77,23 @@ export function createDgramSocket(ipFamily: IpFamily): Socket {
 /**
  * The local address the operating system routes toward a host, which is the interface a peer at that host can reach this process on.
  *
- * A datagram socket is connected and its local address read. No packet is sent: connecting a datagram socket only fixes its default destination, and fixing that
+ * The host is resolved first, through the platform resolver and in the operating system's own order, and the socket is opened in the family the record answered. A
+ * name's records decide the family rather than its spelling, so a host whose only record is an IPv6 one is probed over an IPv6 socket and answered rather than
+ * refused. A literal is answered by the resolver without a query and in its own family, so a literal travels this same path with no branch of its own. The socket is
+ * opened only once the resolver has answered, which is also what makes a lifetime that ends during the lookup open nothing at all.
+ *
+ * That socket is then connected and its local address read. No packet is sent: connecting a datagram socket only fixes its default destination, and fixing that
  * destination is what makes the kernel consult its routing table and bind the local address it would send from. That is a more honest answer than enumerating the
  * host's interfaces and guessing which one faces the peer, because a host with several interfaces has no single right answer to guess at.
  *
  * The `connect` event is awaited rather than a callback passed, because the platform declares that callback to take no arguments: a callback shape that reads an
  * error argument types only by declaring a parameter the contract does not promise, and then reads past it at runtime. With no callback, the runtime emits `connect`
- * on success and `error` on failure, which `events.once` turns into a rejection carrying the lookup or family code - so a host that does not resolve, or one whose
- * family the socket cannot reach, is a failure the caller sees rather than an address that means nothing.
+ * on success and `error` on failure, which `events.once` turns into a rejection carrying the family code - so an address whose family the socket cannot reach is a
+ * failure the caller sees rather than an address that means nothing.
  *
  * The socket is unreferenced, so it never holds the process open. A name lookup already in flight is a threadpool request no API cancels, so it holds the process
- * until the resolver answers however this call ends; `signal` ends the caller's wait at once and the lookup drains on its own, completing against a closed socket
- * and emitting nothing.
+ * until the resolver answers however this call ends; `signal` ends the caller's wait at once, and the lookup then drains into the wait combinator below, which has
+ * already marked its answer handled.
  *
  * @param host            - The peer's address or hostname.
  * @param options         - Optional inputs.
@@ -96,7 +101,8 @@ export function createDgramSocket(ipFamily: IpFamily): Socket {
  *
  * @returns The local address the route toward that host would leave from.
  *
- * @throws The lookup or address-family error when the host cannot be reached, and `signal.reason` when the caller's lifetime ends first.
+ * @throws The resolver's own error when the host does not resolve, the address-family error when the resolved address cannot be reached, and `signal.reason` when
+ * the caller's lifetime ends first.
  *
  * @example
  *
@@ -114,7 +120,12 @@ export async function localAddressFor(host: string, options: { signal?: AbortSig
   // A lifetime that has already ended opens no socket at all, rather than opening one and tearing it down a line later.
   options.signal?.throwIfAborted();
 
-  const socket = createDgramSocket((isIP(host) === 6) ? "ipv6" : "ipv4");
+  /* The resolver is what decides the family, so a name's records rather than its spelling choose the socket. Opening the socket only once the answer is in hand is
+   * also what makes a lifetime that ends during the lookup open nothing at all, and this wait is ended by the same combinator the connect wait below explains.
+   */
+  const resolved = lookup(host);
+  const { address, family } = await ((options.signal === undefined) ? resolved : waitWithSignal(resolved, options.signal));
+  const socket = createDgramSocket((family === 6) ? "ipv6" : "ipv4");
 
   // Excluded from Node's reference counting, so a probe in flight never keeps the process alive on its own account.
   socket.unref();
@@ -124,7 +135,7 @@ export async function localAddressFor(host: string, options: { signal?: AbortSig
     // Registered before the connect is asked for, so an outcome arriving in the same turn as the request has a listener waiting for it.
     const connected = once(socket, "connect");
 
-    socket.connect(ROUTE_PROBE_PORT, host);
+    socket.connect(ROUTE_PROBE_PORT, address);
 
     /* `waitWithSignal` is the library's one combinator for a wait a caller's signal may end: it rejects with the signal's reason rather than a bare `AbortError`,
      * and it marks the underlying promise handled, so a `connect` or `error` that settles against the closed socket after an abort lands somewhere. That is why

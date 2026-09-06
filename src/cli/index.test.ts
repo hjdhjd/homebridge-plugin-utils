@@ -1,12 +1,9 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * cli/index.test.ts: Unit tests for the CLI module, covering the pure {@link prepareUi} transform (content-hashed mirror semantics, manifest shape, stale-build
- * cleanup, preservation of non-version entries, source-side validation), the pure {@link prepareDocs} transform (catalog validation, scope-hook forwarding,
- * atomic-write marker splicing), the pure {@link prepareChrome} transform (multi-region stamping across the README, docs, and webUI, external project-source
- * resolution, and all-or-nothing writes), the {@link runCli} dispatcher (argument routing, exit codes, usage banner, and the check mode that reports every target
- * that would change without writing any of them), and the entry-point execution invoked through
- * a symlink (the real bin invocation path that a direct-path test never exercises). Every surface runs against an AsyncDisposable tmpdir scratch root; only
- * the entry-point test forgoes the in-process `captureStderr()` helper, instead spawning the CLI as a real subprocess and reading its stderr pipe directly.
+ * cli/index.test.ts: Unit tests for the CLI module, covering every transform the module exports, the {@link runCli} dispatcher (argument routing, exit codes, the
+ * usage banner, and the check mode that reports every target that would change without writing any of them), and the entry-point execution invoked through a
+ * symlink (the real bin invocation path that a direct-path test never exercises). Every surface runs against an AsyncDisposable tmpdir scratch root; only the
+ * entry-point test forgoes the in-process `captureStderr()` helper, instead spawning the CLI as a real subprocess and reading its stderr pipe directly.
  * No test touches a real install or modifies the working tree.
  */
 import * as docChrome from "../docChrome.ts";
@@ -665,7 +662,7 @@ describe("prepareDocs", () => {
 
     // The hand-written prose on both sides of the marker pair must survive, and the stale placeholder between the markers must be gone, replaced by the rendered
     // tables. We assert against rendered structure (the category index bullets, a per-row anchor, the value-option placeholder) rather than a brittle full-string
-    // match, so the test pins the splice's contract without coupling to the renderer's exact column padding.
+    // match, so the test asserts the splice's contract without coupling to the renderer's exact column padding.
     assert.match(first, /# Header/, "the hand-written header must be preserved");
     assert.match(first, /Hand-written footer\./, "the hand-written footer must be preserved");
     assert.equal(first.includes("stale content to be replaced"), false, "the stale marked-region content must be replaced");
@@ -758,7 +755,7 @@ describe("prepareDocs", () => {
     await using scratch = await makeScratchRoot();
 
     // The no-regression guarantee for the zero-hook plugin: a catalog exporting neither hook must produce exactly the document a hooks-unaware catalog always has. We
-    // splice the same catalog into two separate docs - one through the plain no-hooks body, one through that same body re-read - and require byte equality, which pins
+    // splice the same catalog into two separate docs - one through the plain no-hooks body, one through that same body re-read - and require byte equality, which asserts
     // that the new hook-pickup code adds nothing to the output when both hooks are absent. The hook-contribution strings from the present-hooks test must also be
     // wholly absent, since neither hook was exported.
     const catalogModulePath = await writeCatalog({ body: VALID_CATALOG_BODY, root: scratch.path });
@@ -960,6 +957,24 @@ describe("runCli", () => {
     assert.equal(capture.chunks(), USAGE);
   });
 
+  test("the README's usage block is the banner, verbatim", async () => {
+
+    /* The README shows the banner as a fenced block, which is a hand copy of the constant this module exports. Holding that block to USAGE is what keeps the
+     * documented command list from aging behind the bin's own: a verb added to the constant reddens this row until the README carries it too.
+     */
+    const readme = await readFile(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8");
+    const lines = readme.split("\n");
+    const opening = lines.indexOf("Usage: homebridge-plugin-utils <command> [options]");
+
+    assert.ok(opening > 0, "the README must show the usage banner");
+    assert.equal(lines[opening - 1], "```", "and the banner must open a fenced block");
+
+    const closing = lines.indexOf("```", opening);
+
+    assert.ok(closing > opening, "the fenced block must be closed");
+    assert.equal(lines.slice(opening, closing).join("\n") + "\n", USAGE, "the README's usage block must be the banner, verbatim");
+  });
+
   test("prepare-ui without a destination argument writes a misuse message and exits 1", async () => {
 
     await using scratch = await makeScratchRoot();
@@ -982,7 +997,7 @@ describe("runCli", () => {
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
 
     // The prepare-ui dispatch reaches HBPU's loader renderer and the splice primitive through computed dynamic imports of its built dist; supply them the same way the
-    // prepare-docs dispatch tests supply their renderer. No index.html beside the destination means the stamp itself is a no-op, so this pins the dispatch + mirror.
+    // prepare-docs dispatch tests supply their renderer. No index.html beside the destination means the stamp itself is a no-op, so this asserts the dispatch + mirror.
     await writeLoaderDist(sourceRoot);
 
     const capture = captureStderr();

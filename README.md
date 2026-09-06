@@ -24,7 +24,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 
 - **`hblog` log client.** A zero-dependency tool for tailing and querying a `homebridge-config-ui-x` log, usable both as the `hblog` command-line bin and as the importable `HomebridgeLogClient` API. See [Log Client (`hblog`)](#log-client-hblog) below.
 
-- **Plugin tooling.** A `homebridge-plugin-utils` command-line tool that mirrors the compiled webUI into your plugin under a content-hashed folder (so the browser never serves a stale copy after a rebuild) and regenerates your Feature Options reference from its catalog (so the docs can't drift). See [Plugin Tooling (`prepare-ui` and `prepare-docs`)](#plugin-tooling-prepare-ui-and-prepare-docs) below.
+- **Plugin tooling.** A `homebridge-plugin-utils` command-line tool that mirrors the compiled webUI into your plugin under a content-hashed folder (so the browser never serves a stale copy after a rebuild) and regenerates your Feature Options reference, your MQTT topic tables, and your documentation chrome from the sources each is projected from (so none of it can drift). See [Plugin Tooling](#plugin-tooling) below.
 
 - **And more...**
 
@@ -70,7 +70,7 @@ Output:
   -h, --help             Print this help and exit.
 ```
 
-Bare `hblog` live-tails the log. `--follow` rides the UI's Socket.IO stream - it is cheap and incremental, includes a free ~500-line seed of recent history, and reconnects automatically through the Homebridge restarts you do while iterating. A deep `-n N` or `--all` falls back to a one-shot whole-file download, paid only when you explicitly ask for history beyond the seed. `history`/`--all` require the Homebridge log method to be file-backed (`file`/`native`); with `systemd`/`custom` there is no file to download, so use `--follow` instead.
+Bare `hblog` live-tails the log. `--follow` goes through the UI's Socket.IO stream - it is cheap and incremental, includes a free ~500-line seed of recent history, and reconnects automatically through the Homebridge restarts you do while iterating. A deep `-n N` or `--all` falls back to a one-shot whole-file download, paid only when you explicitly ask for history beyond the seed. `history`/`--all` require the Homebridge log method to be file-backed (`file`/`native`); with `systemd`/`custom` there is no file to download, so use `--follow` instead.
 
 Output discipline is pipe-friendly: log data goes to stdout (so `--json` NDJSON stays clean), diagnostics and warnings go to stderr, and a broken downstream pipe (`hblog -f | grep -m1 ...`) ends cleanly. Exit codes are `0` for success (including a clean Ctrl-C), `1` for a connection or authentication failure, and `2` for a usage error.
 
@@ -114,21 +114,27 @@ for await (const record of stream) {
 
 `HomebridgeLogClient` is `AsyncDisposable`: `await using` (or an early `break` out of the iteration) tears the underlying transport down with no leak. Its three channels - `history()`, `follow()`, and `tail()` - each return a `LogStream` of parsed `LogRecord`s. Filtering is consumer-composed via `createLogFilter` over any stream.
 
-## Plugin Tooling (`prepare-ui` and `prepare-docs`)
+## Plugin Tooling
 
-Installing this library also installs a `homebridge-plugin-utils` command-line tool that automates the two build steps every consuming plugin needs: mirroring the compiled webUI into the plugin, and keeping the Feature Options reference in sync with the catalog. Both are meant to run from a plugin's `build` or `prepublishOnly` script so neither artifact can drift from the source.
+Installing this library also installs a `homebridge-plugin-utils` command-line tool that automates the build steps a consuming plugin needs: mirroring the compiled webUI into the plugin, keeping the Feature Options reference in sync with the options catalog, keeping the MQTT topic tables in sync with the topic catalog, and stamping the shared documentation chrome across the plugin's pages. Each is meant to run from a plugin's `build` or `prepublishOnly` script so no artifact can drift from the source it is generated from.
 
 ```
 Usage: homebridge-plugin-utils <command> [options]
 
 Commands:
-  prepare-ui <destination>                          Mirror HBPU's webUI into the plugin's lib directory.
-  prepare-docs <catalog-module> [--doc <path>]      Generate the Feature Options reference into the plugin's docs.
+  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.
+  prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.
+  prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.
+  prepare-chrome <manifest> [--root <dir>] [--check]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across the plugin's docs, README, and webUI.
 ```
 
-- **`prepare-ui <destination>`** mirrors this library's compiled browser-side webUI into your plugin's UI directory (typically `homebridge-ui/public/lib`) under a content-hashed, version-named subfolder. Because the folder name changes whenever its contents change, the browser's HTTP cache invalidates structurally - you never have to chase a stale cached copy after a rebuild. The run is idempotent and sweeps away the previous build's subfolder in the same pass, while leaving any non-versioned files in the destination untouched.
+- **`prepare-ui <destination>`** mirrors this library's compiled browser-side webUI into your plugin's UI directory (typically `homebridge-ui/public/lib`) under a content-hashed, version-named subfolder. Because the folder name changes whenever its contents change, the browser's HTTP cache invalidates structurally - you never have to chase a stale cached copy after a rebuild. The run is safe to repeat and sweeps away the previous build's subfolder in the same pass, while leaving any non-versioned files in the destination untouched.
 
 - **`prepare-docs <catalog-module> [--doc <path>] [--check]`** regenerates your plugin's Feature Options reference straight from its options catalog, splicing it into a marked region of the target document - `docs/FeatureOptions.md` by default, or the `--doc` path you pass for a plugin that ships its reference elsewhere. Running it on every build keeps the published reference from drifting away from the options you actually ship. Passing `--check` writes nothing: the run renders every target it would write, compares each against the file on disk, names each one that would change on standard error, and exits non-zero when any would. `prepare-mqtt` and `prepare-chrome` take the same flag, so a continuous-integration job proves a plugin's committed documentation is what these verbs would produce in one invocation each.
+
+- **`prepare-mqtt <catalog-module> [--doc <path>] [--check]`** regenerates your plugin's MQTT topic tables straight from its topic catalog, splicing the published and subscribed tables into their own marked regions of the target document - `docs/MQTT.md` by default, or the `--doc` path you pass. The headings, the lead sentences, and every hand-written paragraph around those regions stay yours: only the tables are generated, so the topics your documentation lists are the topics your plugin actually speaks.
+
+- **`prepare-chrome <manifest> [--root <dir>] [--check]`** stamps the shared documentation chrome - the masthead, the navigation index, the dashboard badges, the logo, the project list, and the configuration schema's footer sentence - across your plugin's README, its documentation pages, its webUI, and its `config.schema.json`, all from one manifest. Pass `--root` to stamp a tree other than the directory you run it from.
 
 ## Lint Configuration
 

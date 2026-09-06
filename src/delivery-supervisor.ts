@@ -150,9 +150,12 @@ export interface OpenDeliveryWindowOptions<T> {
 /**
  * Construction options for {@link DeliverySupervisor}.
  *
+ * @typeParam T - The consumer's outcome type, the same one the supervisor these options build carries. Defaults to `void`, so a consumer whose slots have no outcome
+ * to give names the type without a parameter.
+ *
  * @category Utilities
  */
-export interface DeliverySupervisorOptions {
+export interface DeliverySupervisorOptions<T = void> {
 
   /**
    * The time source every deadline is armed on. It is handed through unresolved to the {@link TimerRegistry} that arms the timer, which is the one place the default
@@ -161,10 +164,12 @@ export interface DeliverySupervisorOptions {
   readonly clock?: Clock;
 
   /**
-   * Where the error a deadline callback threw is reported, after every pending slot of that window has already been answered. It carries the consumer's entire fault
-   * policy - the logging, the wording, the recovery - which is why the supervisor itself stays logging-free.
+   * Where the error a deadline callback threw is reported, together with the window whose callback threw it, after every pending slot of that window has already
+   * been answered. The window is what lets a consumer name the subject of the fault from the key and slot names it opened the window with, rather than keeping a
+   * catch of its own alongside this one. The callback carries the consumer's entire fault policy - the logging, the wording, the recovery - which is why the
+   * supervisor itself stays logging-free.
    */
-  readonly onError: (error: unknown) => void;
+  readonly onError: (error: unknown, window: DeliveryWindow<T>) => void;
 
   /**
    * The supervisor's lifetime. When it aborts, every pending slot of every standing window is yielded `"aborted"` before the deadlines are retired, and opening a
@@ -384,7 +389,7 @@ class SupervisedWindow<T> implements DeliveryWindow<T> {
 export class DeliverySupervisor<T = void> implements Disposable {
 
   readonly #abortRegistration: Disposable;
-  readonly #onError: (error: unknown) => void;
+  readonly #onError: (error: unknown, window: DeliveryWindow<T>) => void;
   readonly #registry: TimerRegistry;
   readonly #signal: AbortSignal;
   readonly #windows = new Map<string, SupervisedWindow<T>>();
@@ -398,7 +403,7 @@ export class DeliverySupervisor<T = void> implements Disposable {
    *
    * @param options - See {@link DeliverySupervisorOptions}.
    */
-  public constructor(options: DeliverySupervisorOptions) {
+  public constructor(options: DeliverySupervisorOptions<T>) {
 
     this.#onError = options.onError;
     this.#signal = options.signal;
@@ -567,7 +572,7 @@ export class DeliverySupervisor<T = void> implements Disposable {
       }
 
       window.yieldPending("faulted");
-      this.#onError(error);
+      this.#onError(error, window);
     }
   }
 

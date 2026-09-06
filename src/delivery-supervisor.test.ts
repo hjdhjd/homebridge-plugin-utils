@@ -23,7 +23,7 @@ interface Answer<T> {
 }
 
 /* One supervisor with the clock its deadlines are armed on, the lifetime it is bound to, and the ledgers every row asserts against: each settlement in delivery
- * order, and every error the supervisor reported. Each row builds its own, so nothing carries between them.
+ * order, every error the supervisor reported, and the window it named alongside each of those errors. Each row builds its own, so nothing carries between them.
  */
 interface Rig<T> {
 
@@ -31,6 +31,7 @@ interface Rig<T> {
   clock: TestClock;
   controller: AbortController;
   errors: unknown[];
+  faults: DeliveryWindow<T>[];
   onSettle: (slot: string, settlement: DeliverySettlement<T>) => void;
   supervisor: DeliverySupervisor<T>;
 }
@@ -42,6 +43,7 @@ function rig<T>(): Rig<T> {
   const clock = new TestClock();
   const controller = new AbortController();
   const errors: unknown[] = [];
+  const faults: DeliveryWindow<T>[] = [];
 
   return {
 
@@ -49,15 +51,17 @@ function rig<T>(): Rig<T> {
     clock,
     controller,
     errors,
+    faults,
 
     onSettle: (slot: string, settlement: DeliverySettlement<T>): void => {
 
       answers.push({ settlement, slot });
     },
 
-    supervisor: new DeliverySupervisor<T>({ clock, onError: (error: unknown): void => {
+    supervisor: new DeliverySupervisor<T>({ clock, onError: (error: unknown, window: DeliveryWindow<T>): void => {
 
       errors.push(error);
+      faults.push(window);
     }, signal: controller.signal })
   };
 }
@@ -358,6 +362,8 @@ describe("DeliverySupervisor", () => {
       assert.deepEqual(scenario.answers.map((answer) => answer.settlement), [ { kind: "yielded", reason: "faulted" }, { kind: "yielded", reason: "faulted" } ],
         "every pending slot is answered rather than orphaned");
       assert.deepEqual(scenario.errors, [boom], "the thrown value reaches onError once, unchanged");
+      assert.equal(scenario.faults.length, 1, "and is reported alongside exactly one window");
+      assert.equal(expectAt(scenario.faults, 0, "a reported window"), window, "which is the window whose deadline callback threw, by identity");
       assert.equal(expectSlot(window, "alpha").settle("confirmed"), false, "a later settle answers that nothing happened");
       assert.equal(scenario.answers.length, 2, "and fires no second callback");
     });
@@ -488,6 +494,7 @@ describe("DeliverySupervisor", () => {
       await settle();
 
       assert.deepEqual(scenario.errors, [], "the throw is the callback unwinding through a teardown we initiated, so it is not reported");
+      assert.deepEqual(scenario.faults, [], "and no window is named either");
       assert.equal(scenario.answers.length, 1, "and answers nothing a second time");
     });
   });

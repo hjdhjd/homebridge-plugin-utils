@@ -49,6 +49,19 @@ assertion.
 
 ***
 
+### CharacteristicTarget
+
+```ts
+type CharacteristicTarget = WithUUID<typeof Characteristic> & () => Characteristic;
+```
+
+The characteristic class both HAP calls in [updateServices](#updateservices) are handed: `testCharacteristic` matches a service's attached characteristics against the class's
+static `UUID`, while `updateCharacteristic` takes the same class as something it can construct from, since HAP builds the characteristic when the service it is
+called on does not already carry one. Intersecting both shapes lets a caller hand over `Characteristic.StatusActive` and have each call type-check against the
+half of the shape it actually uses, with no cast at the call site.
+
+***
+
 ### acquireService()
 
 ```ts
@@ -307,6 +320,49 @@ characteristics when supported by the service type.
  - acquireService - to add or retrieve services.
  - getServiceName - to retrieve the current name set on a service.
  - setAccessoryName - the accessory-level equivalent, which delegates its information-service write here.
+
+***
+
+### updateServices()
+
+```ts
+function updateServices(
+   accessory, 
+   characteristic, 
+   value
+): void;
+```
+
+Write one characteristic value to every service on an accessory that carries that characteristic, leaving every other service untouched.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `accessory` | `PlatformAccessory` | The Homebridge accessory whose services are swept. |
+| `characteristic` | [`CharacteristicTarget`](#characteristictarget) | The characteristic to write, matched against each service by the class's static UUID. |
+| `value` | `CharacteristicValue` | The value written to every service that carries the characteristic. |
+
+#### Returns
+
+`void`
+
+#### Remarks
+
+A device-wide state - reachability, tamper, an availability flag - belongs on several of an accessory's services at once, and which services those are depends on
+what the device turned out to support. Selecting by the characteristic rather than by a roster of service types is what keeps that correct without anyone
+maintaining the roster: a service added later is swept the moment it carries the characteristic, and a service that never carries it is never written to. The
+test is also what keeps the sweep from creating anything, because HAP's `updateCharacteristic` attaches a characteristic the service is missing - an unguarded walk
+would dress every service on the accessory instead of the ones that model the state.
+
+The AccessoryInformation service needs no exception of its own. It carries none of the state characteristics a caller sweeps, so the same test passes over it.
+
+#### Example
+
+```typescript
+// Project a device-wide reachability state onto every service that models it.
+updateServices(accessory, hap.Characteristic.StatusActive, isReachable);
+```
 
 ***
 

@@ -86,7 +86,7 @@ Construct a supervisor. Construction opens no windows and arms no timers.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`DeliverySupervisorOptions`](#deliverysupervisoroptions) | See [DeliverySupervisorOptions](#deliverysupervisoroptions). |
+| `options` | [`DeliverySupervisorOptions`](#deliverysupervisoroptions)\<`T`\> | See [DeliverySupervisorOptions](#deliverysupervisoroptions). |
 
 ###### Returns
 
@@ -270,12 +270,18 @@ told a second answer landed.
 
 Construction options for [DeliverySupervisor](#deliverysupervisor).
 
+#### Type Parameters
+
+| Type Parameter | Default type | Description |
+| ------ | ------ | ------ |
+| `T` | `void` | The consumer's outcome type, the same one the supervisor these options build carries. Defaults to `void`, so a consumer whose slots have no outcome to give names the type without a parameter. |
+
 #### Properties
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
 | <a id="clock"></a> `clock?` | `readonly` | [`Clock`](clock.md#clock) | The time source every deadline is armed on. It is handed through unresolved to the [TimerRegistry](timer-registry.md#timerregistry) that arms the timer, which is the one place the default is applied, so a consumer that injects a clock drives its supervised deadlines on the same timeline as its awaited waits. |
-| <a id="onerror"></a> `onError` | `readonly` | (`error`) => `void` | Where the error a deadline callback threw is reported, after every pending slot of that window has already been answered. It carries the consumer's entire fault policy - the logging, the wording, the recovery - which is why the supervisor itself stays logging-free. |
+| <a id="onerror"></a> `onError` | `readonly` | (`error`, `window`) => `void` | Where the error a deadline callback threw is reported, together with the window whose callback threw it, after every pending slot of that window has already been answered. The window is what lets a consumer name the subject of the fault from the key and slot names it opened the window with, rather than keeping a catch of its own alongside this one. The callback carries the consumer's entire fault policy - the logging, the wording, the recovery - which is why the supervisor itself stays logging-free. |
 | <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The supervisor's lifetime. When it aborts, every pending slot of every standing window is yielded `"aborted"` before the deadlines are retired, and opening a further window throws. |
 
 ***

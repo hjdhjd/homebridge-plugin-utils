@@ -14,7 +14,7 @@ entry and cache-bust list in a config comment, and `prepare-ui` stamps the rende
 The region carries, in boot order, a hidden status panel a screenshot turns into a complete support report; a boot monitor - a classic inline script, so
 it runs during HTML parse ahead of any deferred module evaluation - that owns the on-page failure surface: it reveals the panel with a plain-language message
 classified by the boot stage that failed, arms a ten-second watchdog for a boot that hangs, stands down when the app signals it rendered, and holds the bundle stamp
-across boots so a page pinned to a bundle that has since been replaced says so instead of half-loading; and the loader - the importmap/cache-bust module script -
+across boots so a page whose bundle has since been replaced says so instead of half-loading; and the loader - the importmap/cache-bust module script -
 stage-instrumented so a fetch, importmap, or entry-import failure routes to the monitor with the stage that failed. The classic-versus-module split is for execution
 ordering alone, not old-engine compatibility: the classic script runs during parse while the module script is deferred.
 
@@ -104,7 +104,7 @@ single `Date.now()` cache-bust stamp shared across the page load, a `bust()` hel
 `cache: "no-store"` fetch of the manifest, an importmap, and a dynamic import of the entry, all wrapped in a stage-instrumented `try`/`catch` that routes a boot
 failure to the monitor with the stage that failed, without adding any await or work to the happy path.
 
-Between reading the manifest and injecting anything, the loader hands the monitor the bundle stamp it is about to pin. The settings frame outlives a single boot, so
+Between reading the manifest and injecting anything, the loader hands the monitor the bundle stamp it is about to lock in. The settings frame outlives one boot, so
 a re-open runs the loader again in a window whose importmap is already fixed to the first run's stamp; a stamp that no longer matches means the bundle was
 regenerated underneath the document, and the boot stops on the monitor's needs-reload state rather than importing an entry whose bare specifiers all resolve into a
 subdir that no longer exists.

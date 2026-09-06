@@ -52,7 +52,7 @@ export interface TimerRegistryOptions {
  *     kind - clears the prior timer first, so the newest intent for a key wins. A keyed one-shot removes its entry before firing; a keyed interval repeats until cleared.
  *   - `schedule(callback, delay)` arms an anonymous one-shot: tracked for disposal, self-removing on fire, never replacing anything, so concurrent anonymous timers
  *     coexist. It answers the same cancel-on-dispose handle {@link Clock.schedule} answers.
- *   - `clear(key)` cancels and removes a keyed timer; `has(key)` reports whether one is currently armed.
+ *   - `clear(key)` cancels and removes a keyed timer; `has(key)` reports whether one is currently armed; `keys()` lists the armed keys, most recently armed last.
  *   - `clearAll()` drains every pending timer, keyed and anonymous alike, and leaves the registry armed: the shape for an owner whose pending work must all cancel on a
  *     state change while the re-arms that follow still need to take.
  *   - `dispose()` (and `[Symbol.dispose]`) drains every pending timer and retires the registry: subsequent registrations are no-ops. An `options.signal` binds the same
@@ -237,6 +237,23 @@ export class TimerRegistry implements Disposable {
   public has(key: string): boolean {
 
     return this.#keyed.has(key);
+  }
+
+  /**
+   * The keys of the armed keyed timers, one-shots and intervals alike, so an owner reconciling its timers against an external schedule reads the set from the
+   * registry instead of keeping a mirror of its own. The order is the order of most recent arming: registering under a key that already holds a timer clears the
+   * old entry and sets a fresh one, so a re-armed key moves to the end. Anonymous timers have no key and are not listed, a drained or disposed registry answers an
+   * empty iterator because the map itself is cleared, and the read arms and clears nothing.
+   *
+   * The caller may clear keys while walking the result: a Map iterator skips an entry deleted before it is reached, tolerates the deletion of the entry it is
+   * standing on, and visits an entry added during the walk. Answering the map's own iterator rather than a copy is what gives the caller those guarantees, and it
+   * allocates nothing per call - the same shape the delivery supervisor's window enumeration answers with.
+   *
+   * @returns An iterator over the keys of the armed keyed timers.
+   */
+  public keys(): IterableIterator<string> {
+
+    return this.#keyed.keys();
   }
 
   /**

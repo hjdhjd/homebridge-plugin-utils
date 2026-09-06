@@ -442,4 +442,163 @@ describe("TimerRegistry", () => {
     fromDisposed[Symbol.dispose]();
     fromAborted[Symbol.dispose]();
   });
+
+  // Every row below asserts over the key set alone and never over a callback's effects, so the timers they arm share one callback with nothing to do.
+  const noOp = (): void => { /* Nothing to do. */ };
+
+  test("keys() on a fresh registry answers nothing", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    assert.deepEqual([...registry.keys()], [], "a registry that has armed nothing lists no keys");
+  });
+
+  test("keys() lists both keyed timer kinds, in the order they were armed", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    registry.setTimeout("once", noOp, 30);
+    registry.setInterval("beat", noOp, 20);
+
+    assert.deepEqual([...registry.keys()], [ "once", "beat" ], "a one-shot and an interval list together, the earlier arming first");
+  });
+
+  test("re-arming a key moves it to the end of keys(), because the registration clears the old entry first", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    registry.setTimeout("first", noOp, 30);
+    registry.setTimeout("second", noOp, 30);
+
+    assert.deepEqual([...registry.keys()], [ "first", "second" ], "the initial order is the arming order");
+
+    registry.setInterval("first", noOp, 20);
+
+    assert.deepEqual([...registry.keys()], [ "second", "first" ], "the re-armed key moves to the end, whichever kind replaces it");
+  });
+
+  test("a fired one-shot leaves keys(), while an interval's key survives its fires", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    registry.setTimeout("once", noOp, 30);
+    registry.setInterval("beat", noOp, 20);
+
+    assert.deepEqual([...registry.keys()], [ "once", "beat" ], "both keys are armed before either is due");
+
+    clock.advance(20);
+
+    assert.deepEqual([...registry.keys()], [ "once", "beat" ], "the interval's first fire leaves its key armed, and the one-shot is not yet due");
+
+    clock.advance(20);
+
+    assert.deepEqual([...registry.keys()], ["beat"], "the one-shot removed its own key when it fired, and the interval is still listed after a second fire");
+  });
+
+  test("clear() removes exactly its own key from keys()", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    registry.setTimeout("a", noOp, 30);
+    registry.setTimeout("b", noOp, 30);
+    registry.setTimeout("c", noOp, 30);
+
+    assert.deepEqual([...registry.keys()], [ "a", "b", "c" ], "all three keys are armed");
+
+    registry.clear("b");
+
+    assert.deepEqual([...registry.keys()], [ "a", "c" ], "clearing one key leaves the rest listed, in the order they were armed");
+  });
+
+  test("clearAll() empties keys(), and a registration after it lists again", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    registry.setTimeout("a", noOp, 30);
+    registry.setInterval("b", noOp, 30);
+
+    assert.deepEqual([...registry.keys()], [ "a", "b" ], "both keys are armed before the drain");
+
+    registry.clearAll();
+
+    assert.deepEqual([...registry.keys()], [], "the drain empties the key set");
+
+    registry.setTimeout("c", noOp, 30);
+
+    assert.deepEqual([...registry.keys()], ["c"], "a registration after the drain lists, because clearAll() leaves the registry armed");
+  });
+
+  test("dispose() empties keys(), and a registration after it stays absent", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    registry.setTimeout("a", noOp, 30);
+    registry.setInterval("b", noOp, 30);
+
+    assert.deepEqual([...registry.keys()], [ "a", "b" ], "both keys are armed before disposal");
+
+    registry.dispose();
+
+    assert.deepEqual([...registry.keys()], [], "disposal empties the key set");
+
+    registry.setTimeout("c", noOp, 30);
+
+    assert.deepEqual([...registry.keys()], [], "a registration on a retired registry is inert, so no key appears for it");
+  });
+
+  test("anonymous timers never appear in keys(), which lists keyed timers alone", () => {
+
+    const clock = new TestClock();
+    const registry = new TimerRegistry({ clock });
+
+    registry.schedule(noOp, 30);
+    registry.setTimeout("keyed", noOp, 30);
+    registry.schedule(noOp, 30);
+
+    assert.deepEqual([...registry.keys()], ["keyed"], "the anonymous timers carry no key, so the keyed timer is the only entry listed");
+  });
+
+  test("keys() walks the map itself, so a caller may clear as it goes and still meets a key armed mid-walk", () => {
+
+    const armed = [ "a", "b", "c", "d" ];
+    const clock = new TestClock();
+    const kept = new Set([ "b", "c" ]);
+    const registry = new TimerRegistry({ clock });
+    const visited: string[] = [];
+
+    for(const key of armed) {
+
+      registry.setTimeout(key, noOp, 30);
+    }
+
+    /* The reconciliation this member exists for: walk the registry's own keys and clear the ones an external schedule does not name. Deleting the entry the
+     * iterator is standing on is well-defined, and so is arming a key mid-walk - which is what the "e" registration reads. An array snapshot, however freshly
+     * taken, is fixed before "e" is armed and would never reach it, so this step is what tells the map's own iterator apart from a copy.
+     */
+    for(const key of registry.keys()) {
+
+      visited.push(key);
+
+      if(key === "b") {
+
+        registry.setTimeout("e", noOp, 30);
+      }
+
+      if(!kept.has(key)) {
+
+        registry.clear(key);
+      }
+    }
+
+    assert.deepEqual(visited, [ "a", "b", "c", "d", "e" ], "the walk runs to completion and visits the key armed while it was running");
+    assert.deepEqual([...registry.keys()], [ "b", "c" ], "exactly the keys the walk kept remain armed");
+    assert.deepEqual(armed.map((key) => registry.has(key)), [ false, true, true, false ], "has() agrees with the walk for every key the registry started with");
+  });
 });

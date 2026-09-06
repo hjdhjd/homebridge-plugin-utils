@@ -96,6 +96,16 @@ function initServiceUUIDSets(service: Service): void {
 export type AcquireServiceTarget<T extends Service = Service> = WithUUID<typeof Service> & (new (displayName?: string, subtype?: string) => T);
 
 /**
+ * The characteristic class both HAP calls in {@link updateServices} are handed: `testCharacteristic` matches a service's attached characteristics against the class's
+ * static `UUID`, while `updateCharacteristic` takes the same class as something it can construct from, since HAP builds the characteristic when the service it is
+ * called on does not already carry one. Intersecting both shapes lets a caller hand over `Characteristic.StatusActive` and have each call type-check against the
+ * half of the shape it actually uses, with no cast at the call site.
+ *
+ * @category Accessory
+ */
+export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => Characteristic);
+
+/**
  * Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
  * service instance. Additionally, the various name characteristics of the service are set to the specified name, and optionally added if necessary.
  *
@@ -261,6 +271,41 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
 export function capabilityGate({ capability, toggle }: { capability: boolean; toggle: boolean }): (hasService: boolean) => boolean {
 
   return hasService => toggle && (hasService || capability);
+}
+
+/**
+ * Write one characteristic value to every service on an accessory that carries that characteristic, leaving every other service untouched.
+ *
+ * @param accessory      - The Homebridge accessory whose services are swept.
+ * @param characteristic - The characteristic to write, matched against each service by the class's static UUID.
+ * @param value          - The value written to every service that carries the characteristic.
+ *
+ * @remarks
+ * A device-wide state - reachability, tamper, an availability flag - belongs on several of an accessory's services at once, and which services those are depends on
+ * what the device turned out to support. Selecting by the characteristic rather than by a roster of service types is what keeps that correct without anyone
+ * maintaining the roster: a service added later is swept the moment it carries the characteristic, and a service that never carries it is never written to. The
+ * test is also what keeps the sweep from creating anything, because HAP's `updateCharacteristic` attaches a characteristic the service is missing - an unguarded walk
+ * would dress every service on the accessory instead of the ones that model the state.
+ *
+ * The AccessoryInformation service needs no exception of its own. It carries none of the state characteristics a caller sweeps, so the same test passes over it.
+ *
+ * @example
+ * ```typescript
+ * // Project a device-wide reachability state onto every service that models it.
+ * updateServices(accessory, hap.Characteristic.StatusActive, isReachable);
+ * ```
+ *
+ * @category Accessory
+ */
+export function updateServices(accessory: PlatformAccessory, characteristic: CharacteristicTarget, value: CharacteristicValue): void {
+
+  for(const service of accessory.services) {
+
+    if(service.testCharacteristic(characteristic)) {
+
+      service.updateCharacteristic(characteristic, value);
+    }
+  }
 }
 
 /**

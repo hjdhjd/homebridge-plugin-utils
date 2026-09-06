@@ -10,7 +10,7 @@
  */
 import * as hap from "@homebridge/hap-nodejs";
 import type { Characteristic, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, validService } from "./service.ts";
+import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updateServices, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import { HAPStatus } from "./homebridge-enums.ts";
 import assert from "node:assert/strict";
@@ -467,6 +467,42 @@ describe("capabilityGate", () => {
 
     assert.equal(gate(false), true, "a toggle-on, capability-true gate must create the service when it is missing");
     assert.equal(gate(true), true, "a toggle-on, capability-true gate must keep an existing service");
+  });
+});
+
+describe("updateServices", () => {
+
+  test("writes the value to every service carrying the characteristic and leaves every other service alone", () => {
+
+    /* Two carriers of different service types and one non-carrier, so the sweep has to select on the characteristic rather than on a service type or on position.
+     * The non-carrier is read with `testCharacteristic` rather than `getCharacteristic`, because the latter attaches what it cannot find and would report the very
+     * state this row exists to refuse.
+     */
+    const { accessory, hapAccessory } = makePlatformAccessory();
+    const motion = hapAccessory.addService(hap.Service.MotionSensor, "Motion");
+    const contact = hapAccessory.addService(hap.Service.ContactSensor, "Contact");
+    const toggle = hapAccessory.addService(hap.Service.Switch, "Toggle");
+
+    motion.addCharacteristic(hap.Characteristic.StatusActive);
+    contact.addCharacteristic(hap.Characteristic.StatusActive);
+
+    updateServices(accessory, hap.Characteristic.StatusActive, true);
+
+    assert.equal(motion.getCharacteristic(hap.Characteristic.StatusActive).value, true, "the first carrier must read the swept value");
+    assert.equal(contact.getCharacteristic(hap.Characteristic.StatusActive).value, true, "and so must the second, of a different service type");
+    assert.equal(toggle.testCharacteristic(hap.Characteristic.StatusActive), false, "a service that does not carry the characteristic must not gain it");
+  });
+
+  test("an accessory carrying the characteristic nowhere is left untouched, without a throw", () => {
+
+    // A sweep that matches nothing is an ordinary outcome - a device that does not model the state at all - rather than a caller defect, so it answers by doing nothing.
+    const { accessory, hapAccessory } = makePlatformAccessory();
+    const toggle = hapAccessory.addService(hap.Service.Switch, "Toggle");
+
+    assert.doesNotThrow(() => updateServices(accessory, hap.Characteristic.StatusActive, true), "a sweep that matches nothing must not throw");
+    assert.equal(toggle.testCharacteristic(hap.Characteristic.StatusActive), false, "and no service gains the characteristic");
+    assert.equal(informationServiceOf(accessory).testCharacteristic(hap.Characteristic.StatusActive), false,
+      "the information service is swept by the same test as any other, so it is left alone too");
   });
 });
 

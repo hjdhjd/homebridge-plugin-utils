@@ -12,11 +12,11 @@
  * drift - a badge label here, a blurb there, an href form that differs per surface. This module collapses all of it into one per-plugin {@link DocChromeManifest} that a
  * plugin authors once (as a typed module or a static JSON file), so each surface becomes a pure projection of a single source of truth.
  *
- * The module exports pure string renderers - {@link renderMasthead}, {@link renderDocIndex}, {@link renderDevBadges}, {@link renderLogo}, {@link renderProjects} - and
- * the marker constants each surface embeds, plus the {@link parseDocChromeManifest} / {@link parseProjectEntries} validators. Like `featureOptions-docs.ts`, every
- * function here is pure and isomorphic: no `node:` imports, no `fs`, no `fetch`. Reading the target files, resolving a remote project list, and writing the spliced
- * result back are the CLI's concern; this module only ever renders already-resolved data. That keeps it browser-safe and trivially testable, though it is a tooling
- * concern and is deliberately NOT mirrored into `dist/ui/`.
+ * The module exports pure string renderers - {@link renderMasthead}, {@link renderDocIndex}, {@link renderDevBadges}, {@link renderLogo}, {@link renderProjects},
+ * {@link renderSchemaFooter} - and the marker constants each surface embeds, plus the {@link parseDocChromeManifest} / {@link parseProjectEntries} validators. Like
+ * `featureOptions-docs.ts`, every function here is pure and isomorphic: no `node:` imports, no `fs`, no `fetch`. Reading the target files, resolving a remote project
+ * list, and writing the spliced result back are the CLI's concern; this module only ever renders already-resolved data. That keeps it browser-safe and trivially
+ * testable, though it is a tooling concern and is deliberately NOT mirrored into `dist/ui/`.
  *
  * @module
  */
@@ -69,12 +69,18 @@ export interface Masthead {
  * to derive: it names a complete destination, so its `url` renders verbatim on every surface, and the chrome stamper passes over it because there is no file of the
  * plugin's own to stamp.
  *
+ * A `"doc"` or an `"external"` entry may also carry `schema: true`, which names it in the configuration-schema footer {@link renderSchemaFooter} renders. The flag is
+ * opt-in per entry because that footer is one sentence under a configuration form, where a plugin points at the few documents a reader configuring it wants rather than
+ * at everything the navigation lists. A README anchor carries no such flag: the footer's links are read from outside the repository, where an in-README anchor is not
+ * a destination of its own.
+ *
  * @category Doc Chrome
  */
 export type DocEntry =
   { readonly anchor: string; readonly blurb: string; readonly kind: "readme-anchor"; readonly title: string } |
-  { readonly blurb: string; readonly file: string; readonly footer?: boolean; readonly kind: "doc"; readonly masthead?: boolean; readonly title: string } |
-  { readonly blurb: string; readonly kind: "external"; readonly title: string; readonly url: string };
+  { readonly blurb: string; readonly file: string; readonly footer?: boolean; readonly kind: "doc"; readonly masthead?: boolean; readonly schema?: boolean;
+    readonly title: string; } |
+  { readonly blurb: string; readonly kind: "external"; readonly schema?: boolean; readonly title: string; readonly url: string };
 
 /**
  * Which auto-generated chrome regions a documentation entry's own file carries: `documentation` is the self-omitting footer index, `masthead` is the logo, title, badge
@@ -160,7 +166,7 @@ export interface DocChromeManifest {
   readonly nav: readonly NavSection[];
   readonly projects?: ExternalSource<ProjectEntry>;
   readonly repo: RepoCoordinates;
-  readonly surfaces?: { readonly readme?: string; readonly webui?: string };
+  readonly surfaces?: { readonly readme?: string; readonly schema?: string; readonly webui?: string };
 }
 
 /**
@@ -259,10 +265,16 @@ function escapeHtmlAttr(value: string): string {
   return escapeHtmlText(value).replaceAll("\"", "&quot;");
 }
 
+// A repository's own page, the destination the schema footer's opening link names and the root every other repository-derived URL here extends.
+function repoPageUrl(repo: RepoCoordinates): string {
+
+  return "https://github.com/" + repo.owner + "/" + repo.name;
+}
+
 // The absolute GitHub blob base for a repository, the prefix every non-local navigation href is built on.
 function blobBaseUrl(repo: RepoCoordinates): string {
 
-  return "https://github.com/" + repo.owner + "/" + repo.name + "/blob/" + repo.branch;
+  return repoPageUrl(repo) + "/blob/" + repo.branch;
 }
 
 // Render a single badge as a linked markdown image, the shape both the masthead and the dashboard badges share.
@@ -479,6 +491,41 @@ export function renderProjects(projects: readonly ProjectEntry[]): string {
   return "<ul dir=\"auto\">\n" + items.join("\n") + "\n</ul>";
 }
 
+/**
+ * Render the configuration-schema footer - the one markdown sentence Homebridge prints beneath a plugin's settings form - naming the repository page and the entries
+ * flagged with `schema: true`. Every link is derived exactly as the documentation index derives it, so the sentence a user reads under the settings form points at the
+ * same destinations the README and the webUI do.
+ *
+ * A plugin opts in by declaring `surfaces.schema`, the path of the schema the `prepare-chrome` verb stamps this into; a plugin whose footer says something else of its
+ * own simply leaves that surface undeclared.
+ *
+ * @param manifest - The documentation-chrome manifest.
+ *
+ * @returns The rendered sentence, a single line.
+ *
+ * @category Doc Chrome
+ */
+export function renderSchemaFooter(manifest: DocChromeManifest): string {
+
+  const opening = "See the [" + manifest.repo.name + " developer page](" + repoPageUrl(manifest.repo) + ") for detailed documentation";
+
+  // The flagged entries in navigation order, so the sentence lists them in the order every other surface does. A README anchor has no flag to read, which is the one
+  // kind the union excludes from the footer.
+  const flagged = manifest.nav.flatMap((section) => section.entries.filter((entry) => (entry.kind !== "readme-anchor") && (entry.schema === true)));
+
+  if(flagged.length === 0) {
+
+    return opening + ".";
+  }
+
+  // The locale is fixed because the sentence around the list is authored English, the same reason the feature-options scope describers fix theirs.
+  const listFormatter = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+
+  const links = flagged.map((entry) => "[" + entry.title + "](" + docEntryHref(entry, manifest.repo, false) + ")");
+
+  return opening + ", including " + listFormatter.format(links) + ".";
+}
+
 // Throw a uniformly framed validation error naming the manifest source and the offending path, mirroring the diagnostics the catalog validation in the CLI produces.
 function fail(source: string, detail: string): never {
 
@@ -509,6 +556,16 @@ function assertBadge(value: unknown, path: string, source: string): void {
   assertString(badge.link, path + ".link", source);
 }
 
+// Validate an entry's optional schema-footer flag, in the same shape the `footer` and `masthead` flags are validated. It lives here rather than inline because both of
+// the kinds that can be listed in that footer carry it, and the diagnostic they answer with is one sentence with one home.
+function assertSchemaFlag(value: unknown, path: string, source: string): void {
+
+  if((value !== undefined) && (typeof value !== "boolean")) {
+
+    fail(source, "field `" + path + ".schema` must be a boolean when present");
+  }
+}
+
 // Validate one documentation entry. The `kind` tag selects which additional field is required.
 function assertDocEntry(value: unknown, path: string, source: string): void {
 
@@ -517,7 +574,8 @@ function assertDocEntry(value: unknown, path: string, source: string): void {
     fail(source, "field `" + path + "` must be an object");
   }
 
-  const entry = value as { anchor?: unknown; blurb?: unknown; file?: unknown; footer?: unknown; kind?: unknown; masthead?: unknown; title?: unknown; url?: unknown };
+  const entry = value as { anchor?: unknown; blurb?: unknown; file?: unknown; footer?: unknown; kind?: unknown; masthead?: unknown; schema?: unknown; title?: unknown;
+    url?: unknown; };
 
   assertString(entry.title, path + ".title", source);
   assertString(entry.blurb, path + ".blurb", source);
@@ -538,12 +596,15 @@ function assertDocEntry(value: unknown, path: string, source: string): void {
         fail(source, "field `" + path + ".masthead` must be a boolean when present");
       }
 
+      assertSchemaFlag(entry.schema, path, source);
+
       return;
     }
 
     case "external": {
 
       assertString(entry.url, path + ".url", source);
+      assertSchemaFlag(entry.schema, path, source);
 
       return;
     }
@@ -679,11 +740,16 @@ export function parseDocChromeManifest(value: unknown, source: string): DocChrom
       fail(source, "field `surfaces` must be an object when present");
     }
 
-    const surfaces = manifest.surfaces as { readme?: unknown; webui?: unknown };
+    const surfaces = manifest.surfaces as { readme?: unknown; schema?: unknown; webui?: unknown };
 
     if((surfaces.readme !== undefined) && ((typeof surfaces.readme !== "string") || (surfaces.readme.length === 0))) {
 
       fail(source, "field `surfaces.readme` must be a non-empty string when present");
+    }
+
+    if((surfaces.schema !== undefined) && ((typeof surfaces.schema !== "string") || (surfaces.schema.length === 0))) {
+
+      fail(source, "field `surfaces.schema` must be a non-empty string when present");
     }
 
     if((surfaces.webui !== undefined) && ((typeof surfaces.webui !== "string") || (surfaces.webui.length === 0))) {

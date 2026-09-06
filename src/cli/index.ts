@@ -23,7 +23,7 @@
  * @module
  */
 import type { ProjectEntry, docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderLogo, renderMasthead,
-  renderProjects } from "../docChrome.ts";
+  renderProjects, renderSchemaFooter } from "../docChrome.ts";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -33,6 +33,7 @@ import { parseArgs } from "node:util";
 import { realpathSync } from "node:fs";
 import type { renderFeatureOptionsReference } from "../featureOptions-docs.ts";
 import type { renderMqttTopicsReference } from "../mqtt-topics-docs.ts";
+import type { spliceJsonStringValue } from "../doc-json.ts";
 import type { spliceMarkedRegion } from "../doc-markdown.ts";
 
 // Semver-shaped subdir names that {@link prepareUi} owns. Only entries matching this pattern are candidates for the stale-build sweep; anything else in the
@@ -56,8 +57,8 @@ export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
   "  prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.\n" +
   "  prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
-  "  prepare-chrome <manifest> [--root <dir>] [--check]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects) across the plugin's docs, README, " +
-  "and webUI.\n";
+  "  prepare-chrome <manifest> [--root <dir>] [--check]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across the plugin's " +
+  "docs, README, and webUI.\n";
 
 /**
  * Compute a deterministic content hash over `root`'s file tree. Walks every file in lexicographic order of relative POSIX path so two runs against the same content
@@ -609,6 +610,7 @@ interface DocChromeModule {
   readonly renderLogo: typeof renderLogo;
   readonly renderMasthead: typeof renderMasthead;
   readonly renderProjects: typeof renderProjects;
+  readonly renderSchemaFooter: typeof renderSchemaFooter;
 }
 
 /**
@@ -617,14 +619,15 @@ interface DocChromeModule {
  * feature-options region in one doc, this regenerates several named regions in many files, so a plugin's masthead and navigation cannot drift between the surfaces that
  * repeat them.
  *
- * Pure-by-injection like {@link prepareDocs}: the `docChrome` renderers and validator arrive through the injected `chrome` namespace and the splice helper through
- * `splice`, so this function is unit-testable against the real exports without a built `dist/`, and the CLI's single-file no-static-relative-import discipline is
- * preserved. `fetchImpl` is injected (defaulting to the global `fetch`) so the remote project-source path is testable without network access.
+ * Pure-by-injection like {@link prepareDocs}: the `docChrome` renderers and validator arrive through the injected `chrome` namespace and the splice helpers through
+ * `splice` and `spliceJson`, so this function is unit-testable against the real exports without a built `dist/`, and the CLI's single-file no-static-relative-import
+ * discipline is preserved. `fetchImpl` is injected (defaulting to the global `fetch`) so the remote project-source path is testable without network access.
  *
  * The manifest is loaded (a typed module or a static JSON file), validated with a field-naming diagnostic, and its optional project source resolved to inline data. The
  * per-file edit plan is then built - the README carries the masthead, the documentation index, and the dashboard badges; each content doc carries whichever regions
- * `docChromeRegions` plans for its entry; the webUI, when present, carries the documentation index, the logo, and the project list. Every region is spliced against its
- * own marker pair through the shared, ambiguity-rejecting splice primitive.
+ * `docChromeRegions` plans for its entry; the webUI, when present, carries the documentation index, the logo, and the project list; and the configuration schema, when
+ * the manifest declares one, carries the footer sentence. Each target carries either marked regions, spliced against their own marker pairs through the shared,
+ * ambiguity-rejecting splice primitive, or one JSON string member, spliced by name.
  *
  * The write is all-or-nothing across files in the realistic failure mode. Splicing happens entirely in memory first, so a missing or ambiguous marker in any file
  * aborts the run before a single write. That same pass answers both modes by comparing each target's spliced content with the bytes it was read from: `"write"` mode
@@ -639,13 +642,14 @@ interface DocChromeModule {
  * @param args.mode         - `"write"` to write the targets that differ, `"check"` to report them without writing. Defaults to `"write"`.
  * @param args.pluginRoot   - Absolute path to the plugin root that the manifest's surface and file references resolve against.
  * @param args.splice       - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
+ * @param args.spliceJson   - The injected {@link spliceJsonStringValue} from `doc-json.ts`, which stamps the configuration schema's footer member.
  *
  * @returns The absolute paths of every planned target whose spliced content differs from the file on disk. Both modes answer the same set.
  *
- * @throws When the manifest is mis-shaped, when a resolved project source is malformed, when a target file cannot be read, or when any region's marker pair is absent or
- *         ambiguous - propagating the splice's own framed errors so the dispatch site frames them uniformly.
+ * @throws When the manifest is mis-shaped, when a resolved project source is malformed, when a target file cannot be read, when any region's marker pair is absent or
+ *         ambiguous, or when the declared schema has no footer member - propagating the splices' own framed errors so the dispatch site frames them uniformly.
  */
-export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, mode = "write", pluginRoot, splice }: {
+export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, mode = "write", pluginRoot, splice, spliceJson }: {
 
   chrome: DocChromeModule;
   fetchImpl?: typeof fetch;
@@ -653,10 +657,12 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, m
   mode?: "check" | "write";
   pluginRoot: string;
   splice: typeof spliceMarkedRegion;
+  spliceJson: typeof spliceJsonStringValue;
 }): Promise<readonly string[]> {
 
   const { DEV_BADGES_BEGIN, DEV_BADGES_END, DOCUMENTATION_BEGIN, DOCUMENTATION_END, LOGO_BEGIN, LOGO_END, MASTHEAD_BEGIN, MASTHEAD_END, PROJECTS_BEGIN, PROJECTS_END,
-    docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderLogo, renderMasthead, renderProjects } = chrome;
+    docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex, renderLogo, renderMasthead, renderProjects,
+    renderSchemaFooter } = chrome;
 
   // Load and validate the manifest up front so a mis-shaped manifest fails with a diagnostic naming the offending field rather than a downstream render error. Parsing
   // returns the same value typed as a validated manifest, so every field access below is type-checked.
@@ -665,15 +671,25 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, m
   // Resolve the optional project source to inline data before rendering; the renderers never perform I/O.
   const projects = await resolveProjects(manifest.projects, { fetchImpl, manifestPath, parseEntries: parseProjectEntries, pluginRoot });
 
-  // Build the per-file edit plan. Each target file collects the ordered marked-region splices that apply to it; a file may carry more than one region - the
-  // README carries the masthead, the documentation index, and, when declared, the dashboard badges - each spliced independently against its own marker pair.
-  const plan = new Map<string, { begin: string; content: string; end: string }[]>();
+  /* Build the per-file edit plan. Each target file collects the ordered edits that apply to it; a file may carry more than one - the README carries the masthead, the
+   * documentation index, and, when declared, the dashboard badges - each applied independently. An edit names either a marked region and the pair that frames it, or
+   * one JSON string member and its key, which is what lets a document with no place to put a marker take part in the same one-pass differencing every other target does.
+   */
+  const plan = new Map<string, ({ begin: string; content: string; end: string; kind: "region" } | { content: string; key: string; kind: "json-string" })[]>();
 
   const addRegion = (path: string, begin: string, end: string, content: string): void => {
 
     const edits = plan.get(path) ?? [];
 
-    edits.push({ begin, content, end });
+    edits.push({ begin, content, end, kind: "region" });
+    plan.set(path, edits);
+  };
+
+  const addJsonString = (path: string, key: string, content: string): void => {
+
+    const edits = plan.get(path) ?? [];
+
+    edits.push({ content, key, kind: "json-string" });
     plan.set(path, edits);
   };
 
@@ -747,8 +763,16 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, m
     }
   }
 
-  // Validate-all: read each target and splice every region in memory. Splicing validates each marker pair, so a missing, inverted, or duplicated marker anywhere aborts
-  // the whole run here - before any file is written - rather than leaving a partial stamp behind.
+  // The configuration schema is opt-in, since a plugin whose footer says something else of its own - a runtime prerequisite, say - declares no schema surface at all.
+  // `footerDisplay` is the member Homebridge renders under a plugin's settings form, and it is named here rather than framed by markers because a JSON string literal
+  // is no place for a marker pair.
+  if(manifest.surfaces?.schema !== undefined) {
+
+    addJsonString(resolve(pluginRoot, manifest.surfaces.schema), "footerDisplay", renderSchemaFooter(manifest));
+  }
+
+  // Validate-all: read each target and apply every edit in memory. Each splice validates its own seed, so a missing, inverted, or duplicated marker - or an absent
+  // footer member - anywhere aborts the whole run here, before any file is written, rather than leaving a partial stamp behind.
   const staged = await Promise.all([...plan].map(async ([ path, edits ]) => {
 
     let source: string;
@@ -758,15 +782,32 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, m
       source = await readFile(path, "utf8");
     } catch {
 
-      throw new Error("Target file " + path + " could not be read; ensure it exists and carries the required markers.");
+      throw new Error("Target file " + path + " could not be read; ensure it exists and carries the required markers or the footer member.");
     }
 
     let content = source;
 
-    // Splice each region against its own marker pair; a malformed marker throws, rejecting the whole collection (per the validate-all note above).
+    /* Apply each edit against the seed its kind names; a malformed marker or an absent member throws, rejecting the whole collection (per the validate-all note above).
+     * The switch carries no default arm on purpose: with every kind answered, a new kind added to the plan fails to compile here until it is given its own application.
+     */
     for(const edit of edits) {
 
-      content = splice(content, edit.content, { beginMarker: edit.begin, endMarker: edit.end });
+      switch(edit.kind) {
+
+        case "json-string": {
+
+          content = spliceJson(content, edit.key, edit.content);
+
+          break;
+        }
+
+        case "region": {
+
+          content = splice(content, edit.content, { beginMarker: edit.begin, endMarker: edit.end });
+
+          break;
+        }
+      }
     }
 
     return { content, path, source };
@@ -1029,29 +1070,33 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       const manifestPath = resolve(cwd, manifestArg);
       const pluginRoot = resolve(cwd, values.root ?? ".");
 
-      // Reach HBPU's own doc-chrome renderers and the splice primitive through computed dynamic imports of their compiled modules - never static relative imports - so
-      // the single-file bin stays symlink-safe. A failed import means HBPU itself has not been built, a distinct and actionable condition from a downstream failure.
+      // Reach HBPU's own doc-chrome renderers and its splice primitives through computed dynamic imports of their compiled modules - never static relative imports -
+      // so the single-file bin stays symlink-safe. A failed import means HBPU itself has not been built, a distinct and actionable condition from a downstream failure.
       const chromePath = join(sourceRoot, "dist", "docChrome.js");
+      const jsonSplicePath = join(sourceRoot, "dist", "doc-json.js");
       const splicePath = join(sourceRoot, "dist", "doc-markdown.js");
 
       let chrome: DocChromeModule;
+      let jsonSplicer: { spliceJsonStringValue: typeof spliceJsonStringValue };
       let splicer: { spliceMarkedRegion: typeof spliceMarkedRegion };
 
       try {
 
         chrome = await import(pathToFileURL(chromePath).href) as DocChromeModule;
+        jsonSplicer = await import(pathToFileURL(jsonSplicePath).href) as typeof jsonSplicer;
         splicer = await import(pathToFileURL(splicePath).href) as typeof splicer;
       } catch {
 
-        stderr.write("homebridge-plugin-utils prepare-chrome: HBPU has not been built: " + chromePath + " or " + splicePath + " is missing. Run `npm run build` in " +
-          "HBPU first.\n");
+        stderr.write("homebridge-plugin-utils prepare-chrome: HBPU has not been built: " + chromePath + ", " + jsonSplicePath + ", or " + splicePath + " is missing. " +
+          "Run `npm run build` in HBPU first.\n");
 
         return 1;
       }
 
       try {
 
-        const changed = await prepareChrome({ chrome, manifestPath, mode, pluginRoot, splice: splicer.spliceMarkedRegion });
+        const changed = await prepareChrome({ chrome, manifestPath, mode, pluginRoot, splice: splicer.spliceMarkedRegion,
+          spliceJson: jsonSplicer.spliceJsonStringValue });
 
         if(mode === "check") {
 

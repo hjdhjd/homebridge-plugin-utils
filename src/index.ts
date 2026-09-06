@@ -8,6 +8,7 @@ export * from "./clock.ts";
 export * from "./coalesce.ts";
 export * from "./delivery-supervisor.ts";
 export * from "./dgram-util.ts";
+export * from "./doc-json.ts";
 export * from "./doc-markdown.ts";
 export * from "./docChrome.ts";
 export * from "./featureOptions.ts";

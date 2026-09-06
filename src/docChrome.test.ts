@@ -1,13 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * docChrome.test.ts: Unit tests for the shared documentation-chrome renderers - the masthead, documentation index, dashboard badges, logo, and project list
- * projections - plus the region plan a documentation entry answers and the manifest and project-entry validators. Coverage pins each surface's canonical output
- * byte-for-byte, proves the per-surface href derivation and HTML escaping, exercises the doc-footer self-omission, and asserts the validators' framed diagnostics for
- * every mis-shaped field.
+ * docChrome.test.ts: Unit tests for the shared documentation-chrome renderers - the masthead, documentation index, dashboard badges, logo, project list, and
+ * configuration-schema footer projections - plus the region plan a documentation entry answers and the manifest and project-entry validators. Coverage pins each
+ * surface's canonical output byte-for-byte, proves the per-surface href derivation and HTML escaping, exercises the doc-footer self-omission, and asserts the
+ * validators' framed diagnostics for every mis-shaped field.
  */
 import type { DocChromeManifest, DocEntry, ProjectEntry } from "./docChrome.ts";
 import { LOGO_BEGIN, LOGO_END, MASTHEAD_BEGIN, MASTHEAD_END, docChromeRegions, parseDocChromeManifest, parseProjectEntries, renderDevBadges, renderDocIndex,
-  renderLogo, renderMasthead, renderProjects } from "./docChrome.ts";
+  renderLogo, renderMasthead, renderProjects, renderSchemaFooter } from "./docChrome.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -298,6 +298,74 @@ describe("renderProjects", () => {
   });
 });
 
+describe("renderSchemaFooter", () => {
+
+  // The opening clause every footer carries, and the blob base its document links hang off. Spelled once here so each row below states only what it is about.
+  const OPENING = "See the [example-plugin developer page](https://github.com/acme/example-plugin) for detailed documentation";
+  const BLOB = "https://github.com/acme/example-plugin/blob/main";
+
+  test("names the repository page alone when no entry is flagged for the footer", () => {
+
+    assert.equal(renderSchemaFooter(MANIFEST), OPENING + ".");
+  });
+
+  test("lists the flagged entries in navigation order, joined as the sentence's own grammar", () => {
+
+    // The flags sit in both sections, so the order the sentence reads in is the navigation's rather than any one section's, and the list grammar is the conjunction a
+    // reader expects of an English sentence rather than a bare join.
+    const nav: DocChromeManifest["nav"] = [
+
+      { entries: [
+
+        { anchor: "installation", blurb: "installing this plugin.", kind: "readme-anchor", title: "Installation" },
+        { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", schema: true, title: "Best Practices" },
+        { blurb: "every feature option.", file: "docs/FeatureOptions.md", kind: "doc", schema: true, title: "Feature Options" }
+      ], title: "Getting Started" },
+      { entries: [
+
+        { blurb: "audio & <video> options.", file: "docs/AudioOptions.md", kind: "doc", schema: true, title: "Audio Options" }
+      ], title: "Additional Topics" }
+    ];
+
+    assert.equal(renderSchemaFooter({ ...MANIFEST, nav }), OPENING + ", including [Best Practices](" + BLOB + "/docs/BestPractices.md), [Feature Options](" + BLOB +
+      "/docs/FeatureOptions.md), and [Audio Options](" + BLOB + "/docs/AudioOptions.md).");
+
+    // Two entries read as a bare conjunction rather than a comma list, which is the same grammar the feature-options scope sentences are joined with.
+    const pair: DocChromeManifest["nav"] = [{ entries: [
+
+      { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", schema: true, title: "Best Practices" },
+      { blurb: "every feature option.", file: "docs/FeatureOptions.md", kind: "doc", schema: true, title: "Feature Options" }
+    ], title: "Getting Started" }];
+
+    assert.equal(renderSchemaFooter({ ...MANIFEST, nav: pair }), OPENING + ", including [Best Practices](" + BLOB + "/docs/BestPractices.md) and [Feature Options](" +
+      BLOB + "/docs/FeatureOptions.md).");
+  });
+
+  test("renders a flagged external entry at its own destination", () => {
+
+    const nav: DocChromeManifest["nav"] = [{ entries: [
+
+      { blurb: "the companion plugin's own documentation.", kind: "external", schema: true, title: "Companion Plugin", url: "https://github.com/acme/companion#readme" }
+    ], title: "Getting Started" }];
+
+    assert.equal(renderSchemaFooter({ ...MANIFEST, nav }), OPENING + ", including [Companion Plugin](https://github.com/acme/companion#readme).");
+  });
+
+  test("omits an entry that carries no flag", () => {
+
+    const nav: DocChromeManifest["nav"] = [{ entries: [
+
+      { blurb: "best practices.", file: "docs/BestPractices.md", kind: "doc", schema: true, title: "Best Practices" },
+      { blurb: "release history.", file: "docs/Changelog.md", kind: "doc", title: "Changelog" }
+    ], title: "Getting Started" }];
+
+    const rendered = renderSchemaFooter({ ...MANIFEST, nav });
+
+    assert.equal(rendered, OPENING + ", including [Best Practices](" + BLOB + "/docs/BestPractices.md).");
+    assert.equal(rendered.includes("Changelog"), false, "a footer that listed every navigation entry would name the changelog under a configuration form");
+  });
+});
+
 describe("parseDocChromeManifest", () => {
 
   // Each failure case is constructed fresh by spread-overriding one field of the worked manifest (or rebuilding the offending sub-tree from scratch), rather than
@@ -439,6 +507,38 @@ describe("parseDocChromeManifest", () => {
   test("accepts a manifest with valid surface path overrides", () => {
 
     assert.doesNotThrow(() => parseDocChromeManifest({ ...MANIFEST, surfaces: { readme: "README.md", webui: "ui/index.html" } }, "manifest.js"));
+  });
+
+  test("accepts the schema-footer flag on both kinds that can carry it, and rejects a non-boolean naming the entry", () => {
+
+    const flagged = [{ entries: [
+
+      { blurb: "b", file: "docs/X.md", kind: "doc", schema: true, title: "t" },
+      { blurb: "b", kind: "external", schema: false, title: "t", url: "https://example.test/elsewhere" }
+    ], title: "Getting Started" }];
+
+    assert.doesNotThrow(() => parseDocChromeManifest({ ...MANIFEST, nav: flagged }, "manifest.js"));
+
+    const mistyped = [{ entries: [{ blurb: "b", file: "docs/X.md", kind: "doc", schema: "yes", title: "t" }], title: "Getting Started" }];
+
+    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, nav: mistyped }, "manifest.js"), /nav\[0\]\.entries\[0\]\.schema` must be a boolean/);
+
+    const mistypedExternal = [{ entries: [{ blurb: "b", kind: "external", schema: 1, title: "t", url: "https://example.test/x" }], title: "Getting Started" }];
+
+    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, nav: mistypedExternal }, "manifest.js"), /nav\[0\]\.entries\[0\]\.schema` must be a boolean/);
+  });
+
+  test("accepts a schema surface path and rejects an empty one", () => {
+
+    assert.doesNotThrow(() => parseDocChromeManifest({ ...MANIFEST, surfaces: { schema: "config.schema.json" } }, "manifest.js"));
+    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, surfaces: { schema: "" } }, "manifest.js"), /surfaces\.schema` must be a non-empty string/);
+  });
+
+  test("rejects an empty webUI surface path, naming that field", () => {
+
+    // Every surface path answers to the same rule, so the webUI's arm is asserted in its own right rather than through the readme's row. An empty override
+    // resolves to the plugin root itself, which the stamper would then try to read as a file.
+    assert.throws(() => parseDocChromeManifest({ ...MANIFEST, surfaces: { webui: "" } }, "manifest.js"), /surfaces\.webui` must be a non-empty string/);
   });
 });
 

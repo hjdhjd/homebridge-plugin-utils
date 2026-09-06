@@ -16,7 +16,7 @@ test - share the same vocabulary. The FFmpeg subsystem's `rtp.ts` and `stream.ts
 [localAddressFor](#localaddressfor) lives here for the same reason: it is a datagram helper, answering which local address the operating system would route toward a host by
 connecting a socket and reading what the kernel bound, and the translation tables above are what it opens that socket through.
 
-This module imports `node:dgram` and `node:net` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve those imports.
+This module imports `node:dgram` and `node:dns/promises` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve those imports.
 
 ## Utilities
 
@@ -62,18 +62,23 @@ function localAddressFor(host, options?): Promise<string>;
 
 The local address the operating system routes toward a host, which is the interface a peer at that host can reach this process on.
 
-A datagram socket is connected and its local address read. No packet is sent: connecting a datagram socket only fixes its default destination, and fixing that
+The host is resolved first, through the platform resolver and in the operating system's own order, and the socket is opened in the family the record answered. A
+name's records decide the family rather than its spelling, so a host whose only record is an IPv6 one is probed over an IPv6 socket and answered rather than
+refused. A literal is answered by the resolver without a query and in its own family, so a literal travels this same path with no branch of its own. The socket is
+opened only once the resolver has answered, which is also what makes a lifetime that ends during the lookup open nothing at all.
+
+That socket is then connected and its local address read. No packet is sent: connecting a datagram socket only fixes its default destination, and fixing that
 destination is what makes the kernel consult its routing table and bind the local address it would send from. That is a more honest answer than enumerating the
 host's interfaces and guessing which one faces the peer, because a host with several interfaces has no single right answer to guess at.
 
 The `connect` event is awaited rather than a callback passed, because the platform declares that callback to take no arguments: a callback shape that reads an
 error argument types only by declaring a parameter the contract does not promise, and then reads past it at runtime. With no callback, the runtime emits `connect`
-on success and `error` on failure, which `events.once` turns into a rejection carrying the lookup or family code - so a host that does not resolve, or one whose
-family the socket cannot reach, is a failure the caller sees rather than an address that means nothing.
+on success and `error` on failure, which `events.once` turns into a rejection carrying the family code - so an address whose family the socket cannot reach is a
+failure the caller sees rather than an address that means nothing.
 
 The socket is unreferenced, so it never holds the process open. A name lookup already in flight is a threadpool request no API cancels, so it holds the process
-until the resolver answers however this call ends; `signal` ends the caller's wait at once and the lookup drains on its own, completing against a closed socket
-and emitting nothing.
+until the resolver answers however this call ends; `signal` ends the caller's wait at once, and the lookup then drains into the wait combinator below, which has
+already marked its answer handled.
 
 #### Parameters
 
@@ -91,7 +96,8 @@ The local address the route toward that host would leave from.
 
 #### Throws
 
-The lookup or address-family error when the host cannot be reached, and `signal.reason` when the caller's lifetime ends first.
+The resolver's own error when the host does not resolve, the address-family error when the resolved address cannot be reached, and `signal.reason` when
+the caller's lifetime ends first.
 
 #### Example
 

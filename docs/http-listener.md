@@ -201,7 +201,7 @@ Construction options for [HttpListener](#httplistener).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="bodylimit"></a> `bodyLimit?` | `number` | The largest request body a route will be handed, in bytes. A body that crosses it is refused with 413 and never reaches a handler. Defaults to 65536. |
+| <a id="bodylimit"></a> `bodyLimit?` | `number` | The largest request body a route will be handed, in bytes. A body that crosses it is refused with 413 and never reaches a handler. Defaults to 65536. Size is the only bound this class sets. The read is bounded in time by the platform: Node's request timeout covers the whole request, headers and body alike, defaults to five minutes, and is enforced on a thirty-second check, so a peer that stalls mid-body is answered 408 and dropped by the server itself. A deadline of this class's own would be a second mechanism for a bound that already exists underneath it. |
 | <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | Optional time source for the bind retry's waits, handed through to `retry()`. Defaults to `systemClock`; a `TestClock` puts the retry schedule on virtual time. |
 | <a id="label"></a> `label` | `string` | The noun phrase every one of this listener's log lines names it by - "event receiver", "document server". Required, because the library owns the wording of those lines and the label is what carries the purpose in them. An empty label is refused. |
 | <a id="log"></a> `log` | [`HomebridgePluginLogging`](util.md#homebridgepluginlogging) | Where the listener's own lines go. |

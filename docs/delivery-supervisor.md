@@ -32,7 +32,8 @@ A supervisor of delivery windows: each window is a set of named slots that settl
 A consumer opens a window under a key of its own choosing, names the slots the window is waiting on, and says how long to wait and what to do when that wait
 lapses. From there it answers slots as its own evidence arrives, and the supervisor guarantees the rest: exactly one settlement per slot, one deadline per window
 cleared the moment the last slot answers, a fresh window under a standing key yielding the old one, and every pending slot answered when the lifetime ends, when
-the consumer invalidates, or when a deadline callback throws.
+the consumer invalidates, or when a deadline callback throws. Every one of those closes answers every slot it covers before it reports the faults its callbacks
+threw, so a consumer's own throw never leaves a sibling slot waiting.
 
 What the supervisor does NOT own is as deliberate as what it does. It has no notion of evidence, no re-send policy, no opinion about how many rounds a delivery is
 worth, and no vocabulary for a successful outcome - every one of those is the consumer's, reached through the deadline callback and the slot handles. That division
@@ -281,7 +282,7 @@ Construction options for [DeliverySupervisor](#deliverysupervisor).
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
 | <a id="clock"></a> `clock?` | `readonly` | [`Clock`](clock.md#clock) | The time source every deadline is armed on. It is handed through unresolved to the [TimerRegistry](timer-registry.md#timerregistry) that arms the timer, which is the one place the default is applied, so a consumer that injects a clock drives its supervised deadlines on the same timeline as its awaited waits. |
-| <a id="onerror"></a> `onError` | `readonly` | (`error`, `window`) => `void` | Where the error a deadline callback threw is reported, together with the window whose callback threw it, after every pending slot of that window has already been answered. The window is what lets a consumer name the subject of the fault from the key and slot names it opened the window with, rather than keeping a catch of its own alongside this one. The callback carries the consumer's entire fault policy - the logging, the wording, the recovery - which is why the supervisor itself stays logging-free. |
+| <a id="onerror"></a> `onError` | `readonly` | (`error`, `window`) => `void` | Where every fault the supervisor meets is reported: the error a deadline callback threw, and any error a settle callback threw while the supervisor was closing a window's slots. Each arrives together with the window it concerns, and always after every pending slot of that window has been answered. The window is what lets a consumer name the subject of the fault from the key and slot names it opened the window with, rather than keeping a catch of its own alongside this one. The callback carries the consumer's entire fault policy - the logging, the wording, the recovery - which is why the supervisor itself stays logging-free. A throw from this callback is not caught: it reaches whoever invoked the close, once that close has completed. |
 | <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The supervisor's lifetime. When it aborts, every pending slot of every standing window is yielded `"aborted"` before the deadlines are retired, and opening a further window throws. |
 
 ***

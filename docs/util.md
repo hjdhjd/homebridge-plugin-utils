@@ -810,7 +810,7 @@ method in that position discards its promise: a rejection surfaces as a process-
 HomeKit waits forever for a response that never comes. `guardedDispatch` closes both gaps. It owns a once-guard around the real callback and hands the guarded callback
 to `handler`, so however the handler behaves - answered then faulted, faulted before answering, or answered twice by mistake - the real callback fires exactly once:
 the first answer wins; a fault after an answer is logged and the earlier answer stands; a fault before any answer is delivered to HomeKit through the callback itself.
-The handler's promise is marked observed through [markHandled](#markhandled), so nothing floats.
+The handler's promise is marked observed through [markHandled](mark-handled.md#markhandled), so nothing floats.
 
 ##### Type Parameters
 
@@ -1066,45 +1066,6 @@ void superviseLoop({
   onError: loopFaultReporter(this.log, "membership"),
   signal: this.signal
 });
-```
-
-***
-
-### markHandled()
-
-```ts
-function markHandled<T>(promise): Promise<T>;
-```
-
-Attach a shared no-op rejection handler to `promise` so that if it rejects and no other observer is attached, Node does not emit an `UnhandledPromiseRejection`
-warning. Returns the original promise so callers can mark-and-assign in one expression.
-
-Use this on internal promise handles (`ready`, `exited`, init segments) that a class exposes for callers who may or may not choose to observe them. Callers who
-`await` the promise or attach their own `.catch` still see the rejection through their own chain - this helper only marks the promise as observed for Node's
-unhandled-rejection tracker.
-
-#### Type Parameters
-
-| Type Parameter | Description |
-| ------ | ------ |
-| `T` | The resolved value type. |
-
-#### Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `promise` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`T`\> | The promise to mark handled. |
-
-#### Returns
-
-[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`T`\>
-
-The same promise, for chained assignment.
-
-#### Example
-
-```ts
-this.ready = markHandled(readyResolvers.promise);
 ```
 
 ***
@@ -1739,7 +1700,7 @@ normally, or the signal aborts and `waitWithSignal` rejects with `signal.reason`
 
 The abort listener is attached with `{ once: true }` and explicitly removed when the helper settles, so there is no listener leak regardless of which side wins the
 race. `promise` is ALWAYS observed via `.then(resolve, reject)` - including on the pre-aborted-signal path - which means attaching `waitWithSignal` to a promise
-marks it as handled for Node's unhandled-rejection tracker. Callers do not need to wrap `promise` in [markHandled](#markhandled) separately.
+marks it as handled for Node's unhandled-rejection tracker. Callers do not need to wrap `promise` in [markHandled](mark-handled.md#markhandled) separately.
 
 #### Type Parameters
 
@@ -1808,3 +1769,9 @@ Re-exports [formatPercent](formatters.md#formatpercent)
 ### formatSeconds
 
 Re-exports [formatSeconds](formatters.md#formatseconds)
+
+***
+
+### markHandled
+
+Re-exports [markHandled](mark-handled.md#markhandled)

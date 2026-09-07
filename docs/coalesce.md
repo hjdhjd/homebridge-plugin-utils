@@ -14,10 +14,11 @@ all resolve to the same refresh. Running the work once per trigger is wasteful, 
 triggers is wrong too, because whatever arrived after the pass had already read its inputs is simply lost. The answer in every case is the same: run one pass, and if
 anything asked while that pass was running, run exactly one more - however many asked.
 
-This is the run-on-demand corner of the library's dispatch mechanisms, and it is deliberately the only thing it is. `guardedDispatch` owns the fire-and-forget failure
-surface, and this class dispatches through it rather than restating it, so a failed pass lands in the log instead of escaping as an unhandled rejection.
-`superviseLoop` owns the run-forever shape, where the work is a loop that should keep going for as long as its lifetime lasts. This owns the run-on-demand shape, where
-the work has nothing to do until something asks, and asking twice must not mean running twice.
+This is the run-on-demand corner of the library's dispatch mechanisms, and it is deliberately the only thing it is. The drain owns each pass's fault and reports it on
+the task's own line, rather than handing the whole dispatch to a guard: a guard wrapping the drain ends it at the first fault, and the follow-up a trigger bought while
+that pass was running is work somebody asked for and a fault says nothing about. `superviseLoop` owns the run-forever shape, where the work is a loop that should keep
+going for as long as its lifetime lasts. This owns the run-on-demand shape, where the work has nothing to do until something asks, and asking twice must not mean
+running twice.
 
 ## Utilities
 
@@ -75,8 +76,8 @@ schedule(): void;
 
 Ask for a pass. A pass already running takes note and runs once more when it finishes; an idle task starts one now.
 
-The dispatch is guarded rather than awaited, because every caller is an event handler or a timer that has nothing to wait for and a fault has to land in the log
-rather than escape as an unhandled rejection.
+The dispatch is fire-and-forget rather than awaited, because every caller is an event handler or a timer that has nothing to wait for and a failed pass has to land
+in the log rather than escape as an unhandled rejection.
 
 ###### Returns
 

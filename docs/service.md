@@ -71,7 +71,7 @@ function acquireService<T>(
    name, 
    subtype?, 
    onServiceCreate?
-): Nullable<T>;
+): T;
 ```
 
 Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
@@ -95,7 +95,7 @@ service instance. Additionally, the various name characteristics of the service 
 
 #### Returns
 
-[`Nullable`](util.md#nullable)\<`T`\>
+`T`
 
 Returns the created or retrieved service. Construction failures throw rather than returning `null`.
 
@@ -109,19 +109,16 @@ The `ConfiguredName` and `Name` characteristics are conditionally added or updat
 #### Example
 
 ```typescript
-// Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created. The return type is narrowed to `Lightbulb | null`,
-// so callers can invoke subclass-specific behavior on the result without casts.
+// Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created. The return type is narrowed to `Lightbulb`, so
+// callers invoke subclass-specific behavior on the result without casts.
 const lightbulbService = acquireService(accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc): void => {
 
   // Called only if the service is newly created. `svc` is typed as `Lightbulb` here.
   svc.setCharacteristic(hap.Characteristic.On, false);
 });
 
-if(lightbulbService) {
-
-  // Service is now available, with display name set and optional characteristics managed.
-  lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
-}
+// Service is now available, with display name set and optional characteristics managed.
+lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
 ```
 
 #### See

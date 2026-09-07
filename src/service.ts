@@ -128,19 +128,16 @@ export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => 
  *
  * @example
  * ```typescript
- * // Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created. The return type is narrowed to `Lightbulb | null`,
- * // so callers can invoke subclass-specific behavior on the result without casts.
+ * // Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created. The return type is narrowed to `Lightbulb`, so
+ * // callers invoke subclass-specific behavior on the result without casts.
  * const lightbulbService = acquireService(accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc): void => {
  *
  *   // Called only if the service is newly created. `svc` is typed as `Lightbulb` here.
  *   svc.setCharacteristic(hap.Characteristic.On, false);
  * });
  *
- * if(lightbulbService) {
- *
- *   // Service is now available, with display name set and optional characteristics managed.
- *   lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
- * }
+ * // Service is now available, with display name set and optional characteristics managed.
+ * lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
  * ```
  *
  * @see setServiceName - updates the newly created (or existing) service's name-related characteristics.
@@ -148,7 +145,7 @@ export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => 
  * @category Accessory
  */
 export function acquireService<T extends Service>(accessory: PlatformAccessory, serviceType: AcquireServiceTarget<T>, name: string, subtype?: string,
-  onServiceCreate?: (svc: T) => void): Nullable<T> {
+  onServiceCreate?: (svc: T) => void): T {
 
   // Sanitize once up front because HomeKit's strict naming rules apply both to the constructor's displayName and to the ConfiguredName / Name characteristics that
   // setServiceName populates - same source string, same validation contract.

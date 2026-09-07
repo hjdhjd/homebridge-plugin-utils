@@ -16,7 +16,8 @@ later registration inert, so a timer can never outlive the owner it was armed ag
 
 Every timer the registry arms goes through its [Clock](clock.md#clock), so the whole surface is what the registry adds ON TOP of that one time source: keyed identity,
 replace-on-register, anonymous tracking, and the lifetime drain. A consumer that injects a clock therefore drives these deadlines on the same timeline as its awaited
-waits, rather than reaching for a second lever.
+waits, rather than reaching for a second lever. The policy of whether those timers hold the process open travels the same way: the registry states it to its clock on
+every arm and never touches a platform handle to enforce it.
 
 ## Utilities
 
@@ -34,7 +35,8 @@ The surface is minimal on purpose:
   - `clearAll()` drains every pending timer, keyed and anonymous alike, and leaves the registry armed: the shape for an owner whose pending work must all cancel on a
     state change while the re-arms that follow still need to take.
   - `dispose()` (and `[Symbol.dispose]`) drains every pending timer and retires the registry: subsequent registrations are no-ops. An `options.signal` binds the same
-    drain to the owner's lifetime, so the owner never has to unwire the registry by hand at teardown.
+    drain to the owner's lifetime, so the owner never has to unwire the registry by hand at teardown. An `options.unref` binds the owner's process-lifetime policy
+    to the same registry, so every timer it arms is stated to its clock as one that may not hold the process open.
 
 This is a `Disposable` (synchronous) rather than `AsyncDisposable` because cancelling a timer is synchronous; there is no background work to await.
 
@@ -269,3 +271,4 @@ Construction options for [TimerRegistry](#timerregistry).
 | ------ | ------ | ------ |
 | <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | The time source every timer this registry arms goes through. Defaults to [systemClock](clock.md#systemclock), whose `schedule` IS the global `setTimeout` / `setInterval`, so the default path is that same platform call with one indirection in front of it and no behavior change. A test injects a `TestClock` so the registry's deadlines share the consumer's virtual timeline with its awaited delays, and one `advance` drives both. |
 | <a id="signal"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | A lifetime signal. When it aborts, the registry drains every pending timer and every later registration becomes inert; a signal already aborted at construction time means the registry is born disposed. Omit it for a registry whose only lifetime bound is an explicit `dispose()`. |
+| <a id="unref"></a> `unref?` | `boolean` | Whether the timers this registry arms may hold the process open. When `true`, every timer is forwarded to the clock with `unref` set, so a process whose only pending work is this registry's timers exits without waiting for them - the shape for an owner living inside a process that must exit on its own, a CLI or a probe. Omitted, the platform's default holds and a pending timer keeps the process alive. This is a per-owner policy with no per-call override, because whether an owner's timers may hold the process open is a property of that owner's relationship to its process rather than of any one timer, and a per-call flag would put the same decision in a second place. |

@@ -91,14 +91,19 @@ schedule(
 Arm a callback timer: run `callback` once after `ms` milliseconds, or every `ms` milliseconds when `init.repeat` is `true`. The production [systemClock](#systemclock)
 implements this as the global `setTimeout` / `setInterval` read at call time, so any harness that replaces those globals observes the timer.
 
+With `init.unref` set the timer never holds the process open, so a process whose only pending work is timers armed this way exits without waiting for them...the
+shape for a consumer living inside a process that must exit on its own. Omitted, the platform's default holds: a referenced timer keeps the process alive until
+it fires or is disposed. Either way the timer is armed and comes due exactly the same, so the flag decides only whether the process waits for it.
+
 ###### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `callback` | () => `void` | The function to run when the timer fires. |
 | `ms` | `number` | The timer's window, in milliseconds. |
-| `init?` | \{ `repeat?`: `boolean`; \} | Optional init options. `repeat` arms a repeating timer that fires every `ms` until it is disposed, rather than a one-shot. |
+| `init?` | \{ `repeat?`: `boolean`; `unref?`: `boolean`; \} | Optional init options. `repeat` arms a repeating timer that fires every `ms` until it is disposed, rather than a one-shot; `unref` arms a timer that does not hold the process open. |
 | `init.repeat?` | `boolean` | - |
+| `init.unref?` | `boolean` | - |
 
 ###### Returns
 

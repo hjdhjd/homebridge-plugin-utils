@@ -247,14 +247,19 @@ repeat seeded from a raw zero would otherwise fire once per pass rather than onc
 a non-positive `ms` comes due at or before the current time and the very next `advance` (including `advance(0)`) flushes it. The call's `ms` is recorded in
 [TestClock.requested](#requested) as asked, before either coercion.
 
+`init.unref` is accepted and ignored. A virtual timeline has no process to hold open, and the platform's unref decides only whether a pending timer keeps the
+process alive rather than anything about when the timer fires, so a timer armed with the flag comes due on `advance` exactly as one armed without it. Accepting
+it is what lets a consumer that sets the policy in production run its rows against this double without a second code path.
+
 ###### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `callback` | () => `void` | The function to run when the timer fires. |
 | `ms` | `number` | The timer's window, in milliseconds. |
-| `init?` | \{ `repeat?`: `boolean`; \} | Optional init options. `repeat` arms a repeating timer rather than a one-shot. |
+| `init?` | \{ `repeat?`: `boolean`; `unref?`: `boolean`; \} | Optional init options. `repeat` arms a repeating timer rather than a one-shot; `unref` is accepted and ignored. |
 | `init.repeat?` | `boolean` | - |
+| `init.unref?` | `boolean` | - |
 
 ###### Returns
 

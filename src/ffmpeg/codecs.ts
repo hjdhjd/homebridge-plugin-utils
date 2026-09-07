@@ -25,12 +25,14 @@
  */
 import { EOL, cpus } from "node:os";
 import { env, platform } from "node:process";
+import type { Clock } from "../clock.ts";
 import type { ExecException } from "node:child_process";
 import type { Logger } from "../util.ts";
 import { composeSignals } from "../util.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFileSync } from "node:fs";
+import { systemClock } from "../clock.ts";
 
 // Promisified execFile, created once at module level rather than per-invocation.
 const execFileAsync = promisify(execFile);
@@ -267,6 +269,13 @@ export function parseRpiGpuMem(stdout: string): number {
 export interface FOptions {
 
   /**
+   * Optional. The time source each probe's per-command deadline is armed on. Defaults to {@link systemClock}, whose `timeout` IS `AbortSignal.timeout`, so the
+   * default path is that same platform call with one indirection in front of it and no behavior change. Supplying a controllable clock (`TestClock`) puts every
+   * probe deadline on virtual time, so a suite drives a hung binary's timeout instead of waiting it out.
+   */
+  clock?: Clock;
+
+  /**
    * Optional. The path or command used to execute FFmpeg. Defaults to "ffmpeg".
    */
   ffmpegExec?: string;
@@ -354,7 +363,7 @@ export class FfmpegCodecs {
    * watchdog timeout so a slow or hung FFmpeg binary cannot stall the caller indefinitely; the optional `init.signal` composes with that timeout so callers can cancel
    * probing from outside (for example, during plugin shutdown).
    *
-   * @param options - Options used to configure the probe (FFmpeg executable, logger, verbose flag).
+   * @param options - Options used to configure the probe (FFmpeg executable, logger, verbose flag, and the clock the per-command deadlines are armed on).
    * @param init    - Optional probe options. `signal` cancels in-flight probes; the per-call watchdog still applies.
    *
    * @returns A promise that resolves to a populated `FfmpegCodecs` instance, or `null` if probing failed.
@@ -576,12 +585,26 @@ export class FfmpegCodecs {
 // orchestration inside the class would conflate "how do I populate state?" with "how do I hold and serve state?" The factory at `FfmpegCodecs.probe` glues the two
 // together.
 
+// What every probe helper needs, carried as one object rather than as a positional tail on each signature: the clock its per-command deadline is armed on, the logger
+// a failure is reported through, and the caller's optional lifetime signal. Threading a third concern positionally would have grown each helper's `log, signal` pair
+// into a triple, and a fourth concern later would grow it again; one context parameter absorbs that growth in the type rather than in every signature.
+interface ProbeContext {
+
+  clock: Clock;
+  log: Logger;
+  signal?: AbortSignal;
+}
+
 // Orchestrate the full probe pipeline. Returns a populated state snapshot on success, or `null` when any required probe fails.
 async function probeFfmpegCapabilities(options: FOptions, signal?: AbortSignal): Promise<FfmpegCodecsState | null> {
 
   const ffmpegExec = options.ffmpegExec ?? "ffmpeg";
   const verbose = options.verbose ?? false;
   const { log } = options;
+
+  // Resolve the clock once, here: the options carry the consumer's choice unresolved, and this is the one place the pipeline is assembled, so every helper below
+  // shares one time source rather than each applying the default on its own.
+  const context: ProbeContext = { clock: options.clock ?? systemClock, log, signal };
 
   // Sync host-system / CPU-generation detection.
   const { hostSystem, cpuGeneration } = probeHwOs();
@@ -591,11 +614,11 @@ async function probeFfmpegCapabilities(options: FOptions, signal?: AbortSignal):
 
   if(hostSystem === "raspbian") {
 
-    gpuMem = await probeRpiGpuMem(log, signal);
+    gpuMem = await probeRpiGpuMem(context);
   }
 
   // FFmpeg version is the first required probe; failure here means the FFmpeg binary isn't usable.
-  const ffmpegVersion = await probeFfmpegVersion(ffmpegExec, log, signal);
+  const ffmpegVersion = await probeFfmpegVersion(ffmpegExec, context);
 
   if(ffmpegVersion === null) {
 
@@ -605,7 +628,7 @@ async function probeFfmpegCapabilities(options: FOptions, signal?: AbortSignal):
   log.info("Using FFmpeg version: %s.", ffmpegVersion);
 
   // FFmpeg codec inventory.
-  const codecs = await probeFfmpegCodecs(ffmpegExec, log, signal);
+  const codecs = await probeFfmpegCodecs(ffmpegExec, context);
 
   if(codecs === null) {
 
@@ -613,7 +636,7 @@ async function probeFfmpegCapabilities(options: FOptions, signal?: AbortSignal):
   }
 
   // FFmpeg hwaccels inventory, with per-accel capability validation.
-  const hwAccels = await probeFfmpegHwAccels(ffmpegExec, verbose, log, signal);
+  const hwAccels = await probeFfmpegHwAccels(ffmpegExec, verbose, context);
 
   if(hwAccels === null) {
 
@@ -727,20 +750,20 @@ function probeHwOs(): { hostSystem: string; cpuGeneration: number } {
 }
 
 // Probe the FFmpeg version string via `ffmpeg -hide_banner -version`. Returns the parsed version string, or `null` on probe failure.
-async function probeFfmpegVersion(ffmpegExec: string, log: Logger, signal?: AbortSignal): Promise<string | null> {
+async function probeFfmpegVersion(ffmpegExec: string, context: ProbeContext): Promise<string | null> {
 
   let version: string | null = null;
 
   const ok = await probeCmd(ffmpegExec, [ "-hide_banner", "-version" ], (stdout) => {
 
     version = parseFfmpegVersion(stdout);
-  }, { log, signal });
+  }, context);
 
   return ok ? version : null;
 }
 
 // Probe the FFmpeg codec inventory via `ffmpeg -hide_banner -codecs`. Returns a format-keyed index, or `null` on probe failure.
-async function probeFfmpegCodecs(ffmpegExec: string, log: Logger, signal?: AbortSignal):
+async function probeFfmpegCodecs(ffmpegExec: string, context: ProbeContext):
 Promise<Record<string, { decoders: Set<string>; encoders: Set<string> }> | null> {
 
   let parsed: Record<string, { decoders: Set<string>; encoders: Set<string> }> | null = null;
@@ -748,7 +771,7 @@ Promise<Record<string, { decoders: Set<string>; encoders: Set<string> }> | null>
   const ok = await probeCmd(ffmpegExec, [ "-hide_banner", "-codecs" ], (stdout) => {
 
     parsed = parseFfmpegCodecs(stdout);
-  }, { log, signal });
+  }, context);
 
   return ok ? parsed : null;
 }
@@ -756,7 +779,7 @@ Promise<Record<string, { decoders: Set<string>; encoders: Set<string> }> | null>
 // Probe the FFmpeg hardware-accelerator inventory via `ffmpeg -hide_banner -hwaccels`, then validate each advertised accel by running a one-second synthetic transcode
 // that initializes the hardware-acceleration context. The validation catches the case where a build advertises an accel the host hardware cannot actually use;
 // discarding those accelerators here means callers don't have to re-validate downstream.
-async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, log: Logger, signal?: AbortSignal): Promise<Set<string> | null> {
+async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, context: ProbeContext): Promise<Set<string> | null> {
 
   const hwAccels = new Set<string>();
 
@@ -766,7 +789,7 @@ async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, log: Lo
 
       hwAccels.add(accel);
     }
-  }, { log, signal });
+  }, context);
 
   if(!ok) {
 
@@ -785,7 +808,7 @@ async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, log: Lo
     const accelOk = await probeCmd(ffmpegExec, [
 
       "-hide_banner", "-hwaccel", accel, "-v", "quiet", "-t", "1", "-f", "lavfi", "-i", "color=black:1920x1080", "-c:v", "libx264", "-f", "null", "-"
-    ], () => { /* No-op. */ }, { log, quietRunErrors: true, signal });
+    ], () => { /* No-op. */ }, { ...context, quietRunErrors: true });
 
     if(!accelOk) {
 
@@ -793,7 +816,7 @@ async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, log: Lo
 
       if(verbose) {
 
-        log.error("Hardware-accelerated decoding and encoding using %s will be unavailable: unable to successfully validate capabilities.", accel);
+        context.log.error("Hardware-accelerated decoding and encoding using %s will be unavailable: unable to successfully validate capabilities.", accel);
       }
     }
   }
@@ -803,14 +826,14 @@ async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, log: Lo
 
 // Probe Raspberry Pi GPU memory via `vcgencmd get_mem gpu`. Returns the megabyte value, or `0` on probe failure (the caller's configureHwAccel gate treats `0` as
 // insufficient anyway, so the return-value distinction is cosmetic but keeps the null handling consistent with the other probes).
-async function probeRpiGpuMem(log: Logger, signal?: AbortSignal): Promise<number> {
+async function probeRpiGpuMem(context: ProbeContext): Promise<number> {
 
   let gpuMem = 0;
 
   await probeCmd("vcgencmd", [ "get_mem", "gpu" ], (stdout) => {
 
     gpuMem = parseRpiGpuMem(stdout);
-  }, { log, signal });
+  }, context);
 
   return gpuMem;
 }
@@ -820,13 +843,14 @@ async function probeRpiGpuMem(log: Logger, signal?: AbortSignal): Promise<number
 // `quietRunErrors`, since a missing binary is worth surfacing no matter the caller's intent; other failures log unless `quietRunErrors` is set - that flag exists for
 // the per-accel validation loop where failures are expected and logged at a higher level by the caller.
 async function probeCmd(command: string, commandLineArgs: string[], processOutput: (output: string) => void,
-  options: { log: Logger; quietRunErrors?: boolean; signal?: AbortSignal }): Promise<boolean> {
+  options: ProbeContext & { quietRunErrors?: boolean }): Promise<boolean> {
 
-  const { log, quietRunErrors = false, signal: callerSignal } = options;
+  const { clock, log, quietRunErrors = false, signal: callerSignal } = options;
 
-  // Always compose with a per-probe watchdog timeout so the worst-case outcome is bounded. When the caller also supplies a signal, `composeSignals` falls through to
-  // `AbortSignal.any()`; when no caller signal is supplied, the timeout alone governs (composeSignals returns it unwrapped).
-  const composed = composeSignals(callerSignal, AbortSignal.timeout(PROBE_DEFAULT_TIMEOUT_MS));
+  // Always compose with a per-probe watchdog timeout so the worst-case outcome is bounded. The deadline comes from the context's clock, so a consumer that wired one
+  // drives this window on virtual time. When the caller also supplies a signal, `composeSignals` falls through to `AbortSignal.any()`; when no caller signal is
+  // supplied, the timeout alone governs (composeSignals returns it unwrapped).
+  const composed = composeSignals(callerSignal, clock.timeout(PROBE_DEFAULT_TIMEOUT_MS));
 
   try {
 

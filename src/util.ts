@@ -1196,7 +1196,7 @@ export async function takeLast<T>(source: AsyncIterable<T>, n: number): Promise<
  * const composed = composeSignals(this.signal, init.signal);
  *
  * // Compose an optional caller signal with a derived watchdog timeout.
- * const composed = composeSignals(init.signal, AbortSignal.timeout(PROBE_DEFAULT_TIMEOUT_MS));
+ * const composed = composeSignals(init.signal, clock.timeout(PROBE_DEFAULT_TIMEOUT_MS));
  * ```
  *
  * @category Utilities
@@ -1569,11 +1569,12 @@ export function guardedDispatch<C extends DispatchCallback>(options:
 
 /**
  * Options for {@link runWithAbort}. At least one of `signal` or `timeout` must be provided so there is always an abort mechanism. TypeScript enforces this at compile
- * time through a discriminated union - the "no abort mechanism" case is unrepresentable.
+ * time through a discriminated union - the "no abort mechanism" case is unrepresentable. `clock` intersects that union rather than joining either arm, because the
+ * time source a timeout is armed on is independent of which abort mechanism the caller chose.
  *
  * @category Utilities
  */
-export type RunWithAbortOptions = { signal: AbortSignal; timeout?: number } | { timeout: number };
+export type RunWithAbortOptions = ({ signal: AbortSignal; timeout?: number } | { timeout: number }) & { clock?: Clock };
 
 /**
  * Run an abortable operation with signal-based cancellation.
@@ -1585,7 +1586,9 @@ export type RunWithAbortOptions = { signal: AbortSignal; timeout?: number } | { 
  *
  * @typeParam T           - The type of value the factory's promise resolves with.
  * @param fn              - A factory that receives the composed abort signal and returns the promise to await.
- * @param options         - Abort options. Provide `timeout` (milliseconds), an external `signal`, or both.
+ * @param options         - Abort options. Provide `timeout` (milliseconds), an external `signal`, or both, plus the optional `clock` the timeout is armed on.
+ *                          Defaults to {@link systemClock}, whose `timeout` IS `AbortSignal.timeout`, so the default path is that same platform call with one
+ *                          indirection in front of it; supplying a controllable clock puts the deadline on virtual time.
  *
  * @returns Resolves with the factory's result if it completes before abort, or `null` if the signal fires first.
  *
@@ -1607,11 +1610,14 @@ export type RunWithAbortOptions = { signal: AbortSignal; timeout?: number } | { 
  */
 export async function runWithAbort<T>(fn: (signal: AbortSignal) => Promise<T>, options: RunWithAbortOptions): Promise<Nullable<T>> {
 
+  const { clock = systemClock } = options;
+
   // Route through `composeSignals` so this helper uses the same signal-composition primitive every other HBPU resource class uses. The discriminated union
   // guarantees at least one of `signal` / `timeout` is defined, which means `composeSignals` always receives at least one concrete signal and never throws its
   // empty-input guard. When only a timeout is supplied, `composeSignals` returns that single timeout signal unwrapped (no needless `AbortSignal.any` allocation).
+  // The deadline itself is the clock's, so a consumer that injected one drives this helper's timeout on virtual time.
   const callerSignal = ("signal" in options) ? options.signal : undefined;
-  const timeoutSignal = (options.timeout !== undefined) ? AbortSignal.timeout(options.timeout) : undefined;
+  const timeoutSignal = (options.timeout !== undefined) ? clock.timeout(options.timeout) : undefined;
   const signal = composeSignals(callerSignal, timeoutSignal);
 
   // If the signal is already aborted, return immediately without starting any work.
@@ -1621,8 +1627,8 @@ export async function runWithAbort<T>(fn: (signal: AbortSignal) => Promise<T>, o
   }
 
   // Run the factory and let the signal handle cancellation. We check `signal.aborted` rather than inspecting the error type because the signal is the source of truth
-  // for cancellation state...the exception type varies by API and abort reason (AbortError from manual abort, TimeoutError from AbortSignal.timeout(), or any custom
-  // reason). Genuine errors that occur before the signal fires propagate normally.
+  // for cancellation state...the exception type varies by API and abort reason (AbortError from manual abort, TimeoutError from the clock's deadline signal, or any
+  // custom reason). Genuine errors that occur before the signal fires propagate normally.
   try {
 
     return await fn(signal);

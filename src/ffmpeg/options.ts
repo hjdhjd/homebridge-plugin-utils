@@ -53,8 +53,8 @@ const H264_PROFILE_NAMES = {
  *                                  `systemClock` on its own, so the options object carries the choice unresolved exactly as any other composer does. The clock lives
  *                                  here, beside `log` and `debug`, because these options ARE the per-session substrate a consumer configures once and every process,
  *                                  recording, and livestream is then built from, where an init carries per-construction lifetimes instead. The startup timeout and
- *                                  the codec probe are deadline signals rather than callback timers: they read the platform's `AbortSignal.timeout` directly and do
- *                                  not observe this clock.
+ *                                  the codec probe are deadline signals rather than callback timers, and they draw those signals from this same clock, so a
+ *                                  consumer's virtual clock drives every shape of time the process family arms.
  * @property codecSupport         - FFmpeg codec capabilities and hardware support.
  * @property crop                 - Optional. Cropping rectangle for output video.
  * @property debug                - Optional. Enable debug logging.

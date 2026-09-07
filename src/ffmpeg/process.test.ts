@@ -6,9 +6,11 @@
 import type { CapturingLog, TestLogEntry } from "../testing/index.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
+import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessExitInfo } from "./process.ts";
+import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { capturingLog } from "../testing/index.ts";
 import { setTimeout as delay } from "node:timers/promises";
@@ -19,6 +21,7 @@ import { once } from "node:events";
 // `verbose: true` to cover the live-log path) without reconstructing the full options shape each time.
 interface TestOptionsOverrides {
 
+  clock?: Clock;
   debug?: boolean;
   ffmpegExec?: string;
   verbose?: boolean;
@@ -31,6 +34,7 @@ function makeOptions(logger: CapturingLog = capturingLog(), overrides: TestOptio
 
   return new FfmpegOptions({
 
+    clock: overrides.clock,
     codecSupport: makeCodecs({
 
       ffmpegExec: overrides.ffmpegExec ?? process.execPath,
@@ -339,6 +343,26 @@ describe("FfmpegProcess - startup timeout", () => {
     await assert.rejects(proc.ready, (error: unknown) => isHbpuAbortReason(error, "timeout"));
 
     assert.equal(proc.isTimedOut, true);
+
+    await proc.exited;
+  });
+
+  test("arms the window on the options' clock, so an advance on virtual time fires the watchdog", async () => {
+
+    // The virtual-time twin of the row above: same construction, same outcome, but the window is armed on an injected clock instead of on real time. The ledger
+    // readings are what prove where the deadline landed - against a platform-armed window they would both be empty and the advance would cross nothing.
+    const clock = new TestClock();
+
+    await using proc = new FfmpegProcess(makeOptions(capturingLog(), { clock }), { args: silentIdle(), startupTimeout: 50 });
+
+    assert.equal(clock.pending, 1, "the startup window is registered on the injected clock");
+    assert.deepEqual(clock.requested, [50], "for exactly the window the caller configured");
+
+    clock.advance(50);
+
+    await assert.rejects(proc.ready, (error: unknown) => isHbpuAbortReason(error, "timeout"));
+
+    assert.equal(proc.isTimedOut, true, "and the process reports the timeout teardown");
 
     await proc.exited;
   });

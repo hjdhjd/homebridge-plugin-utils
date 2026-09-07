@@ -2817,6 +2817,21 @@ describe("runWithAbort", () => {
     assert.equal(result, null);
     assert.equal(observedReason, reason);
   });
+
+  test("arms the timeout on the injected clock rather than on the platform", async () => {
+
+    // Where the deadline landed is what this row reads: a platform-armed timeout would leave the clock's ledger empty and nothing for the advance to cross, so the
+    // two readings below are the evidence and the advance is what makes the call answer.
+    const clock = new TestClock();
+    const result = runWithAbort(waitForAbort, { clock, timeout: 1000 });
+
+    assert.equal(clock.pending, 1, "the deadline is registered on the injected clock");
+    assert.deepEqual(clock.requested, [1000], "for exactly the window the caller asked for");
+
+    clock.advance(1000);
+
+    assert.equal(await result, null, "crossing the deadline aborts the composed signal, so the helper answers null");
+  });
 });
 
 describe("toStartCase", () => {

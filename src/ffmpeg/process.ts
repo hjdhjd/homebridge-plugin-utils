@@ -33,6 +33,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EOL } from "node:os";
 import type { FfmpegOptions } from "./options.ts";
 import { spawn } from "node:child_process";
+import { systemClock } from "../clock.ts";
 
 // Matches non-printable control characters that #onStderrData replaces with EOL so control sequences become line boundaries rather than vanishing. Compiled once at
 // module scope rather than per data event.
@@ -118,7 +119,7 @@ export interface FfmpegProcessExitInfo {
  * @property args            - Optional. FFmpeg command-line arguments. Defaults to an empty array.
  * @property signal          - Optional. Parent {@link AbortSignal} to compose with the process's internal controller. When the parent aborts, the process tears down.
  * @property startupTimeout  - Optional. If FFmpeg does not produce stderr output within this many milliseconds, the process is aborted with
- *                             `HbpuAbortError("timeout")`.
+ *                             `HbpuAbortError("timeout")`. The window is armed on the options' clock, so a consumer's virtual clock drives it.
  *
  * @category FFmpeg
  */
@@ -335,14 +336,14 @@ export class FfmpegProcess implements AsyncDisposable {
     // pre-aborted spawn emits its `"error"` event on the next microtask.
     onAbort(this.signal, () => this.#teardown());
 
-    // Optional startup watchdog. `AbortSignal.timeout` fires an abort after the configured window; we observe that abort and convert it into our own `"timeout"`
-    // reason when the process has not yet emitted its first stderr byte. The `{ signal: this.signal }` option on `addEventListener` ties the listener's lifetime to
-    // the process signal, so the listener auto-unregisters (and the timeout signal becomes GC-eligible) the moment the process aborts for any other reason - no
-    // manual `clearTimeout` bookkeeping, and the listener cannot fire after the process is already torn down. The `#firstStderr` guard prevents firing after a
-    // successful start; this is a startup watchdog, not a general stall detector.
+    // Optional startup watchdog. The options' clock - the system clock when the consumer wired none - answers a deadline signal that aborts after the configured
+    // window; we observe that abort and convert it into our own `"timeout"` reason when the process has not yet emitted its first stderr byte. The
+    // `{ signal: this.signal }` option on `addEventListener` ties the listener's lifetime to the process signal, so the listener auto-unregisters (and the timeout
+    // signal becomes GC-eligible) the moment the process aborts for any other reason - no manual `clearTimeout` bookkeeping, and the listener cannot fire after the
+    // process is already torn down. The `#firstStderr` guard prevents firing after a successful start; this is a startup watchdog, not a general stall detector.
     if(startupTimeout !== undefined) {
 
-      const timeoutSignal = AbortSignal.timeout(startupTimeout);
+      const timeoutSignal = (this.options.clock ?? systemClock).timeout(startupTimeout);
 
       timeoutSignal.addEventListener("abort", () => {
 

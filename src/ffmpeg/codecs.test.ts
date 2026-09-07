@@ -1,14 +1,19 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/codecs.test.ts: Unit tests for the codec-probe result parsers. Pure-function coverage against fixture strings; a real-binary integration test runs whenever an
- * FFmpeg binary is discoverable on PATH (or `FFMPEG_INTEGRATION=1` is set), and is skipped otherwise. See `integration.helpers.ts` for the full gate semantics.
+ * ffmpeg/codecs.test.ts: Unit tests for the codec-probe result parsers. Pure-function coverage against fixture strings, plus one virtual-clock row over the probe's
+ * per-command deadline; a real-binary integration test runs whenever an FFmpeg binary is discoverable on PATH (or `FFMPEG_INTEGRATION=1` is set), and is skipped
+ * otherwise. See `integration.helpers.ts` for the full gate semantics.
  */
 import { FfmpegCodecs, ffmpegVersionAtLeast, parseFfmpegCodecs, parseFfmpegHwAccels, parseFfmpegVersion, parseFfmpegVersionParts, parseRpiGpuMem } from "./codecs.ts";
+import { capturingLog, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { ffmpegIntegrationEnabled } from "./integration.helpers.ts";
+import { join } from "node:path";
 import { makeCodecs } from "./codecs.helpers.ts";
-import { silentLog } from "../testing/index.ts";
+import { tmpdir } from "node:os";
 
 // Fixture strings built from real FFmpeg command output. EOL handling uses `\n` because `node:os.EOL` is `\n` on the test machine (macOS / Linux); the parsers split
 // on the host's EOL, and the test file is host-local too, so there is no cross-platform ambiguity to resolve here.
@@ -361,6 +366,48 @@ describe("FfmpegCodecs - scalar getter surface", () => {
     assert.equal(codecs.ffmpegMajorVersion, 7, "fromState-constructed instances still derive major version through the pure primitive");
     assert.equal(codecs.ffmpegAtLeast(7), true);
     assert.equal(codecs.ffmpegAtLeast(8), false);
+  });
+});
+
+describe("FfmpegCodecs.probe - the per-command deadline", () => {
+
+  test("arms every probe deadline on the injected clock, so a command that never answers is cut off on virtual time", async () => {
+
+    // A script that ignores its arguments and never exits stands in for a hung FFmpeg binary. It `exec`s `sleep`, so the shell is replaced by the sleeper and the
+    // abort's kill lands on the process the probe actually spawned - no orphan outlives the row.
+    const directory = await mkdtemp(join(tmpdir(), "hbpu-codec-probe-"));
+
+    try {
+
+      const script = join(directory, "hang.sh");
+
+      await writeFile(script, "#!/bin/sh\nexec sleep 600\n", { mode: 0o755 });
+
+      const clock = new TestClock();
+      const probing = FfmpegCodecs.probe({ clock, ffmpegExec: script, log: capturingLog() });
+
+      // The deadline is armed synchronously, before the probe's first suspension, so this yield is margin against a future earlier await rather than a need.
+      await settle();
+
+      // A floor rather than an exact count: a Raspberry Pi host runs its GPU-memory probe first, under a deadline of its own, before the version probe arms one.
+      assert.ok(clock.pending >= 1, "the probe's deadline is armed on the injected clock");
+
+      // Step deadline by deadline rather than by one span, so the hanging command's deadline is the one that fires last on every host, whatever ran before it. The
+      // bound fails the row rather than letting it spin if the pipeline ever arms more deadlines than the four a probe can reach.
+      for(let step = 0; clock.pending > 0; step++) {
+
+        assert.ok(step < 4, "the probe must come to rest within the deadlines it arms");
+        clock.advanceToNext();
+
+        // eslint-disable-next-line no-await-in-loop
+        await settle();
+      }
+
+      assert.equal(await probing, null, "a probe whose command never answers resolves null once its deadline is crossed");
+    } finally {
+
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });
 

@@ -519,11 +519,20 @@ type RunWithAbortOptions =
 }
   | {
   timeout: number;
+} & {
+  clock?: Clock;
 };
 ```
 
 Options for [runWithAbort](#runwithabort). At least one of `signal` or `timeout` must be provided so there is always an abort mechanism. TypeScript enforces this at compile
-time through a discriminated union - the "no abort mechanism" case is unrepresentable.
+time through a discriminated union - the "no abort mechanism" case is unrepresentable. `clock` intersects that union rather than joining either arm, because the
+time source a timeout is armed on is independent of which abort mechanism the caller chose.
+
+#### Type Declaration
+
+| Name | Type |
+| ------ | ------ |
+| `clock?` | [`Clock`](clock.md#clock) |
 
 ***
 
@@ -628,7 +637,7 @@ this.signal = composeSignals(init.signal, this.#controller.signal);
 const composed = composeSignals(this.signal, init.signal);
 
 // Compose an optional caller signal with a derived watchdog timeout.
-const composed = composeSignals(init.signal, AbortSignal.timeout(PROBE_DEFAULT_TIMEOUT_MS));
+const composed = composeSignals(init.signal, clock.timeout(PROBE_DEFAULT_TIMEOUT_MS));
 ```
 
 ***
@@ -1352,7 +1361,7 @@ from the factory propagate normally.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `fn` | (`signal`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`T`\> | A factory that receives the composed abort signal and returns the promise to await. |
-| `options` | [`RunWithAbortOptions`](#runwithabortoptions) | Abort options. Provide `timeout` (milliseconds), an external `signal`, or both. |
+| `options` | [`RunWithAbortOptions`](#runwithabortoptions) | Abort options. Provide `timeout` (milliseconds), an external `signal`, or both, plus the optional `clock` the timeout is armed on. Defaults to [systemClock](clock.md#systemclock), whose `timeout` IS `AbortSignal.timeout`, so the default path is that same platform call with one indirection in front of it; supplying a controllable clock puts the deadline on virtual time. |
 
 #### Returns
 

@@ -352,7 +352,7 @@ probing from outside (for example, during plugin shutdown).
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`FOptions`](#foptions) | Options used to configure the probe (FFmpeg executable, logger, verbose flag). |
+| `options` | [`FOptions`](#foptions) | Options used to configure the probe (FFmpeg executable, logger, verbose flag, and the clock the per-command deadlines are armed on). |
 | `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional probe options. `signal` cancels in-flight probes; the per-call watchdog still applies. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
@@ -419,6 +419,7 @@ Options for configuring FFmpeg probing.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="clock"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional. The time source each probe's per-command deadline is armed on. Defaults to [systemClock](../clock.md#systemclock), whose `timeout` IS `AbortSignal.timeout`, so the default path is that same platform call with one indirection in front of it and no behavior change. Supplying a controllable clock (`TestClock`) puts every probe deadline on virtual time, so a suite drives a hung binary's timeout instead of waiting it out. |
 | <a id="ffmpegexec-2"></a> `ffmpegExec?` | `string` | Optional. The path or command used to execute FFmpeg. Defaults to "ffmpeg". |
 | <a id="log"></a> `log` | [`Logger`](../util.md#logger) | Logging interface for output and errors. |
 | <a id="verbose-2"></a> `verbose?` | `boolean` | Optional. Enables or disables verbose logging output. Defaults to `false`. |

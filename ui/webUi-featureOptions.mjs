@@ -164,6 +164,11 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   That signal is the mount's lifetime, so a resource belonging to the module copy rather than to this panel is scoped to {@link webUi.epochSignal} instead when
  *   the page is driven by a `webUi` instance - a standalone instance of this class has no page epoch and therefore no copy lifetime to scope to. The rule for
  *   choosing between the two lives on that getter.
+ * @property {() => void} [onLoaded] - Invoked once per show cycle immediately after that cycle's model has loaded: the catalog and the plugin's controllers are in
+ *   the store, {@link webUiFeatureOptions.editedConfig} answers the live overlay, and the options view has rendered the catalog's categories - the page is
+ *   established, and a consumer that needs to act at that moment has one signal for it. Every path that reaches a loaded model announces it, the global-only path
+ *   and every menu relaunch or retry that gets there included; a cycle that failed before that point, or that a newer page copy superseded, never announces at all.
+ *   The device list arrives later in the cycle and is not this hook's promise. Invoked with no arguments and no debounce.
  * @property {() => void} [onOptionsEdited] - Invoked after the store state has transitioned for any option mutation (an option set or cleared, the options reset,
  *   or the model reverted), so a consumer reading editedConfig from inside the callback sees the post-edit state. Invoked once per mutation with no arguments and no
  *   debounce; a consumer that needs coalescing applies its own.
@@ -372,6 +377,7 @@ export class webUiFeatureOptions {
       getDevices = undefined,
       globalOnly = false,
       infoPanel = undefined,
+      onLoaded = undefined,
       onOptionsEdited = undefined,
       sidebar = {},
       statusPanel = undefined,
@@ -453,6 +459,7 @@ export class webUiFeatureOptions {
       infoPanel,
       labelControllers: sidebar.controllerLabel ?? "Controllers",
       labelDevices: sidebar.deviceLabel ?? "Devices",
+      onLoaded,
       onOptionsEdited,
       renderDeviceContent: sidebar.deviceContent,
       renderGlobalGlyph: sidebar.globalGlyph,
@@ -870,6 +877,17 @@ export class webUiFeatureOptions {
       mode: this.#config.globalOnly ? "global-only" : (this.#config.getControllers ? "controller-based" : "device-only"),
       type: "model:loaded"
     });
+
+    /* Announce the loaded model to the plugin. The dispatch above is the one place a cycle crosses from an empty page into a loaded one - every mode reaches it,
+     * the global-only one included, and each cycle reaches it exactly once - so a consumer that needs to act at the moment the page is established has one site to
+     * be told from rather than several places a cycle could be said to have arrived. Everything the announcement promises is true by now: the store carries the
+     * catalog and the controllers, editedConfig answers the live overlay, and the dispatch ran the options view's render synchronously on its way out.
+     *
+     * No staleness guard sits on this call, and its absence is the design rather than an oversight. Nothing awaits between the dispatch and here, and every path a
+     * supersession takes returns before the dispatch, so a superseded cycle can never arrive at this line - a guard here would be a branch that cannot be taken. A
+     * hook that throws propagates to whoever called show().
+     */
+    this.#config.onLoaded?.();
 
     /* Wait for the theming registration's initial lighting-mode read, so the first paint lands with the mode already applied rather than showing the default and
      * correcting under the user's eye. Both of the registration's host-signal routes go live synchronously, ahead of that read, so first-paint correctness is the

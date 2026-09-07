@@ -5862,3 +5862,197 @@ describe("webUiFeatureOptions.catalog", () => {
     orchestrator.cleanup();
   });
 });
+
+describe("webUiFeatureOptions - the onLoaded hook", () => {
+
+  /* Stand up the page skeleton and a fake bridge whose `/getOptions` answers through the supplied responder, counting the calls so a row can wait for the read to
+   * reach the wrapper before it acts. The responder takes the call's ordinal, which is what lets a row fail a first read and answer the retry.
+   */
+  const arrange = ({ config = makePluginConfig(), respond = async () => FEATURES } = {}) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config });
+    const calls = [];
+    const route = fake.request;
+
+    fake.request = async (path) => {
+
+      if(path !== "/getOptions") {
+
+        return route(path);
+      }
+
+      calls.push(path);
+
+      return respond(calls.length);
+    };
+
+    seedBootstrapProbeShim();
+
+    return { calls, homebridgeGuard: installHomebridge(fake), skeleton };
+  };
+
+  test("fires once on a successful cycle, with the overlay answerable and the categories already rendered", async () => {
+
+    /* The two readings inside the hook are what place the call rather than merely count it. The rendered category disclosures are produced by the model:loaded
+     * dispatch itself, so a hook invoked before that dispatch would see none of them; and editedConfig answering the saved options is the statement that the page
+     * is established rather than still on its placeholder state.
+     */
+    using _dom = createTestDom();
+
+    const saved = [ "Enable.Audio.Volume.50", "Disable.Motion.Detect" ];
+    const { homebridgeGuard, skeleton } = arrange({ config: makePluginConfig({ options: saved }) });
+
+    using _homebridge = homebridgeGuard;
+
+    const seen = [];
+    const orchestrator = new webUiFeatureOptions({
+
+      onLoaded: () => seen.push({ options: orchestrator.editedConfig[0].options, rendered: skeleton.configTable.querySelector("details[data-category]") })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(seen.length, 1, "the cycle announces its loaded model exactly once");
+    assert.deepEqual(seen[0].options, saved, "editedConfig answers the live overlay from inside the hook");
+    assert.ok(seen[0].rendered, "and the options view has rendered the catalog's categories by the time the hook runs");
+
+    orchestrator.cleanup();
+  });
+
+  test("never fires for a cycle whose catalog read failed", async () => {
+
+    // The announcement is a statement that the page is established, so a cycle that ended on the connection-error view has nothing to announce.
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange({ respond: async () => {
+
+      throw new Error("The bridge is not answering.");
+    } });
+
+    using _homebridge = homebridgeGuard;
+
+    let fired = 0;
+    const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++, ui: { controllerRetryEnableDelayMs: 20 } });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "precondition: the failed cycle rendered the connection-error view");
+    assert.equal(fired, 0, "and announced nothing");
+
+    orchestrator.cleanup();
+  });
+
+  test("fires once on a retry that follows a failed cycle", async () => {
+
+    // The menu relaunch and the retry affordance both reboot the page through show(), so the healed cycle announces exactly as a first successful cycle does.
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange({ respond: async (ordinal) => {
+
+      if(ordinal === 1) {
+
+        throw new Error("The bridge is not answering.");
+      }
+
+      return FEATURES;
+    } });
+
+    using _homebridge = homebridgeGuard;
+
+    let fired = 0;
+    const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++, ui: { controllerRetryEnableDelayMs: 20 } });
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.equal(fired, 0, "precondition: the first cycle failed and announced nothing");
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.ok(skeleton.configTable.querySelector("details[data-category]"), "the retry renders the page");
+    assert.equal(fired, 1, "and announces it once");
+
+    orchestrator.cleanup();
+  });
+
+  test("never fires for a cycle a newer page copy superseded", async () => {
+
+    // A superseded cycle returns before the dispatch, which is what makes a staleness guard on the call unnecessary rather than merely unused. This row is what
+    // proves the return actually happens rather than being assumed.
+    using _dom = createTestDom();
+
+    const { promise, resolve } = Promise.withResolvers();
+    const { calls, homebridgeGuard } = arrange({ respond: () => promise });
+
+    using _homebridge = homebridgeGuard;
+
+    let fired = 0;
+    const epoch = new AbortController();
+    const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++ }, { epochSignal: epoch.signal });
+    const showPromise = orchestrator.show(await openTestSession());
+
+    await waitFor(() => calls.length === 1, { message: "the cycle must reach its catalog read before the supersession lands" });
+
+    epoch.abort();
+    resolve(FEATURES);
+
+    await showPromise;
+    await flush();
+
+    assert.equal(fired, 0, "the superseded cycle announces nothing, whatever its catalog does afterwards");
+
+    orchestrator.cleanup();
+  });
+
+  test("fires once on a global-only cycle", async () => {
+
+    // Global-only mode skips the sidebar, the header, and the whole device path, and it still crosses the same dispatch - which is why the call sits there and not
+    // on any of the device-side arrivals a global-only page never reaches.
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    let fired = 0;
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true, onLoaded: () => fired++ });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.configTable.querySelector("details[data-category]"), "precondition: the global-only cycle rendered its options page");
+    assert.equal(fired, 1, "and announced it once");
+
+    orchestrator.cleanup();
+  });
+
+  test("fires once per cycle, so two successful cycles announce twice", async () => {
+
+    // The announcement belongs to the cycle rather than to the page: a navigate-away and back re-establishes the page, and a consumer doing per-cycle work needs
+    // to hear about the second arrival as much as the first, even though the catalog behind it was read once.
+    using _dom = createTestDom();
+
+    const { calls, homebridgeGuard } = arrange();
+
+    using _homebridge = homebridgeGuard;
+
+    let fired = 0;
+    const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++ });
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+    await orchestrator.show(session);
+    await flush();
+
+    assert.equal(fired, 2, "each cycle announces its own loaded model");
+    assert.equal(calls.length, 1, "while the catalog behind both was read once");
+
+    orchestrator.cleanup();
+  });
+});

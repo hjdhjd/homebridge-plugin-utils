@@ -31,7 +31,7 @@
   ],
   "scripts": {
     "build": "npm run clean && tsc -p tsconfig.build.json && tsc -p tsconfig.eslint-plugin.json && node build/fs-ops.mjs finalize",
-    "build-docs": "node build/fs-ops.mjs clean-docs && npx typedoc",
+    "build-docs": "npx typedoc && node build/fs-ops.mjs publish-docs",
     "build-ui": "node build/fs-ops.mjs build-ui",
     "clean": "node build/fs-ops.mjs clean dist && npm run build-ui",
     "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"0\"} eslint.config.mjs build src ui",

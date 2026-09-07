@@ -1,6 +1,9 @@
 # Ignore compiled code
 dist
 
+# Ignore the docs build's staging directory.
+.docs-staging
+
 # Ignore npmrc.
 .npmrc
 

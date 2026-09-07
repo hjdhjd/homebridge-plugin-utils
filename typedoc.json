@@ -2,7 +2,7 @@
 
   "$schema": "https://typedoc-plugin-markdown.org/schema.json",
   "categoryOrder": ["Constructor", "Utilities" , "Accessory", "FFmpeg", "Log Client", "Testing"],
-  "cleanOutputDir": false,
+  "cleanOutputDir": true,
   "disableSources": true,
   "entryPoints": ["src/*.ts", "src/ffmpeg/*.ts", "src/logclient/*.ts", "src/testing/*.ts"],
   "enumMembersFormat": "table",
@@ -35,7 +35,7 @@
   "hideGenerator": true,
   "indexFormat": "table",
   "mergeReadme": true,
-  "out": "docs",
+  "out": ".docs-staging",
   "outputFileStrategy": "modules",
   "parametersFormat": "table",
   "plugin": ["typedoc-plugin-markdown"],

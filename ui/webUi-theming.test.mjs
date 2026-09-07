@@ -47,17 +47,33 @@ const flush = async () => {
 // Dispatch the host's own theme announcement into this window, in the shape Homebridge posts it.
 const postThemeUpdate = (data = { isDark: true, theme: "dark", type: "theme-update" }) => window.dispatchEvent(new window.MessageEvent("message", { data }));
 
-// Adopt the base sheet and return its rules joined as text. The effect adopts synchronously before it awaits the lighting mode, so the sheet is present once this
-// resolves; the probe is skipped with timeoutMs 0.
-const baseCss = async () => {
+// Adopt the base sheet and return the stylesheet itself. The effect adopts synchronously before it awaits the lighting mode, so the sheet is present once this
+// resolves; the probe is skipped with timeoutMs 0. A row that reads declared values back off a rule takes the sheet from here; a row that matches the sheet's text
+// takes it through baseCss below, so the two readings share one adoption.
+const baseSheet = async () => {
 
   const controller = new AbortController();
 
   await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
 
-  const stylesheet = document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
+  return document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
+};
 
-  return [...stylesheet.cssRules].map((rule) => rule.cssText).join("\n");
+// Adopt the base sheet and return its rules joined as text.
+const baseCss = async () => [...(await baseSheet()).cssRules].map((rule) => rule.cssText).join("\n");
+
+// Find one rule in an adopted sheet by its selector, so a row names the rule it is asserting rather than a position in the sheet. A selector the sheet does not
+// carry throws here, which keeps such a failure about the missing rule rather than about a property read off nothing.
+const ruleFor = (sheet, selector) => {
+
+  const rule = [...sheet.cssRules].find((candidate) => candidate.selectorText === selector);
+
+  if(!rule) {
+
+    throw new Error("the adopted sheet carries no rule for the selector \"" + selector + "\".");
+  }
+
+  return rule;
 };
 
 describe("registerThemeEffect - synchronous setup", () => {
@@ -571,6 +587,92 @@ describe("buildBaseCss - page rules", () => {
     // at a time - either half alone is the failure this rule exists to prevent.
     assert.match(text, /body\s*\{[^}]*background-color:\s*var\(--fo-surface-bg\)\s*!important/);
     assert.match(text, /body\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)\s*!important/);
+  });
+});
+
+describe("buildBaseCss - the utility rules", () => {
+
+  test("the page reset takes the document's own margin and padding to zero", async () => {
+
+    using _dom = createTestDom();
+
+    const rule = ruleFor(await baseSheet(), "html, body");
+
+    // The reset is what lets the page own the whole canvas: a user agent's default body margin leaves a pale gutter around a dark page, which is the one place the
+    // host's own chrome shows through.
+    assert.equal(rule.style.getPropertyValue("margin"), "0px", "the document declares no margin of its own");
+    assert.equal(rule.style.getPropertyValue("padding"), "0px", "and no padding of its own");
+  });
+
+  test("the hidden class outranks whatever display a hidden element declares for itself", async () => {
+
+    using _dom = createTestDom();
+
+    const rule = ruleFor(await baseSheet(), ".fo-hidden");
+
+    // The weight is the whole rule. The class lands on elements that declare a display of their own - a flex row, a table cell, a Bootstrap utility - and an
+    // even-weighted declaration would lose to every one of them and leave the element on screen.
+    assert.equal(rule.style.getPropertyValue("display"), "none", "the class takes the element off the page");
+    assert.equal(rule.style.getPropertyPriority("display"), "important", "at the weight that reaches an element declaring a display of its own");
+  });
+
+  test("the small button shrinks its type and padding at a weight that reaches Bootstrap's own button rules", async () => {
+
+    using _dom = createTestDom();
+
+    const rule = ruleFor(await baseSheet(), ".btn-xs");
+
+    // Bootstrap declares font-size and padding on `.btn` itself, so the declarations that shrink the control carry the weight to reach past it, while the ones
+    // Bootstrap says nothing about do not need it. The shrinking values read their tokens rather than literals, so the page keeps one definition of its scale.
+    assert.equal(rule.style.getPropertyValue("font-size"), "var(--fo-font-size-xs)", "the type reads the extra-small token");
+    assert.equal(rule.style.getPropertyPriority("font-size"), "important", "at the weight that outranks Bootstrap's own button type");
+    assert.equal(rule.style.getPropertyValue("padding"), "var(--fo-space-xxs) var(--fo-space-sm)", "the padding reads the spacing tokens");
+    assert.equal(rule.style.getPropertyPriority("padding"), "important", "at the same weight, so the two shrink together or not at all");
+    assert.equal(rule.style.getPropertyValue("line-height"), "1.5", "the line box keeps the page's own ratio");
+    assert.equal(rule.style.getPropertyValue("touch-action"), "manipulation", "and the control answers a tap without waiting out a double-tap gesture");
+  });
+
+  test("the pointer utility declares the hand cursor it is named for", async () => {
+
+    using _dom = createTestDom();
+
+    const rule = ruleFor(await baseSheet(), ".cursor-pointer");
+
+    // The utility exists for the elements the browser gives no pointer of its own: a clickable row, a summary, a label standing in for a control.
+    assert.equal(rule.style.getPropertyValue("cursor"), "pointer", "the utility declares the hand cursor");
+  });
+
+  test("the no-select utility refuses selection through the standard property", async () => {
+
+    using _dom = createTestDom();
+
+    const rule = ruleFor(await baseSheet(), ".user-select-none");
+
+    // Happy-DOM keeps the standard property and drops the vendor-prefixed one when it parses the rule, so the prefixed declaration has nothing to be read back off
+    // here. It stays in the source for the engines that answer only to it, and this row asserts the half the double exposes.
+    assert.equal(rule.style.getPropertyValue("user-select"), "none", "the utility refuses selection");
+  });
+
+  test("the reduced-motion block stops every transition and animation the page could run", async () => {
+
+    using _dom = createTestDom();
+
+    const sheet = await baseSheet();
+    const media = [...sheet.cssRules].find((rule) => rule.media?.mediaText === "(prefers-reduced-motion: reduce)");
+
+    assert.ok(media, "the sheet carries a block keyed on the reduced-motion preference");
+
+    const inner = [...media.cssRules];
+
+    assert.equal(inner.length, 1, "the block holds a single rule, so no motion is declared outside the reach of the wildcard below");
+
+    // The wildcard and the weight together are what make the preference hold. Motion on this page is declared across many selectors, several of them weighted, so
+    // only a declaration that reaches every element and outranks each of them quiets the page as a whole.
+    assert.equal(inner[0].selectorText, "*", "the rule reaches every element rather than a list of them");
+    assert.equal(inner[0].style.getPropertyValue("transition"), "none", "transitions are off");
+    assert.equal(inner[0].style.getPropertyPriority("transition"), "important", "at a weight that reaches a rule declaring its own transition");
+    assert.equal(inner[0].style.getPropertyValue("animation"), "none", "animations are off");
+    assert.equal(inner[0].style.getPropertyPriority("animation"), "important", "at the same weight");
   });
 });
 

@@ -41,6 +41,16 @@ const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
  */
 export const BOOT_AWAIT_DEADLINE_SECONDS = 30;
 
+/**
+ * The deadline, in seconds, on the page's one feature-catalog read. Tighter than the page-wide bound above because the call it covers is different in kind: the
+ * catalog comes from the plugin's own UI server on this host, with no controller, network hop, or credential anywhere in the path, so a read still unanswered at
+ * five seconds is stuck rather than slow - and the retry the connection-error view offers is a better answer than waiting out the page-wide bound.
+ *
+ * A module constant rather than a configuration knob, deliberately. Every plugin that carries a hand-written copy of this fetch bounds it at the same five seconds,
+ * so there is no evidence of a second right answer for anyone to need, and a knob nobody sets is surface the page would carry forever.
+ */
+const CATALOG_DEADLINE_SECONDS = 5;
+
 // The page's content regions, in alphabetical id order. hide() sets each to display:none during teardown so the user never sees a half-built page; the coordinated
 // end-of-load reveal restores them together. Both the teardown-hide loop and the reveal read this single list so the two can never drift.
 //
@@ -287,6 +297,11 @@ export class webUiFeatureOptions {
   // load. Null whenever no boot window is open - before the first show(), and from the moment a terminal state takes the frame back.
   #bootAffordance;
 
+  // The page's one feature-catalog read, memoized for this instance's life so the boot and every plugin reader share a single request. It holds the in-flight or
+  // fulfilled promise, and null in the two states where there is nothing to share: before the first read, and after a rejection clears it so the next reader starts
+  // a fresh request rather than inheriting a failure that has already been reported.
+  #catalogPromise;
+
   // Plugin-provided configuration captured at construction. Threaded through to effects and views at mount time via closures; never mutated after the constructor
   // returns.
   #config;
@@ -452,6 +467,7 @@ export class webUiFeatureOptions {
     };
 
     this.#bootAffordance = null;
+    this.#catalogPromise = null;
     this.#epochSignal = epochSignal;
     this.#flushPersist = null;
     this.#pageAbort = null;
@@ -492,6 +508,46 @@ export class webUiFeatureOptions {
     const options = (this.#store && modelLoaded(this.#store.state)) ? this.#store.state.configuredOptions : (this.#session.platform.options ?? []);
 
     return [ { ...this.#session.platform, options }, ...this.#session.entries.slice(1) ];
+  }
+
+  /**
+   * The plugin's feature-option catalog: the categories and the options beneath them, as the plugin's own UI server publishes them at `/getOptions`.
+   *
+   * One read serves the whole page. The promise is memoized for this instance's life and handed to every reader - this class's own boot and any plugin code that
+   * needs the catalog for rendering of its own - so a page that shows, hides, and shows again asks its server once. That is the right number because the catalog is
+   * fixed for a given plugin version: there is no staleness question to answer, and therefore no cache policy to carry.
+   *
+   * A rejection clears the memo, so the next reader issues a fresh request rather than inheriting a failure that has already been reported and acted on. The read
+   * is bounded at five seconds and composed into the page epoch, and that is the whole of its lifecycle: a caller wanting a tighter bound or a cancellation of its
+   * own composes them over the returned promise rather than passing them in.
+   *
+   * @returns {Promise<{ categories: Object[], options: Object }>} The catalog's two members - exactly the pair the catalog index is built from.
+   * @throws {Error} Through the returned promise: when the response is not a usable catalog, when the deadline elapses, or when the host call itself fails.
+   * @public
+   */
+  catalog() {
+
+    if(this.#catalogPromise === null) {
+
+      // The clear is chained here rather than written at each call site because every reader shares this one promise: whoever asks next has to find the memo
+      // empty, whether or not the reader that saw the failure is still on the page to notice.
+      this.#catalogPromise = withDeadline({ promise: homebridge.request("/getOptions").then(assertCatalogResponse), seconds: CATALOG_DEADLINE_SECONDS,
+        signal: this.#epochSignal }).catch((error) => {
+
+        this.#catalogPromise = null;
+
+        throw error;
+      });
+
+      /* Mark the memoized promise handled for the page, once at the moment it is created rather than once per call. The boot starts the read before it can await
+       * it - the controllers await sits between the two - and a plugin reader may attach to it later still, so a deadline or shape rejection landing in that
+       * window meets no handler and surfaces as an unhandled rejection the page itself caused. Every reader still observes the rejection through its own branch
+       * of the same promise, so nothing here swallows a failure a caller was waiting to see.
+       */
+      this.#catalogPromise.catch(() => {});
+    }
+
+    return this.#catalogPromise;
   }
 
   /**
@@ -603,11 +659,14 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // Fire every independent I/O in parallel. The independent sources: controllers (optional), the /getOptions catalog, and - on the one cycle that registers it -
+    // Fire every independent I/O in parallel. The independent sources: controllers (optional), the feature catalog, and - on the one cycle that registers it -
     // the Homebridge lighting mode the theming registration reads. The plugin config is not fetched here - the session already holds it - so getControllers
     // receives the injected platform config rather than reaching for it. None depend on each other; firing them concurrently means total wall-clock time is
     // bounded by the slowest.
-    const featuresPromise = homebridge.request("/getOptions").then((response) => response ?? []);
+    //
+    // The catalog comes through the page's own accessor, which is what makes the boot one reader among several rather than the owner of the request: a later cycle
+    // and any plugin code asking for the catalog get this same promise, and the read reaches the server once for the page.
+    const featuresPromise = this.catalog();
     const controllersPromise = this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) :
       Promise.resolve({ controllers: [], error: "" });
 
@@ -762,9 +821,10 @@ export class webUiFeatureOptions {
       devicesPromise = this.#devicesFor(initialController);
     }
 
-    // Wait for the feature catalog, bounded like every other host await. Build the catalog (catalog index + validators) and dispatch model:loaded so the store
-    // transitions to "ready" and views can mount against a populated state. The configured options come from the session's primary entry - the persisted config the
-    // orchestrator already loaded.
+    // Wait for the feature catalog. The accessor's own five-second bound is armed once, at the moment the read is first issued, so it is the bound that settles
+    // first on every cycle, whichever cycle started the read; this outer bound is kept for the consistency every host await in show() shares. Build the catalog
+    // (catalog index + validators) and dispatch model:loaded so the store transitions to "ready" and views can mount against a populated state. The configured
+    // options come from the session's primary entry - the persisted config the orchestrator already loaded.
     let features;
 
     try {
@@ -785,7 +845,7 @@ export class webUiFeatureOptions {
     const loadedOptions = Array.isArray(session.platform?.options) ? session.platform.options : [];
     const catalog = {
 
-      ...buildCatalogIndex(features.categories ?? [], features.options ?? {}),
+      ...buildCatalogIndex(features.categories, features.options),
 
       choiceSources: this.#config.choiceSources,
       validators: this.#config.validators
@@ -1493,6 +1553,24 @@ export class webUiFeatureOptions {
     return result;
   }
 }
+
+/* Check a `/getOptions` response for the two members the catalog index is built from, and narrow it to exactly those, so nothing else a server sends travels any
+ * further into the page.
+ *
+ * A response carrying no categories, or whose options are not an object, cannot produce an options page: the index builds, the render runs, and the user is left
+ * looking at an empty table with nothing on it to say why. Refusing it here turns that silence into the connection-error view carrying this message and its retry,
+ * which is the only rendering of that failure a user can act on. Every plugin that carries a hand-written copy of this fetch makes the same check, so the page and
+ * its consumers agree on what a usable catalog is.
+ */
+const assertCatalogResponse = (response) => {
+
+  if(!Array.isArray(response?.categories) || (response.categories.length === 0) || !response.options || (typeof response.options !== "object")) {
+
+    throw new Error("Received a malformed response from the plugin option catalog.");
+  }
+
+  return { categories: response.categories, options: response.options };
+};
 
 /* Assert that every choice source the catalog names has a resolver behind it, throwing at catalog-construction time when one does not.
  *

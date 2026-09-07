@@ -9,6 +9,7 @@
 import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, seedBootstrapProbeShim,
   waitFor } from "./ui.helpers.mjs";
 import { describe, mock, test } from "node:test";
+import { DeadlineExpiredError } from "./webUi-liveness.mjs";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
@@ -5628,5 +5629,236 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
     window.dispatchEvent(new Event("blur"));
 
     assert.equal(fake.observed.updatedConfigs.length, before, "nothing was committed and nothing was persisted");
+  });
+});
+
+describe("webUiFeatureOptions.catalog", () => {
+
+  /* Stand up the page skeleton and a fake bridge whose `/getOptions` answers through the supplied responder, counting every call to that path so a row can assert
+   * how many times the page asked its server. The responder receives the call's ordinal, which is what lets a row answer a retry differently from the read that
+   * failed. Every other path falls through to the fake's own router untouched.
+   */
+  const arrange = (respond) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig() });
+    const calls = [];
+    const route = fake.request;
+
+    fake.request = async (path) => {
+
+      if(path !== "/getOptions") {
+
+        return route(path);
+      }
+
+      calls.push(path);
+
+      return respond(calls.length);
+    };
+
+    seedBootstrapProbeShim();
+
+    return { calls, homebridgeGuard: installHomebridge(fake), skeleton };
+  };
+
+  // The catalog as the accessor answers it: the fixture narrowed to exactly the pair the engine is built from, and nothing else the server might have sent.
+  const CATALOG = { categories: FEATURES.categories, options: FEATURES.options };
+
+  // The message the shape check raises. Asserted by its text rather than by its type, because reaching the user verbatim is the whole point of raising it.
+  const MALFORMED = "Received a malformed response from the plugin option catalog.";
+
+  test("answers the catalog before any show, and the boot that follows reads that same promise", async () => {
+
+    using _dom = createTestDom();
+
+    const { calls, homebridgeGuard, skeleton } = arrange(async () => FEATURES);
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+
+    assert.deepEqual(await orchestrator.catalog(), CATALOG, "the accessor answers the catalog's two members");
+    assert.equal(calls.length, 1, "reaching the server once");
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(skeleton.configTable.querySelector("details[data-category]"), "the boot renders the catalog it was handed");
+    assert.equal(calls.length, 1, "and asks the server for it no second time");
+
+    orchestrator.cleanup();
+  });
+
+  test("two show cycles on one page read the catalog once", async () => {
+
+    // The catalog is fixed for a plugin version, so a navigate-away and back has nothing to re-read. This is the reading that makes the memo the page's lifetime
+    // rather than the cycle's.
+    using _dom = createTestDom();
+
+    const { calls, homebridgeGuard, skeleton } = arrange(async () => FEATURES);
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+    await orchestrator.show(session);
+    await flush();
+
+    assert.ok(skeleton.configTable.querySelector("details[data-category]"), "the second cycle renders the catalog too");
+    assert.equal(calls.length, 1, "and one read served both cycles");
+
+    orchestrator.cleanup();
+  });
+
+  test("a catalog carrying no categories is refused, and the page says so rather than rendering an empty table", async () => {
+
+    // An options page with nothing on it is a silent failure: the user cannot tell a plugin that published nothing from a read that came back broken. The shape
+    // check turns that silence into the connection-error view, carrying the read's own message and the retry affordance beside it.
+    using _dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange(async () => ({ categories: [], options: {} }));
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+
+    await assert.rejects(() => orchestrator.catalog(), { message: MALFORMED }, "the accessor refuses a catalog with no categories in it");
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /Unable to load the feature options\./, "the features site's own failure copy renders");
+    assert.match(skeleton.headerInfo.textContent, /Received a malformed response from the plugin option catalog\./, "carrying the shape check's own message");
+    assert.equal(skeleton.configTable.querySelector("details[data-category]"), null, "and no empty options table renders in its place");
+
+    orchestrator.cleanup();
+  });
+
+  test("a rejected read clears the memo, so the next reader retries rather than inheriting the failure", async () => {
+
+    // A transient bridge failure must not poison the page for its whole life. Clearing the memo on rejection is what keeps one bad moment from being permanent.
+    using _dom = createTestDom();
+
+    const { calls, homebridgeGuard } = arrange(async (ordinal) => {
+
+      if(ordinal === 1) {
+
+        throw new Error("The bridge is not answering.");
+      }
+
+      return FEATURES;
+    });
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+
+    await assert.rejects(() => orchestrator.catalog(), { message: "The bridge is not answering." }, "the first read fails the way the host failed it");
+    assert.deepEqual(await orchestrator.catalog(), CATALOG, "and the next reader gets a fresh read rather than the failure again");
+    assert.equal(calls.length, 2, "which is one request per attempt");
+  });
+
+  test("a read that never answers expires at the accessor's own bound, and the boot renders the expiry copy", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { calls, homebridgeGuard, skeleton } = arrange(() => new Promise(() => {}));
+
+    using _homebridge = homebridgeGuard;
+
+    const session = await openTestSession();
+    const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
+    const showPromise = orchestrator.show(session);
+
+    /* show() awaits its own hide() and the config re-sync before it reaches the accessor, so at the moment the cycle starts the deadline's timer does not exist
+     * yet. Draining real macrotask turns until the read has actually reached the counting wrapper is what puts that timer on the mock clock; a tick placed before
+     * the drain advances past nothing at all and leaves the row waiting on a deadline that was never armed.
+     */
+    await waitFor(() => calls.length === 1, { message: "the boot must reach the catalog read before the clock advances" });
+
+    const pending = orchestrator.catalog();
+
+    t.mock.timers.tick(5000);
+
+    await assert.rejects(() => pending, DeadlineExpiredError, "the read the boot started expires at the accessor's own five-second bound");
+
+    await showPromise;
+    await flush();
+
+    assert.equal(calls.length, 1, "the boot and this row read one promise between them");
+    assert.match(skeleton.headerInfo.textContent, /The plugin stopped responding while loading the feature options\./, "and the boot renders the expiry copy");
+
+    orchestrator.cleanup();
+  });
+
+  test("two readers arriving before the read settles are handed one promise", async () => {
+
+    using _dom = createTestDom();
+
+    const { calls, homebridgeGuard } = arrange(async () => FEATURES);
+
+    using _homebridge = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+    const first = orchestrator.catalog();
+    const second = orchestrator.catalog();
+
+    assert.equal(first, second, "the second reader is handed the promise the first started rather than a read of its own");
+
+    await first;
+
+    assert.equal(calls.length, 1, "and the server saw a single request");
+  });
+
+  test("a read that expires while the controllers hook is still pending raises no unhandled rejection", async (t) => {
+
+    /* The boot starts the catalog read and then waits on the controllers hook before it ever awaits the catalog, so a hook slower than the five-second bound
+     * leaves the memoized promise rejected with nothing attached to it yet. The accessor's handled mark is what covers that window, and the reading of it is
+     * indirect by nature: node:test fails a test whose turn produced an unhandled rejection, so the runner's own listener is this row's assertion and the row
+     * completing green is what reports the mark did its work.
+     */
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using _dom = createTestDom();
+
+    const { calls, homebridgeGuard, skeleton } = arrange(() => new Promise(() => {}));
+
+    using _homebridge = homebridgeGuard;
+
+    // The controllers hook this row settles by hand, and beside it the device hook the boot fires the moment those controllers name a controller to fetch for.
+    const controllers = Promise.withResolvers();
+    const session = await openTestSession();
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => controllers.promise,
+      getDevices: async () => ({ devices: [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }], error: "" }),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    const showPromise = orchestrator.show(session);
+
+    await waitFor(() => calls.length === 1, { message: "the boot must reach the catalog read before the clock advances" });
+
+    t.mock.timers.tick(5000);
+
+    // A full macrotask turn with the catalog rejected and the boot still inside its controllers await - the turn an unhandled rejection would be reported on.
+    await flushImmediate();
+
+    controllers.resolve({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" });
+
+    await showPromise;
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /The plugin stopped responding while loading the feature options\./, "the boot reaches its features await on a " +
+      "promise that rejected while it was elsewhere, and renders the expiry copy");
+    assert.equal(calls.length, 1, "on the one request the page made");
+
+    orchestrator.cleanup();
   });
 });

@@ -1,7 +1,8 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * coalesce.test.ts: Unit tests for CoalescingTask - one pass at a time and exactly one follow-up however many triggers arrive, the queue drained so a later trigger runs
- * fresh, a throwing pass absorbed and reported under the task's label, and the lifetime signal honored both before a pass starts and while one is in flight.
+ * fresh, a throwing pass absorbed and named once under the task's label, the follow-up a trigger bought during a failing pass run all the same, and the lifetime signal
+ * honored both before a pass starts and while one is in flight.
  *
  * The count is the whole subject here, which is why every scenario drives SEVERAL triggers rather than one. A naive implementation that simply ran the callback on every
  * schedule passes a single-trigger test and fails every one of these; so does one that queued each trigger and drained them in turn.
@@ -261,5 +262,109 @@ describe("a coalescing task", () => {
     await settle();
 
     assert.equal(counts.passes, 1, "a follow-up queued before a teardown is abandoned rather than run into a lifetime that is over");
+  });
+
+  test("runs the follow-up a trigger bought during a pass that then fails", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const counts = { passes: 0 };
+
+      let release: (() => void) | undefined;
+
+      const task = new CoalescingTask({
+
+        label: "test pass",
+        log: silentLog(),
+
+        run: async (): Promise<void> => {
+
+          counts.passes++;
+
+          // Only the first pass parks and fails; the follow-up runs straight through, because what this row reads is whether it ran at all.
+          if(counts.passes > 1) {
+
+            return;
+          }
+
+          await new Promise<void>((resolve) => {
+
+            release = resolve;
+          });
+
+          throw new Error("The pass failed.");
+        },
+
+        signal: new AbortController().signal
+      });
+
+      task.schedule();
+
+      await settle();
+
+      /* The trigger lands while the first pass is parked, so the follow-up it buys is on the books before that pass fails rather than after. A fault that ends the
+       * whole drain rather than the pass loses exactly this request - the one the class promises to honor, made while a pass was still reading its inputs.
+       */
+      task.schedule();
+      release?.();
+
+      await settle();
+
+      assert.equal(counts.passes, 2, "the follow-up bought during a failing pass still runs");
+    });
+  });
+
+  test("names each failing pass once", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const counts = { passes: 0 };
+
+      let release: (() => void) | undefined;
+
+      const task = new CoalescingTask({
+
+        label: "device refresh",
+        log,
+
+        run: async (): Promise<void> => {
+
+          counts.passes++;
+
+          // Only the first pass parks, so the second trigger can land mid-pass; both passes fail, which is what gives the log two lines to account for.
+          if(counts.passes === 1) {
+
+            await new Promise<void>((resolve) => {
+
+              release = resolve;
+            });
+          }
+
+          throw new Error("The pass failed.");
+        },
+
+        signal: new AbortController().signal
+      });
+
+      task.schedule();
+
+      await settle();
+
+      task.schedule();
+      release?.();
+
+      await settle();
+
+      // Two triggers and two failing passes: the count is what proves a fault reports and nothing more. A catch that re-armed the follow-up itself would run a
+      // third pass and a fourth against a fault that never clears.
+      assert.equal(counts.passes, 2, "two triggers buy two passes and no more, a fault re-arming nothing");
+
+      const failures = log.entries.filter((entry) => entry.level === "error");
+
+      assert.equal(failures.length, 2, "each failing pass is named on its own line");
+      assert.deepEqual(expectAt(failures, 0, "the first failure line").params, [ "device refresh", "The pass failed" ], "the first line carries the task's label");
+      assert.deepEqual(expectAt(failures, 1, "the second failure line").params, [ "device refresh", "The pass failed" ], "the second line carries the task's label");
+    });
   });
 });

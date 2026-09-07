@@ -12,15 +12,16 @@
  * triggers is wrong too, because whatever arrived after the pass had already read its inputs is simply lost. The answer in every case is the same: run one pass, and if
  * anything asked while that pass was running, run exactly one more - however many asked.
  *
- * This is the run-on-demand corner of the library's dispatch mechanisms, and it is deliberately the only thing it is. `guardedDispatch` owns the fire-and-forget failure
- * surface, and this class dispatches through it rather than restating it, so a failed pass lands in the log instead of escaping as an unhandled rejection.
- * `superviseLoop` owns the run-forever shape, where the work is a loop that should keep going for as long as its lifetime lasts. This owns the run-on-demand shape, where
- * the work has nothing to do until something asks, and asking twice must not mean running twice.
+ * This is the run-on-demand corner of the library's dispatch mechanisms, and it is deliberately the only thing it is. The drain owns each pass's fault and reports it on
+ * the task's own line, rather than handing the whole dispatch to a guard: a guard wrapping the drain ends it at the first fault, and the follow-up a trigger bought while
+ * that pass was running is work somebody asked for and a fault says nothing about. `superviseLoop` owns the run-forever shape, where the work is a loop that should keep
+ * going for as long as its lifetime lasts. This owns the run-on-demand shape, where the work has nothing to do until something asks, and asking twice must not mean
+ * running twice.
  *
  * @module
  */
+import { formatErrorMessage, markHandled } from "./util.ts";
 import type { HomebridgePluginLogging } from "./util.ts";
-import { guardedDispatch } from "./util.ts";
 
 /**
  * Construction options for {@link CoalescingTask}.
@@ -106,8 +107,8 @@ export class CoalescingTask {
   /**
    * Ask for a pass. A pass already running takes note and runs once more when it finishes; an idle task starts one now.
    *
-   * The dispatch is guarded rather than awaited, because every caller is an event handler or a timer that has nothing to wait for and a fault has to land in the log
-   * rather than escape as an unhandled rejection.
+   * The dispatch is fire-and-forget rather than awaited, because every caller is an event handler or a timer that has nothing to wait for and a failed pass has to land
+   * in the log rather than escape as an unhandled rejection.
    */
   public schedule(): void {
 
@@ -127,7 +128,9 @@ export class CoalescingTask {
       return;
     }
 
-    guardedDispatch({ handler: async (): Promise<void> => this.#drain(), label: this.#label, log: this.#log });
+    // The drain answers every pass's fault itself and reaches its own end normally, so nothing rejects here on the work's account. The mark covers the one path that is
+    // left: a logger that throws while reporting a failed pass leaves the drain through this promise, and an unobserved rejection is the worst way for that to surface.
+    void markHandled(this.#drain());
   }
 
   // Run passes until nothing further has been asked for. The state is reset to "running" before each pass rather than after it, so a trigger arriving mid-pass is
@@ -140,9 +143,19 @@ export class CoalescingTask {
 
         this.#state = "running";
 
-        // A sequence of passes is what this is, so awaiting inside the loop is the shape rather than an oversight.
-        // eslint-disable-next-line no-await-in-loop
-        await this.#run();
+        /* A fault is reported per pass and goes no further, because the follow-up a trigger bought while this pass was running was asked for on its own account and a
+         * fault here says nothing about it. Reporting is the whole of what the catch does: it never re-arms a follow-up of its own, so a pass that fails every time
+         * cannot turn the loop into a tight retry against a persistent fault - only a genuine trigger buys the next pass.
+         */
+        try {
+
+          // A sequence of passes is what this is, so awaiting inside the loop is the shape rather than an oversight.
+          // eslint-disable-next-line no-await-in-loop
+          await this.#run();
+        } catch(error) {
+
+          this.#log.error("The %s pass failed: %s.", this.#label, formatErrorMessage(error));
+        }
 
         if(!this.#queued() || this.#signal.aborted) {
 

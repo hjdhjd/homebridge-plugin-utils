@@ -149,6 +149,18 @@ export type TransportFailure = {
 };
 
 /**
+ * The kinds of transport failure that are reached only by matching a code: the arm of {@link TransportFailure} whose `code` is a required field rather than an
+ * optional one.
+ *
+ * The union already carries that set structurally, so a consumer keying an exhaustive table on it - one sentence of remedy per coded kind, say - can recover the
+ * set with an `Extract` over the union's shape. Naming it here gives that consumer the library's own concept to key on instead, and leaves the derivation in the
+ * one place that owns the taxonomy, so a kind that joins the coded arm reaches every such table at once.
+ *
+ * @category Utilities
+ */
+export type TransportFailureCodedKind = Extract<TransportFailure, { code: string }>["kind"];
+
+/**
  * Classify a thrown transport failure into one kind-tagged record.
  *
  * Pure: no state, no clock, no logging, and nothing thrown back at the caller. Any value at all can be handed to it, including values that are not errors.

@@ -8,9 +8,9 @@
  * the depth rows bracket the cap so no other cap passes both, the numeric-code rows pin that the platform's legacy numeric code is stepped over rather than
  * adopted, and the wrapped rows pin that the name checks ride the walk instead of reading only the value that was caught.
  */
+import type { TransportFailureCodedKind, TransportFailureKind } from "./transport-error.ts";
 import { describe, test } from "node:test";
 import { HbpuAbortError } from "./util.ts";
-import type { TransportFailureKind } from "./transport-error.ts";
 import assert from "node:assert/strict";
 import { classifyTransportError } from "./transport-error.ts";
 
@@ -143,4 +143,17 @@ describe("the transport error classifier", () => {
       assert.equal(failure.cause, row.error);
     });
   }
+
+  /* The coded arm's name, asserted in both halves at once. The Record is the type-level half: its key set is checked at compile time, so a key the alias does not
+   * carry and a kind the object leaves out each fail the build rather than this test, which is why the object is written out in full rather than derived. The
+   * comparison below is the runtime half and the one the runner counts.
+   */
+  test("names the kinds reached only by matching a code", () => {
+
+    const coded: Record<TransportFailureCodedKind, true> = { "connect-timeout": true, destroyed: true, dns: true, refused: true, reset: true,
+      "retries-exhausted": true };
+
+    assert.deepEqual(Object.keys(coded).sort(), [ "connect-timeout", "destroyed", "dns", "refused", "reset", "retries-exhausted" ],
+      "the coded kinds are exactly the kinds the code map produces");
+  });
 });

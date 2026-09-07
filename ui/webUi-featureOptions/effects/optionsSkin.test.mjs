@@ -9,17 +9,19 @@ import assert from "node:assert/strict";
 import { createTestDom } from "../../ui.helpers.mjs";
 import { registerOptionsSkinEffect } from "./optionsSkin.mjs";
 
-// Adopt the skin sheet and return its rules joined as text. Adoption is synchronous, so the sheet is the document's newest the moment this returns.
-const skinCss = () => {
+// Adopt the skin sheet and return the stylesheet itself. Adoption is synchronous, so the sheet is the document's newest the moment this returns. A row that reads a
+// declared value back off one rule takes the sheet from here; a row that matches the sheet's text takes it through skinCss below, so both share one adoption.
+const skinSheet = () => {
 
   const controller = new AbortController();
 
   registerOptionsSkinEffect({ signal: controller.signal });
 
-  const stylesheet = document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
-
-  return [...stylesheet.cssRules].map((rule) => rule.cssText).join("\n");
+  return document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
 };
+
+// Adopt the skin sheet and return its rules joined as text.
+const skinCss = () => [...skinSheet().cssRules].map((rule) => rule.cssText).join("\n");
 
 describe("registerOptionsSkinEffect", () => {
 
@@ -114,6 +116,20 @@ describe("buildOptionsSkinCss - layout rules", () => {
 
     assert.match(text, /\.fo-options-busy \.fo-option-row \.fo-option-label\s*\{[^}]*cursor:\s*default/, "a busy row's label drops the pointer");
     assert.doesNotMatch(text, /\.fo-options-busy \.fo-option-row \.fo-option-label\s*\{[^}]*opacity/, "the label rule declares no opacity of its own");
+  });
+
+  test("the checkbox seat re-centers the control on the label's first line", () => {
+
+    using _dom = createTestDom();
+
+    const rule = [...skinSheet().cssRules].find((candidate) => candidate.selectorText === ".fo-option-checkbox");
+
+    assert.ok(rule, "the sheet carries the checkbox rule");
+
+    // The nudge is half the leading of the label's first line, which is what keeps a single-line row's control optically centered on its text while a stacked or
+    // wrapped row keeps the control on the first line. It is read as a declared value rather than matched as text because the arithmetic is the whole of the rule:
+    // a slip in either term would still satisfy a looser pattern.
+    assert.equal(rule.style.getPropertyValue("margin-top"), "calc((1lh - 1em) / 2)", "the seat is half the difference between the line box and the text box");
   });
 });
 
@@ -377,9 +393,10 @@ describe("buildOptionsSkinCss - the heading action's glyph", () => {
     /* The guard and the rule are asserted as one nested match because the guard is what makes the declarations land together or not at all: the glyph's box grows
      * to the line box and then sits flush at its top, and a browser resolving only the alignment would seat the glyph worse than a browser resolving neither.
      *
-     * Happy-DOM's CSS parser drops the `lh` unit from a declaration value, so `height: 1lh` cannot be read back off the adopted sheet at all. A regex for it would
-     * match the guard's own condition text and pass whether or not the declaration survived, which is why the height is absent from these assertions rather than
-     * pinned by a check that cannot fail. The guard condition and `vertical-align: top` are what the sheet does expose, and the height rides the same rule.
+     * Happy-DOM's CSS parser keeps an `lh` unit inside a `calc()` value and drops a bare one, so the checkbox seat's own `calc((1lh - 1em) / 2)` reads back off the
+     * adopted sheet while this rule's `height: 1lh` does not survive parsing at all. A regex for that height would match the guard's own condition text and pass
+     * whether or not the declaration landed, so the height is absent from these assertions rather than checked by something that cannot fail. The guard condition
+     * and `vertical-align: top` are what the sheet does expose of this rule.
      */
     assert.match(skinCss(), /@supports \(height: 1lh\) \{\s*\.nav-header \.fo-action svg \{[^}]*vertical-align:\s*top/,
       "the glyph rule sits inside the feature guard, seating its box flush in the button's line box");

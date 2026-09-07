@@ -293,14 +293,18 @@ export class TestClock implements Clock {
    * a non-positive `ms` comes due at or before the current time and the very next `advance` (including `advance(0)`) flushes it. The call's `ms` is recorded in
    * {@link TestClock.requested} as asked, before either coercion.
    *
+   * `init.unref` is accepted and ignored. A virtual timeline has no process to hold open, and the platform's unref decides only whether a pending timer keeps the
+   * process alive rather than anything about when the timer fires, so a timer armed with the flag comes due on `advance` exactly as one armed without it. Accepting
+   * it is what lets a consumer that sets the policy in production run its rows against this double without a second code path.
+   *
    * @param callback - The function to run when the timer fires.
    * @param ms       - The timer's window, in milliseconds.
-   * @param init     - Optional init options. `repeat` arms a repeating timer rather than a one-shot.
+   * @param init     - Optional init options. `repeat` arms a repeating timer rather than a one-shot; `unref` is accepted and ignored.
    *
    * @returns A handle whose `[Symbol.dispose]` cancels the timer by removing its entry from the timeline. Disposing after a one-shot has fired, and disposing a second
    * time, find nothing to remove and do nothing.
    */
-  public schedule(callback: () => void, ms: number, init?: { repeat?: boolean }): Disposable {
+  public schedule(callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable {
 
     const interval = Math.max(1, ms);
 

@@ -63,13 +63,18 @@ export interface Clock {
    * Arm a callback timer: run `callback` once after `ms` milliseconds, or every `ms` milliseconds when `init.repeat` is `true`. The production {@link systemClock}
    * implements this as the global `setTimeout` / `setInterval` read at call time, so any harness that replaces those globals observes the timer.
    *
+   * With `init.unref` set the timer never holds the process open, so a process whose only pending work is timers armed this way exits without waiting for them...the
+   * shape for a consumer living inside a process that must exit on its own. Omitted, the platform's default holds: a referenced timer keeps the process alive until
+   * it fires or is disposed. Either way the timer is armed and comes due exactly the same, so the flag decides only whether the process waits for it.
+   *
    * @param callback - The function to run when the timer fires.
    * @param ms       - The timer's window, in milliseconds.
-   * @param init     - Optional init options. `repeat` arms a repeating timer that fires every `ms` until it is disposed, rather than a one-shot.
+   * @param init     - Optional init options. `repeat` arms a repeating timer that fires every `ms` until it is disposed, rather than a one-shot; `unref` arms a timer
+   *                   that does not hold the process open.
    *
    * @returns A handle whose `[Symbol.dispose]` cancels the timer. Disposing after a one-shot has already fired, and disposing a second time, do nothing.
    */
-  schedule(callback: () => void, ms: number, init?: { repeat?: boolean }): Disposable;
+  schedule(callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable;
 
   /**
    * Return a signal that aborts after `ms` milliseconds with the platform's deadline reason: a `DOMException` whose `name` is `"TimeoutError"`, the reason the
@@ -103,10 +108,16 @@ export const systemClock: Clock = {
   // The bare `setTimeout` / `setInterval` identifiers here resolve to the GLOBAL callback timers, because the module's only `node:timers/promises` import is aliased
   // to `delay`. Reading them inside the function body rather than binding them at module scope is what keeps them harness-visible: a harness that replaces the globals,
   // `node:test` `mock.timers` among them, observes every timer the production clock arms, so a consumer suite driving mock timers keeps working through this clock.
-  // `clearTimeout` cancels either kind - Node holds one-shots and intervals in a single pool - so one disposer covers both arms.
-  schedule: (callback: () => void, ms: number, init?: { repeat?: boolean }): Disposable => {
+  // `clearTimeout` cancels either kind - Node holds one-shots and intervals in a single pool - so one disposer covers both arms. An `unref` forwards to the handle's
+  // own `unref()`, the same platform mechanism the deadline signal below relies on, so the clock states the policy it was handed and adds none of its own.
+  schedule: (callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable => {
 
     const handle = (init?.repeat ?? false) ? setInterval(callback, ms) : setTimeout(callback, ms);
+
+    if(init?.unref ?? false) {
+
+      handle.unref();
+    }
 
     return { [Symbol.dispose]: (): void => clearTimeout(handle) };
   },

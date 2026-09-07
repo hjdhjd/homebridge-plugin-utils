@@ -1,19 +1,25 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * clock.test.ts: Unit tests for the injectable Clock contract - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
- * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time, and its
- * timeout() IS AbortSignal.timeout), plus the shipped controllable TestClock double (advanceable virtual time, deadline-ordered resolution, the advance(0)/negative
- * flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on both resolution paths, the requested history across every settlement
- * path, the earliest-pending-deadline read, the step that lands on that deadline, the callback timers that share that one timeline with the delays, and the deadline
- * signals whose reason a consumer cannot tell apart from the platform's).
+ * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time and
+ * forwards an unref to the platform handle's own unref(), and its timeout() IS AbortSignal.timeout), plus the shipped controllable TestClock double (advanceable
+ * virtual time, deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on
+ * both resolution paths, the requested history across every settlement path, the earliest-pending-deadline read, the step that lands on that deadline, the callback
+ * timers that share that one timeline with the delays, the deadline signals whose reason a consumer cannot tell apart from the platform's, and the unref it accepts
+ * and ignores because a virtual timeline has no process to hold open).
  */
 import { describe, test } from "node:test";
 import { getEventListeners, once } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Clock } from "./clock.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { isTimeoutReason } from "./util.ts";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
 import { systemClock } from "./clock.ts";
+import { tmpdir } from "node:os";
 
 // Flush the microtask queue so a delay that became due during a synchronous `advance` has run its `resolve`/`reject` continuation before the test inspects the outcome.
 // `advance` settles each due entry synchronously, but the awaiting code runs on a later microtask; a bare `await Promise.resolve()` yields long enough for those to run.
@@ -42,6 +48,27 @@ function assertTimeoutReason(reason: unknown, message: string): void {
   assert.ok(reason instanceof DOMException, message + " - the reason must be a DOMException");
   assert.equal(reason.name, "TimeoutError", message + " - name must be TimeoutError");
   assert.equal(isTimeoutReason(reason), true, message + " - isTimeoutReason must accept it");
+}
+
+/**
+ * Allocate a per-test tmpdir scratch root and answer an AsyncDisposable handle that removes it on scope exit, so the `await using` at the call site cleans up even
+ * when the row throws. The CLI suite carries a helper of the same shape; each suite keeps its own rather than sharing one, so this suite's single filesystem row
+ * does not reach across into another suite's file for a utility this small.
+ *
+ * @returns An AsyncDisposable carrying the scratch root's path.
+ */
+async function makeScratchRoot(): Promise<AsyncDisposable & { path: string }> {
+
+  const path = await mkdtemp(join(tmpdir(), "hbpu-clock-"));
+
+  return {
+
+    path,
+    async [Symbol.asyncDispose](): Promise<void> {
+
+      await rm(path, { force: true, recursive: true });
+    }
+  };
 }
 
 describe("systemClock - conformance and behavior-neutrality", () => {
@@ -113,14 +140,16 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     // use this suite keeps, because it is the contract every consumer suite that drives mock timers through an injected clock depends on.
     t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
 
+    // Both arms carry the unref policy, because a mocked timer handle carries `unref` just as the real one does. That is what lets a consumer suite driving mock
+    // timers through a clock built with the policy set keep working, rather than meeting a missing method on the mock.
     const fired: string[] = [];
-    const oneShot = systemClock.schedule(() => fired.push("one-shot"), 10);
+    const oneShot = systemClock.schedule(() => fired.push("one-shot"), 10, { unref: true });
 
     t.mock.timers.tick(10);
 
     assert.deepEqual(fired, ["one-shot"], "the production clock's one-shot is a global timer the harness can tick");
 
-    const repeat = systemClock.schedule(() => fired.push("repeat"), 10, { repeat: true });
+    const repeat = systemClock.schedule(() => fired.push("repeat"), 10, { repeat: true, unref: true });
 
     t.mock.timers.tick(20);
 
@@ -142,6 +171,75 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     await promise;
 
     handle[Symbol.dispose]();
+  });
+
+  test("an unreferenced timer is absent from the process's active timers, while a referenced one counts", () => {
+
+    /* The runner holds timers of its own, so every reading below is a delta against a synchronous sample rather than an absolute count, and nothing awaits between
+     * an arm and the read that follows it - no other timer can enter or leave the list in between. The delivery supervisor's suite reads the platform's active
+     * timers the same way, for the same reason.
+     */
+    const activeTimers = (): number => process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
+    const sample = activeTimers();
+    const referencedOneShot = systemClock.schedule((): void => undefined, 60000);
+    const referencedRepeat = systemClock.schedule((): void => undefined, 60000, { repeat: true });
+
+    assert.equal(activeTimers(), sample + 2, "a referenced one-shot and a referenced repeat each hold the process open");
+
+    referencedOneShot[Symbol.dispose]();
+    referencedRepeat[Symbol.dispose]();
+
+    assert.equal(activeTimers(), sample, "and disposing them releases it again");
+
+    // The referenced pair above is disposed by hand because its release is half of what this row reads. The unreferenced pair is held in `using` declarations
+    // instead, so the assertion below can fail without stranding a live interval in the runner's loop.
+    using unreferencedOneShot = systemClock.schedule((): void => undefined, 60000, { unref: true });
+    using unreferencedRepeat = systemClock.schedule((): void => undefined, 60000, { repeat: true, unref: true });
+
+    assert.equal(activeTimers(), sample, "an unreferenced one-shot and an unreferenced repeat stand pending without counting against the process");
+    assert.notEqual(unreferencedOneShot, unreferencedRepeat, "each arm answers its own cancelling handle");
+  });
+
+  test("a process whose only pending work is unreferenced timers exits on its own", async () => {
+
+    /* The process-lifetime property cannot be read from inside this suite, because the runner holds the event loop open on its own account. A child whose entire
+     * pending workload is two unreferenced timers is the smallest arrangement that shows it: the child has to reach its own exit while both timers are still an
+     * hour from firing. The deadline on the spawn is what makes this a proof - a child that instead held its timers would be killed and answer a null code, which
+     * fails the assertion rather than hanging the suite.
+     */
+    await using scratch = await makeScratchRoot();
+
+    const childPath = join(scratch.path, "unreferenced-timers.ts");
+    const clockPath = fileURLToPath(new URL("./clock.ts", import.meta.url));
+
+    // The child imports this repo's own clock by absolute path, quoted through JSON.stringify so a scratch root carrying a quote or a backslash still yields a
+    // valid specifier. Composing the source by concatenation keeps the file free of template literals, as everything else here is.
+    await writeFile(childPath, "import { systemClock } from " + JSON.stringify(clockPath) + ";\n\n" +
+      "systemClock.schedule(() => undefined, 3600000, { unref: true });\n" +
+      "systemClock.schedule(() => undefined, 3600000, { repeat: true, unref: true });\n" +
+      "console.log(\"armed\");\n", "utf8");
+
+    // Propagate a type-stripping flag, and only that flag, when the runner carries one, so the child can execute a .ts entry; never the --test, --import, or
+    // coverage flags, which would derail it into a second test run. On a runtime that strips types by default the flag is absent and the child runs flagless.
+    const stripFlag = process.execArgv.find((arg) => (arg === "--strip-types") || (arg === "--experimental-strip-types"));
+    const childArgs = stripFlag ? [ stripFlag, childPath ] : [childPath];
+    const result = await new Promise<{ code: number | null; stderr: string; stdout: string }>((resolveResult) => {
+
+      const stderrChunks: Buffer[] = [];
+      const stdoutChunks: Buffer[] = [];
+      const child = spawn(process.execPath, childArgs, { signal: AbortSignal.timeout(10000), stdio: [ "ignore", "pipe", "pipe" ] });
+
+      child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+      // A child killed at the deadline surfaces here as an error rather than as a clean close, so this listener is what turns a hung child into a failed assertion.
+      child.on("error", (error: Error) => resolveResult({ code: null, stderr: error.message, stdout: "" }));
+      child.on("close", (code) => resolveResult({ code, stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        stdout: Buffer.concat(stdoutChunks).toString("utf8") }));
+    });
+
+    assert.equal(result.code, 0, "the child must reach its own exit with both timers still pending; stderr: " + result.stderr);
+    assert.equal(result.stdout, "armed\n", "and must have armed both of them before exiting; stderr: " + result.stderr);
   });
 
   test("systemClock.timeout answers the platform's deadline signal, aborting with its TimeoutError", async () => {
@@ -695,6 +793,25 @@ describe("TestClock - callback timers", () => {
     assert.equal(clock.now(), 40, "the step lands on the callback timer's deadline");
     assert.deepEqual(fired, ["timer at 40"], "and the step fires it rather than only settling delays");
     assert.equal(clock.pending, 2, "the two later delays are left alone");
+  });
+
+  test("an unreferenced timer is an ordinary entry on the timeline, because a virtual timeline has no process to hold open", () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+
+    clock.schedule(() => fired.push("one-shot"), 100, { unref: true });
+
+    const repeat = clock.schedule(() => fired.push("repeat"), 100, { repeat: true, unref: true });
+
+    assert.equal(clock.pending, 2, "the double counts an unreferenced timer as outstanding, exactly as it counts a referenced one");
+
+    clock.advance(100);
+
+    assert.deepEqual(fired, [ "one-shot", "repeat" ], "both come due at their deadline, in registration order on the tie");
+    assert.equal(clock.pending, 1, "the one-shot has left the timeline and the repeat stands, as they would without the flag");
+
+    repeat[Symbol.dispose]();
   });
 });
 

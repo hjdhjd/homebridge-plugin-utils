@@ -14,7 +14,8 @@
  *
  * Every timer the registry arms goes through its {@link Clock}, so the whole surface is what the registry adds ON TOP of that one time source: keyed identity,
  * replace-on-register, anonymous tracking, and the lifetime drain. A consumer that injects a clock therefore drives these deadlines on the same timeline as its awaited
- * waits, rather than reaching for a second lever.
+ * waits, rather than reaching for a second lever. The policy of whether those timers hold the process open travels the same way: the registry states it to its clock on
+ * every arm and never touches a platform handle to enforce it.
  *
  * @module
  */
@@ -41,6 +42,16 @@ export interface TimerRegistryOptions {
    * means the registry is born disposed. Omit it for a registry whose only lifetime bound is an explicit `dispose()`.
    */
   signal?: AbortSignal;
+
+  /**
+   * Whether the timers this registry arms may hold the process open. When `true`, every timer is forwarded to the clock with `unref` set, so a process whose only
+   * pending work is this registry's timers exits without waiting for them - the shape for an owner living inside a process that must exit on its own, a CLI or a
+   * probe. Omitted, the platform's default holds and a pending timer keeps the process alive.
+   *
+   * This is a per-owner policy with no per-call override, because whether an owner's timers may hold the process open is a property of that owner's relationship to
+   * its process rather than of any one timer, and a per-call flag would put the same decision in a second place.
+   */
+  unref?: boolean;
 }
 
 /**
@@ -56,7 +67,8 @@ export interface TimerRegistryOptions {
  *   - `clearAll()` drains every pending timer, keyed and anonymous alike, and leaves the registry armed: the shape for an owner whose pending work must all cancel on a
  *     state change while the re-arms that follow still need to take.
  *   - `dispose()` (and `[Symbol.dispose]`) drains every pending timer and retires the registry: subsequent registrations are no-ops. An `options.signal` binds the same
- *     drain to the owner's lifetime, so the owner never has to unwire the registry by hand at teardown.
+ *     drain to the owner's lifetime, so the owner never has to unwire the registry by hand at teardown. An `options.unref` binds the owner's process-lifetime policy
+ *     to the same registry, so every timer it arms is stated to its clock as one that may not hold the process open.
  *
  * This is a `Disposable` (synchronous) rather than `AsyncDisposable` because cancelling a timer is synchronous; there is no background work to await.
  *
@@ -77,6 +89,10 @@ export class TimerRegistry implements Disposable {
   // The time source every timer here is armed on, resolved once at construction. Every registration reads this one field, so the registry never touches a platform
   // timer directly and a consumer's injected clock reaches every deadline it owns.
   readonly #clock: Clock;
+
+  // Whether the timers armed here may hold the process open, resolved once at construction beside the clock and forwarded on every arm. The registry states this
+  // policy to its clock rather than to a platform handle it never holds, so the one time source stays the only place a timer is touched.
+  readonly #unref: boolean;
 
   // Keyed timers, one-shots and intervals alike: a key holds at most one live timer, so registering under a key replaces whatever it held.
   readonly #keyed = new Map<string, Disposable>();
@@ -104,6 +120,7 @@ export class TimerRegistry implements Disposable {
   public constructor(options: TimerRegistryOptions = {}) {
 
     this.#clock = options.clock ?? systemClock;
+    this.#unref = options.unref ?? false;
     this.#signal = options.signal;
 
     // Wire the abort handler last, against fully-initialized fields, because `onAbort` runs the handler inline for an already-aborted signal - that inline call disposes
@@ -134,12 +151,13 @@ export class TimerRegistry implements Disposable {
 
     // Arm through the registry's clock, as every registration here does, and hold the handle it answers with: that handle is the whole cancellation story, so the
     // containers below carry `Disposable`s rather than platform timer objects. Removing the entry before running the callback is what lets a fired one-shot read as
-    // absent to the callback and to anything the callback triggers.
+    // absent to the callback and to anything the callback triggers. Every arm here and below forwards the resolved policy in both states rather than only when it is
+    // set, so the init a registry hands its clock is a complete statement of what it asked for.
     const handle = this.#clock.schedule(() => {
 
       this.#keyed.delete(key);
       callback();
-    }, delay);
+    }, delay, { unref: this.#unref });
 
     this.#keyed.set(key, handle);
   }
@@ -162,7 +180,7 @@ export class TimerRegistry implements Disposable {
     this.clear(key);
 
     // The repeating arm of the same clock member. The entry is not removed on fire: an interval repeats until it is cleared or drained.
-    const handle = this.#clock.schedule(callback, interval, { repeat: true });
+    const handle = this.#clock.schedule(callback, interval, { repeat: true, unref: this.#unref });
 
     this.#keyed.set(key, handle);
   }
@@ -198,7 +216,7 @@ export class TimerRegistry implements Disposable {
 
       this.#anonymous.delete(handle);
       callback();
-    }, delay);
+    }, delay, { unref: this.#unref });
 
     const handle: Disposable = { [Symbol.dispose]: (): void => {
 

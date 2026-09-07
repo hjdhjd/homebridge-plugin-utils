@@ -1,7 +1,8 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * timer-registry.test.ts: Unit tests for TimerRegistry - keyed one-shots and intervals, anonymous tracked one-shots, replace-on-register, delete-before-callback, the
- * anonymous handle's cancel, the inert handle a retired registry answers with, and the lifetime-signal / dispose() drain that makes every later registration inert.
+ * anonymous handle's cancel, the inert handle a retired registry answers with, the lifetime-signal / dispose() drain that makes every later registration inert, and
+ * the unref policy the registry forwards to its clock on every arm.
  */
 import { describe, test } from "node:test";
 import { NO_OP_DISPOSABLE } from "./util.ts";
@@ -9,6 +10,23 @@ import { TestClock } from "./clock-double.ts";
 import { TimerRegistry } from "./timer-registry.ts";
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
+
+/**
+ * A {@link TestClock} that records the `init` of every `schedule` call before delegating to it, so a row reads back exactly what the registry stated to its clock on
+ * each arm. Subclassing the shipped double rather than standing up a bare `Clock` literal is what keeps the recording faithful: the timers still land on the double's
+ * own timeline, so the same row that reads the recorded inits can advance the clock and watch those timers come due.
+ */
+class RecordingClock extends TestClock {
+
+  public readonly inits: ({ repeat?: boolean; unref?: boolean } | undefined)[] = [];
+
+  public override schedule(callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable {
+
+    this.inits.push(init);
+
+    return super.schedule(callback, ms, init);
+  }
+}
 
 describe("TimerRegistry", () => {
 
@@ -600,5 +618,40 @@ describe("TimerRegistry", () => {
     assert.deepEqual(visited, [ "a", "b", "c", "d", "e" ], "the walk runs to completion and visits the key armed while it was running");
     assert.deepEqual([...registry.keys()], [ "b", "c" ], "exactly the keys the walk kept remain armed");
     assert.deepEqual(armed.map((key) => registry.has(key)), [ false, true, true, false ], "has() agrees with the walk for every key the registry started with");
+  });
+
+  test("every arm states the registry's process-lifetime policy to its clock, in both directions and by default", () => {
+
+    /* Each case builds its registry against its OWN recording clock, so a clock's ledger holds exactly the arms that registry made and one comparison reads them
+     * all. Every arming verb the registry offers is exercised: a keyed one-shot, a keyed interval, and an anonymous one-shot. The case that omits the option still
+     * expects the key present and `false`, because the init a registry hands its clock carries the policy in both directions rather than only where it is set - a
+     * clock reading an absent key could not tell "hold the process" from "the owner said nothing".
+     */
+    const cases: { build: (clock: RecordingClock) => TimerRegistry; expected: boolean; label: string }[] = [
+      { build: (clock): TimerRegistry => new TimerRegistry({ clock, unref: true }), expected: true, label: "a registry that asked to release its process" },
+      { build: (clock): TimerRegistry => new TimerRegistry({ clock, unref: false }), expected: false, label: "a registry that asked to hold its process" },
+      { build: (clock): TimerRegistry => new TimerRegistry({ clock }), expected: false, label: "a registry that asked for neither" }
+    ];
+
+    for(const { build, expected, label } of cases) {
+
+      const clock = new RecordingClock();
+      const fired: string[] = [];
+      const registry = build(clock);
+
+      registry.setTimeout("once", () => fired.push("once"), 30);
+      registry.setInterval("beat", () => fired.push("beat"), 20);
+      registry.schedule(() => fired.push("anonymous"), 10);
+
+      assert.deepEqual(clock.inits, [ { unref: expected }, { repeat: true, unref: expected }, { unref: expected } ],
+        label + " states it on the keyed one-shot, the keyed interval, and the anonymous one-shot alike");
+
+      // The same row proves the forward changed nothing about the schedule: every timer still comes due on its own deadline, in deadline order.
+      clock.advance(30);
+
+      assert.deepEqual(fired, [ "anonymous", "beat", "once" ], label + " armed timers that fire exactly as they would have without it");
+
+      registry.dispose();
+    }
   });
 });

@@ -24,6 +24,22 @@ The facts about a device that [notResponding](#notresponding) binds once: the cl
 
 ***
 
+### PresenceCharacteristicOptions
+
+The inputs [updatePresenceCharacteristic](#updatepresencecharacteristic) reconciles one characteristic's presence from: the characteristic itself, the service it lives on, the
+read-through behind it, and whether the device can currently be seen.
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="characteristic"></a> `characteristic` | `readonly` | [`CharacteristicTarget`](#characteristictarget) | The characteristic whose presence on the service follows the reading behind it. |
+| <a id="reachable"></a> `reachable` | `readonly` | `boolean` | Whether the device can currently be seen. A removal is believed only when it can, so a device that has dropped off keeps every characteristic it had. |
+| <a id="read"></a> `read` | `readonly` | () => [`PresenceReading`](#presencereading) | The read-through behind the characteristic, called on every pass and on every HomeKit pull so the bound handler answers from the record at pull time rather than from whatever was true when it was bound. |
+| <a id="service"></a> `service` | `readonly` | `Service` | The service the characteristic lives on. |
+
+***
+
 ### AcquireServiceTarget
 
 ```ts
@@ -59,6 +75,28 @@ The characteristic class both HAP calls in [updateServices](#updateservices) are
 static `UUID`, while `updateCharacteristic` takes the same class as something it can construct from, since HAP builds the characteristic when the service it is
 called on does not already carry one. Intersecting both shapes lets a caller hand over `Characteristic.StatusActive` and have each call type-check against the
 half of the shape it actually uses, with no cast at the call site.
+
+***
+
+### PresenceReading
+
+```ts
+type PresenceReading = 
+  | {
+  state: "reported";
+  value: CharacteristicValue;
+}
+  | {
+  state: "pending";
+}
+  | {
+  state: "absent";
+};
+```
+
+The reading a consumer's liveness policy maps its metric into, handed to [updatePresenceCharacteristic](#updatepresencecharacteristic) on every pass: `reported` carries the value
+HomeKit shows, `pending` means the metric is still reporting but has no number at this instant - the momentary gap between readings - and `absent` means the
+metric has left liveness, having stopped reporting rather than merely gone quiet.
 
 ***
 
@@ -166,7 +204,8 @@ validService(accessory, Service.Switch, capabilityGate({ capability: deviceRepor
 
 #### See
 
-validService - consumes the returned predicate.
+ - validService - consumes the returned predicate.
+ - updatePresenceCharacteristic - the same asymmetry, applied to one characteristic's presence on a service.
 
 ***
 
@@ -317,6 +356,50 @@ characteristics when supported by the service type.
  - acquireService - to add or retrieve services.
  - getServiceName - to retrieve the current name set on a service.
  - setAccessoryName - the accessory-level equivalent, which delegates its information-service write here.
+
+***
+
+### updatePresenceCharacteristic()
+
+```ts
+function updatePresenceCharacteristic(options): void;
+```
+
+Reconcile one characteristic's presence on a service against the reading behind it, applying the same additive-eager / subtractive-conservative asymmetry
+[capabilityGate](#capabilitygate) applies to services, one level down.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | [`PresenceCharacteristicOptions`](#presencecharacteristicoptions) | The characteristic, its service, the read-through behind it, and the device's reachability. See [PresenceCharacteristicOptions](#presencecharacteristicoptions). |
+
+#### Returns
+
+`void`
+
+#### Remarks
+
+Every outcome follows from one read of the reading. ADD or UPDATE: a reported reading attaches the characteristic and writes the value it carries, with no
+reachability gate on this half, because the guarantee is asymmetric - the characteristic set never shrinks outside a real loss of the metric, while growth is
+welcome the moment data arrives. HOLD: a pending reading, or a device that cannot be seen, writes nothing and removes nothing, so a momentary gap between
+readings or an offline window leaves HomeKit showing the last thing the sensor said. REMOVE: an absent reading on a reachable device takes the characteristic
+away, the one case in which the metric genuinely stopped reporting rather than merely going quiet.
+
+The read-through is bound on every reported pass rather than only where the characteristic is attached. A characteristic restored from the accessory cache, or
+re-attached by HAP after a removal, is a fresh object carrying no handler and answering its own cached value, and HAP replaces a bound handler rather than
+stacking one, so rebinding every pass is what keeps a pull honest and costs nothing.
+
+#### Example
+
+```typescript
+// Follow one metric's liveness, mapping the sensor's own metric into a reading.
+updatePresenceCharacteristic({ characteristic: Characteristic.PM2_5Density, reachable: this.isReachable, read: () => toReading(this.metric), service });
+```
+
+#### See
+
+capabilityGate - the same asymmetry, applied to whether a service should exist at all.
 
 ***
 

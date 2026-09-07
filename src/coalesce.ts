@@ -26,9 +26,11 @@ import type { HomebridgePluginLogging } from "./util.ts";
 /**
  * Construction options for {@link CoalescingTask}.
  *
+ * @typeParam T - The verdict a pass answers and a requester reads back. Defaults to `void` for the fire-and-forget form, whose passes have nothing to answer.
+ *
  * @category Utilities
  */
-export interface CoalescingTaskOptions {
+export interface CoalescingTaskOptions<T = void> {
 
   /**
    * What to call this task in the line a failed pass writes.
@@ -42,8 +44,10 @@ export interface CoalescingTaskOptions {
 
   /**
    * The pass itself. It is never invoked concurrently with itself.
+   *
+   * Whatever the pass answers is the verdict a requester reads back, so a pass with nothing to answer is typed `void`, which is the fire-and-forget form.
    */
-  run: () => Promise<void>;
+  run: () => Promise<T>;
 
   /**
    * The task's lifetime. Once it is aborted no further pass is run, and a queued follow-up is abandoned.
@@ -54,12 +58,23 @@ export interface CoalescingTaskOptions {
 /**
  * A single-flight task: one pass runs at a time, and any number of triggers arriving during a pass buy exactly one more.
  *
- * Asking is the whole of the surface. {@link CoalescingTask.schedule} asks for a pass and returns immediately: an idle task starts one now, a task already running takes
- * note and runs once more when the pass in flight finishes. A burst of triggers arriving during a pass therefore buys exactly one follow-up rather than one pass apiece,
- * and a trigger arriving after everything has settled starts a fresh pass of its own.
+ * Asking is the whole of the surface, in a spelling that discards the answer and a spelling that hands it back. {@link CoalescingTask.schedule} asks for a pass and
+ * returns nothing: an idle task starts one now, a task already running takes note and runs once more when the pass in flight finishes. A burst of triggers arriving
+ * during a pass therefore buys exactly one follow-up rather than one pass apiece, and a trigger arriving after everything has settled starts a fresh pass of its own.
+ * {@link CoalescingTask.request} asks in precisely that way and returns the promise of the drain that answers - a fresh drain's when the task is idle, the drain in
+ * flight's when a pass is running, and the same promise object for every asker of that drain - settling with the verdict of the last pass the drain runs, because a
+ * request made mid-pass bought the follow-up so that the answer reflects inputs the running pass had already read past.
  *
  * The lifetime signal is honored at both ends. Once it aborts, a trigger starts nothing at all, and a follow-up that was queued before the abort is abandoned rather than
  * run into a lifetime that is over.
+ *
+ * A failed pass is reported on the task's own line whichever spelling asked for it. What a requester reads back beyond that is the drain's own end: a drain that ends
+ * on a fault rejects its requesters with it, the last pass's once every follow-up a trigger bought has run, or the logger's own if it threw while reporting a pass. A
+ * consumer that wants a verdict in every case therefore converts the fault inside its own pass, where the wording and the fallback are its business rather than this
+ * class's. A request made after the lifetime has ended rejects with the signal's reason and runs nothing.
+ *
+ * @typeParam T - The verdict each pass answers, in the consumer's own vocabulary, and what {@link CoalescingTask.request} settles with. Defaults to `void` for a task
+ * whose passes have nothing to answer, which is what every fire-and-forget consumer builds without naming the parameter.
  *
  * @example
  *
@@ -72,45 +87,69 @@ export interface CoalescingTaskOptions {
  * // Every trigger is a bare call - the task decides whether that means starting a pass or buying the one follow-up.
  * this.client.on("configuration-changed", () => refresh.schedule());
  * this.client.on("reconnected", () => refresh.schedule());
+ *
+ * // The one asker that needs the answer awaits the drain that serves it, rather than asking and hoping.
+ * const found = await refresh.request();
  * ```
  *
  * @category Utilities
  */
-export class CoalescingTask {
+export class CoalescingTask<T = void> {
 
   readonly #label: string;
   readonly #log: HomebridgePluginLogging;
-  readonly #run: () => Promise<void>;
+  readonly #run: () => Promise<T>;
   readonly #signal: AbortSignal;
 
   /* The whole of the single-flight state, as one value rather than as a running flag beside a queued flag.
    *
    * Two booleans can express "queued but not running", which is a state this discipline has no meaning for and every consumer would simply have to avoid producing. One
    * three-armed value cannot express it at all, so the combination is unrepresentable rather than merely avoided.
+   *
+   * The drain's settlement lives inside the running arms for that same reason: an idle task holding the settlement of a drain in flight is a combination with no
+   * meaning, and carrying the promise on the arms that have a drain behind them makes it unrepresentable rather than something every path has to be careful not to
+   * produce. Because the running kinds share one arm, the drain's own exit test reads `kind` directly after an await and stays well-typed, rather than reaching the
+   * field through a call so that the compiler cannot carry the narrowing from the assignment before each pass across the await, which is precisely when the answer
+   * changes.
    */
-  #state: "idle" | "running" | "running-queued";
+  #state: { kind: "idle" } | { kind: "running" | "running-queued"; settled: Promise<T> };
 
   /**
    * Build a coalescing task. Construction starts nothing; the first {@link CoalescingTask.schedule} does.
    *
    * @param options - See {@link CoalescingTaskOptions}.
    */
-  public constructor(options: CoalescingTaskOptions) {
+  public constructor(options: CoalescingTaskOptions<T>) {
 
     this.#label = options.label;
     this.#log = options.log;
     this.#run = options.run;
     this.#signal = options.signal;
-    this.#state = "idle";
+    this.#state = { kind: "idle" };
   }
 
   /**
    * Ask for a pass. A pass already running takes note and runs once more when it finishes; an idle task starts one now.
    *
-   * The dispatch is fire-and-forget rather than awaited, because every caller is an event handler or a timer that has nothing to wait for and a failed pass has to land
-   * in the log rather than escape as an unhandled rejection.
+   * This is the fire-and-forget spelling: it discards the answer and marks the promise handled, because every caller here is an event handler or a timer with nothing
+   * to wait for. A last pass that failed, a lifetime that has already ended, and a logger that throws while reporting a pass each reach that promise as a rejection,
+   * and an unobserved rejection is the worst way for any of them to surface.
    */
   public schedule(): void {
+
+    void markHandled(this.request());
+  }
+
+  /**
+   * Ask for a pass and read back what it answers. A pass already running takes note and runs once more when it finishes; an idle task starts one now.
+   *
+   * The promise is the drain's settlement: a fresh drain's when the task is idle, and the drain in flight's when a pass is running, which is the identical promise
+   * every other asker of that drain holds. It settles with the verdict of the last pass that drain runs, rejects with the fault the drain ends on, and rejects with the
+   * signal's reason once the lifetime has ended, in which case no pass runs at all.
+   *
+   * @returns The verdict of the last pass run by the drain that serves this request.
+   */
+  public request(): Promise<T> {
 
     /* A task whose lifetime has ended runs nothing at all, however it is asked. The drain loop answers the same question between passes, and asking it here too is what
      * closes the one window that check cannot reach: the first pass of a task triggered after teardown, which would otherwise get all the way into its work before
@@ -118,64 +157,76 @@ export class CoalescingTask {
      */
     if(this.#signal.aborted) {
 
-      return;
+      /* The refusal carries the lifetime's own reason, whatever value the consumer aborted with. It is assembled through resolvers so that reason crosses out exactly
+       * as it was set, rather than through `Promise.reject`, which is held to an error-typed reason a lifetime's reason need not be.
+       */
+      const { promise, reject } = Promise.withResolvers<T>();
+
+      reject(this.#signal.reason);
+
+      return promise;
     }
 
-    if(this.#state !== "idle") {
+    if(this.#state.kind !== "idle") {
 
-      this.#state = "running-queued";
+      this.#state = { kind: "running-queued", settled: this.#state.settled };
 
-      return;
+      return this.#state.settled;
     }
 
-    // The drain answers every pass's fault itself and reaches its own end normally, so nothing rejects here on the work's account. The mark covers the one path that is
-    // left: a logger that throws while reporting a failed pass leaves the drain through this promise, and an unobserved rejection is the worst way for that to surface.
-    void markHandled(this.#drain());
+    /* The settlement is built here and handed to the drain rather than read off the drain's own promise, because the drain installs it into the state as its first act,
+     * synchronously, before the first pass runs: a pass that asks re-entrantly then joins the drain that is running it rather than starting a second one. Holding the
+     * promise before the work it stands for has begun is exactly what `Promise.withResolvers` is for.
+     */
+    const { promise, reject, resolve } = Promise.withResolvers<T>();
+
+    this.#drain(promise).then(resolve, reject);
+
+    return promise;
   }
 
   // Run passes until nothing further has been asked for. The state is reset to "running" before each pass rather than after it, so a trigger arriving mid-pass is
   // recorded against the pass that follows rather than against the one it interrupted.
-  async #drain(): Promise<void> {
+  async #drain(settled: Promise<T>): Promise<T> {
 
     try {
 
       for(;;) {
 
-        this.#state = "running";
+        this.#state = { kind: "running", settled };
 
         /* A fault is reported per pass and goes no further, because the follow-up a trigger bought while this pass was running was asked for on its own account and a
          * fault here says nothing about it. Reporting is the whole of what the catch does: it never re-arms a follow-up of its own, so a pass that fails every time
-         * cannot turn the loop into a tight retry against a persistent fault - only a genuine trigger buys the next pass.
+         * cannot turn the loop into a tight retry against a persistent fault - only a genuine trigger buys the next pass. What the drain settles on is the outcome of
+         * its LAST pass, reached once every follow-up a trigger bought has run, so a requester never reads a verdict a later pass has already superseded.
          */
+        let outcome: { fault: unknown; kind: "faulted" } | { kind: "answered"; verdict: T };
+
         try {
 
           // A sequence of passes is what this is, so awaiting inside the loop is the shape rather than an oversight.
           // eslint-disable-next-line no-await-in-loop
-          await this.#run();
+          outcome = { kind: "answered", verdict: await this.#run() };
         } catch(error) {
 
           this.#log.error("The %s pass failed: %s.", this.#label, formatErrorMessage(error));
+
+          outcome = { fault: error, kind: "faulted" };
         }
 
-        if(!this.#queued() || this.#signal.aborted) {
+        if((this.#state.kind !== "running-queued") || this.#signal.aborted) {
 
-          return;
+          if(outcome.kind === "faulted") {
+
+            throw outcome.fault;
+          }
+
+          return outcome.verdict;
         }
       }
     } finally {
 
-      this.#state = "idle";
+      this.#state = { kind: "idle" };
     }
-  }
-
-  /* Whether a trigger arrived while a pass was running.
-   *
-   * This reads the state through a call rather than touching the field directly, and the indirection is deliberate. The loop above assigns the field immediately before
-   * each pass; read directly, the compiler carries that assignment's narrowing across the await and reports the test afterwards as dead code - and an await is precisely
-   * when the answer changes.
-   */
-  #queued(): boolean {
-
-    return this.#state === "running-queued";
   }
 }

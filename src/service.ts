@@ -263,11 +263,110 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
  * ```
  *
  * @see validService - consumes the returned predicate.
+ * @see updatePresenceCharacteristic - the same asymmetry, applied to one characteristic's presence on a service.
  * @category Accessory
  */
 export function capabilityGate({ capability, toggle }: { capability: boolean; toggle: boolean }): (hasService: boolean) => boolean {
 
   return hasService => toggle && (hasService || capability);
+}
+
+/**
+ * The reading a consumer's liveness policy maps its metric into, handed to {@link updatePresenceCharacteristic} on every pass: `reported` carries the value
+ * HomeKit shows, `pending` means the metric is still reporting but has no number at this instant - the momentary gap between readings - and `absent` means the
+ * metric has left liveness, having stopped reporting rather than merely gone quiet.
+ *
+ * @category Accessory
+ */
+export type PresenceReading = { state: "reported"; value: CharacteristicValue } | { state: "pending" } | { state: "absent" };
+
+/**
+ * The inputs {@link updatePresenceCharacteristic} reconciles one characteristic's presence from: the characteristic itself, the service it lives on, the
+ * read-through behind it, and whether the device can currently be seen.
+ *
+ * @category Accessory
+ */
+export interface PresenceCharacteristicOptions {
+
+  /**
+   * The characteristic whose presence on the service follows the reading behind it.
+   */
+  readonly characteristic: CharacteristicTarget;
+
+  /**
+   * Whether the device can currently be seen. A removal is believed only when it can, so a device that has dropped off keeps every characteristic it had.
+   */
+  readonly reachable: boolean;
+
+  /**
+   * The read-through behind the characteristic, called on every pass and on every HomeKit pull so the bound handler answers from the record at pull time rather
+   * than from whatever was true when it was bound.
+   */
+  readonly read: () => PresenceReading;
+
+  /**
+   * The service the characteristic lives on.
+   */
+  readonly service: Service;
+}
+
+/**
+ * Reconcile one characteristic's presence on a service against the reading behind it, applying the same additive-eager / subtractive-conservative asymmetry
+ * {@link capabilityGate} applies to services, one level down.
+ *
+ * @param options - The characteristic, its service, the read-through behind it, and the device's reachability. See {@link PresenceCharacteristicOptions}.
+ *
+ * @remarks
+ * Every outcome follows from one read of the reading. ADD or UPDATE: a reported reading attaches the characteristic and writes the value it carries, with no
+ * reachability gate on this half, because the guarantee is asymmetric - the characteristic set never shrinks outside a real loss of the metric, while growth is
+ * welcome the moment data arrives. HOLD: a pending reading, or a device that cannot be seen, writes nothing and removes nothing, so a momentary gap between
+ * readings or an offline window leaves HomeKit showing the last thing the sensor said. REMOVE: an absent reading on a reachable device takes the characteristic
+ * away, the one case in which the metric genuinely stopped reporting rather than merely going quiet.
+ *
+ * The read-through is bound on every reported pass rather than only where the characteristic is attached. A characteristic restored from the accessory cache, or
+ * re-attached by HAP after a removal, is a fresh object carrying no handler and answering its own cached value, and HAP replaces a bound handler rather than
+ * stacking one, so rebinding every pass is what keeps a pull honest and costs nothing.
+ *
+ * @example
+ * ```typescript
+ * // Follow one metric's liveness, mapping the sensor's own metric into a reading.
+ * updatePresenceCharacteristic({ characteristic: Characteristic.PM2_5Density, reachable: this.isReachable, read: () => toReading(this.metric), service });
+ * ```
+ *
+ * @see capabilityGate - the same asymmetry, applied to whether a service should exist at all.
+ * @category Accessory
+ */
+export function updatePresenceCharacteristic({ characteristic, reachable, read, service }: PresenceCharacteristicOptions): void {
+
+  const reading = read();
+
+  if(reading.state === "reported") {
+
+    // Answer a pull from the record rather than from the pass that bound this handler...a pull arriving between readings answers what HomeKit already holds
+    // rather than a dead reading.
+    service.getCharacteristic(characteristic).onGet(() => {
+
+      const current = read();
+
+      return (current.state === "reported") ? current.value : service.getCharacteristic(characteristic).value;
+    });
+
+    service.updateCharacteristic(characteristic, reading.value);
+
+    return;
+  }
+
+  // A metric that is still reporting, or a device we cannot currently see, holds whatever HomeKit has.
+  if((reading.state === "pending") || !reachable) {
+
+    return;
+  }
+
+  // Read prior existence side-effect-free...getCharacteristic would attach the very characteristic this branch is about to remove.
+  if(service.testCharacteristic(characteristic)) {
+
+    service.removeCharacteristic(service.getCharacteristic(characteristic));
+  }
 }
 
 /**

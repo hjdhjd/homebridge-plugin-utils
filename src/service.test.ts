@@ -10,10 +10,12 @@
  */
 import * as hap from "@homebridge/hap-nodejs";
 import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updateServices, validService } from "./service.ts";
+import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic, updateServices,
+  validService } from "./service.ts";
 import { describe, test } from "node:test";
 import { HAPStatus } from "./homebridge-enums.ts";
 import type { Nullable } from "./util.ts";
+import type { PresenceReading } from "./service.ts";
 import assert from "node:assert/strict";
 
 // The HAP static-Characteristic shape: every Characteristic class ships with a `UUID` static and satisfies `new () => Characteristic`. That is the exact type HAP's
@@ -76,6 +78,44 @@ function informationServiceOf(accessory: PlatformAccessory): Service {
   }
 
   return service;
+}
+
+/* The presence fixture: a real HAP AirQualitySensor service, a mutable reading behind the read-through, and counters for the service-level events the rows
+ * read their outcomes from. The counts are the observers because HAP raises `characteristic-change` on every write, an unchanged value included, so a zero delta
+ * is what proves a hold wrote nothing - the value HomeKit holds cannot tell a hold apart from a write of the same number. `service-configurationChange` answers
+ * an attach and a detach alike, so an unchanged count is what proves a pass that removed nothing also attached nothing.
+ */
+function presenceFixture(): { changes: () => number; configurations: () => number; pass: (reachable: boolean) => void;
+  reading: (next: PresenceReading) => void; service: Service; } {
+
+  const { hapAccessory } = makePlatformAccessory();
+  const service = hapAccessory.addService(hap.Service.AirQualitySensor, "Air");
+  const holder: { reading: PresenceReading } = { reading: { state: "absent" } };
+  let changes = 0;
+  let configurations = 0;
+
+  service.on("characteristic-change", () => {
+
+    changes++;
+  });
+
+  service.on("service-configurationChange", () => {
+
+    configurations++;
+  });
+
+  return {
+
+    changes: (): number => changes,
+    configurations: (): number => configurations,
+    pass: (reachable: boolean): void => updatePresenceCharacteristic({ characteristic: hap.Characteristic.PM2_5Density, reachable,
+      read: () => holder.reading, service }),
+    reading: (next: PresenceReading): void => {
+
+      holder.reading = next;
+    },
+    service
+  };
 }
 
 // Single source of truth for HAP's reflection-based characteristic discovery. Every HAP `Service` instance carries a `characteristics` array whose elements share a
@@ -168,6 +208,24 @@ const _readerShapeExercises = (): void => {
 
   // @ts-expect-error - a symbol is not a CharacteristicValue, so a reader answering one is not a characteristic reader.
   const _symbol = wrap((): symbol => Symbol("not a characteristic value"));
+};
+
+/* Compile-time shape exercises for the reading a consumer's liveness policy maps its metric into. These never run - the function is never called, and its leading
+ * underscore marks it, with its bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals. The negative cases use
+ * `@ts-expect-error`, which fails the build if the error each expects ever stops occurring.
+ */
+const _presenceReadingShapeExercises = (): void => {
+
+  // Each state is assignable from a literal of its own shape, and the value HomeKit shows is carried by the reported state alone.
+  const _reported: PresenceReading = { state: "reported", value: 42 };
+  const _pending: PresenceReading = { state: "pending" };
+  const _absent: PresenceReading = { state: "absent" };
+
+  // @ts-expect-error - a reported reading with no value is not a reading at all, since carrying the value is what the reported state exists to do.
+  const _valueless: PresenceReading = { state: "reported" };
+
+  // @ts-expect-error - a symbol is not a CharacteristicValue, so no reading can carry one.
+  const _symbolValued: PresenceReading = { state: "reported", value: Symbol("not a characteristic value") };
 };
 
 describe("acquireService - creation path", () => {
@@ -473,6 +531,154 @@ describe("capabilityGate", () => {
 
     assert.equal(gate(false), true, "a toggle-on, capability-true gate must create the service when it is missing");
     assert.equal(gate(true), true, "a toggle-on, capability-true gate must keep an existing service");
+  });
+});
+
+describe("updatePresenceCharacteristic", () => {
+
+  test("a reported reading attaches the characteristic, writes the value, and binds a read-through that answers the live reading", async () => {
+
+    // The additive half in full: a reported reading is the only input that creates anything, and what it binds has to answer from the record rather than from
+    // the pass that bound it, so a later reading reaches HomeKit through a pull with no pass in between.
+    const { pass, reading, service } = presenceFixture();
+
+    reading({ state: "reported", value: 3 });
+    pass(true);
+
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a reported reading must attach the characteristic");
+    assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must write the value the reading carries");
+
+    reading({ state: "reported", value: 9 });
+
+    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 9,
+      "a pull must answer the live reading rather than the value the binding pass wrote");
+  });
+
+  test("a pending reading holds the characteristic and its value, writes nothing, and a pull answers the held value", async () => {
+
+    // The momentary gap between readings. HomeKit keeps showing the last number the sensor gave, and the zero write delta is what proves the hold is a hold: an
+    // unchanged-value write raises the change count exactly as a changed one does, so only a count that stands still means nothing was written.
+    const { changes, pass, reading, service } = presenceFixture();
+
+    reading({ state: "reported", value: 3 });
+    pass(true);
+
+    const written = changes();
+
+    reading({ state: "pending" });
+    pass(true);
+
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a pending reading must keep the characteristic");
+    assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must leave the value HomeKit already holds");
+    assert.equal(changes(), written, "and must write nothing");
+    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 3, "and a pull must answer the held value");
+  });
+
+  test("an unreachable device holds the characteristic even as its metric leaves liveness", () => {
+
+    // Reachability is the second half of the hold. The metric has genuinely gone, but a device that cannot be seen cannot be believed about it, so the
+    // characteristic and its value both stay until the device is back to confirm the loss.
+    const { changes, pass, reading, service } = presenceFixture();
+
+    reading({ state: "reported", value: 3 });
+    pass(true);
+
+    const written = changes();
+
+    reading({ state: "absent" });
+    pass(false);
+
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "an unreachable device must keep the characteristic");
+    assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must keep the value HomeKit already holds");
+    assert.equal(changes(), written, "and must write nothing");
+  });
+
+  test("an absent reading on a reachable device removes the characteristic", () => {
+
+    // The subtractive half, and the only input that removes anything: the metric has left liveness while the device can be seen, which is a real loss of the
+    // metric rather than a quiet spell.
+    const { pass, reading, service } = presenceFixture();
+
+    reading({ state: "reported", value: 3 });
+    pass(true);
+
+    reading({ state: "absent" });
+    pass(true);
+
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), false, "an absent reading on a reachable device must remove the characteristic");
+  });
+
+  test("an absent reading on a service that never carried the characteristic attaches nothing", () => {
+
+    // Prior existence is read side-effect-free. An unguarded `getCharacteristic` would attach the characteristic and then take it straight back off, raising the
+    // configuration count twice on a pass whose whole job here is to leave the accessory's configuration exactly as it found it.
+    const { configurations, pass, reading, service } = presenceFixture();
+    const configured = configurations();
+
+    reading({ state: "absent" });
+    pass(true);
+
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), false, "a service that never carried the characteristic must not gain it");
+    assert.equal(configurations(), configured, "and the pass must raise no configuration change at all");
+  });
+
+  test("a reported reading after a removal re-attaches with the new value and a working read-through", async () => {
+
+    // A re-attached characteristic is a fresh object with nothing bound to it, so a helper that bound its read-through only where it attached would leave this
+    // one answering the value HomeKit holds for the life of the process. The second pull is what tells the two apart.
+    const { pass, reading, service } = presenceFixture();
+
+    reading({ state: "reported", value: 3 });
+    pass(true);
+
+    reading({ state: "absent" });
+    pass(true);
+
+    reading({ state: "reported", value: 5 });
+    pass(true);
+
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a reported reading must re-attach the characteristic");
+    assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 5, "and must write the value the new reading carries");
+
+    reading({ state: "reported", value: 8 });
+
+    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 8,
+      "and the re-attached characteristic must read through to the record");
+  });
+
+  test("a characteristic that exists without a handler gains one on the next reported pass", async () => {
+
+    // The shape an accessory cache restore leaves behind: the characteristic is present and carries a value, with nothing bound to it. Binding on every reported
+    // pass is what gets a handler onto it, where a helper that bound only on an attach would answer 6 to every pull this service ever sees.
+    const { pass, reading, service } = presenceFixture();
+
+    service.addCharacteristic(hap.Characteristic.PM2_5Density).updateValue(4);
+
+    reading({ state: "reported", value: 6 });
+    pass(true);
+
+    assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 6, "a reported pass must write over the value the characteristic carried");
+
+    reading({ state: "reported", value: 11 });
+
+    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 11, "and the pull must answer the live reading");
+  });
+
+  test("a reported reading attaches and writes even while the device is unreachable", async () => {
+
+    // The additive half asks nothing about reachability. The guarantee is asymmetric: growth is welcome the moment data arrives, and only the removal half
+    // waits until the device can be seen, so a metric that keeps reporting through an offline window still reaches HomeKit.
+    const { pass, reading, service } = presenceFixture();
+
+    reading({ state: "reported", value: 3 });
+    pass(false);
+
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a reported reading must attach whatever reachability says");
+    assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must write the value the reading carries");
+
+    reading({ state: "reported", value: 9 });
+
+    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 9, "and must bind a read-through that answers the record");
   });
 });
 

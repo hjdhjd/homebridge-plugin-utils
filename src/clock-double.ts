@@ -1,6 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * clock-double.ts: A reusable, controllable Clock test double - one virtual timeline a test advances explicitly, carrying awaited delays and callback timers alike.
+ * clock-double.ts: A reusable, controllable Clock test double - one virtual timeline a test advances explicitly, carrying awaited delays, callback timers, and
+ * deadline signals alike.
  */
 
 /**
@@ -9,11 +10,12 @@
  * The {@link Clock} contract in `clock.ts` exists so a consuming plugin's time-dependent code can be driven without real wall-clock waits. This module ships the fake
  * that cashes that in: a {@link TestClock} over one virtual timeline a test advances explicitly. `now()` returns the virtual time; `delay()` registers a pending wait
  * that resolves only when {@link TestClock.advance} crosses its deadline, or rejects when its signal aborts - matching `node:timers/promises` `setTimeout`'s
- * `AbortError` shape; `schedule()` registers a callback timer that runs inside `advance` when its deadline is crossed, once or on repeat. No real timers and no
+ * `AbortError` shape; `schedule()` registers a callback timer that runs inside `advance` when its deadline is crossed, once or on repeat; `timeout()` returns a
+ * signal that aborts when `advance` crosses its deadline, with the same `TimeoutError` the platform's `AbortSignal.timeout` aborts with. No real timers and no
  * wall-clock are used, so a consumer's pacing, timeout, and heartbeat paths all run deterministically and instantly under test.
  *
- * Both shapes share ONE timeline, which is the point: a scenario spanning a backoff wait and a liveness deadline is driven by a single `advance` rather than by a
- * clock for the waits and a mock-timer harness for the deadlines, and they interleave exactly as the platform would order them.
+ * Every shape shares ONE timeline, which is the point: a scenario spanning a backoff wait, a liveness deadline, and a bounded call's deadline signal is driven by a
+ * single `advance` rather than by a clock for the waits and a mock-timer harness for the deadlines, and they interleave exactly as the platform would order them.
  *
  * Beside the timeline the double keeps the ledger a pacing assertion reads: `requested` is every `ms` a consumer asked for, in call order, and `advanceToNext()`
  * steps straight to the earliest pending deadline - so a suite drives a consumer's schedule by the numbers the consumer chose rather than by numbers it restates.
@@ -99,11 +101,11 @@ function abortError(): Error {
 export class TestClock implements Clock {
 
   /**
-   * Every `ms` a {@link TestClock.delay} or {@link TestClock.schedule} call asked for, in call order. A request lands here before its entry is registered and whatever
-   * later becomes of that entry, so a delay the clock crossed, one whose signal aborted mid-wait, one whose signal was already aborted, and a cancelled callback timer
-   * all appear. That is the ledger a suite does its cadence arithmetic against - a history that dropped the entries which never came due would understate exactly the
-   * loops worth asserting on. Delays and callback timers share it, so a clock driving several timers at once is read BY VALUE (`requested.includes(...)`, a count of a
-   * given window) rather than at a fixed index, since the interleaving depends on what the consumer armed when.
+   * Every `ms` a {@link TestClock.delay}, {@link TestClock.schedule}, or {@link TestClock.timeout} call asked for, in call order. A request lands here before its entry
+   * is registered and whatever later becomes of that entry, so a delay the clock crossed, one whose signal aborted mid-wait, one whose signal was already aborted, and
+   * a cancelled callback timer all appear. That is the ledger a suite does its cadence arithmetic against - a history that dropped the entries which never came due
+   * would understate exactly the loops worth asserting on. Delays, callback timers, and deadline signals share it, so a clock driving several timers at once is read
+   * BY VALUE (`requested.includes(...)`, a count of a given window) rather than at a fixed index, since the interleaving depends on what the consumer armed when.
    */
   public readonly requested: number[] = [];
 
@@ -314,6 +316,33 @@ export class TestClock implements Clock {
   }
 
   /**
+   * Return a signal that aborts when virtual time reaches `this.now() + ms`, with the platform's own deadline reason: a `DOMException` named `"TimeoutError"` carrying
+   * the message `AbortSignal.timeout` aborts with, so a consumer that branches on the reason - through `isTimeoutReason`, a `name` comparison, or a log line - cannot
+   * tell this clock's deadline from the production clock's.
+   *
+   * The abort is one of this clock's own one-shot callback timers, which is why a deadline signal needs no arm of its own on the timeline: {@link TestClock.advance},
+   * {@link TestClock.advanceToNext}, {@link TestClock.nextDeadline}, {@link TestClock.pending}, and {@link TestClock.requested} all see it exactly as they see any
+   * other one-shot, and the `ms` reaches the ledger through the {@link TestClock.schedule} call underneath.
+   *
+   * The handle that `schedule` answers is deliberately dropped, because the platform offers no cancel for a deadline signal either: the entry stays on the timeline
+   * until an advance crosses its deadline. A deadline whose bounded operation completed early therefore still counts in {@link TestClock.pending} and is still what
+   * `advanceToNext` steps to next, exactly as the platform's timer stays armed (only unreferenced) past the settlement of the work it bounded, so a suite drains it
+   * rather than reading it as a leak.
+   *
+   * @param ms - The deadline, in milliseconds.
+   *
+   * @returns A signal that aborts with a `TimeoutError` once virtual time crosses the deadline.
+   */
+  public timeout(ms: number): AbortSignal {
+
+    const controller = new AbortController();
+
+    this.schedule(() => controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), ms);
+
+    return controller.signal;
+  }
+
+  /**
    * The earliest deadline among the registered entries that have not yet settled - delays and callback timers alike - and `null` when nothing is pending. A test reads
    * it to assert WHEN a consumer's next wait or next timer comes due, where {@link TestClock.pending} answers how many of them are outstanding.
    *
@@ -338,7 +367,9 @@ export class TestClock implements Clock {
 
   /**
    * The number of registered entries that have not yet settled, counting pending delays and armed callback timers together. A test reads this to assert a consumer
-   * registered its waits and timers and later cleared them (no leak). A repeating timer counts once and keeps counting until its handle is disposed.
+   * registered its waits and timers and later cleared them (no leak). A repeating timer counts once and keeps counting until its handle is disposed. A deadline signal
+   * from {@link TestClock.timeout} counts here until its deadline is crossed, even after the operation it bounded has settled, so a suite drains it rather than
+   * reading it as a leak.
    *
    * @returns The count of outstanding entries.
    */

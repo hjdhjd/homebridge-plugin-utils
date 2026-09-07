@@ -1,16 +1,18 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * clock.test.ts: Unit tests for the injectable Clock contract - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
- * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, and its schedule() IS the global callback timers read at call time), plus
- * the shipped controllable TestClock double (advanceable virtual time, deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises
- * AbortError on abort, the no-listener-leak teardown on both resolution paths, the requested history across every settlement path, the earliest-pending-deadline read,
- * the step that lands on that deadline, and the callback timers that share that one timeline with the delays).
+ * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time, and its
+ * timeout() IS AbortSignal.timeout), plus the shipped controllable TestClock double (advanceable virtual time, deadline-ordered resolution, the advance(0)/negative
+ * flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on both resolution paths, the requested history across every settlement
+ * path, the earliest-pending-deadline read, the step that lands on that deadline, the callback timers that share that one timeline with the delays, and the deadline
+ * signals whose reason a consumer cannot tell apart from the platform's).
  */
 import { describe, test } from "node:test";
+import { getEventListeners, once } from "node:events";
 import type { Clock } from "./clock.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
-import { getEventListeners } from "node:events";
+import { isTimeoutReason } from "./util.ts";
 import { systemClock } from "./clock.ts";
 
 // Flush the microtask queue so a delay that became due during a synchronous `advance` has run its `resolve`/`reject` continuation before the test inspects the outcome.
@@ -29,6 +31,17 @@ function assertAbortError(thrown: unknown, message: string): void {
   assert.ok(thrown instanceof Error, message + " - the rejection must be an Error");
   assert.equal(thrown.name, "AbortError", message + " - name must be AbortError");
   assert.equal((thrown as Error & { code?: unknown }).code, "ABORT_ERR", message + " - code must be the string ABORT_ERR");
+}
+
+// Assert that `reason` is the deadline shape `AbortSignal.timeout` aborts with: a DOMException named "TimeoutError" that the library's own predicate accepts. This is
+// the fidelity anchor for the third time shape - systemClock (the platform call itself) and TestClock (the fabricated double) must both satisfy it, because a consumer
+// branching on a deadline reason must not be able to tell which clock produced it. Unlike the AbortError shape above, the constructor identity IS assertable here:
+// DOMException is a constructable global, so the double reproduces the real class rather than only its observable fields.
+function assertTimeoutReason(reason: unknown, message: string): void {
+
+  assert.ok(reason instanceof DOMException, message + " - the reason must be a DOMException");
+  assert.equal(reason.name, "TimeoutError", message + " - name must be TimeoutError");
+  assert.equal(isTimeoutReason(reason), true, message + " - isTimeoutReason must accept it");
 }
 
 describe("systemClock - conformance and behavior-neutrality", () => {
@@ -129,6 +142,19 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     await promise;
 
     handle[Symbol.dispose]();
+  });
+
+  test("systemClock.timeout answers the platform's deadline signal, aborting with its TimeoutError", async () => {
+
+    // The other acceptable real wait in this suite, for the same reason as the delay() row above: only the real clock can prove the real deadline, so we await a 1ms
+    // platform timeout. The signal's timer is unreferenced, but the test runner holds the process open, so the abort arrives.
+    const signal = systemClock.timeout(1);
+
+    assert.equal(signal.aborted, false, "a freshly armed deadline must not be aborted synchronously");
+
+    await once(signal, "abort");
+
+    assertTimeoutReason(signal.reason, "systemClock deadline signal");
   });
 });
 
@@ -669,5 +695,88 @@ describe("TestClock - callback timers", () => {
     assert.equal(clock.now(), 40, "the step lands on the callback timer's deadline");
     assert.deepEqual(fired, ["timer at 40"], "and the step fires it rather than only settling delays");
     assert.equal(clock.pending, 2, "the two later delays are left alone");
+  });
+});
+
+describe("TestClock - deadline signals", () => {
+
+  test("a deadline signal aborts when the clock crosses its deadline, and not before", () => {
+
+    const clock = new TestClock();
+    const signal = clock.timeout(100);
+
+    assert.equal(signal.aborted, false, "an armed deadline is not aborted at creation");
+
+    clock.advance(99);
+
+    assert.equal(signal.aborted, false, "an advance short of the deadline leaves the signal unaborted");
+
+    clock.advance(1);
+
+    assert.equal(signal.aborted, true, "crossing the deadline aborts the signal");
+    assertTimeoutReason(signal.reason, "the double's deadline signal");
+  });
+
+  test("a deadline records its window in the ledger and leaves the timeline once it has fired", () => {
+
+    const clock = new TestClock();
+
+    clock.timeout(250);
+
+    assert.deepEqual(clock.requested, [250], "the window reaches the ledger through the schedule call the deadline is built on");
+    assert.equal(clock.pending, 1, "an armed deadline is outstanding until the clock crosses it");
+
+    clock.advance(250);
+
+    assert.equal(clock.pending, 0, "a fired deadline has left the timeline");
+
+    clock.advance(1000);
+
+    assert.equal(clock.pending, 0, "and a later advance finds nothing left of it");
+    assert.deepEqual(clock.requested, [250], "the ledger records the one window that was asked for, once");
+  });
+
+  test("the double's deadline reason is indistinguishable from the platform's", async () => {
+
+    // The differential oracle for the third time shape. We compare against a LIVE platform reason rather than against a restatement of what the platform is believed
+    // to produce, so a future platform change to the message or the class surfaces here as a failure instead of passing against a stale literal.
+    const platformSignal = AbortSignal.timeout(1);
+
+    await once(platformSignal, "abort");
+
+    const clock = new TestClock();
+    const doubleSignal = clock.timeout(1);
+
+    clock.advance(1);
+
+    const platformReason: unknown = platformSignal.reason;
+    const doubleReason: unknown = doubleSignal.reason;
+
+    assert.ok(platformReason instanceof DOMException, "the platform's reason must be a DOMException");
+    assert.ok(doubleReason instanceof DOMException, "the double's reason must be a DOMException");
+    assert.equal(doubleReason.name, platformReason.name, "the two reasons must carry the same name");
+    assert.equal(doubleReason.message, platformReason.message, "the two reasons must carry the same message");
+    assert.equal(doubleReason.constructor, platformReason.constructor, "the two reasons must come from the same constructor");
+    assert.equal(isTimeoutReason(platformReason), true, "the library's predicate accepts the platform's reason");
+    assert.equal(isTimeoutReason(doubleReason), true, "and accepts the double's identically");
+  });
+
+  test("a deadline and a delay share one timeline, so each step settles the entry that is next", async () => {
+
+    const clock = new TestClock();
+    const signal = clock.timeout(500);
+    const waited = clock.delay(700);
+
+    assert.equal(clock.nextDeadline, 500, "the deadline is the earlier of the two entries");
+    assert.equal(clock.advanceToNext(), true, "the first step lands on it");
+    assert.equal(signal.aborted, true, "and aborts the deadline signal");
+    assert.equal(clock.now(), 500, "virtual time moved exactly to the deadline");
+    assert.equal(clock.pending, 1, "the delay is still outstanding");
+    assert.equal(clock.advanceToNext(), true, "a second step lands on the delay");
+
+    await waited;
+
+    assert.equal(clock.now(), 700, "which moved virtual time to the wait's own deadline");
+    assert.equal(clock.pending, 0, "and left the timeline empty");
   });
 });

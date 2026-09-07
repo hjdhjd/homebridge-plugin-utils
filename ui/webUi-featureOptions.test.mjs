@@ -1620,8 +1620,8 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     await flush();
 
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "a wrong-shaped result must render the connection-error view's retry affordance");
-    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, "getControllers must resolve to { controllers, error }.",
-      "the failure detail must name the contract the hook broke");
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent,
+      "getControllers must resolve to { controllers, error } with optional string guidance and headline.", "the failure detail must name the contract the hook broke");
     assert.doesNotMatch(skeleton.headerInfo.textContent, /Please configure a controller/,
       "the no-controllers helper text must be unreachable for a hook that never answered the question");
 

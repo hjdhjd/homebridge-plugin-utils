@@ -329,4 +329,108 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     orchestrator.cleanup();
   });
+
+  test("a controllers result that names its own failure renders the plugin's words in place of the framework's", async () => {
+
+    // The hook saw the failure, so it is the one that can describe it precisely; its headline and guidance replace the framework's shared controller wording
+    // wherever it supplied them. A reported device failure already reads this way, and the two contracts answer to the same reader.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [], error: "Hub offline.", guidance: "Power the hub on.", headline: "The hub is not answering." }),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /The hub is not answering\./, "the hook's own headline renders");
+    assert.match(skeleton.headerInfo.textContent, /Power the hub on\./, "and its own guidance renders beside it");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Unable to retrieve the controller list\./,
+      "the framework's shared controller headline is displaced rather than shown alongside");
+    assert.match(skeleton.headerInfo.textContent, /Hub offline\./, "and the reported error still reaches the failure text");
+
+    orchestrator.cleanup();
+  });
+
+  test("a controllers result that names no copy of its own keeps the framework's headline and the plugin's configured guidance", async () => {
+
+    // The plugin's configured guidance speaks for every controller failure it can have, so it is what a failure with nothing of its own to say reads. This is the
+    // page exactly as it was before a result could carry copy, which is what makes the copy an addition rather than a change of behavior.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [], error: "Hub offline." }),
+      ui: { controllerFailureGuidance: "Check the hub's address in the plugin settings.", controllerRetryEnableDelayMs: 20 }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the controller list\./, "the framework's controller headline renders");
+    assert.match(skeleton.headerInfo.textContent, /Check the hub's address in the plugin settings\./, "with the plugin's configured guidance");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Verify the controller's connection details are correct/,
+      "which is what the configured guidance displaces");
+
+    orchestrator.cleanup();
+  });
+
+  test("a controllers result whose display copy is not a string lands the contract's own message on the retry view", async () => {
+
+    // Each copy slot is appended to the error block as a text child, so a value that is not text would render as something no one can act on. The guard refuses it
+    // at the boundary, and show() has no plugin code on its call stack to hand the TypeError to, so it lands where every other boot failure lands.
+    using _dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using _homebridge = installHomebridge(fake);
+
+    seedBootstrapProbeShim(RETRY_BUTTON_CSS);
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [], error: "Hub offline.", headline: 42 }),
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(skeleton.headerInfo.textContent,
+      /getControllers must resolve to \{ controllers, error \} with optional string guidance and headline\./,
+      "the contract guard's own message reaches the user verbatim");
+    assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the controller list\./, "under the controllers site's own failure headline");
+    assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "and the retry affordance renders with it");
+
+    orchestrator.cleanup();
+  });
 });

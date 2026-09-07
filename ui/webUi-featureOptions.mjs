@@ -79,12 +79,19 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * The resolved shape of a `getControllers` hook: the single contract every controller fetch crosses. It carries the controller list and the connection outcome
  * together, on the same reasoning as {@link DeviceListResult} - a failure travels back with the response it belongs to rather than through a separate side-channel -
  * and it is what lets the page tell "this plugin has no controllers configured" apart from "the controllers could not be reached", two situations whose remedies
- * have nothing in common.
+ * have nothing in common. The display copy travels the same way and for the same reason: the outcome is what knows which failure this was, so the words describing
+ * it belong to the outcome rather than to a static setting that has to speak for every failure at once.
  *
  * @typedef {Object} ControllerListResult
  * @property {Controller[]} controllers - The plugin's configured controllers; empty when the probe failed or when the plugin legitimately has none configured.
  * @property {string} error - The user-facing connection-failure message: empty when the fetch succeeded, the failure text when the fetch failed and `controllers`
  *   is empty.
+ * @property {string} [guidance] - What the user should do about THIS failure, read only when `error` is non-empty. It overrides the guidance the page would
+ *   otherwise show - the plugin's own `ui.controllerFailureGuidance` where it supplied one, the framework's shared controller wording where it did not - so a
+ *   plugin that can tell a bad credential from an unreachable address sends the user after the right thing in each case.
+ * @property {string} [headline] - The failure's own headline, read only when `error` is non-empty, replacing the framework's connection-failure wording on the
+ *   rendered error view. A rejection thrown out of the hook carries no display copy at all and keeps the framework's, which is what makes a hook that reports its
+ *   failure and one that throws read identically until the plugin chooses otherwise.
  */
 
 /**
@@ -706,7 +713,8 @@ export class webUiFeatureOptions {
     // common, and only one of which the user can act on from this page.
     if(controllerResult.error) {
 
-      this.#failConnection({ err: controllerResult.error, signal, site: "controllers" });
+      this.#failConnection({ copy: { guidance: controllerResult.guidance, headline: controllerResult.headline }, err: controllerResult.error, signal,
+        site: "controllers" });
 
       return;
     }
@@ -1123,13 +1131,19 @@ export class webUiFeatureOptions {
    * superseded cycle reaches this catch after the cycle that replaced it has installed an affordance of its own. Its own was retired by its abort listener at the moment
    * it was superseded, so a dead cycle has nothing of its own left to clear here and an unguarded clear would only take the live page's frame away on its behalf.
    *
+   * A result that reports its own failure may name it in its own words, and each of those words outranks the table's on its own: the hook's headline or
+   * guidance where it supplied one, the configured guidance or the table's wording where it did not. That is the precedence a reported device failure already
+   * follows, so a controller the page cannot reach reads the same whichever fetch discovered it. A thrown failure carries no copy at all and keeps the table's.
+   *
    * @param {Object} args
+   * @param {{ guidance?: string, headline?: string }} [args.copy] - The failure's own display copy, as the result that reported it supplied it. Absent for a
+   *                                                                 thrown failure, and either name may be absent while the other is supplied.
    * @param {*} args.err - The failure value - thrown or reported - tested for a deadline expiry and rendered as the failure's message.
    * @param {AbortSignal} args.signal - The signal of the cycle the failure belongs to.
    * @param {string} args.site - The await that failed, as named in the copy table.
    * @private
    */
-  #failConnection({ err, signal, site }) {
+  #failConnection({ copy = undefined, err, signal, site }) {
 
     const { guidance, headline } = connectionFailureCopy({
 
@@ -1142,7 +1156,7 @@ export class webUiFeatureOptions {
 
       this.#removeBootAffordance();
 
-      this.#store.dispatch({ guidance, headline, message: errorMessage(err), type: "connection:error" });
+      this.#store.dispatch({ guidance: copy?.guidance ?? guidance, headline: copy?.headline ?? headline, message: errorMessage(err), type: "connection:error" });
     }, signal });
   }
 
@@ -1576,20 +1590,26 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
 };
 
 /* Enforce the getControllers hook contract at one site, mirroring the guard `#devicesFor` applies to getDevices: a result that is not a `{ controllers, error }`
- * object raises a TypeError naming the contract, and an accepted one is handed back so a call site can validate and assign in one step.
+ * object raises a TypeError naming the contract, and an accepted one is handed back so a call site can validate and assign in one step. The optional display copy
+ * is held to the same string requirement the device contract holds its copy to, and for the same reason: both reach the connection-error view's DOM construction,
+ * which passes each text slot straight to appendChild, so a non-string would surface as a corrupted render rather than as a mistake anyone could locate.
  *
  * The failure this catches is a plugin still on the bare-array shape. Unchecked, its array carries no `error` and no `controllers`, so the page reads it as "this
  * plugin has no controllers configured" and says so - advice that sends the user to a settings page which is already correct. Naming the contract instead puts the
- * mistake where it happened rather than three screens later, wearing a message about something else.
+ * mistake where it happened rather than three screens later, wearing a message about something else. One message states the whole shape rather than one per field,
+ * on the reasoning `#devicesFor` gives: a plugin reading it wants the shape it should have resolved, not a fragment of it.
  *
  * Each caller routes the failure differently, and deliberately: show() catches it into the connection-error view, because no plugin code is on its call stack to
  * receive it, while refreshControllers lets it reach the caller that asked for the refresh and wrote the hook.
  */
 const assertControllerListResult = (result) => {
 
-  if(!result || !Array.isArray(result.controllers) || (typeof result.error !== "string")) {
+  const optionalCopy = [ result?.guidance, result?.headline ];
 
-    throw new TypeError("getControllers must resolve to { controllers, error }.");
+  if(!result || !Array.isArray(result.controllers) || (typeof result.error !== "string") ||
+    optionalCopy.some((copy) => (copy !== undefined) && (typeof copy !== "string"))) {
+
+    throw new TypeError("getControllers must resolve to { controllers, error } with optional string guidance and headline.");
   }
 
   return result;

@@ -10,6 +10,7 @@
  */
 import type { Clock } from "./clock.ts";
 import type { Logging } from "homebridge";
+import { markHandled } from "./mark-handled.ts";
 import { systemClock } from "./clock.ts";
 
 // Validates a name against HomeKit's naming conventions. Compiled once at module scope since this sits on the fast path of sanitizeName().
@@ -19,10 +20,6 @@ const VALID_HOMEKIT_NAME = /^(?!.*\p{Extended_Pictographic})(?!.* {2})(?=^[\p{L}
 // without branching for the "no signal supplied" case on every operation. Shared module-scope constant rather than per-call allocation - the underlying platform
 // AbortController that produced it is unreferenced after module init, leaving the signal in a permanent unaborted state for the module's lifetime.
 const NEVER_ABORTED_SIGNAL = new AbortController().signal;
-
-// Shared no-op reaction used by {@link markHandled} to mark promises as observed. Module-scope constant keeps the identity stable across call sites so attaching the
-// reaction is a single function-reference pass rather than a fresh closure allocation per call.
-const MARK_HANDLED_NOOP = (): void => { /* Intentionally empty. */ };
 
 /**
  * The shared inert `Disposable` an API answers with when there is nothing to cancel: {@link onAbort}'s pre-aborted branch, which registered no listener, and the
@@ -315,36 +312,6 @@ export function onAbort(signal: AbortSignal, handler: () => void): Disposable {
   // that serve many short-lived waits. `removeEventListener` does nothing - calling it after the listener has already fired (and been auto-removed by `{ once: true }`)
   // is a safe no-op.
   return { [Symbol.dispose]: (): void => signal.removeEventListener("abort", handler) };
-}
-
-/**
- * Attach a shared no-op rejection handler to `promise` so that if it rejects and no other observer is attached, Node does not emit an `UnhandledPromiseRejection`
- * warning. Returns the original promise so callers can mark-and-assign in one expression.
- *
- * Use this on internal promise handles (`ready`, `exited`, init segments) that a class exposes for callers who may or may not choose to observe them. Callers who
- * `await` the promise or attach their own `.catch` still see the rejection through their own chain - this helper only marks the promise as observed for Node's
- * unhandled-rejection tracker.
- *
- * @typeParam T  - The resolved value type.
- * @param promise - The promise to mark handled.
- *
- * @returns The same promise, for chained assignment.
- *
- * @example
- *
- * ```ts
- * this.ready = markHandled(readyResolvers.promise);
- * ```
- *
- * @category Utilities
- */
-// Identity-preserving helper: returns the caller's promise unchanged so mark-and-assign flows (`this.ready = markHandled(...)`) keep reference equality with the
-// underlying resolver. Marking this `async` would wrap the return in a fresh promise chain and break that contract.
-export function markHandled<T>(promise: Promise<T>): Promise<T> {
-
-  promise.catch(MARK_HANDLED_NOOP);
-
-  return promise;
 }
 
 /**
@@ -790,6 +757,11 @@ export function debugGatedLog(base: Logger, isEnabled: () => boolean): Homebridg
 // ship into `dist/ui/` without dragging in any of util.ts's Node-only imports); util.ts surfaces them here so server-side consumers see the same public API they
 // always did. The single SSOT is `formatters.ts`; this file is just a forwarding re-export.
 export { formatBps, formatBytes, formatMs, formatPercent, formatSeconds } from "./formatters.ts";
+
+// Re-export the handled mark from the browser-safe `mark-handled.ts` module. The webUI imports it directly from there (so it can ship into `dist/ui/` without
+// dragging in any of util.ts's Node-only imports); util.ts surfaces it here so server-side consumers reach it alongside the rest of the utilities. The single
+// SSOT is `mark-handled.ts`; this file is just a forwarding re-export.
+export { markHandled } from "./mark-handled.ts";
 
 /**
  * Render an arbitrary thrown value as a clean log-suffix string. Real `Error` instances surface their `.message`; everything else is coerced through `String(...)`.

@@ -8,6 +8,7 @@ import { BOOT_AWAIT_DEADLINE_SECONDS, webUiFeatureOptions } from "./webUi-featur
 import { DeadlineExpiredError, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
 import { paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
+import { markHandled } from "./mark-handled.js";
 import { registerThemeEffect } from "./webUi-theming.mjs";
 import { registerTokensEffect } from "./webUi-tokens.mjs";
 
@@ -287,13 +288,12 @@ export class webUi {
     if(!this.#themingPromise) {
 
       registerTokensEffect({ signal: this.#epochSignal });
-      this.#themingPromise = registerThemeEffect({ host: homebridge, probe, signal: this.#epochSignal });
 
       // A caller that voids the returned promise attaches no rejection handler, and the void operator does not mark a rejection handled - so this branch owns the
       // diagnostic posture: it marks a failed initial mode read handled for the page (the failure is survivable by design - the sheets and the followed host
       // signals are live, and the next host announcement applies the mode), while a caller that awaits still observes the rejection through its own branch of the
-      // same promise.
-      this.#themingPromise.catch(() => {});
+      // same promise. The mark is the library's own, and it answers the promise it was handed, so the memo every caller shares keeps one identity.
+      this.#themingPromise = markHandled(registerThemeEffect({ host: homebridge, probe, signal: this.#epochSignal }));
     }
 
     return this.#themingPromise;

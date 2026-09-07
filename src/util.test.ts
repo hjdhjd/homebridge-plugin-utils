@@ -1,13 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, hasErrorCode, onAbort,
- * waitWithSignal,
- * markHandled, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
+ * waitWithSignal, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
  * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
  * formatPercent, formatErrorMessage, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes, formatErrorMessage,
-  formatMs, formatPercent, formatSeconds, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, markHandled,
+  formatMs, formatPercent, formatSeconds, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter,
   membershipDelta, onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream, takeLast, toStartCase, validateName,
   waitWithSignal } from "./util.ts";
 import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, settle } from "./testing/index.ts";
@@ -558,39 +557,6 @@ describe("waitWithSignal", () => {
 
       laterRejection.reject(new Error("post-abort rejection"));
     });
-  });
-});
-
-describe("markHandled", () => {
-
-  test("returns the original promise unchanged for chained assignment", () => {
-
-    const resolvers: PromiseWithResolvers<number> = Promise.withResolvers();
-
-    assert.equal(markHandled(resolvers.promise), resolvers.promise);
-  });
-
-  test("suppresses unhandled-rejection tracking without consuming the rejection", async () => {
-
-    // The original promise still rejects through any observer's own chain - `markHandled` opts out of Node's unhandled-rejection warning but does not swallow the
-    // error. A caller attaching a `.catch` after the call site still sees the rejection.
-    const resolvers: PromiseWithResolvers<number> = Promise.withResolvers();
-    const reason = new Error("boom");
-    const handled = markHandled(resolvers.promise);
-
-    resolvers.reject(reason);
-
-    await assert.rejects(handled, (error: unknown) => error === reason);
-  });
-
-  test("resolves pass through unchanged", async () => {
-
-    const resolvers: PromiseWithResolvers<string> = Promise.withResolvers();
-    const handled = markHandled(resolvers.promise);
-
-    resolvers.resolve("ok");
-
-    assert.equal(await handled, "ok");
   });
 });
 

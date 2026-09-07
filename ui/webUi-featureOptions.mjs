@@ -9,6 +9,7 @@ import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { buildCatalogIndex, expandOption } from "./featureOptions.js";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { createElement, delay, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
+import { markHandled } from "./mark-handled.js";
 import { modelLoaded } from "./webUi-featureOptions/selectors.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
@@ -538,20 +539,20 @@ export class webUiFeatureOptions {
 
       // The clear is chained here rather than written at each call site because every reader shares this one promise: whoever asks next has to find the memo
       // empty, whether or not the reader that saw the failure is still on the page to notice.
-      this.#catalogPromise = withDeadline({ promise: homebridge.request("/getOptions").then(assertCatalogResponse), seconds: CATALOG_DEADLINE_SECONDS,
+
+      /* The memoized promise is marked handled for the page at the moment it is created rather than once per call. The boot starts the read before it can await
+       * it - the controllers await sits between the two - and a plugin reader may attach to it later still, so a deadline or shape rejection landing in that
+       * window meets no handler and surfaces as an unhandled rejection the page itself caused. Every reader still observes the rejection through its own branch
+       * of the same promise, so nothing here swallows a failure a caller was waiting to see, and the mark answers the promise it was handed so the memo keeps
+       * one identity.
+       */
+      this.#catalogPromise = markHandled(withDeadline({ promise: homebridge.request("/getOptions").then(assertCatalogResponse), seconds: CATALOG_DEADLINE_SECONDS,
         signal: this.#epochSignal }).catch((error) => {
 
         this.#catalogPromise = null;
 
         throw error;
-      });
-
-      /* Mark the memoized promise handled for the page, once at the moment it is created rather than once per call. The boot starts the read before it can await
-       * it - the controllers await sits between the two - and a plugin reader may attach to it later still, so a deadline or shape rejection landing in that
-       * window meets no handler and surfaces as an unhandled rejection the page itself caused. Every reader still observes the rejection through its own branch
-       * of the same promise, so nothing here swallows a failure a caller was waiting to see.
-       */
-      this.#catalogPromise.catch(() => {});
+      }));
     }
 
     return this.#catalogPromise;

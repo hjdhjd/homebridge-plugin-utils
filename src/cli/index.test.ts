@@ -1631,6 +1631,62 @@ describe("prepareChrome", () => {
     assert.match(html, /prismcast: streaming server\./, "the local-file project list must be stamped into the webUI");
   });
 
+  test("offline leaves a remote project source unfetched and the projects region as it is", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifest = { ...BASE_MANIFEST, projects: { url: "https://projects.test/list.json" } };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    // A fetch that throws the moment it is called, so reaching the network at all under an offline run is a failure this row reports rather than tolerates.
+    const fetchImpl = (async (): Promise<unknown> => {
+
+      throw new Error("The project list must not be fetched under an offline run.");
+    }) as unknown as typeof fetch;
+
+    const webuiPath = join(scratch.path, "homebridge-ui", "public", "index.html");
+
+    await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, offline: true, pluginRoot: scratch.path, splice: spliceMarkedRegion,
+      spliceJson: spliceJsonStringValue });
+
+    const html = await readFile(webuiPath, "utf8");
+
+    /* The projects region keeps the exact placeholder it was written with, while the documentation and logo regions in the same file are stamped: one placeholder
+     * left in the whole document is what says the flag skipped a region rather than the file.
+     */
+    assert.ok(html.includes(docChrome.PROJECTS_BEGIN + "\nstale region content\n" + docChrome.PROJECTS_END),
+      "the projects region must be left exactly as it was");
+    assert.equal(html.split("stale region content").length - 1, 1, "every region other than the projects region must still be stamped");
+
+    // With the projects region unplanned, a check of the tree the write just stamped has nothing to report: the skip is consistent across both modes.
+    const changed = await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, mode: "check", offline: true, pluginRoot: scratch.path,
+      splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+
+    assert.deepEqual(changed, [], "an offline check of an offline-stamped tree must report nothing");
+  });
+
+  test("offline still resolves a local-file project source", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const manifest = { ...BASE_MANIFEST, projects: { file: "projects.json" } };
+    const manifestPath = await writeManifest({ manifest, root: scratch.path });
+
+    await writePluginTree({ root: scratch.path });
+
+    const projects = [{ blurb: "streaming server.", href: "https://github.com/acme/prismcast", title: "prismcast" }];
+
+    await writeFile(join(scratch.path, "projects.json"), JSON.stringify(projects));
+
+    await prepareChrome({ chrome: docChrome, manifestPath, offline: true, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+
+    const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
+
+    assert.match(html, /prismcast: streaming server\./, "a source that needs no network must render under the flag exactly as it does without it");
+  });
+
   test("frames a manifest that is not valid JSON with a source-naming diagnostic", async () => {
 
     await using scratch = await makeScratchRoot();
@@ -1817,6 +1873,43 @@ describe("runCli - prepare-chrome dispatch", () => {
 
     assert.match(readme, /# Example Plugin/, "the masthead must be stamped through the dispatch path");
     assert.equal(readme.includes("stale region content"), false, "the README regions must be replaced");
+  });
+
+  test("--offline reaches prepareChrome, so neither mode touches the network", async (t) => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const cwd = join(scratch.path, "plugin");
+
+    await writeChromeDist(sourceRoot);
+    await mkdir(cwd, { recursive: true });
+
+    const manifest = { ...BASE_MANIFEST, projects: { url: "https://projects.test/list.json" } };
+
+    await writeManifest({ manifest, root: cwd });
+    await writePluginTree({ root: cwd });
+
+    /* The dispatch passes no `fetchImpl`, so `prepareChrome` falls back to the module default - the global `fetch` - which makes mocking the global the only way to
+     * hold the dispatch to the flag. The mock throws on call, so a wrong branch surfaces as a framed failure and a non-zero exit, and its call count is read
+     * directly besides. The context restores the global when the row ends.
+     */
+    const fetched = t.mock.method(globalThis, "fetch", () => {
+
+      throw new Error("The project list must not be fetched under --offline.");
+    });
+
+    const seed = captureStderr();
+
+    assert.equal(await runCli({ argv: [ "prepare-chrome", "docChrome.mjs", "--offline" ], cwd, sourceRoot, stderr: seed.stderr }), 0,
+      "an offline write must stamp the tree without the network; stderr: " + seed.chunks());
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-chrome", "docChrome.mjs", "--check", "--offline" ], cwd, sourceRoot, stderr: capture.stderr });
+
+    assert.equal(code, 0, "an offline check of the tree the offline write stamped is not drift; stderr: " + capture.chunks());
+    assert.equal(capture.chunks(), "", "a check that finds nothing says nothing");
+    assert.equal(fetched.mock.callCount(), 0, "no run under --offline may reach the network");
   });
 
   test("with no manifest argument exits 1 with a framed usage error", async () => {

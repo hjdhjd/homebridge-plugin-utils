@@ -125,7 +125,7 @@ Commands:
   prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.
   prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.
   prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.
-  prepare-chrome <manifest> [--root <dir>] [--check]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across the plugin's docs, README, and webUI.
+  prepare-chrome <manifest> [--root <dir>] [--check] [--offline]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across the plugin's docs, README, and webUI.
 ```
 
 - **`prepare-ui <destination>`** mirrors this library's compiled browser-side webUI into your plugin's UI directory (typically `homebridge-ui/public/lib`) under a content-hashed, version-named subfolder. Because the folder name changes whenever its contents change, the browser's HTTP cache invalidates structurally - you never have to chase a stale cached copy after a rebuild. The run is safe to repeat and sweeps away the previous build's subfolder in the same pass, while leaving any non-versioned files in the destination untouched.
@@ -134,7 +134,7 @@ Commands:
 
 - **`prepare-mqtt <catalog-module> [--doc <path>] [--check]`** regenerates your plugin's MQTT topic tables straight from its topic catalog, splicing the published and subscribed tables into their own marked regions of the target document - `docs/MQTT.md` by default, or the `--doc` path you pass. The headings, the lead sentences, and every hand-written paragraph around those regions stay yours: only the tables are generated, so the topics your documentation lists are the topics your plugin actually speaks.
 
-- **`prepare-chrome <manifest> [--root <dir>] [--check]`** stamps the shared documentation chrome - the masthead, the navigation index, the dashboard badges, the logo, the project list, and the configuration schema's footer sentence - across your plugin's README, its documentation pages, its webUI, and its `config.schema.json`, all from one manifest. Pass `--root` to stamp a tree other than the directory you run it from.
+- **`prepare-chrome <manifest> [--root <dir>] [--check] [--offline]`** stamps the shared documentation chrome - the masthead, the navigation index, the dashboard badges, the logo, the project list, and the configuration schema's footer sentence - across your plugin's README, its documentation pages, its webUI, and its `config.schema.json`, all from one manifest. Pass `--root` to stamp a tree other than the directory you run it from. Pass `--offline` to leave a remote project list unfetched, so a check or a write runs without the network: the projects region is left as it is and every other region proceeds.
 
 ## Lint Configuration
 

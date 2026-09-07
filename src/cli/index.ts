@@ -57,8 +57,8 @@ export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
   "  prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.\n" +
   "  prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
-  "  prepare-chrome <manifest> [--root <dir>] [--check]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across the plugin's " +
-  "docs, README, and webUI.\n";
+  "  prepare-chrome <manifest> [--root <dir>] [--check] [--offline]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across " +
+  "the plugin's docs, README, and webUI.\n";
 
 /**
  * Compute a deterministic content hash over `root`'s file tree. Walks every file in lexicographic order of relative POSIX path so two runs against the same content
@@ -539,9 +539,10 @@ async function loadDocChromeManifest(manifestPath: string): Promise<unknown> {
 // to the plugin root, or a remote URL fetched at stamp time. The remote form is what lets a family-wide project list live in one external file that every plugin's build
 // pulls from, keeping this library free of any plugin-specific data. The injected `parseEntries` validates the resolved entries and returns them typed, so every
 // manifest-shape check stays the single responsibility of `docChrome.ts`.
-async function resolveProjects(source: unknown, { fetchImpl, manifestPath, parseEntries, pluginRoot }: {
+async function resolveProjects(source: unknown, { fetchImpl, manifestPath, offline, parseEntries, pluginRoot }: {
   fetchImpl: typeof fetch;
   manifestPath: string;
+  offline: boolean;
   parseEntries: (value: unknown, origin: string) => readonly ProjectEntry[];
   pluginRoot: string;
 }): Promise<readonly ProjectEntry[] | undefined> {
@@ -565,6 +566,16 @@ async function resolveProjects(source: unknown, { fetchImpl, manifestPath, parse
   // A remote reference is fetched at stamp time; a non-OK response is a framed error naming the URL and status. We read the body as text and parse it ourselves so a
   // malformed remote list reports through the same framed-JSON path as a local one.
   if(("url" in source) && (typeof source.url === "string")) {
+
+    /* An offline run answers undefined without reaching the network, which is the answer an omitted `projects` field already gives: the region goes unplanned, so
+     * the file keeps the bytes it carries and every other region is rendered, compared, and written as usual. Skipping beats failing here because a consumer that
+     * asks for an offline run is stating that the network is not there to be read, and a fetch failure is not something we can tell apart from a mistyped URL.
+     * Only this remote form reads the network, so the inline and local-file sources resolve exactly as they do without the flag.
+     */
+    if(offline) {
+
+      return undefined;
+    }
 
     const response = await fetchImpl(source.url);
 
@@ -640,6 +651,7 @@ interface DocChromeModule {
  * @param args.fetchImpl    - The `fetch` implementation used to resolve a remote project source. Defaults to the global `fetch`; tests inject a fake.
  * @param args.manifestPath - Absolute path to the plugin's manifest - a compiled module or a `.json` file.
  * @param args.mode         - `"write"` to write the targets that differ, `"check"` to report them without writing. Defaults to `"write"`.
+ * @param args.offline      - When `true`, a remote project list is left unfetched and the projects region goes unplanned. Defaults to `false`.
  * @param args.pluginRoot   - Absolute path to the plugin root that the manifest's surface and file references resolve against.
  * @param args.splice       - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
  * @param args.spliceJson   - The injected {@link spliceJsonStringValue} from `doc-json.ts`, which stamps the configuration schema's footer member.
@@ -649,12 +661,13 @@ interface DocChromeModule {
  * @throws When the manifest is mis-shaped, when a resolved project source is malformed, when a target file cannot be read, when any region's marker pair is absent or
  *         ambiguous, or when the declared schema has no footer member - propagating the splices' own framed errors so the dispatch site frames them uniformly.
  */
-export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, mode = "write", pluginRoot, splice, spliceJson }: {
+export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, mode = "write", offline = false, pluginRoot, splice, spliceJson }: {
 
   chrome: DocChromeModule;
   fetchImpl?: typeof fetch;
   manifestPath: string;
   mode?: "check" | "write";
+  offline?: boolean;
   pluginRoot: string;
   splice: typeof spliceMarkedRegion;
   spliceJson: typeof spliceJsonStringValue;
@@ -669,7 +682,7 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, m
   const manifest = parseDocChromeManifest(await loadDocChromeManifest(manifestPath), manifestPath);
 
   // Resolve the optional project source to inline data before rendering; the renderers never perform I/O.
-  const projects = await resolveProjects(manifest.projects, { fetchImpl, manifestPath, parseEntries: parseProjectEntries, pluginRoot });
+  const projects = await resolveProjects(manifest.projects, { fetchImpl, manifestPath, offline, parseEntries: parseProjectEntries, pluginRoot });
 
   /* Build the per-file edit plan. Each target file collects the ordered edits that apply to it; a file may carry more than one - the README carries the masthead, the
    * documentation index, and, when declared, the dashboard badges - each applied independently. An edit names either a marked region and the pair that frames it, or
@@ -892,7 +905,7 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
   // usage banner. That throw is intentionally uncaught - the per-case try/catch blocks below wrap only the subcommand work - so it surfaces as a rejected `runCli`
   // promise at the entry point, distinct from the default case's banner handling for an unknown positional command.
   const { positionals, values } = parseArgs({ allowPositionals: true, args: [...argv],
-    options: { check: { type: "boolean" }, doc: { type: "string" }, root: { type: "string" } }, strict: true });
+    options: { check: { type: "boolean" }, doc: { type: "string" }, offline: { type: "boolean" }, root: { type: "string" } }, strict: true });
   const [ command, ...rest ] = positionals;
 
   // The docs verbs share one mode: `--check` renders and compares every target it would write and reports instead of writing, which is the whole docs gate in
@@ -1095,8 +1108,8 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
 
       try {
 
-        const changed = await prepareChrome({ chrome, manifestPath, mode, pluginRoot, splice: splicer.spliceMarkedRegion,
-          spliceJson: jsonSplicer.spliceJsonStringValue });
+        const changed = await prepareChrome({ chrome, manifestPath, mode, offline: values.offline === true, pluginRoot,
+          splice: splicer.spliceMarkedRegion, spliceJson: jsonSplicer.spliceJsonStringValue });
 
         if(mode === "check") {
 

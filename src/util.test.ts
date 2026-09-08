@@ -2386,7 +2386,7 @@ describe("formatBps", () => {
 
   test("returns integer kbps for round thousand boundaries", () => {
 
-    // Exact multiples of 1000 bits per second must not pick up a phantom decimal - the formatter suppresses the fractional part when (value % 1000) === 0.
+    // An exact multiple of a thousand bits per second is a whole number of kilobits, and a value whose rounded form is whole renders without a decimal.
     assert.equal(formatBps(1000), "1 kbps");
     assert.equal(formatBps(15000), "15 kbps");
     assert.equal(formatBps(999000), "999 kbps");
@@ -2394,7 +2394,7 @@ describe("formatBps", () => {
 
   test("returns one-decimal kbps for non-round values", () => {
 
-    // Non-integral kbps values retain a single decimal - the formatter's stated precision contract for "human readable" output.
+    // A fractional kilobit value renders to one decimal place, and one whose rounded form is whole renders whole, so a decimal appears where it carries information.
     assert.equal(formatBps(1500), "1.5 kbps");
     assert.equal(formatBps(2000), "2 kbps");
     assert.equal(formatBps(2500), "2.5 kbps");
@@ -2427,7 +2427,7 @@ describe("formatBytes", () => {
 
   test("returns integer KB for round 1024 boundaries", () => {
 
-    // Exact multiples of 1024 bytes must not pick up a phantom decimal - the formatter suppresses the fractional part when (value % 1024) === 0.
+    // An exact multiple of 1024 bytes is a whole number of kilobytes, and a value whose rounded form is whole renders without a decimal.
     assert.equal(formatBytes(1024), "1 KB");
     assert.equal(formatBytes(2048), "2 KB");
     assert.equal(formatBytes(1023 * 1024), "1023 KB");

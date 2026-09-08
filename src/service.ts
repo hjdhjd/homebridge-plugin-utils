@@ -221,6 +221,7 @@ export function acquireService<T extends Service>(accessory: PlatformAccessory, 
  * ```
  *
  * @see acquireService - to add or retrieve services.
+ * @see validCharacteristic - the same contract, applied to one characteristic's presence on a service.
  * @category Accessory
  */
 export function validService(accessory: PlatformAccessory, serviceType: WithUUID<typeof Service>, validate: boolean | ((hasService: boolean) => boolean),
@@ -244,17 +245,100 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
 }
 
 /**
- * Build a `validService` predicate for a service gated on a hardware capability and a user toggle, applying an additive-eager / subtractive-conservative asymmetry
- * between the two: the user `toggle` is absolute - when false, the service is removed - while the hardware `capability` is conservative - an existing service is kept
- * through a transient capability-false, and a new service is created only when the capability reports.
+ * The inputs {@link validCharacteristic} reconciles one characteristic's presence from: the characteristic itself, the service it lives on, and the verdict
+ * that decides whether it should exist.
+ *
+ * @category Accessory
+ */
+export interface ValidCharacteristicOptions {
+
+  /**
+   * The characteristic whose presence on the service follows the verdict.
+   */
+  readonly characteristic: CharacteristicTarget;
+
+  /**
+   * The service the characteristic lives on.
+   */
+  readonly service: Service;
+
+  /**
+   * A boolean, or a predicate handed the characteristic's current presence and answering whether it should exist.
+   */
+  readonly validate: boolean | ((hasCharacteristic: boolean) => boolean);
+}
+
+/**
+ * Validate whether a specific characteristic should exist on the given service, attaching it when it should and removing it when it should not.
+ *
+ * @param options - The characteristic, the service it lives on, and the verdict that decides its presence. See {@link ValidCharacteristicOptions}.
+ *
+ * @returns `true` if the characteristic is valid (and present afterward), or `false` if it was removed or never attached.
+ *
+ * @remarks
+ * The `validate` parameter can be either:
+ *   - a boolean (where `true` means the characteristic should exist, `false` means remove it).
+ *   - a function (which is called with `hasCharacteristic: boolean` and returns whether the characteristic should exist).
+ *
+ * Presence is read without attaching, so a characteristic the service never carried is never materialized only to be removed. A true verdict attaches through
+ * the service's own lookup, which adds an optional characteristic the service lacks and answers the existing one otherwise...the answer therefore equals the
+ * characteristic's presence once the call returns. The helper is meant for a characteristic the service declares optional. HAP attaches a characteristic
+ * outside a service's declared sets too, with a warning, and nothing here guards against that.
+ *
+ * @example
+ * ```typescript
+ * // Attach the characteristic while a configuration fact holds, and remove it otherwise.
+ * validCharacteristic({ characteristic: Characteristic.StatusFault, service, validate: hasCredentials });
+ *
+ * // Keep the characteristic if the service already carries it, or add it when the user asks for it.
+ * validCharacteristic({ characteristic: Characteristic.StatusTampered, service, validate: (has) => has || config.showTamper });
+ *
+ * // Gate the characteristic on a hardware capability and a user toggle.
+ * validCharacteristic({ characteristic: Characteristic.StatusTampered, service,
+ *   validate: capabilityGate({ capability: device.reportsTamper, toggle: config.tamperDetection }) });
+ * ```
+ *
+ * @see validService - the same contract, applied to whether a service should exist on an accessory.
+ * @see capabilityGate - builds a predicate for either applier.
+ * @category Accessory
+ */
+export function validCharacteristic({ characteristic, service, validate }: ValidCharacteristicOptions): boolean {
+
+  // Read prior existence side-effect-free...getCharacteristic would attach the very characteristic the false branch is about to remove.
+  const present = service.testCharacteristic(characteristic);
+
+  // Resolve `validate` against the current presence and remove the characteristic when the validator votes false. The function form receives the actual presence
+  // boolean so callers can express add-if-missing semantics like `(has) => has || config.showTamper`.
+  if(!((typeof validate === "function") ? validate(present) : validate)) {
+
+    if(present) {
+
+      service.removeCharacteristic(service.getCharacteristic(characteristic));
+    }
+
+    return false;
+  }
+
+  // One lookup is the whole of the additive half: it attaches an optional characteristic the service lacks and answers the one already there otherwise, so what
+  // the service carries afterward matches the answer below.
+  service.getCharacteristic(characteristic);
+
+  return true;
+}
+
+/**
+ * Build a presence predicate for a service or a characteristic gated on a hardware capability and a user toggle, applying an additive-eager /
+ * subtractive-conservative asymmetry between the two: the user `toggle` is absolute - when false, what it gates is removed - while the hardware `capability`
+ * is conservative - an existing service is kept through a transient capability-false, and a missing one is added only when the capability reports.
  *
  * @param options - The `capability` and `toggle` inputs for the gate.
  *
- * @returns A `validService` function-form predicate, `(hasService) => toggle && (hasService || capability)`.
+ * @returns A function-form predicate for `validService` or `validCharacteristic`, `(present) => toggle && (present || capability)`.
  *
  * @remarks
- * Pass the result as `validService`'s `validate` argument. The asymmetry keeps a capability-gated service from being removed during a transient window in which the
- * device under-reports its capability, while still honoring a user who disables the service. A service with no user toggle should gate on its capability directly.
+ * Pass the result as the `validate` argument of `validService` or `validCharacteristic`. The asymmetry keeps a capability-gated service from being removed
+ * during a transient window in which the device under-reports its capability, while still honoring a user who disables the service. A service with no user
+ * toggle should gate on its capability directly.
  *
  * @example
  * ```typescript
@@ -263,12 +347,13 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
  * ```
  *
  * @see validService - consumes the returned predicate.
+ * @see validCharacteristic - consumes the returned predicate for one characteristic on a service.
  * @see updatePresenceCharacteristic - the same asymmetry, applied to one characteristic's presence on a service.
  * @category Accessory
  */
-export function capabilityGate({ capability, toggle }: { capability: boolean; toggle: boolean }): (hasService: boolean) => boolean {
+export function capabilityGate({ capability, toggle }: { capability: boolean; toggle: boolean }): (present: boolean) => boolean {
 
-  return hasService => toggle && (hasService || capability);
+  return present => toggle && (present || capability);
 }
 
 /**

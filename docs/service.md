@@ -40,6 +40,21 @@ read-through behind it, and whether the device can currently be seen.
 
 ***
 
+### ValidCharacteristicOptions
+
+The inputs [validCharacteristic](#validcharacteristic) reconciles one characteristic's presence from: the characteristic itself, the service it lives on, and the verdict
+that decides whether it should exist.
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="characteristic-1"></a> `characteristic` | `readonly` | [`CharacteristicTarget`](#characteristictarget) | The characteristic whose presence on the service follows the verdict. |
+| <a id="service-1"></a> `service` | `readonly` | `Service` | The service the characteristic lives on. |
+| <a id="validate"></a> `validate` | `readonly` | `boolean` \| ((`hasCharacteristic`) => `boolean`) | A boolean, or a predicate handed the characteristic's current presence and answering whether it should exist. |
+
+***
+
 ### AcquireServiceTarget
 
 ```ts
@@ -169,12 +184,12 @@ lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
 ### capabilityGate()
 
 ```ts
-function capabilityGate(options): (hasService) => boolean;
+function capabilityGate(options): (present) => boolean;
 ```
 
-Build a `validService` predicate for a service gated on a hardware capability and a user toggle, applying an additive-eager / subtractive-conservative asymmetry
-between the two: the user `toggle` is absolute - when false, the service is removed - while the hardware `capability` is conservative - an existing service is kept
-through a transient capability-false, and a new service is created only when the capability reports.
+Build a presence predicate for a service or a characteristic gated on a hardware capability and a user toggle, applying an additive-eager /
+subtractive-conservative asymmetry between the two: the user `toggle` is absolute - when false, what it gates is removed - while the hardware `capability`
+is conservative - an existing service is kept through a transient capability-false, and a missing one is added only when the capability reports.
 
 #### Parameters
 
@@ -186,14 +201,15 @@ through a transient capability-false, and a new service is created only when the
 
 #### Returns
 
-A `validService` function-form predicate, `(hasService) => toggle && (hasService || capability)`.
+A function-form predicate for `validService` or `validCharacteristic`, `(present) => toggle && (present || capability)`.
 
-(`hasService`) => `boolean`
+(`present`) => `boolean`
 
 #### Remarks
 
-Pass the result as `validService`'s `validate` argument. The asymmetry keeps a capability-gated service from being removed during a transient window in which the
-device under-reports its capability, while still honoring a user who disables the service. A service with no user toggle should gate on its capability directly.
+Pass the result as the `validate` argument of `validService` or `validCharacteristic`. The asymmetry keeps a capability-gated service from being removed
+during a transient window in which the device under-reports its capability, while still honoring a user who disables the service. A service with no user
+toggle should gate on its capability directly.
 
 #### Example
 
@@ -205,6 +221,7 @@ validService(accessory, Service.Switch, capabilityGate({ capability: deviceRepor
 #### See
 
  - validService - consumes the returned predicate.
+ - validCharacteristic - consumes the returned predicate for one characteristic on a service.
  - updatePresenceCharacteristic - the same asymmetry, applied to one characteristic's presence on a service.
 
 ***
@@ -446,6 +463,58 @@ updateServices(accessory, hap.Characteristic.StatusActive, isReachable);
 
 ***
 
+### validCharacteristic()
+
+```ts
+function validCharacteristic(options): boolean;
+```
+
+Validate whether a specific characteristic should exist on the given service, attaching it when it should and removing it when it should not.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | [`ValidCharacteristicOptions`](#validcharacteristicoptions) | The characteristic, the service it lives on, and the verdict that decides its presence. See [ValidCharacteristicOptions](#validcharacteristicoptions). |
+
+#### Returns
+
+`boolean`
+
+`true` if the characteristic is valid (and present afterward), or `false` if it was removed or never attached.
+
+#### Remarks
+
+The `validate` parameter can be either:
+  - a boolean (where `true` means the characteristic should exist, `false` means remove it).
+  - a function (which is called with `hasCharacteristic: boolean` and returns whether the characteristic should exist).
+
+Presence is read without attaching, so a characteristic the service never carried is never materialized only to be removed. A true verdict attaches through
+the service's own lookup, which adds an optional characteristic the service lacks and answers the existing one otherwise...the answer therefore equals the
+characteristic's presence once the call returns. The helper is meant for a characteristic the service declares optional. HAP attaches a characteristic
+outside a service's declared sets too, with a warning, and nothing here guards against that.
+
+#### Example
+
+```typescript
+// Attach the characteristic while a configuration fact holds, and remove it otherwise.
+validCharacteristic({ characteristic: Characteristic.StatusFault, service, validate: hasCredentials });
+
+// Keep the characteristic if the service already carries it, or add it when the user asks for it.
+validCharacteristic({ characteristic: Characteristic.StatusTampered, service, validate: (has) => has || config.showTamper });
+
+// Gate the characteristic on a hardware capability and a user toggle.
+validCharacteristic({ characteristic: Characteristic.StatusTampered, service,
+  validate: capabilityGate({ capability: device.reportsTamper, toggle: config.tamperDetection }) });
+```
+
+#### See
+
+ - validService - the same contract, applied to whether a service should exist on an accessory.
+ - capabilityGate - builds a predicate for either applier.
+
+***
+
 ### validService()
 
 ```ts
@@ -497,4 +566,5 @@ validService(accessory, Service.Switch, (hasService) => hasService || config.ena
 
 #### See
 
-acquireService - to add or retrieve services.
+ - acquireService - to add or retrieve services.
+ - validCharacteristic - the same contract, applied to one characteristic's presence on a service.

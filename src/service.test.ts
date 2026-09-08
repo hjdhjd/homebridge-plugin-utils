@@ -10,12 +10,12 @@
  */
 import * as hap from "@homebridge/hap-nodejs";
 import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
+import type { PresenceReading, ValidCharacteristicOptions } from "./service.ts";
 import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic, updateServices,
-  validService } from "./service.ts";
+  validCharacteristic, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import { HAPStatus } from "./homebridge-enums.ts";
 import type { Nullable } from "./util.ts";
-import type { PresenceReading } from "./service.ts";
 import assert from "node:assert/strict";
 
 // The HAP static-Characteristic shape: every Characteristic class ships with a `UUID` static and satisfies `new () => Characteristic`. That is the exact type HAP's
@@ -113,6 +113,33 @@ function presenceFixture(): { changes: () => number; configurations: () => numbe
     reading: (next: PresenceReading): void => {
 
       holder.reading = next;
+    },
+    service
+  };
+}
+
+/* The gate fixture: a real HAP MotionSensor service, which declares `StatusTampered` optional, and a counter for the service-level events the rows read their
+ * outcomes from. The count is the observer because the service raises `service-configurationChange` on an attach and on a detach alike, so a zero delta is what
+ * proves a pass materialized nothing - `testCharacteristic` answers only what the service carries at the moment it is asked, and cannot tell a characteristic
+ * that was never attached from one attached and taken away again.
+ */
+function gateFixture(): { configurations: () => number; gate: (validate: boolean | ((hasCharacteristic: boolean) => boolean)) => boolean; service: Service } {
+
+  const { hapAccessory } = makePlatformAccessory();
+  const service = hapAccessory.addService(hap.Service.MotionSensor, "Motion");
+  let configurations = 0;
+
+  service.on("service-configurationChange", () => {
+
+    configurations++;
+  });
+
+  return {
+
+    configurations: (): number => configurations,
+    gate: (validate: boolean | ((hasCharacteristic: boolean) => boolean)): boolean => {
+
+      return validCharacteristic({ characteristic: hap.Characteristic.StatusTampered, service, validate });
     },
     service
   };
@@ -226,6 +253,25 @@ const _presenceReadingShapeExercises = (): void => {
 
   // @ts-expect-error - a symbol is not a CharacteristicValue, so no reading can carry one.
   const _symbolValued: PresenceReading = { state: "reported", value: Symbol("not a characteristic value") };
+};
+
+/* Compile-time shape exercises for the options {@link validCharacteristic} reads a characteristic's fate from. These never run - the function is never called,
+ * and its leading underscore marks it, with its bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals. The
+ * negative cases use `@ts-expect-error`, which fails the build if the error each expects ever stops occurring.
+ */
+const _validCharacteristicShapeExercises = (): void => {
+
+  const { service } = gateFixture();
+
+  // Both verdict forms are accepted: a plain boolean, and a predicate handed the presence the applier read.
+  const _booleanVerdict: ValidCharacteristicOptions = { characteristic: hap.Characteristic.StatusTampered, service, validate: true };
+  const _predicateVerdict: ValidCharacteristicOptions = { characteristic: hap.Characteristic.StatusTampered, service, validate: (has) => has };
+
+  // @ts-expect-error - the verdict is required, because there is nothing else for the characteristic's presence to follow.
+  const _verdictless: ValidCharacteristicOptions = { characteristic: hap.Characteristic.StatusTampered, service };
+
+  // @ts-expect-error - a string is neither a boolean nor a presence predicate, so it cannot stand in for the verdict.
+  const _stringVerdict: ValidCharacteristicOptions = { characteristic: hap.Characteristic.StatusTampered, service, validate: "yes" };
 };
 
 describe("acquireService - creation path", () => {
@@ -496,6 +542,115 @@ describe("validService", () => {
     assert.equal(validService(accessory, hap.Service.Switch, false, "sub-a"), false);
     assert.equal(accessory.getServiceById(hap.Service.Switch, "sub-a"), undefined, "matching-subtype service must be removed");
     assert.ok(accessory.getServiceById(hap.Service.Switch, "sub-b"), "non-matching-subtype service must remain");
+  });
+});
+
+describe("validCharacteristic", () => {
+
+  test("a true verdict attaches a missing characteristic and answers true", () => {
+
+    // The additive half: the service carries nothing, the verdict is true, and the applier attaches. The single configuration change is the attach itself, which
+    // is what distinguishes an attach from a lookup that found something already there.
+    const { configurations, gate, service } = gateFixture();
+
+    assert.equal(gate(true), true);
+    assert.equal(service.testCharacteristic(hap.Characteristic.StatusTampered), true, "a true verdict must attach the characteristic");
+    assert.equal(configurations(), 1, "the attach must raise exactly one configuration change");
+  });
+
+  test("a true verdict keeps a present characteristic as the same object and raises no configuration change", () => {
+
+    // Attaching is a lookup, and a lookup on a service that already carries the characteristic answers the object it already has. Identity is what proves the
+    // applier did not take the characteristic away and build a fresh one, which would drop any handler bound to it and reset the value HomeKit holds.
+    const { configurations, gate, service } = gateFixture();
+
+    gate(true);
+
+    const attached = service.getCharacteristic(hap.Characteristic.StatusTampered);
+    const before = configurations();
+
+    assert.equal(gate(true), true);
+    assert.equal(service.getCharacteristic(hap.Characteristic.StatusTampered), attached, "the characteristic must survive as the same object");
+    assert.equal(configurations(), before, "a repeat true verdict must reconfigure nothing");
+  });
+
+  test("a false verdict removes a present characteristic and answers false", () => {
+
+    // The subtractive half: the characteristic is there, the verdict is false, and the answer matches what the service carries once the applier returns. The one
+    // additional configuration change is the detach.
+    const { configurations, gate, service } = gateFixture();
+
+    gate(true);
+
+    const before = configurations();
+
+    assert.equal(gate(false), false);
+    assert.equal(service.testCharacteristic(hap.Characteristic.StatusTampered), false, "a false verdict must remove the characteristic");
+    assert.equal(configurations(), before + 1, "the detach must raise exactly one configuration change");
+  });
+
+  test("a false verdict on a service that never carried the characteristic attaches nothing", () => {
+
+    // Why presence is read through `testCharacteristic`: an applier that looked the characteristic up before removing it would attach and detach it, leaving the
+    // service carrying nothing but charging two configuration changes for the round trip. The count is what tells that path apart from this one.
+    const { configurations, gate, service } = gateFixture();
+
+    assert.equal(gate(false), false);
+    assert.equal(service.testCharacteristic(hap.Characteristic.StatusTampered), false, "a false verdict must leave the characteristic absent");
+    assert.equal(configurations(), 0, "a characteristic the service never carried must never be materialized");
+  });
+
+  test("the function form receives the current presence and its verdict decides", () => {
+
+    // The predicate is handed the presence read before the verdict, which is what lets a caller write add-if-missing policies like `(has) => has || flag`. The
+    // second pass sees the characteristic the first pass attached, so the pair proves the argument tracks the service rather than being a constant.
+    const { gate, service } = gateFixture();
+    const seen: boolean[] = [];
+
+    assert.equal(gate((has) => {
+
+      seen.push(has);
+
+      return true;
+    }), true);
+
+    assert.deepEqual(seen, [false], "the first pass must observe the characteristic as absent");
+    assert.equal(service.testCharacteristic(hap.Characteristic.StatusTampered), true, "a true verdict must attach the characteristic");
+
+    assert.equal(gate((has) => {
+
+      seen.push(has);
+
+      return false;
+    }), false);
+
+    assert.deepEqual(seen, [ false, true ], "the second pass must observe the characteristic the first pass attached");
+    assert.equal(service.testCharacteristic(hap.Characteristic.StatusTampered), false, "a false verdict must remove the characteristic");
+  });
+
+  test("a capabilityGate predicate applies to a characteristic: a lapsed capability keeps a present one and adds no missing one, and a false toggle removes", () => {
+
+    // The gate composes at either level unchanged, which is the whole reason the applier takes the same predicate shape as its service-level counterpart: the
+    // conservative half keeps a characteristic the service already carries through a transient capability-false while declining to add a missing one, and the
+    // absolute half removes on a user toggle turned off whatever the capability reports.
+    const lapsed = gateFixture();
+
+    lapsed.gate(true);
+
+    assert.equal(lapsed.gate(capabilityGate({ capability: false, toggle: true })), true, "a lapsed capability must keep a characteristic already attached");
+    assert.equal(lapsed.service.testCharacteristic(hap.Characteristic.StatusTampered), true);
+
+    const missing = gateFixture();
+
+    assert.equal(missing.gate(capabilityGate({ capability: false, toggle: true })), false, "a lapsed capability must add no characteristic");
+    assert.equal(missing.configurations(), 0, "a characteristic the capability has not vouched for must never be materialized");
+
+    const disabled = gateFixture();
+
+    disabled.gate(true);
+
+    assert.equal(disabled.gate(capabilityGate({ capability: true, toggle: false })), false, "a disabled toggle must remove the characteristic");
+    assert.equal(disabled.service.testCharacteristic(hap.Characteristic.StatusTampered), false);
   });
 });
 

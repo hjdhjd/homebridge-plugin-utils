@@ -10,9 +10,10 @@
  * `util.ts`'s Node-only dependency graph, which the browser cannot resolve. This module is the SSOT for the magnitude-rendering policy. It has zero runtime imports
  * of any kind, so shipping it alongside `featureOptions.js` is safe in any runtime that can execute ES2024+ JavaScript.
  *
- * **Precision policy.** Whole numbers render without a trailing decimal place ("5" not "5.0"); fractional numbers render to one decimal place. Centralizing the
- * precision policy in `formatMagnitude` means tightening it later - more precision, a thousands separator, locale-aware formatting - is a single-line change
- * rather than a sweep across every format helper.
+ * **Precision policy.** Every value renders rounded to one decimal place, and a value whose rounded form is a whole number renders without a decimal ("5" not
+ * "5.0", "45.8" for 45.84, "24" for 23.9997), so a decimal appears exactly when it carries information. Centralizing the precision policy in `formatMagnitude`
+ * means tightening it later - more precision, a thousands separator, locale-aware formatting - is a single-line change rather than a sweep across every format
+ * helper.
  *
  * **Consumers.** `util.ts` re-exports these for the server-side surface; `featureOptions.ts` imports directly from here to keep its browser-runnable dependency
  * graph free of `util.ts`. Both consumers share one implementation - the file is the join point.
@@ -33,11 +34,12 @@ const MS_PER_MINUTE = 60 * MS_PER_SECOND;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 const MS_PER_DAY = 24 * MS_PER_HOUR;
 
-// Shared magnitude-rendering helper used by every magnitude-based formatter, applying the module's precision policy (see the module doc): whole numbers render with
-// no trailing decimal place, fractional numbers to one decimal place.
+// Shared magnitude-rendering helper used by every magnitude-based formatter, applying the module's precision policy (see the module doc): round to one decimal
+// place, then let the number's own shortest spelling render the result, so a value that rounds to a whole reads whole and a fractional one keeps its decimal.
+// The order is what makes that hold...a whole-number test taken before the rounding answers on the raw value and leaves a decimal on a value that rounds whole.
 function formatMagnitude(value: number): string {
 
-  return ((value % 1) === 0 ? value.toFixed(0) : value.toFixed(1));
+  return String(Number(value.toFixed(1)));
 }
 
 /**
@@ -64,7 +66,7 @@ export function formatBps(value: number): string {
 
   if(value < 1000) {
 
-    return value.toString() + " bps";
+    return formatMagnitude(value) + " bps";
   }
 
   if(value < 1000000) {
@@ -101,7 +103,7 @@ export function formatBytes(value: number): string {
 
   if(value < BYTES_PER_KB) {
 
-    return value.toString() + " bytes";
+    return formatMagnitude(value) + " bytes";
   }
 
   if(value < BYTES_PER_MB) {
@@ -133,6 +135,7 @@ export function formatBytes(value: number): string {
  * @example
  *
  * ```ts
+ * formatMs(250.25);       // "250.3 ms".
  * formatMs(250);          // "250 ms".
  * formatMs(1500);         // "1.5 s".
  * formatMs(15000);        // "15 s".
@@ -147,7 +150,7 @@ export function formatMs(value: number): string {
 
   if(value < MS_PER_SECOND) {
 
-    return value.toString() + " ms";
+    return formatMagnitude(value) + " ms";
   }
 
   if(value < MS_PER_MINUTE) {
@@ -203,6 +206,7 @@ export function formatPercent(value: number): string {
  * @example
  *
  * ```ts
+ * formatSeconds(45.84);     // "45.8 s".
  * formatSeconds(45);        // "45 s".
  * formatSeconds(90);        // "1.5 min".
  * formatSeconds(1800);      // "30 min".
@@ -216,7 +220,7 @@ export function formatSeconds(value: number): string {
 
   if(value < 60) {
 
-    return value.toString() + " s";
+    return formatMagnitude(value) + " s";
   }
 
   if(value < 3600) {

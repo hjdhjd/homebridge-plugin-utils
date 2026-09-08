@@ -2377,10 +2377,11 @@ describe("formatBps", () => {
 
   test("returns bits per second for sub-1000 values", () => {
 
-    // Values below the kilobit boundary are returned verbatim with a "bps" suffix; no fractional precision is introduced.
+    // Values below the kilobit boundary stay in bits per second, and the base tier rounds like every tier above it, so a fractional rate reaches one decimal place.
     assert.equal(formatBps(0), "0 bps");
     assert.equal(formatBps(500), "500 bps");
     assert.equal(formatBps(999), "999 bps");
+    assert.equal(formatBps(2.56), "2.6 bps");
   });
 
   test("returns integer kbps for round thousand boundaries", () => {
@@ -2415,12 +2416,13 @@ describe("formatBps", () => {
 
 describe("formatBytes", () => {
 
-  test("returns raw bytes for sub-1024 values", () => {
+  test("renders sub-1024 values in bytes under the precision policy", () => {
 
-    // Values below the kilobyte boundary are returned verbatim with a "bytes" suffix; no fractional precision is introduced.
+    // Values below the kilobyte boundary stay in bytes, and the base tier rounds like every tier above it, so a fractional byte count reaches one decimal place.
     assert.equal(formatBytes(0), "0 bytes");
     assert.equal(formatBytes(512), "512 bytes");
     assert.equal(formatBytes(1023), "1023 bytes");
+    assert.equal(formatBytes(512.25), "512.3 bytes");
   });
 
   test("returns integer KB for round 1024 boundaries", () => {
@@ -2513,11 +2515,15 @@ describe("formatErrorMessage", () => {
 
 describe("formatMs", () => {
 
-  test("returns raw milliseconds for sub-second values", () => {
+  test("renders sub-second values in milliseconds under the precision policy", () => {
 
     assert.equal(formatMs(0), "0 ms");
     assert.equal(formatMs(250), "250 ms");
     assert.equal(formatMs(999), "999 ms");
+
+    // The base tier rounds like every tier above it, so a fractional millisecond count reaches one decimal place rather than its raw spelling.
+    assert.equal(formatMs(0.25), "0.3 ms");
+    assert.equal(formatMs(250.25), "250.3 ms");
   });
 
   test("returns seconds at the second boundary, with one decimal for fractional values", () => {
@@ -2540,10 +2546,10 @@ describe("formatMs", () => {
     assert.equal(formatMs(3600000), "1 hr");
     assert.equal(formatMs(5400000), "1.5 hr");
 
-    // The top of the hour band pins the day threshold from below. The last millisecond before the boundary is not a whole number of hours, so the precision policy
-    // renders it with one decimal place - "24.0 hr" is the correct rendering here, not a rounding artifact.
+    // The top of the hour band asserts the day threshold from below. The last millisecond before the boundary rounds to a whole twenty-four hours, so it renders
+    // without a decimal, and the tier chosen on the raw value keeps it in the hour band - the row is where the two halves of the precision policy meet.
     assert.equal(formatMs(82800000), "23 hr");
-    assert.equal(formatMs(86399999), "24.0 hr");
+    assert.equal(formatMs(86399999), "24 hr");
   });
 
   test("returns days once values reach the day boundary", () => {
@@ -2563,6 +2569,15 @@ describe("formatPercent", () => {
     assert.equal(formatPercent(0), "0%");
     assert.equal(formatPercent(50), "50%");
     assert.equal(formatPercent(100), "100%");
+
+    // The whole-or-fractional decision is taken on the rounded value, so a percentage that rounds to a whole renders without a decimal even though the raw value
+    // carries one.
+    assert.equal(formatPercent(49.96), "50%");
+    assert.equal(formatPercent(0.04), "0%");
+
+    // A negative value keeps its sign unless it rounds to zero, where the rendering reads "0%" rather than a signed zero.
+    assert.equal(formatPercent(-2.56), "-2.6%");
+    assert.equal(formatPercent(-0.04), "0%");
   });
 
   test("renders fractional percentages with a single decimal place", () => {
@@ -2577,11 +2592,14 @@ describe("formatPercent", () => {
 
 describe("formatSeconds", () => {
 
-  test("returns raw seconds for sub-minute values", () => {
+  test("renders sub-minute values in seconds under the precision policy", () => {
 
     assert.equal(formatSeconds(0), "0 s");
     assert.equal(formatSeconds(45), "45 s");
     assert.equal(formatSeconds(59), "59 s");
+
+    // The base tier rounds like every tier above it, so a fractional second count reaches one decimal place rather than its raw spelling.
+    assert.equal(formatSeconds(45.84), "45.8 s");
   });
 
   test("returns minutes at the minute boundary, with one decimal for fractional values", () => {
@@ -2596,7 +2614,12 @@ describe("formatSeconds", () => {
     assert.equal(formatSeconds(3600), "1 hr");
     assert.equal(formatSeconds(5400), "1.5 hr");
     assert.equal(formatSeconds(82800), "23 hr");
-    assert.equal(formatSeconds(86399), "24.0 hr");
+
+    // A value whose rounded form is a whole number renders whole: an hour and a minute is 1.0167 hours, and one decimal place of that is a whole hour.
+    assert.equal(formatSeconds(3660), "1 hr");
+
+    // Where the two halves meet, in seconds: the last second before the day boundary rounds to twenty-four whole hours, and the raw value keeps it in the hour band.
+    assert.equal(formatSeconds(86399), "24 hr");
   });
 
   test("returns days once values reach the day boundary", () => {

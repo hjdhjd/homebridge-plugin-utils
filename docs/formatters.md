@@ -11,9 +11,10 @@ formatter registry needs `formatBps`, `formatBytes`, `formatMs`, `formatPercent`
 `util.ts`'s Node-only dependency graph, which the browser cannot resolve. This module is the SSOT for the magnitude-rendering policy. It has zero runtime imports
 of any kind, so shipping it alongside `featureOptions.js` is safe in any runtime that can execute ES2024+ JavaScript.
 
-**Precision policy.** Whole numbers render without a trailing decimal place ("5" not "5.0"); fractional numbers render to one decimal place. Centralizing the
-precision policy in `formatMagnitude` means tightening it later - more precision, a thousands separator, locale-aware formatting - is a single-line change
-rather than a sweep across every format helper.
+**Precision policy.** Every value renders rounded to one decimal place, and a value whose rounded form is a whole number renders without a decimal ("5" not
+"5.0", "45.8" for 45.84, "24" for 23.9997), so a decimal appears exactly when it carries information. Centralizing the precision policy in `formatMagnitude`
+means tightening it later - more precision, a thousands separator, locale-aware formatting - is a single-line change rather than a sweep across every format
+helper.
 
 **Consumers.** `util.ts` re-exports these for the server-side surface; `featureOptions.ts` imports directly from here to keep its browser-runnable dependency
 graph free of `util.ts`. Both consumers share one implementation - the file is the join point.
@@ -112,6 +113,7 @@ Returns the value as a human-readable string.
 #### Example
 
 ```ts
+formatMs(250.25);       // "250.3 ms".
 formatMs(250);          // "250 ms".
 formatMs(1500);         // "1.5 s".
 formatMs(15000);        // "15 s".
@@ -178,6 +180,7 @@ Returns the value as a human-readable string.
 #### Example
 
 ```ts
+formatSeconds(45.84);     // "45.8 s".
 formatSeconds(45);        // "45 s".
 formatSeconds(90);        // "1.5 min".
 formatSeconds(1800);      // "30 min".

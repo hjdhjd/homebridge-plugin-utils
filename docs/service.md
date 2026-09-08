@@ -115,6 +115,18 @@ metric has left liveness, having stopped reporting rather than merely gone quiet
 
 ***
 
+### PresenceTransition
+
+```ts
+type PresenceTransition = "absent" | "attached" | "kept" | "removed";
+```
+
+The transition a presence gate performed on one call: `attached` when the call put the characteristic on the service, `kept` when the service already carried
+it and keeps it, `removed` when the service carried it and the verdict took it off, and `absent` when the service did not carry it and none was attached.
+Presence afterward is `attached` or `kept`, so a consumer reads the presence and the transition that produced it from one answer.
+
+***
+
 ### acquireService()
 
 ```ts
@@ -466,7 +478,7 @@ updateServices(accessory, hap.Characteristic.StatusActive, isReachable);
 ### validCharacteristic()
 
 ```ts
-function validCharacteristic(options): boolean;
+function validCharacteristic(options): PresenceTransition;
 ```
 
 Validate whether a specific characteristic should exist on the given service, attaching it when it should and removing it when it should not.
@@ -479,9 +491,10 @@ Validate whether a specific characteristic should exist on the given service, at
 
 #### Returns
 
-`boolean`
+[`PresenceTransition`](#presencetransition)
 
-`true` if the characteristic is valid (and present afterward), or `false` if it was removed or never attached.
+The transition the call performed - `"attached"`, `"kept"`, `"removed"`, or `"absent"`; the characteristic is present afterward when the answer
+is `"attached"` or `"kept"`.
 
 #### Remarks
 
@@ -490,9 +503,9 @@ The `validate` parameter can be either:
   - a function (which is called with `hasCharacteristic: boolean` and returns whether the characteristic should exist).
 
 Presence is read without attaching, so a characteristic the service never carried is never materialized only to be removed. A true verdict attaches through
-the service's own lookup, which adds an optional characteristic the service lacks and answers the existing one otherwise...the answer therefore equals the
-characteristic's presence once the call returns. The helper is meant for a characteristic the service declares optional. HAP attaches a characteristic
-outside a service's declared sets too, with a warning, and nothing here guards against that.
+the service's own lookup, which adds an optional characteristic the service lacks and answers the existing one otherwise...the answer names which of the
+four transitions happened, so a consumer that must act exactly once on the attach reads that from the answer. The helper is meant for a characteristic the
+service declares optional. HAP attaches a characteristic outside a service's declared sets too, with a warning, and nothing here guards against that.
 
 #### Example
 
@@ -506,6 +519,12 @@ validCharacteristic({ characteristic: Characteristic.StatusTampered, service, va
 // Gate the characteristic on a hardware capability and a user toggle.
 validCharacteristic({ characteristic: Characteristic.StatusTampered, service,
   validate: capabilityGate({ capability: device.reportsTamper, toggle: config.tamperDetection }) });
+
+// Act exactly once when the characteristic first appears: write the verdict held for it.
+if(validCharacteristic({ characteristic: Characteristic.StatusTampered, service, validate: tamperEnabled }) === "attached") {
+
+  service.updateCharacteristic(Characteristic.StatusTampered, heldTamperState);
+}
 ```
 
 #### See

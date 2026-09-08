@@ -245,6 +245,15 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
 }
 
 /**
+ * The transition a presence gate performed on one call: `attached` when the call put the characteristic on the service, `kept` when the service already carried
+ * it and keeps it, `removed` when the service carried it and the verdict took it off, and `absent` when the service did not carry it and none was attached.
+ * Presence afterward is `attached` or `kept`, so a consumer reads the presence and the transition that produced it from one answer.
+ *
+ * @category Accessory
+ */
+export type PresenceTransition = "absent" | "attached" | "kept" | "removed";
+
+/**
  * The inputs {@link validCharacteristic} reconciles one characteristic's presence from: the characteristic itself, the service it lives on, and the verdict
  * that decides whether it should exist.
  *
@@ -273,7 +282,8 @@ export interface ValidCharacteristicOptions {
  *
  * @param options - The characteristic, the service it lives on, and the verdict that decides its presence. See {@link ValidCharacteristicOptions}.
  *
- * @returns `true` if the characteristic is valid (and present afterward), or `false` if it was removed or never attached.
+ * @returns The transition the call performed - `"attached"`, `"kept"`, `"removed"`, or `"absent"`; the characteristic is present afterward when the answer
+ * is `"attached"` or `"kept"`.
  *
  * @remarks
  * The `validate` parameter can be either:
@@ -281,9 +291,9 @@ export interface ValidCharacteristicOptions {
  *   - a function (which is called with `hasCharacteristic: boolean` and returns whether the characteristic should exist).
  *
  * Presence is read without attaching, so a characteristic the service never carried is never materialized only to be removed. A true verdict attaches through
- * the service's own lookup, which adds an optional characteristic the service lacks and answers the existing one otherwise...the answer therefore equals the
- * characteristic's presence once the call returns. The helper is meant for a characteristic the service declares optional. HAP attaches a characteristic
- * outside a service's declared sets too, with a warning, and nothing here guards against that.
+ * the service's own lookup, which adds an optional characteristic the service lacks and answers the existing one otherwise...the answer names which of the
+ * four transitions happened, so a consumer that must act exactly once on the attach reads that from the answer. The helper is meant for a characteristic the
+ * service declares optional. HAP attaches a characteristic outside a service's declared sets too, with a warning, and nothing here guards against that.
  *
  * @example
  * ```typescript
@@ -296,13 +306,19 @@ export interface ValidCharacteristicOptions {
  * // Gate the characteristic on a hardware capability and a user toggle.
  * validCharacteristic({ characteristic: Characteristic.StatusTampered, service,
  *   validate: capabilityGate({ capability: device.reportsTamper, toggle: config.tamperDetection }) });
+ *
+ * // Act exactly once when the characteristic first appears: write the verdict held for it.
+ * if(validCharacteristic({ characteristic: Characteristic.StatusTampered, service, validate: tamperEnabled }) === "attached") {
+ *
+ *   service.updateCharacteristic(Characteristic.StatusTampered, heldTamperState);
+ * }
  * ```
  *
  * @see validService - the same contract, applied to whether a service should exist on an accessory.
  * @see capabilityGate - builds a predicate for either applier.
  * @category Accessory
  */
-export function validCharacteristic({ characteristic, service, validate }: ValidCharacteristicOptions): boolean {
+export function validCharacteristic({ characteristic, service, validate }: ValidCharacteristicOptions): PresenceTransition {
 
   // Read prior existence side-effect-free...getCharacteristic would attach the very characteristic the false branch is about to remove.
   const present = service.testCharacteristic(characteristic);
@@ -314,16 +330,18 @@ export function validCharacteristic({ characteristic, service, validate }: Valid
     if(present) {
 
       service.removeCharacteristic(service.getCharacteristic(characteristic));
+
+      return "removed";
     }
 
-    return false;
+    return "absent";
   }
 
-  // One lookup is the whole of the additive half: it attaches an optional characteristic the service lacks and answers the one already there otherwise, so what
-  // the service carries afterward matches the answer below.
+  // One lookup is the whole of the additive half: it attaches an optional characteristic the service lacks and answers the one already there otherwise, and the
+  // presence read above is what tells those two apart.
   service.getCharacteristic(characteristic);
 
-  return true;
+  return present ? "kept" : "attached";
 }
 
 /**

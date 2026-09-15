@@ -206,7 +206,7 @@ export function hasErrorCode<C extends string>(error: unknown, code: C): error i
 
 /**
  * Test whether an abort reason indicates a timeout. Matches both the canonical {@link HbpuAbortError} with `"timeout"` name - produced by project watchdogs
- * ({@link Watchdog}, the inactivity monitors on `FfmpegProcess` / `RtpDemuxer` / `Mp4SegmentAssembler`) - and the platform {@link DOMException}/`Error` whose
+ * ({@link Watchdog}, the inactivity monitors on `FfmpegStreamingProcess` / `RtpDemuxer` / `Mp4SegmentAssembler`) - and the platform {@link DOMException}/`Error` whose
  * `.name === "TimeoutError"` - produced by `AbortSignal.timeout()`. Consumers branch on a single predicate regardless of which code path originated the timeout.
  *
  * Exists because every long-lived resource class exposes an `isTimedOut` getter with identical branching logic; routing all of them through this single predicate
@@ -1771,7 +1771,10 @@ export class Watchdog implements Disposable {
 }
 
 /**
- * Start case a string, capitalizing the first letter of each word unconditionally.
+ * Start case a string, capitalizing the first letter of each word unconditionally. A word opens at the start of the string or after a run of whitespace, and its
+ * opening character is capitalized when it is a letter in any script - Latin, Cyrillic, Greek and the rest alike - matched as a whole code point, so a letter
+ * outside the Basic Multilingual Plane cases correctly rather than as half a surrogate pair. A word opening with a digit or with punctuation is left as it
+ * stands, and a script that carries no case, such as Chinese or Japanese, passes through unchanged.
  *
  * @param input - The string to start case.
  *
@@ -1781,15 +1784,16 @@ export class Watchdog implements Disposable {
  *
  * ```ts
  * toStartCase("this is a test");
+ * toStartCase("élan vital");
  * ```
  *
- * Returns: `This Is A Test`.
+ * Returns: `This Is A Test` and `Élan Vital`.
  *
  * @category Utilities
  */
 export function toStartCase(input: string): string {
 
-  return input.replace(/(^\w|\s+\w)/g, match => match.toUpperCase());
+  return input.replace(/(^\p{L}|\s+\p{L})/gu, (match) => match.toUpperCase());
 }
 
 /**

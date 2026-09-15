@@ -2,7 +2,7 @@
  *
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, hasErrorCode, onAbort,
  * waitWithSignal, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
- * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
+ * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, consoleLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
  * formatPercent, formatErrorMessage, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes, formatErrorMessage,
@@ -330,7 +330,7 @@ describe("onAbort", () => {
   test("fires at most once even when abort is called repeatedly", () => {
 
     // AbortController only fires the "abort" event once, so this is belt-and-suspenders: combined with `{ once: true }` on the underlying listener, duplicate aborts
-    // cannot drive the handler more than once. Pins the rule so a future refactor that breaks either side shows up loudly.
+    // cannot drive the handler more than once. Asserts the rule so a future refactor that breaks either side shows up loudly.
     const controller = new AbortController();
     let fireCount = 0;
 
@@ -387,7 +387,7 @@ describe("onAbort", () => {
 
   test("[Symbol.dispose] is safe to call more than once", () => {
 
-    // `removeEventListener` is a no-op for already-removed listeners per spec, so disposing twice must be a safe no-op. Pins the contract so a caller that both
+    // `removeEventListener` is a no-op for already-removed listeners per spec, so disposing twice must be a safe no-op. Asserts the contract so a caller that both
     // manually disposes AND relies on `using`'s scope-exit dispatch (or disposes in response to two separate signals) cannot accidentally throw.
     const controller = new AbortController();
 
@@ -1626,7 +1626,7 @@ describe("superviseStream", () => {
 
 describe("loopFaultReporter", () => {
 
-  // The single canonical template the reporter emits. Pinning it here lets the tests assert the exact format string the consumers depend on, so a wording change is a
+  // The single canonical template the reporter emits. Stating it here lets the tests assert the exact format string the consumers depend on, so a wording change is a
   // deliberate test update rather than a silent drift.
   const CANONICAL_MESSAGE = "HomeKit updates for %s stopped unexpectedly and will not resume until the Homebridge plugin restarts: %s.";
 
@@ -1711,7 +1711,7 @@ describe("loopFaultReporter", () => {
 
 describe("guardedDispatch", () => {
 
-  // The two canonical failure templates the wrapper emits. Pinning them here means a wording change is a deliberate test update rather than a silent drift, matching the
+  // The two canonical failure templates the wrapper emits. Stating them here means a wording change is a deliberate test update rather than a silent drift, matching the
   // loopFaultReporter suite's convention above.
   const CALLBACK_LESS_MESSAGE = "The %s handler failed: %s.";
   const POST_ANSWER_MESSAGE = "The %s handler failed after it had already responded to HomeKit: %s.";
@@ -2239,8 +2239,8 @@ describe("prefixedLog", () => {
     const wrapped = prefixedLog(base, () => prefix);
 
     // The parameterized case exercises %s, %d, and a trailing object parameter; the bare case has no parameters at all. In each, formatting the wrapper's captured
-    // message and parameters must equal writing the prefix into the caller's own format string and formatting that, which proves the prefix rides the format string and
-    // the parameters reach the sink untouched.
+    // message and parameters must equal writing the prefix into the caller's own format string and formatting that, which proves the prefix goes through the format
+    // string and the parameters reach the sink untouched.
     wrapped.info("Motion on %s at %d.", "front", 5, { zone: "porch" });
     wrapped.warn("Stream stalled.");
 
@@ -2464,7 +2464,7 @@ describe("formatBytes", () => {
 
   test("returns integer TB at terabyte boundaries", () => {
 
-    // Pins the cap-tier promotion: once a value reaches 1024 GB it must surface as "1 TB" rather than awkwardly continuing in the GB tier as "1024 GB".
+    // Asserts the cap-tier promotion: once a value reaches 1024 GB it must surface as "1 TB" rather than awkwardly continuing in the GB tier as "1024 GB".
     assert.equal(formatBytes(1099511627776), "1 TB");
     assert.equal(formatBytes(2 * 1099511627776), "2 TB");
   });
@@ -2508,7 +2508,7 @@ describe("formatErrorMessage", () => {
   test("strips only a single trailing period (multiple-period suffixes survive)", () => {
 
     // Some upstream error messages legitimately end with an ellipsis or a deliberate "..". The formatter's contract is "strip a single trailing period" - it is
-    // not an ellipsis-canonicalizer. We pin this so a future refactor does not silently broaden the strip pattern.
+    // not an ellipsis-canonicalizer. We assert this so a future refactor does not silently broaden the strip pattern.
     assert.equal(formatErrorMessage(new Error("ellipsis...")), "ellipsis..");
   });
 });
@@ -2847,8 +2847,41 @@ describe("toStartCase", () => {
 
   test("capitalizes after runs of whitespace", () => {
 
-    // The regex matches `\s+\w`, so runs of whitespace are treated as a single separator and the next word still gets capitalized.
+    // The whitespace run is part of the match, so a run of spaces counts as a single separator and the word after it still gets capitalized.
     assert.equal(toStartCase("foo   bar"), "Foo   Bar");
+  });
+
+  test("leaves a word opening with a digit or an underscore as it stands", () => {
+
+    // Only a letter is capitalized, so a word opening with anything else is untouched while the letter-led words around it still capitalize. These are the inputs
+    // that distinguish the letter match from a broader word-character one, since uppercasing a digit or an underscore would be a no-op either way.
+    assert.equal(toStartCase("1st place"), "1st Place");
+    assert.equal(toStartCase("_private field"), "_private Field");
+    assert.equal(toStartCase("abc 123 def"), "Abc 123 Def");
+  });
+
+  test("capitalizes a non-ASCII letter at the start of the string", () => {
+
+    assert.equal(toStartCase("élan vital"), "Élan Vital");
+    assert.equal(toStartCase("привет мир"), "Привет Мир");
+    assert.equal(toStartCase("αλφα βήτα"), "Αλφα Βήτα");
+  });
+
+  test("capitalizes a non-ASCII letter after whitespace", () => {
+
+    assert.equal(toStartCase("the élan of it"), "The Élan Of It");
+  });
+
+  test("passes a script that carries no case through unchanged", () => {
+
+    assert.equal(toStartCase("東京 大阪"), "東京 大阪");
+  });
+
+  test("cases a letter outside the Basic Multilingual Plane as a single code point", () => {
+
+    // Deseret small letter long I (U+10428) uppercases to Deseret capital letter long I (U+10400). A match reading UTF-16 code units rather than code points would
+    // take the leading surrogate on its own, leaving the pair unchanged, so this asserts the whole code point is what gets matched and cased.
+    assert.equal(toStartCase("\u{10428}x \u{10428}y"), "\u{10400}x \u{10400}y");
   });
 });
 

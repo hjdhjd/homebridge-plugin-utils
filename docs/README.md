@@ -47,7 +47,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [ffmpeg/options](ffmpeg/options.md) | Homebridge FFmpeg transcoding, decoding, and encoding options, selecting codecs, pixel formats, and hardware acceleration for the host system. |
 | [ffmpeg/process](ffmpeg/process.md) | FFmpeg process management with AbortSignal-based lifecycle. |
 | [ffmpeg/record](ffmpeg/record.md) | fMP4 FFmpeg processes for HomeKit Secure Video (HKSV) events and livestreaming. |
-| [ffmpeg/recording-process-double](ffmpeg/recording-process-double.md) | Reusable test doubles for the recording dependency-inversion seam. |
+| [ffmpeg/recording-process-double](ffmpeg/recording-process-double.md) | Reusable test doubles for the recording dependency-inversion boundary. |
 | [ffmpeg/rtp](ffmpeg/rtp.md) | Signal-driven RTP/RTCP demultiplexing, FFmpeg keepalive heartbeat, and UDP port reservation for FFmpeg-based HomeKit livestreaming. |
 | [ffmpeg/rtp-parser](ffmpeg/rtp-parser.md) | Pure stateful byte-to-record parser for RTP and RTCP datagrams multiplexed on a single UDP port per RFC 5761. |
 | [ffmpeg/settings](ffmpeg/settings.md) | - |
@@ -67,7 +67,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [logclient/parser](logclient/parser.md) | Pure, incremental text-to-[LogRecord](logclient/types.md#logrecord) parsing for the Homebridge UI log stream. |
 | [logclient/rest](logclient/rest.md) | Streamed REST log retrieval for the Homebridge UI log client. |
 | [logclient/socket](logclient/socket.md) | AsyncDisposable live-log socket for the Homebridge UI log stream. |
-| [logclient/socket-double](logclient/socket-double.md) | Reusable test doubles for the log client's two socket seams. |
+| [logclient/socket-double](logclient/socket-double.md) | Reusable test doubles for the log client's two socket boundaries. |
 | [logclient/stitch](logclient/stitch.md) | Pure join of a REST history tail with a socket-seeded live buffer. |
 | [logclient/time-expression](logclient/time-expression.md) | Pure, CLI-layer parsing of the `hblog` `--since`/`--until` time expressions into an absolute epoch interval. |
 | [logclient/time-window](logclient/time-window.md) | The internal time-window stream transform for the `hblog` CLI. |

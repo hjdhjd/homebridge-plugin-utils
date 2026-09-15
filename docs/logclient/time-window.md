@@ -20,7 +20,7 @@ a continuation is kept iff its parent is. This is a log-semantics rule intrinsic
 necessarily processes records in arrival order, and every channel yields in order (history is file order, live is arrival order, the stitch preserves order), so the
 carry-forward is sound; the stitch's null-timestamp gap marker inherits and shows, because a window must never hide a discontinuity marker.
 
-## Functions
+## Log Client
 
 ### timeWindow()
 
@@ -40,9 +40,9 @@ inclusive, and a `null` bound is unbounded on that side.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `source` | `AsyncIterable`\<[`LogRecord`](types.md#logrecord)\> | The upstream record stream (a channel's `LogStream`, or any async iterable of records in arrival order). |
-| `bounds` | \{ `since`: [`Nullable`](../util.md#nullable)\<`number`\>; `until`: [`Nullable`](../util.md#nullable)\<`number`\>; \} | The window bounds in epoch milliseconds. `since` is the inclusive lower bound (`null` for unbounded-below); `until` is the inclusive upper bound (`null` for unbounded-above). |
-| `bounds.since` | [`Nullable`](../util.md#nullable)\<`number`\> | - |
-| `bounds.until` | [`Nullable`](../util.md#nullable)\<`number`\> | - |
+| `bounds` | \{ `since`: [`Nullable`](../util.md#nullable)\<`number`\>; `until`: [`Nullable`](../util.md#nullable)\<`number`\>; \} | The window bounds in epoch milliseconds. |
+| `bounds.since` | [`Nullable`](../util.md#nullable)\<`number`\> | The inclusive lower bound (`null` for unbounded-below). |
+| `bounds.until` | [`Nullable`](../util.md#nullable)\<`number`\> | The inclusive upper bound (`null` for unbounded-above). |
 
 #### Returns
 

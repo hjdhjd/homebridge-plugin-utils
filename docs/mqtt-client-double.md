@@ -295,13 +295,16 @@ the payload once the publish is recorded, and it is cleared when [TestMqttClient
 the client clears its own. The comparison and keeping rules are [MqttLastPayloads](mqtt-publish.md#mqttlastpayloads)'s. A suppressed publish records
 nothing, counts nothing, and says nothing.
 
+A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic) once the composed signal has answered,
+ahead of the session and lever admissions, which is where the client's own publish refuses one.
+
 ###### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `topic` | `string` | The relative topic (tail) to publish to. Recorded verbatim; the double expands nothing. |
 | `payload` | `string` \| `Buffer`\<`ArrayBufferLike`\> | The payload to publish. Buffers and strings are recorded unchanged. |
-| `init` | [`MqttPublishInit`](mqttClient.md#mqttpublishinit) | Optional per-publish options. See [MqttPublishInit](mqttClient.md#mqttpublishinit). A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic) once the composed signal has answered, ahead of the session and lever admissions, which is where the client's own publish refuses one. |
+| `init` | [`MqttPublishInit`](mqttClient.md#mqttpublishinit) | Optional per-publish options. See [MqttPublishInit](mqttClient.md#mqttpublishinit). |
 
 ###### Returns
 
@@ -455,7 +458,8 @@ unsubscribe(id, topic): void;
 Record an unsubscribe of the `(id, topic)` tuple and release every registration on the topic it names, mirroring
 [MqttClient.unsubscribe](mqttClient.md#unsubscribe).
 
-A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic), after those guards.
+An aborted double or an empty `id` is a no-op, releasing nothing. A tail still carrying a brace is refused through
+[assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic), after those guards.
 
 ###### Parameters
 

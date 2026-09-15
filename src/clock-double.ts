@@ -136,9 +136,10 @@ export class TestClock implements Clock {
    * the numeric sort is stable - matching how the platform fires equal-deadline timers in scheduling order. A delay is removed by identity and has its abort listener
    * detached before it resolves, so the resolve path leaks no listener; a one-shot is removed before its callback runs; a repeat re-arms from its own deadline and stays.
    *
-   * A callback runs synchronously inside this call, so it observes the clock mid-pass and may register or cancel entries. Anything it arms that is ALREADY due fires
-   * within this same `advance`, exactly as the platform processes it within one tick - which also means a callback that re-arms a zero-delay one-shot on every fire
-   * spins here as it would spin on the platform.
+   * A callback runs synchronously inside this call, so it observes the clock mid-pass and may register or cancel entries. Anything it arms that is ALREADY due
+   * fires within this same `advance`, which also means a callback that re-arms a zero-delay one-shot on every fire spins here just as it would on the platform -
+   * neither ever terminates. The mechanism differs, though: the platform defers each re-armed timer to a later event-loop turn, yielding control between fires,
+   * while this loop re-snapshots and fires already-due entries synchronously within the same call, with no yield point until the chain is exhausted.
    *
    * @param ms - The amount of virtual time to advance, in milliseconds. May be zero or negative.
    */

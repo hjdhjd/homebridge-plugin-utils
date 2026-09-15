@@ -13,9 +13,9 @@ import { delay } from "./webUi-featureOptions/utils.mjs";
  * The normal entry point is `webUi.registerTheming`, which composes this effect with the design tokens its rules read and holds both for the life of the page. A
  * direct call is for bespoke composition, where the caller owns the ordering and the lifetime itself.
  *
- * Two routes carry a host theme change into this page and the effect follows both: the message Homebridge posts into a plugin frame, and a mutation of that
+ * Every route that can carry a host theme change into this page is followed: the message Homebridge posts into a plugin frame, and a mutation of that
  * frame body's own theme classes. Each announces a mode the user picked and a system flip an auto-detecting install inherits alike, because the host resolves
- * either into the same retint. Both routes re-read the mode through the bridge, so the bridge stays the one authority on which mode is current.
+ * either into the same retint. Each route re-reads the mode through the bridge, so the bridge stays the one authority on which mode is current.
  *
  * Cleanup is automatic via the AbortSignal: aborting releases the stylesheet from the document, clears the `color-scheme`, `.fo-dark` class, and accent-token
  * inline overrides the effect wrote on `:root` (so it leaves no trace on a shared document), removes the message listener (via `{signal}` on addEventListener),
@@ -31,8 +31,10 @@ import { delay } from "./webUi-featureOptions/utils.mjs";
  *        "light" or "dark"; any unrecognized value is tolerated and treated as a no-op (no color scheme is applied).
  * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down the listener, the class observer, and the background probe.
  * @param {Object} [args.probe] - Optional probe overrides.
- * @param {number} [args.probe.timeoutMs=2000] - Maximum time, in milliseconds, to poll for Bootstrap's stylesheet. Override to `0` in tests to skip the probe.
- * @param {number} [args.probe.intervalMs=20] - Poll interval, in milliseconds.
+ * @param {number} [args.probe.timeoutMs=2000] - Maximum time, in milliseconds, to poll for Bootstrap's stylesheet before giving up and applying the fallback.
+ *        The ceiling bounds how long a page whose stylesheet never arrives waits before rendering unthemed. Override to `0` in tests to skip the probe.
+ * @param {number} [args.probe.intervalMs=20] - Poll interval, in milliseconds. The interval trades how promptly the probe notices the stylesheet against how
+ *        often it wakes to look.
  * @returns {Promise<void>} Resolves once the initial mode read has been applied, and rejects when that read rejects - the sheet and both follow routes are live
  *                          either way. Does NOT wait for the Bootstrap probe to complete.
  */
@@ -84,7 +86,7 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
    * both routes run on a mode the user picked and on a system flip an auto-detecting install inherits, because the host resolves either into the same retint.
    * Watching our own body settles the ordering - a class change IS the retint, and mutation records deliver after it lands - while the message reaches frames the
    * host cannot reach into directly. The system color-scheme query is deliberately not a route: it answers before the host has retinted anything, and on an
-   * install pinned to one mode it fires when nothing about the page changed.
+   * install fixed to one mode it fires when nothing about the page changed.
    *
    * A toggle that fires both routes costs two cheap bridge reads and two accent probes. That is the accepted price of covering both announcements with no dedup
    * state that could go stale, and the payload is read for nothing but its type, so traffic from anywhere else costs one string comparison.
@@ -323,7 +325,7 @@ const buildBaseCss = () => [
   // shared not-actionable value.
   ".fo-secret-toggle:disabled { cursor: default; opacity: var(--fo-opacity-disabled); }",
 
-  // Dark-mode corrections for Bootstrap's page-wide text utilities. Bootstrap pins its own grey on the element with `!important`, so these escape the forced body
+  // Dark-mode corrections for Bootstrap's page-wide text utilities. Bootstrap locks in its own grey on the element with `!important`, so these escape the forced body
   // text color above, and a grey calibrated for a light canvas is unreadable on the dark surface.
   ":root.fo-dark .text-body { color: var(--fo-text-muted) !important; }",
   ":root.fo-dark .text-muted { color: var(--fo-text-muted) !important; }",
@@ -346,8 +348,8 @@ const buildBaseCss = () => [
    *
    * Every state either vocabulary can be in is spelled out here rather than left to whatever the page around us says, because the host stylesheet carries its own
    * stateful `.btn` rules and a class-plus-pseudo-class selector outranks a bare class. A button wearing no Bootstrap variant resolves those rules' color variables to
-   * nothing, so an unpinned state shows the canvas through it. Pinning is limited to background, text, and border color: box-shadow and outline stay the host's, which
-   * is what keeps its focus ring intact.
+   * nothing, so a state with no forced color shows the canvas through it. Forcing color is limited to background, text, and border color: box-shadow and outline
+   * stay the host's, which is what keeps its focus ring intact.
    *
    * Where our own selectors tie on specificity - the ghost's states against the active tab's - source order decides, so the active rule is written last and the fill
    * holds on the tab the user is on.

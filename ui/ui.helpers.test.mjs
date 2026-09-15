@@ -75,8 +75,8 @@ describe("createSkeletonFeatureOptionsDom", () => {
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    // Every element the orchestrator looks up by id must be reachable through the returned skeleton record. We pin the full surface so any silent removal of a key
-    // breaks here rather than at the test bodies that consume them.
+    // Every element the orchestrator looks up by id must be reachable through the returned skeleton record. We assert the full surface so any silent removal of a
+    // key breaks here rather than at the test bodies that consume them.
     const requiredKeys = [
 
       "configTable", "controllersContainer", "deviceStatsContainer", "devicesContainer", "firstRun", "headerInfo", "menuFeatureOptions", "menuHome", "menuSettings",
@@ -99,7 +99,7 @@ describe("createSkeletonFeatureOptionsDom", () => {
     const skeleton = createSkeletonFeatureOptionsDom();
 
     // Global-only mode leaves #sidebar and #headerInfo hidden for the page's life, so a content region nested under either can never become visible however its own
-    // display is set. Pinning the sibling relationship here is what lets one fixture serve every mode.
+    // display is set. Asserting the sibling relationship here is what lets one fixture serve every mode.
     assert.equal(skeleton.sidebar.contains(skeleton.deviceStatsContainer), false, "#deviceStatsContainer must sit outside #sidebar");
     assert.equal(skeleton.headerInfo.contains(skeleton.deviceStatsContainer), false, "#deviceStatsContainer must sit outside #headerInfo");
     assert.ok(skeleton.deviceStatsContainer.parentElement === skeleton.search.parentElement, "#deviceStatsContainer and #search share the content column");
@@ -424,7 +424,7 @@ describe("waitFor", () => {
 
   test("respects a custom timeout value (shorter than default)", async () => {
 
-    // Pins the contract that the timeout option actually drives the failure window. A 1ms timeout that takes longer than ~50ms would prove the timeout isn't
+    // Asserts the contract that the timeout option actually drives the failure window. A 1ms timeout that takes longer than ~50ms would prove the timeout isn't
     // being read; we assert the timeout elapses faster than the default-1000ms would have allowed.
     const start = Date.now();
 

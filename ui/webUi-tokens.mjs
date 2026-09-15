@@ -6,8 +6,8 @@
 
 /**
  * Register the design-tokens effect. Adopts a constructable stylesheet declaring every `--fo-*` CSS custom property the rest of the webUI references (font family,
- * font scale, spacing scale, radii, motion, accent colors, surfaces, borders, text, form controls, interactive states, specific colors). Cleanup is automatic via
- * the supplied AbortSignal - aborting removes the stylesheet from `document.adoptedStyleSheets`.
+ * font scale, spacing scale, layout, radii, motion, accent colors, surfaces, borders, text, form controls, interactive states, specific colors). Cleanup is
+ * automatic via the supplied AbortSignal - aborting removes the stylesheet from `document.adoptedStyleSheets`.
  *
  * Stylistic rules the tokens encode:
  *
@@ -50,8 +50,8 @@ export const registerTokensEffect = ({ signal }) => {
 // Assemble the full token CSS. Grouped by category with a section comment per group so the file reads as the design vocabulary it represents. Within a scale
 // group, tokens order smallest-to-largest by magnitude; within a flat group, tokens order alphabetically by token name, except that --fo-focus-ring sits
 // with the form-control tokens it styles rather than by its own name; surfaces order by conceptual layering (base surface before elevated) rather than by
-// scale or alphabet. The groups themselves fall into two clusters: the dimensional groups (font, spacing, layout, radius, motion, disabled opacity) come
-// first, followed by the color groups, which run from the broadest, foundational concerns down to the narrowest, single-purpose tokens.
+// scale or alphabet. The groups themselves fall into two clusters: the dimensional groups come first, followed by the color groups, which run from the
+// broadest, foundational concerns down to the narrowest, single-purpose tokens.
 const buildTokenCss = () => [
 
   ":root {",
@@ -124,10 +124,9 @@ const buildTokenCss = () => [
   // styling), so this accent default takes effect only if a future light-mode focus rule references it.
   "  --fo-form-control-focus-border: var(--fo-accent-bg);",
   "  --fo-form-control-placeholder: var(--bs-secondary-color, rgba(33, 37, 41, 0.75));",
-  // The focus ring (box-shadow glow) shared by every focus rule that reads it: the search input's light and dark rules, the dark-mode option-value rule, and
-  // the dark-mode form-control rule in the page theme. Light matches the container border color (--fo-border-accent) so the ring reads as the same theme
-  // slate; dark redeclares a lighter accent tint below, because a translucent color that reads well on the dark surface washes out to near-gray on the light
-  // one - the ring is genuinely mode-dependent, like the surface tokens.
+  // The focus ring (box-shadow glow) shared by every dark-mode focus rule and the search field's light-mode rule. Light matches the container border color
+  // (--fo-border-accent) so the ring reads as the same theme slate; dark redeclares a lighter accent tint below, because a translucent color that reads well
+  // on the dark surface washes out to near-gray on the light one - the ring is genuinely mode-dependent, like the surface tokens.
   "  --fo-focus-ring: 0 0 0 0.2rem var(--fo-border-accent);",
 
   // Interactive-state colors.

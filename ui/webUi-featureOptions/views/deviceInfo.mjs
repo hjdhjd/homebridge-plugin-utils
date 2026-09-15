@@ -15,14 +15,15 @@ import { selectedDevice } from "../selectors.mjs";
  * `infoPanel` callback - plugins override this to surface plugin-specific device metadata (firmware version, model, status indicators). When no override is
  * supplied, the default callback ({@link defaultInfoPanel}) renders a grid of the device's identity fields.
  *
- * The container is shown when any device is in scope (controller-as-device or regular device) and cleared when the scope is global (no specific device to show
- * stats for - the global view aggregates options across every device).
+ * The container's content reflects device scope: populated with stats when any device is in scope (controller-as-device or regular device), and cleared to empty
+ * when the scope is global (no specific device to show stats for - the global view aggregates options across every device). The container's own visibility is the
+ * orchestrator's responsibility, not this view's.
  *
- * The renderer receives one options bag, minted fresh on each render. What is per-render and what is per-mount inside that bag differ, and a hook that registers
- * anything depends on the distinction: `device` is per-render data, since the selection moves between renders of a single mount, while `signal` is the mount's own
- * identity - the same AbortSignal object arrives on every render of one mount, and it aborts when the page navigates away or is torn down. A hook that must register
- * a listener or a subscription exactly once, despite being re-invoked per render, therefore keys that once-ness on the signal (or on a flag of its own), and scopes
- * whatever it registers to the signal so the registration dies with the mount.
+ * The renderer receives one options bag, minted fresh on each render. What is per-render and what is per-mount inside that bag differ, and a hook that registers anything
+ * depends on the distinction: `device` is per-render data, since the selection moves between renders of a single mount, while `panel` and `signal` are the mount's own
+ * identities - the same container element and the same AbortSignal object arrive on every render of one mount, and the signal aborts when the page navigates away or is
+ * torn down. A hook that must register a listener or a subscription exactly once, despite being re-invoked per render, therefore keys that once-ness on the signal (or on
+ * a flag of its own), and scopes whatever it registers to the signal so the registration dies with the mount.
  *
  * @param {Object} args
  * @param {((args: { device: (import("../state.mjs").Device | undefined), panel: HTMLElement, signal: AbortSignal }) => void) | undefined} args.infoPanel - Optional

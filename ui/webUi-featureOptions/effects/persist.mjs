@@ -188,10 +188,14 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
       }
 
       // Single-writer drain start-site (mutation path). The macrotask-ordering rule the serialization rests on: every subscribed store mutation
-      // (option:set / option:cleared / options:reset / model:reverted) and every flush() caller (hide() / the visibilitychange handler) originates from a DOM-event
-      // macrotask, so none can preempt the queued `inFlight.finally` microtask and strand a `pending` edit in the gap between the drain returning and its `finally`
-      // clearing `inFlight`. (Forward-safety: if a future caller ever dispatches one of those subscribed actions from a microtask continuation, this rule
-      // must be re-checked.) Reset `flushing` here too so it never outlives the drain it belongs to.
+      // (option:set / option:cleared / options:reset / model:reverted), the visibilitychange handler, and the window blur handler all originate from a DOM-event
+      // macrotask, so none of them can preempt the queued `inFlight.finally` microtask and strand a `pending` edit in the gap between the drain returning and its
+      // `finally` clearing `inFlight`. A flush() landing in that same gap needs no such rule, because it cannot strand anything: it never sets `pending`, so it takes
+      // the already-in-flight branch, skips the dirty check that branch guards, and awaits an already-settled promise without draining. Nothing is lost, because a
+      // drain that reached its `finally` with the lifetime still live left nothing to write - a succeeded persist advanced the anchor to the snapshot, the in-loop
+      // dirty check broke on an already-clean store, and the reducer's persist:failed rollback restores configuredOptions to the anchor. The one exit that can leave
+      // the store dirty is the unloaded-model refusal above, and a fresh drain refuses it identically. Reset `flushing` here too so it never outlives the drain it
+      // belongs to.
       inFlight = drain().finally(() => {
 
         inFlight = null;

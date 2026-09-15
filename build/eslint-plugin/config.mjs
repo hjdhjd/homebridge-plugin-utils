@@ -54,7 +54,7 @@ const plugins = {
  * Deliberately omits `@typescript-eslint/promise-function-async` and forces `@typescript-eslint/require-await` (and the base `require-await`) off. The pair
  * encodes a tight coupling between Promise return types and the `async` keyword that predates the Disposable protocol: `[Symbol.asyncDispose]()` must be declared
  * `async ...(): Promise<void>` to satisfy `await using` even when the body is synchronous, and identity-preserving Promise pass-throughs (e.g., `markHandled` in
- * `src/util.ts`) cannot be marked `async` without wrapping the return in a fresh chain and breaking reference equality. Encoding the stance at the preset level
+ * `src/mark-handled.ts`) cannot be marked `async` without wrapping the return in a fresh chain and breaking reference equality. Encoding the stance at the preset level
  * rather than scattering per-site `eslint-disable` directives is the SSOT.
  *
  * Spread into the `rules:` slot of a flat config block scoped to `.ts` files.
@@ -87,8 +87,9 @@ const tsRules = {
 
 /**
  * Rule preset for JavaScript source files. Starts from `typescript-eslint`'s `disableTypeChecked` set (so type-aware rules don't fire on plain JS), then
- * re-enables `no-unused-vars` with the underscore-prefix ignore pattern. The `require-await` rule is left disabled here for the same reason the TypeScript
- * preset omits its pair - see the omission paragraph in the {@link tsRules} JSDoc.
+ * reconfigures `no-unused-vars` - already active at "error" from {@link config}'s `eslintJs.configs.recommended` block - down to warn with the
+ * underscore-prefix ignore pattern. Base `require-await` has no JavaScript-recommended equivalent to conflict with, so nothing needs suppressing for
+ * `.js` / `.mjs` files the way the TypeScript preset must force its type-aware pair off - see the omission paragraph in the {@link tsRules} JSDoc.
  *
  * Spread into the `rules:` slot of a flat config block scoped to `.js` / `.mjs` files.
  */
@@ -103,8 +104,8 @@ const jsRules = {
 
 /**
  * Rule preset applied to every linted file regardless of language: the full `@hjdhjd/*` rule set, the `@stylistic/*` whitespace and formatting rules, the
- * project's opinionated `sort-imports` / `sort-keys` / `quotes` / `eqeqeq` / `curly` constraints, and the modernization rules (`no-var`,
- * `prefer-rest-params`, `prefer-spread`) that read the same way in every language.
+ * project's opinionated `sort-imports` / `sort-keys` / `quotes` / `eqeqeq` / `curly` constraints, the `no-restricted-syntax` ban on template literals, and
+ * the modernization rules (`no-var`, `prefer-rest-params`, `prefer-spread`) that read the same way in every language.
  *
  * The enabled ESLint-recommended baseline comes from the separate `eslintJs.configs.recommended` block pushed in {@link config}, and the compatibility
  * overlay that trades parts of that baseline away for compiler diagnostics lives in {@link tsRules}, scoped to the files the compiler actually covers.

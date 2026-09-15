@@ -30,7 +30,7 @@ import { once } from "node:events";
 // subscribe / publish were on the wire it would arrive well within this window.
 const SETTLE_MS = 20;
 
-// Standard unreachable-broker URL for the construction tests that pin behavior on a non-listener: mqtt.js attempts to connect, the kernel returns ECONNREFUSED, and
+// Standard unreachable-broker URL for the construction tests that assert behavior on a non-listener: mqtt.js attempts to connect, the kernel returns ECONNREFUSED, and
 // (because `reconnectInterval: 0`) does not retry. The client stays constructed, the connection stays down, and every test flow that does not require a live broker
 // runs deterministically without standing one up.
 const UNREACHABLE_BROKER = "mqtt://127.0.0.1:1";
@@ -138,8 +138,8 @@ describe("MqttClient - construction", () => {
   test("invalid broker URL throws synchronously from the constructor with the underlying error as cause", () => {
 
     // The architectural contract: construction fails loudly for misconfiguration rather than silently producing a zombie client. Consumers wrap in try/catch if they
-    // want graceful degradation. Discrimination is by `instanceof Error` + `cause` presence - never by the wrapper's message text - so the assertion remains stable
-    // across message-wording changes, and the `cause` itself is the mqtt.js error the caller cares about for forensics.
+    // want graceful degradation. Telling the failure apart from any other is by `instanceof Error` + `cause` presence - never by the wrapper's message text - so the
+    // assertion remains stable across message-wording changes, and the `cause` itself is the mqtt.js error the caller cares about for forensics.
     assert.throws(
 
       () => new MqttClient({ brokerUrl: "not-a-valid-url", log: silentLog(), topicPrefix: "test" }),
@@ -217,7 +217,7 @@ describe("MqttClient - publish signal composition", () => {
 
   /* This describe covers composition only, and deliberately holds no in-flight row. A publish with no broker session is refused before it ever reaches the wait, so
    * there is no parked publish on a disconnected client for a signal to interrupt. The during-wait mechanism itself - a signal aborting mid-wait and rejecting the
-   * pending promise with its reason - is pinned in the `waitWithSignal` suite, and the abort-first ordering is pinned in the abort-and-teardown rows above. The one
+   * pending promise with its reason - is proven in the `waitWithSignal` suite, and the abort-first ordering is proven in the abort-and-teardown rows above. The one
    * in-flight window a connected client does have is the socket write's drain wait inside mqtt.js, which a unit test cannot construct deterministically.
    */
 });
@@ -392,7 +392,7 @@ describe("MqttClient - offline publish posture", () => {
       const outcome = await settleOrPending(client.publish("device1/status", "on"));
 
       assert.ok((outcome instanceof MqttOfflineError) && (outcome.message === "The MQTT client is not connected to the broker."),
-        "the publish must reject at once with the offline error and its pinned sentence, observed: " + String(outcome));
+        "the publish must reject at once with the offline error and its exact sentence, observed: " + String(outcome));
       assert.equal(client.connected, false);
     }
 
@@ -443,7 +443,7 @@ describe("MqttClient - offline publish posture", () => {
   test("publishGuarded drops a publish while disconnected to one debug line after its trace, and stays silent about it at error", async () => {
 
     // The guarded path has no caller to answer, so its one line is the whole of what a reader gets - and the outage behind it is already on the error line the broker
-    // error handler emits, which is why the drop itself belongs at debug. Pinning the trace's position ahead of the drop is what keeps the pre-check behind the one
+    // error handler emits, which is why the drop itself belongs at debug. Asserting the trace's position ahead of the drop is what keeps the pre-check behind the one
     // line every publish call leaves whatever becomes of it.
     await assertNoUnhandledRejections(async () => {
 
@@ -833,8 +833,8 @@ describe("MqttClient - subscription lifecycle (real broker)", () => {
 
     await firstSubscribe;
 
-    // Settle: any spurious additional subscribe packet (the bug this test pins) would arrive within the localhost window. Asserting after the settle proves the
-    // single-subscribe contract.
+    // Settle: any spurious additional subscribe packet (the bug this test guards against) would arrive within the localhost window. Asserting after the settle proves
+    // the single-subscribe contract.
     await delay(SETTLE_MS);
 
     assert.deepEqual(subscribed, ["test/device1/status"]);
@@ -1196,7 +1196,7 @@ describe("MqttClient - subscribeGet", () => {
 
   test("case-insensitive trigger: \"TRUE\" and mixed-case variants fire the getter", async () => {
 
-    // `subscribeGet` lowercases the payload before comparison, so any casing of "true" triggers. This is the existing production behavior the test pins.
+    // `subscribeGet` lowercases the payload before comparison, so any casing of "true" triggers. This is the existing production behavior the test proves.
     await using broker = await startTestBroker();
     await using client = makeClient({ brokerUrl: broker.url });
 
@@ -1680,7 +1680,7 @@ describe("routeMqttBrokerError - pure function", () => {
 
   test("reconnect interval pluralization: 1 second is singular, others are plural", () => {
 
-    // The retry-cadence suffix says "1 second" for interval 1 and "N seconds" for any other interval. Pin both branches.
+    // The retry-cadence suffix says "1 second" for interval 1 and "N seconds" for any other interval. Assert both branches.
     const logSingular = capturingLog();
 
     routeMqttBrokerError(syntheticError("ECONNREFUSED"), logSingular, 1);
@@ -1850,7 +1850,7 @@ const _mqttGroupShapeExercises = (): void => {
 
 describe("mqttFeatureOptions - canonical MQTT feature-option group", () => {
 
-  test("declares the MQTT category and exactly two entries carrying the catalog's pinned literals", () => {
+  test("declares the MQTT category and exactly two entries carrying the catalog's exact literals", () => {
 
     const { category, options } = mqttFeatureOptions({ defaultTopic: "homebridge" });
 
@@ -2154,7 +2154,7 @@ describe("mqttConnectionSettings - broker and topic-prefix resolution", () => {
   });
 });
 
-// The redaction contract, one row per URL shape, each pinned to the exact string the platform's URL parser produces. The list covers the shapes that defeated
+// The redaction contract, one row per URL shape, each fixed to the exact string the platform's URL parser produces. The list covers the shapes that defeated
 // authored credential patterns during design - a password containing "@", an empty username, a colon inside the password, a bracketed IPv6 host, a username
 // carrying the "$&" sequence a string-valued replacement would interpret - plus the two schemes WHATWG treats as special, whose canonical re-serialization elides a
 // default port, lowercases the host, and adds a trailing slash.
@@ -2176,7 +2176,7 @@ const REDACTION_FIXTURES: readonly { expected: string; input: string }[] = [
 
 describe("redactBrokerUrl / redactKnownBrokerUrl - credential excision", () => {
 
-  test("every broker URL shape redacts to its pinned form", () => {
+  test("every broker URL shape redacts to its exact form", () => {
 
     for(const fixture of REDACTION_FIXTURES) {
 
@@ -2260,7 +2260,7 @@ describe("createMqttClient - guarded construction", () => {
 
   test("a credentialed broker URL that throws logs the cause without the credential", () => {
 
-    // This exact input is what gives the pin its teeth: it throws synchronously AND mqtt.js quotes the configured URL verbatim in the error chain, so the redaction
+    // This exact input is what gives the assertion its teeth: it throws synchronously AND mqtt.js quotes the configured URL verbatim in the error chain, so the redaction
     // path is genuinely exercised. A plain invalid URL throws without ever naming the URL, and a well-formed credentialed URL does not throw at all.
     const brokerUrl = "mqtt://user:secret123@:::bad::port";
     const log = capturingLog();

@@ -507,7 +507,7 @@ export class FfmpegCodecs {
   /**
    * Returns the CPU generation if we're on Linux and have an Intel processor or on macOS and have an Apple Silicon processor.
    *
-   * @returns Returns the CPU generation or 0 if it can't be detected or an invalid platform.
+   * @returns The CPU generation, or 0 if it can't be detected or the platform is unsupported.
    */
   public get cpuGeneration(): number {
 
@@ -617,7 +617,10 @@ async function probeFfmpegCapabilities(options: FOptions, signal?: AbortSignal):
     gpuMem = await probeRpiGpuMem(context);
   }
 
-  // FFmpeg version is the first required probe; failure here means the FFmpeg binary isn't usable.
+  // FFmpeg version is the first required probe; failure here means the FFmpeg binary isn't usable. The FFmpeg probes below await one another in sequence rather
+  // than running concurrently: each one only makes sense once the prior one has succeeded, so running them in order lets a failure skip the FFmpeg invocations
+  // that would follow it rather than spawning them for output that would just be discarded. This pipeline also runs once at startup rather than on a
+  // throughput-sensitive path, so the sequencing costs nothing that matters.
   const ffmpegVersion = await probeFfmpegVersion(ffmpegExec, context);
 
   if(ffmpegVersion === null) {
@@ -678,7 +681,8 @@ function probeHwOs(): { hostSystem: string; cpuGeneration: number } {
       // Identify what generation of Apple Silicon we have.
       if(cpuModelString.includes("Apple")) {
 
-        // Extract the CPU model.
+        // Pull the generation digit out of a model string like "Apple M1 Pro" or "Apple M2 Ultra": the number after "M" is the generation itself, and the
+        // wildcard tail absorbs whatever chip variant name follows it.
         const cpuModel = /Apple M(\d+) .*/i.exec(cpuModelString);
 
         if(cpuModel?.[1]) {
@@ -712,7 +716,8 @@ function probeHwOs(): { hostSystem: string; cpuGeneration: number } {
       // Identify what generation of Intel CPU we have if we're on Intel.
       if(cpuModelString.includes("Intel")) {
 
-        // Extract the CPU model.
+        // Pull the SKU digits out of a model string like "Intel(R) Core(TM) i7-8700K": the three-to-five digit group after the dash is what the block below
+        // decodes into a generation number.
         const cpuModel = /Intel.*Core.*i\d+-(\d{3,5})/i.exec(cpuModelString);
 
         if(cpuModel?.[1]) {
@@ -804,6 +809,10 @@ async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, context
     // engine), so concurrent probes would contend for that shared resource and risk a false negative - an accel reported as unusable because of contention with a
     // sibling probe rather than a genuine host incapability. This is a one-time startup probe, not a throughput-sensitive workload, so serializing it here costs nothing
     // that matters.
+    //
+    // The synthetic transcode itself targets 1920x1080 for one second: large enough to force the accelerator to actually initialize its encode pipeline, since a
+    // trivially small frame lets some accelerators silently fall back to software without erroring, while the one-second duration keeps the wall-clock cost of
+    // validating every advertised accel negligible.
     // eslint-disable-next-line no-await-in-loop
     const accelOk = await probeCmd(ffmpegExec, [
 
@@ -824,8 +833,9 @@ async function probeFfmpegHwAccels(ffmpegExec: string, verbose: boolean, context
   return hwAccels;
 }
 
-// Probe Raspberry Pi GPU memory via `vcgencmd get_mem gpu`. Returns the megabyte value, or `0` on probe failure (the caller's configureHwAccel gate treats `0` as
-// insufficient anyway, so the return-value distinction is cosmetic but keeps the null handling consistent with the other probes).
+// Probe Raspberry Pi GPU memory via `vcgencmd get_mem gpu`. Returns the megabyte value, or `0` on probe failure. Unlike the required probes above, which are typed
+// to return `null` and abort the whole pipeline on failure, this one never signals failure that way - a failed `vcgencmd` call folds into `0`, which the caller's
+// configureHwAccel gate treats the same as an insufficient reading anyway, so a failed probe here is non-fatal rather than pipeline-ending.
 async function probeRpiGpuMem(context: ProbeContext): Promise<number> {
 
   let gpuMem = 0;

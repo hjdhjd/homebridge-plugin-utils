@@ -11,7 +11,7 @@
  * output reads as one continuous log: all of history, then exactly the live lines that history did not already contain.
  *
  * The join's correctness guarantee is asymmetric and deliberately so: it NEVER drops a distinct live line, at the cost of possibly emitting a bounded run of duplicate
- * lines at the seam. The hazard is repeated/identical lines - when several adjacent lines share the same text, the longest suffix-equals-prefix match could pair a
+ * lines at the boundary. The hazard is repeated/identical lines - when several adjacent lines share the same text, the longest suffix-equals-prefix match could pair a
  * history line with a live line that is actually a new occurrence and silently swallow it. To avoid that, the join chooses the MINIMAL overlap among the valid matches
  * (keeping the most live content), accepting bounded duplicate chatter rather than risking silent loss. Equality is by normalized {@link LogRecord.raw}. When no overlap
  * is found at all, a single visible {@link gapMarker} record is emitted between history and live so the boundary discontinuity is never hidden.
@@ -56,7 +56,8 @@ export interface StitchOptions {
 }
 
 // Test whether the last `k` records of `history` equal the first `k` records of `live`, comparing by normalized `raw`. This is the overlap predicate the join searches
-// over; it walks both windows forward from their respective anchor points (history's trailing-window start, live's head) so the comparison aligns the seam correctly.
+// over; it walks both windows forward from their respective anchor points (history's trailing-window start, live's head) so the comparison aligns the join point
+// correctly.
 function overlapsAt(history: readonly LogRecord[], live: readonly LogRecord[], k: number): boolean {
 
   const base = history.length - k;
@@ -86,6 +87,8 @@ function alignedEnd(history: readonly LogRecord[], live: readonly LogRecord[], k
 
     const start = end - k + 1;
 
+    // The `noUncheckedIndexedAccess`-safe read uses optional chaining on `raw`; out-of-range would yield `undefined` on both sides, but `start + index` stays within
+    // `[0, live.length - 1]` for every `end` this loop considers, since `start = end - k + 1 >= 0` and `start + (k - 1) = end < live.length` by the loop header.
     if(tail.every((record, index) => record.raw === live[start + index]?.raw)) {
 
       return end;
@@ -139,7 +142,7 @@ function stitchWithin(history: readonly LogRecord[], live: readonly LogRecord[],
  */
 export function stitchLive(history: readonly LogRecord[], live: readonly LogRecord[], options: StitchOptions = {}): LogRecord[] {
 
-  // Empty-input short-circuits: with nothing on one side there is no seam to align, so we pass the other side through unchanged and emit no marker.
+  // Empty-input short-circuits: with nothing on one side there is no boundary to align, so we pass the other side through unchanged and emit no marker.
   if(live.length === 0) {
 
     return [...history];
@@ -180,7 +183,7 @@ export function stitchLive(history: readonly LogRecord[], live: readonly LogReco
   }
 
   // Partial head overlap (the common case - history is a superset of the seed, e.g. `--all -f` or a large `-n`): join at the minimal valid offset, retaining every live
-  // line from that point on. This is where bounded duplicate chatter may appear at the seam, in exchange for never dropping a distinct live line.
+  // line from that point on. This is where bounded duplicate chatter may appear at the join point, in exchange for never dropping a distinct live line.
   if(minK > 0) {
 
     return [ ...history, ...live.slice(minK) ];

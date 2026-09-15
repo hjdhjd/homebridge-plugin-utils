@@ -124,9 +124,9 @@ function stampHeaders(headers: Dispatcher.DispatchOptions["headers"], name: stri
  * place where what the transport retries and what the plugin then says about it are the same question. Every other status-to-message decision belongs to the plugin,
  * whose protocol it is.
  *
- * @remarks This is a deliberate widening of the transport's own retry defaults, which cover the 5xx family and 429 alone. Real APIs answer well-formed requests with
- * a transient 400 or 404 while a device is rebooting or a backend is under load, and treating either as permanent gives up on a request that would have succeeded a
- * second later.
+ * @remarks This is a deliberate widening of the transport's own retry defaults, which cover 429, 500, 502, 503, and 504 alone. Real APIs answer well-formed requests
+ * with a transient 400 or 404 while a device is rebooting or a backend is under load, and treating either as permanent gives up on a request that would have succeeded
+ * a second later.
  *
  * @category Utilities
  */

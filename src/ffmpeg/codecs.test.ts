@@ -333,7 +333,7 @@ describe("FfmpegCodecs - scalar getter surface", () => {
   test("getters return the documented defaults when the fixture builder fills in absent fields", () => {
 
     // Coverage for the fixture's default branch: when callers pass an empty init, every scalar resolves to the documented default. The defaults are part of the
-    // fixture's contract (see `makeCodecs`), so this pins them to the documented values.
+    // fixture's contract (see `makeCodecs`), so this locks them in against the documented values.
     const codecs = makeCodecs();
 
     assert.equal(codecs.hostSystem, "generic");
@@ -393,7 +393,9 @@ describe("FfmpegCodecs.probe - the per-command deadline", () => {
       assert.ok(clock.pending >= 1, "the probe's deadline is armed on the injected clock");
 
       // Step deadline by deadline rather than by one span, so the hanging command's deadline is the one that fires last on every host, whatever ran before it. The
-      // bound fails the row rather than letting it spin if the pipeline ever arms more deadlines than the four a probe can reach.
+      // bound fails the row rather than letting it spin, sized generously against this scenario's own deadlines - the optional Raspberry Pi GPU probe plus the
+      // version probe that never answers - since it stops at the first required probe rather than reaching the per-accelerator validation loop, whose deadline
+      // count tracks the host's advertised hardware rather than a fixed ceiling.
       for(let step = 0; clock.pending > 0; step++) {
 
         assert.ok(step < 4, "the probe must come to rest within the deadlines it arms");

@@ -6,10 +6,9 @@
 /**
  * A shared documentation renderer for the {@link featureOptions!FeatureOptions | FeatureOptions} catalog.
  *
- * Every plugin in the family used to ship a near-duplicate `*-gendocs.ts` script that walked its feature-options catalog and printed a markdown category index plus
- * per-category option tables, then pasted the result into its `docs/FeatureOptions.md` by hand. ~95% of each script was identical, and each hand-rolled the dotted-key
- * construction and the value-vs-toggle distinction that this library already owns as single-source-of-truth helpers. This module collapses all of that into one
- * elegant renderer so the documentation becomes a pure projection of the live catalog.
+ * Every plugin's feature-options catalog needs a markdown category index plus per-category option tables rendered into its `docs/FeatureOptions.md`. This module
+ * renders that projection once, so every plugin shares one implementation of the dotted-key construction and the value-vs-toggle distinction that this library
+ * already owns as single-source-of-truth helpers, and the documentation stays a pure projection of the live catalog.
  *
  * The module exports one pure string function:
  *

@@ -140,7 +140,8 @@ function acquireService<T>(
 ```
 
 Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
-service instance. Additionally, the various name characteristics of the service are set to the specified name, and optionally added if necessary.
+service instance. For a newly created service, the various name characteristics are also set to the specified name and added where necessary; re-acquiring an
+existing service returns it with its name characteristics untouched.
 
 #### Type Parameters
 
@@ -166,8 +167,9 @@ Returns the created or retrieved service. Construction failures throw rather tha
 
 #### Remarks
 
-This method ensures that the service's display name and available name characteristics are updated to the specified name. If `onServiceCreate` is provided,
-it will only be called for newly created services, not for existing ones.
+This method ensures that a newly created service's display name and available name characteristics are updated to the specified name; re-acquiring an
+existing service leaves its name characteristics untouched, so a caller renaming an existing service calls [setServiceName](#setservicename) directly. If
+`onServiceCreate` is provided, it will only be called for newly created services, not for existing ones.
 
 The `ConfiguredName` and `Name` characteristics are conditionally added or updated based on the type of service, in accordance with HomeKit requirements.
 

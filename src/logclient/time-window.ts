@@ -32,11 +32,14 @@ import { parseLogTimestamp } from "./parser.ts";
  * timestamp has been seen is treated as the oldest possible instant: a `since` lower bound excludes it, a pure `until` upper bound includes it. Both bounds are
  * inclusive, and a `null` bound is unbounded on that side.
  *
- * @param source - The upstream record stream (a channel's `LogStream`, or any async iterable of records in arrival order).
- * @param bounds - The window bounds in epoch milliseconds. `since` is the inclusive lower bound (`null` for unbounded-below); `until` is the inclusive upper bound
- *                 (`null` for unbounded-above).
+ * @param source        - The upstream record stream (a channel's `LogStream`, or any async iterable of records in arrival order).
+ * @param bounds        - The window bounds in epoch milliseconds.
+ * @param bounds.since  - The inclusive lower bound (`null` for unbounded-below).
+ * @param bounds.until  - The inclusive upper bound (`null` for unbounded-above).
  *
  * @returns An async generator yielding only the records inside the window, in arrival order.
+ *
+ * @category Log Client
  */
 export async function *timeWindow(source: AsyncIterable<LogRecord>, bounds: { since: Nullable<number>; until: Nullable<number> }): AsyncGenerator<LogRecord> {
 

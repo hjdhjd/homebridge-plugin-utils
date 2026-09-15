@@ -5,8 +5,8 @@
  *
  * The table below is the specification rather than a sample of it. Each row is an input shape and the exact record it must produce, and several rows exist purely to
  * fail an implementation that is plausible but wrong: the aborted-signal-with-an-errno row separates the correct precedence from one that consults the code map first,
- * the depth rows bracket the cap so no other cap passes both, the numeric-code rows pin that the platform's legacy numeric code is stepped over rather than
- * adopted, and the wrapped rows pin that the name checks ride the walk instead of reading only the value that was caught.
+ * the depth rows bracket the cap so no other cap passes both, the numeric-code rows assert that the platform's legacy numeric code is stepped over rather than
+ * adopted, and the wrapped rows assert that the name checks go through the walk instead of reading only the value that was caught.
  */
 import type { TransportFailureCodedKind, TransportFailureKind } from "./transport-error.ts";
 import { describe, test } from "node:test";

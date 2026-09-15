@@ -219,7 +219,8 @@ export class FfmpegProcess implements AsyncDisposable {
   protected readonly args: readonly string[];
 
   /**
-   * Protected alias for {@link FfmpegProcess.stdin}. Subclasses that publicly narrow `stdin` to `never` still consume the underlying stream through this typed path.
+   * Protected alias for {@link FfmpegProcess.stdin}. Kept for symmetry with `_stdout` / `_stderr`; unlike `_stdout`, no subclass narrows the public `stdin` to
+   * `never`, so this typed path exists for consistency rather than to route around a narrowing of its own.
    */
   protected readonly _stdin: Writable;
 
@@ -490,7 +491,7 @@ export class FfmpegProcess implements AsyncDisposable {
     }
 
     // Natural exit. Code 0 is the closed case; anything else is a failure. The cause shape is the single constant either way; only the reason name varies. The
-    // `satisfies` operator pins production to the strict `FfmpegProcessExitInfo` type so `exited`'s callers get the `NodeJS.Signals` narrowing; the read-side guard
+    // `satisfies` operator holds production to the strict `FfmpegProcessExitInfo` type so `exited`'s callers get the `NodeJS.Signals` narrowing; the read-side guard
     // (`isExitInfoShape`) verifies what the runtime can actually check. Both sides share this literal shape, so a future rename of either field breaks both ends.
     const reasonName: HbpuAbortReason = (exitCode === 0) ? "closed" : "failed";
     const cause = { exitCode, exitSignal } satisfies FfmpegProcessExitInfo;
@@ -642,8 +643,9 @@ export class FfmpegProcess implements AsyncDisposable {
    * The default implementation emits a single WARN: a stall that trips the watchdog on a general FFmpeg process (a live stream) genuinely is a problem. A subclass may
    * override to demote the reap to debug and leave the severity verdict to the consumer that holds the input-feed and reachability context.
    *
-   * @param _reason - The `"timeout"` abort reason that drove this teardown. Part of the seam contract so an override can inspect it (parallel to `logFailedTeardown`),
-   *                  but neither the default body nor the recording override reads it - a watchdog timeout carries no actionable cause - so it is `_`-prefixed.
+   * @param _reason - The `"timeout"` abort reason that drove this teardown. Part of the override contract so a subclass can inspect it (parallel to
+   *                  `logFailedTeardown`), but neither the default body nor the recording override reads it - a watchdog timeout carries no actionable cause - so
+   *                  it is `_`-prefixed.
    */
   protected logTimeoutTeardown(_reason: HbpuAbortError): void {
 

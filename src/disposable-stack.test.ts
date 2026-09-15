@@ -145,8 +145,8 @@ function scenarioUseNullPassthrough(makeStack: StackFactory): { order: string[] 
   const order: string[] = [];
   const stack = makeStack();
 
-  // Both calls sit in statement position, where a void-typed result is unremarkable... the disposal order below proves neither registered a disposer, and the contract
-  // suite pins the returned-unchanged behavior separately.
+  // Both calls sit in statement position, where a void-typed result is unremarkable...the disposal order below proves neither registered a disposer, and the contract
+  // suite asserts the returned-unchanged behavior separately.
   stack.use(null);
   stack.use(undefined);
   stack.defer(() => order.push("d"));

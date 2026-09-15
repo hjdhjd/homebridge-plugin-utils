@@ -58,8 +58,8 @@ Error.constructor
 
 ### BackpressureOverflowError
 
-Thrown synchronously by [BackpressureWriter.write](#write) when the pending queue is already at the configured [BackpressureWriterInit.highWaterMark](#highwatermark) and
-accepting the new chunk would push it over.
+Rejects synchronously from [BackpressureWriter.write](#write) when the pending queue is already at the configured [BackpressureWriterInit.highWaterMark](#highwatermark)
+and accepting the new chunk would push it over.
 
 Separate from the "writer has aborted" and "underlying stream is dead" failure modes so callers can distinguish backpressure-overflow (back off and retry later)
 from terminal failures (give up or escalate) by type rather than by inspecting error message text.
@@ -256,9 +256,11 @@ A promise that resolves when the chunk has been flushed to the underlying stream
          this entry, immediately if the provider then returns `null` (drop semantics). The promise rejects in the following cases:
 
 - `this.signal.reason` - the writer aborted before or during the write.
-- [BackpressureOverflowError](#backpressureoverflowerror) (thrown synchronously) - `highWaterMark` is configured and the queue depth already equals or exceeds it.
+- [BackpressureOverflowError](#backpressureoverflowerror) (rejects synchronously) - `highWaterMark` is configured and the queue depth already equals or exceeds it.
 - [BackpressureClosedStreamError](#backpressureclosedstreamerror) - the provider returned a stream whose `writable` flag is `false`. The writer itself stays alive for a potential later
   stream replacement.
+- The underlying stream's own error, by reference - the stream emitted an error while writing or draining this entry. The writer aborts itself with
+  `"failed"` afterward, which rejects every other queued entry with that abort reason rather than with the stream's error.
 
 ###### Throws
 

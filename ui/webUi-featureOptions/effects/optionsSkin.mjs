@@ -252,7 +252,7 @@ const buildOptionsSkinCss = () => [
    * row too.
    *
    * The outline is the interactive family's, shared with the page's action controls at rest, and that symmetry is the point: what separates a destination from an
-   * action is not its resting frame but its type, its position, and what happens when you arrive. This row rides the tabs' lifecycle rather than a button's - an
+   * action is not its resting frame but its type, its position, and what happens when you arrive. This row follows the tabs' lifecycle rather than a button's - an
    * outline while you are elsewhere, a solid accent fill that stays for as long as you are here - because it is a place with a current state, which an action never
    * has.
    *
@@ -260,7 +260,7 @@ const buildOptionsSkinCss = () => [
    * tint and the fill down with it; the row is transparent at rest already, since nothing paints a resting nav row. The radius is the shared nav token, inherited
    * rather than restated, so the family reads as one at every corner.
    *
-   * The resting text is the ghost family's own: the `.fo-action` and `.fo-menu` rest state declares exactly this token, and a row riding that family's grammar
+   * The resting text is the ghost family's own: the `.fo-action` and `.fo-menu` rest state declares exactly this token, and a row sharing that family's grammar
    * while you are elsewhere rests in the same muted tone rather than in whatever an ordinary nav row inherits. Agreeing with the headings beside it follows from
    * both reading one token and is a consequence rather than the reason. The tie is semantic and not mechanical: the family's rule and this one reach for the token
    * independently, so a redesign of what the family's rest looks like carries both without either rule reaching into the other. The color is safe to declare where
@@ -305,7 +305,7 @@ const buildOptionsSkinCss = () => [
 
   /* A value option's field, dressed from the same tokens the search field reads and keyed on the class the renderer stamps on every value input. A masked secret
    * field is that same construction with its type swapped, so this reaches it through the same hook rather than through a rule of its own. The correction is
-   * needed because Bootstrap pins an explicit white background on a form control, which outranks the native `color-scheme` rendering - so a field left alone
+   * needed because Bootstrap locks in an explicit white background on a form control, which outranks the native `color-scheme` rendering - so a field left alone
    * renders white on the dark surface while the search field beside it renders dark.
    *
    * Light mode is deliberately Bootstrap's own, the same stance the page kit takes on its own fields, and the search field's light-mode accent styling is
@@ -349,8 +349,8 @@ const buildOptionsSkinCss = () => [
 
   /* The entry field's own dark treatment. The `.fo-option-value` rules above cannot reach it: that class sits on the editor's wrapper, `:focus` matches only the
    * element actually holding focus, `::placeholder` exists only on a field, and neither background nor border is inherited - so the field would render light on
-   * the dark surface while the text field in the row above it rendered dark. The three declarations are the same ones, read from the same tokens, addressed to
-   * the field as a descendant.
+   * the dark surface while the text field in the row above it rendered dark. These are the same rule variants as the `.fo-option-value` dark treatment above,
+   * read from the same tokens, addressed to the field as a descendant.
    */
   ":root.fo-dark .fo-list-editor .fo-list-entry { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); " +
     "color: var(--fo-text-on-elevated); }",

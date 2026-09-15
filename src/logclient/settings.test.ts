@@ -7,9 +7,9 @@ import { DEFAULT_HOST, DEFAULT_PORT, JITTER_FRACTION, LOG_NAMESPACE, MARGIN_MS, 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-// These constants govern both protocol and behavior across the transports; a silent drift in any of them changes how the client talks to the
-// server (port, namespace, mount path) or how it reconnects (base delay, jitter). The tests pin each value so an accidental edit is caught loudly rather than shipping a
-// subtly mis-configured client.
+// These constants govern both protocol and behavior across the transports; a silent drift in any of them changes how the client talks to the server (port, namespace,
+// mount path) or how it reconnects (base delay, jitter). The tests assert each value so an accidental edit is caught loudly rather than shipping a subtly mis-configured
+// client.
 describe("logclient settings", () => {
 
   test("defaults the host to loopback", () => {
@@ -80,7 +80,7 @@ describe("logclient settings", () => {
 
   test("orders the seed terminators so the quiet gap ends nothing early and the floor stays inside the cap", () => {
 
-    /* The three are read through `number` bindings rather than compared as the literal types the constants carry. A comparison between two literal types is settled by
+    /* Each constant below is read through a `number` binding rather than compared as the literal type it carries. A comparison between two literal types is settled by
      * the compiler, which both trips the unnecessary-condition rule and would leave this row asserting nothing at all at run time.
      */
     const cap: number = SEED_WINDOW_MAX_MS;

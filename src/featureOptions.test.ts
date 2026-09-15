@@ -334,7 +334,7 @@ describe("FeatureOptions - declared option scopes", () => {
 
   test("the catalog default resolves even when every configured entry sits at an undeclared level, in both directions", () => {
 
-    // A default belongs to the option rather than to a level, so the fallback is never gated. Both fixtures pin a default whose enabled state DIFFERS from the
+    // A default belongs to the option rather than to a level, so the fallback is never gated. Both fixtures fix a default whose enabled state DIFFERS from the
     // disallowed global entry's, so an implementation that leaked that entry through would fail here rather than agreeing with the default by coincidence.
     const catalog = buildCatalogIndex(SCOPED_CATEGORIES, SCOPED_OPTIONS);
     const enabledGlobal = buildConfigIndex(catalog, ["Enable.Scoped.DeviceOnly"]);
@@ -1607,9 +1607,9 @@ describe("FeatureOptions - shared parser correctness", () => {
   });
 });
 
-// The payload delimiter gives a value its own separator, so dots are left to address and nothing else. These tests pin the reader and the writer against each
-// other across both accepted forms: what the canonical "=" grammar decodes to, what the legacy dot grammar still decodes to for configurations authored before
-// it, and what the composer writes.
+// The payload delimiter gives a value its own separator, so dots are left to address and nothing else. These tests assert the reader and the writer against
+// each other across both accepted forms: what the canonical "=" grammar decodes to, what the legacy dot grammar still decodes to for configurations authored
+// before it, and what the composer writes.
 describe("FeatureOptions - the value payload delimiter", () => {
 
   test("a global value round-trips verbatim with periods and spaces intact", () => {
@@ -1684,7 +1684,7 @@ describe("FeatureOptions - the value payload delimiter", () => {
     // the "=" as ordinary value text - the reading a configuration authored before the delimiter existed meant: an id followed by a free-form value.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.a.b=x"]);
 
-    assert.equal(fo.value("Audio.Volume", "a"), "b=x", "the first segment is the scope id and the delimiter rides inside the value");
+    assert.equal(fo.value("Audio.Volume", "a"), "b=x", "the first segment is the scope id and the delimiter lives inside the value");
     assert.equal(fo.value("Audio.Volume"), null, "no global value is registered");
   });
 
@@ -1769,8 +1769,8 @@ describe("FeatureOptions - the value payload delimiter", () => {
 
   test("the legacy bare-with-id form keeps its global-value reading", () => {
 
-    // Pinned as it has always resolved, for configurations that predate the delimiter: the single trailing segment is read as this option's global value, while the
-    // primary key registers the same text as a scope. Both readings are live at once, which is the ambiguity the delimiter form exists to avoid.
+    // Locked in as it has always resolved, for configurations that predate the delimiter: the single trailing segment is read as this option's global value, while
+    // the primary key registers the same text as a scope. Both readings are live at once, which is the ambiguity the delimiter form exists to avoid.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.ABC123"]);
 
     assert.equal(fo.value("Audio.Volume"), "ABC123", "the trailing segment reads as the global value");
@@ -1878,8 +1878,8 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
 
     Video: [
 
-      { choices: PIN_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality pin.", name: "Only" },
-      { choices: "streams", default: false, defaultValue: "Medium", description: "A pin whose choices a webUI source derives.", name: "Sourced" },
+      { choices: PIN_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality selection.", name: "Only" },
+      { choices: "streams", default: false, defaultValue: "Medium", description: "An option whose choices a webUI source derives.", name: "Sourced" },
       { default: false, defaultValue: 50, description: "A value option declaring no choices at all.", name: "Bitrate" }
     ]
   };
@@ -1888,13 +1888,13 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
 
   test("a segment naming a declared member is the option's value, and no enable at a scope spelling it", () => {
 
-    // The pin a configuration authored by hand carries: the segment is the domain's own text, so the entry says what the option is set to and nothing about any
+    // The value a configuration authored by hand carries: the segment is the domain's own text, so the entry says what the option is set to and nothing about any
     // device. Reading it as a scope as well would invent a device out of the value.
     const fo = pinnedWith(["Enable.Video.Only.High"]);
 
     assert.equal(fo.value("Video.Only"), "High", "the segment reads as the global value");
     assert.equal(fo.scope("Video.Only", "High"), "global", "a device named like the member resolves against that global entry rather than one of its own");
-    assert.equal(fo.value("Video.Only", "High"), "High", "so it reads the pinned value, not the absence a bare scoped enable reports");
+    assert.equal(fo.value("Video.Only", "High"), "High", "so it reads the fixed value, not the absence a bare scoped enable reports");
 
     const catalog = buildCatalogIndex(PIN_CATEGORIES, PIN_OPTIONS);
     const configIndex = buildConfigIndex(catalog, ["Enable.Video.Only.High"]);
@@ -1904,14 +1904,14 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
     assert.equal(optionExists({ catalog, configIndex, id: "High", option: "Video.Only" }), false, "and nothing is configured at a scope named like the member");
   });
 
-  test("a scoped write at a name the member spells lands beside the pin rather than replacing it", () => {
+  test("a scoped write at a name the member spells lands beside the existing entry rather than replacing it", () => {
 
     // The matcher decodes an entry through the same parse the index does, so an entry carrying no scope reading is not an entry a scoped write can claim.
     const fo = pinnedWith(["Enable.Video.Only.High"]);
 
     fo.setOption({ enabled: true, id: "High", option: "Video.Only", value: "Low" });
 
-    assert.deepEqual(fo.configuredOptions, [ "Enable.Video.Only.High", "Enable.Video.Only.High=Low" ], "the pin survives the write verbatim");
+    assert.deepEqual(fo.configuredOptions, [ "Enable.Video.Only.High", "Enable.Video.Only.High=Low" ], "the earlier entry survives the write verbatim");
     assert.equal(fo.value("Video.Only"), "High", "and still answers globally");
     assert.equal(fo.value("Video.Only", "High"), "Low", "while the device that spells the member now carries a value of its own");
   });
@@ -1978,24 +1978,24 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
 
     const global = pinnedWith(["Enable.Video.Only=High"]);
 
-    assert.equal(global.value("Video.Only"), "High", "and the global delimiter form is the unambiguous spelling of the pin");
+    assert.equal(global.value("Video.Only"), "High", "and the global delimiter form is the unambiguous spelling of the same value");
     assert.equal(global.scope("Video.Only", "High"), "global", "which addresses no scope at all");
   });
 
   test("an option the catalog names exactly like the narrowed tail reads the same way to the index and to the enumeration", () => {
 
-    /* The catalog a plugin holds while it converts a set of boolean pins into one value option and carries both through a deprecation window: the tail of a
+    /* The catalog a plugin holds while it converts a set of boolean toggles into one value option and carries both through a deprecation window: the tail of a
      * legacy entry spells both a declared member of the value option and the name of the boolean beside it. The value-option walk never considers that boolean,
-     * so the tail narrows to the value, and what this pins is that every reader says so. A reader that went on reporting the boolean as enabled would have the
-     * engine contradicting itself about one entry, which is the whole reason the parse result is shared.
+     * so the tail narrows to the value, and what this asserts is that every reader says so. A reader that went on reporting the boolean as enabled would have
+     * the engine contradicting itself about one entry, which is the whole reason the parse result is shared.
      */
     const categories: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
     const options: Record<string, FeatureOptionEntry[]> = {
 
       Video: [
 
-        { choices: PIN_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality pin.", name: "Stream" },
-        { default: false, description: "The boolean pin whose name a declared member also spells.", name: "Stream.High" }
+        { choices: PIN_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality selection.", name: "Stream" },
+        { default: false, description: "The boolean option whose name a declared member also spells.", name: "Stream.High" }
       ]
     };
     const configured = ["Enable.Video.Stream.High"];
@@ -2346,7 +2346,7 @@ describe("FeatureOptions - pure functional core", () => {
         /a default outside the declared choices declared on option "Motion\.Tier"/);
       });
 
-      /* The declaration check is deliberately exact where value matching folds case, and this row is what pins that. A case-variant default admitted here would
+      /* The declaration check is deliberately exact where value matching folds case, and this row is what asserts that. A case-variant default admitted here would
        * answer two different strings for the life of a defaults-only install: value() and every reader built on it are handed no domain and answer the declared
        * casing verbatim, while valueList and the picker read through selectValues and answer the list's spelling. The declaration is the one spelling the engine
        * can check when the catalog is built, and holding it exact is what keeps every accessor answering one string for a validated catalog.
@@ -2472,7 +2472,7 @@ describe("FeatureOptions - pure functional core", () => {
     test("accepts any trimmed text carrying a non-delimiter character and rejects the rest", () => {
 
       // The shared definition of "carries a value": whitespace-only and all-"=" payloads sit outside the canonical value domain, which is exactly the shape of
-      // base64 terminal padding - while padding attached to real content rides along like any other character.
+      // base64 terminal padding - while padding attached to real content passes through like any other character.
       assert.equal(hasValueContent("50"), true, "ordinary text carries content");
       assert.equal(hasValueContent("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="), true, "a full base64 value carries content, padding included");
       assert.equal(hasValueContent(""), false, "the empty string carries nothing");
@@ -2483,14 +2483,15 @@ describe("FeatureOptions - pure functional core", () => {
   });
 
   // The grammar is a contract two sides read: the browser editor composing a list and a plugin splitting it back apart. Each row is therefore checked in both
-  // directions - what the text parses to, and what formatting that parse composes - so the normalization a stored value settles into is pinned, not just the split.
+  // directions - what the text parses to, and what formatting that parse composes - so the normalization a stored value settles into is asserted, not just the
+  // split.
   describe("the greedy-prefix discipline", () => {
 
     test("an option name that is merely a PREFIX of a longer token does not claim that token's value", () => {
 
       // "Audio.Volume" is a prefix of "Audio.Volumes", which no option declares. The parser has to recognize that the candidate ran out mid-token and keep trying
       // shorter names rather than reading the tail as this option carrying a value - a leak that would have an entry for one option silently configure another.
-      // The rule is documented as the greedy-prefix discipline and is pinned here rather than left to whichever fixture happens to exercise it.
+      // The rule is documented as the greedy-prefix discipline and is asserted here rather than left to whichever fixture happens to exercise it.
       const options = new FeatureOptions(CATEGORIES, structuredClone(OPTIONS), ["Enable.Audio.Volumes=5"]);
 
       assert.equal(options.scope("Audio.Volume"), "none", "nothing was configured for this option at any scope");
@@ -2738,7 +2739,7 @@ describe("FeatureOptions - pure functional core", () => {
  * The exception is the legacy dot form's single trailing segment, which consults the declared members to settle whether it names this option's value or a scope
  * of it. It is confined to the one shape that has nothing else to settle it, and what it trades away is bounded: a hand-authored legacy entry whose segment a
  * declaration claims reads one way against the catalog that declares it and another against one that does not. The engine owes such an entry graceful degradation
- * and no more - one sensible reading, with the "=" form as the spelling that states either reading outright - and a row below pins that difference as designed.
+ * and no more - one sensible reading, with the "=" form as the spelling that states either reading outright - and a row below asserts that difference as designed.
  *
  * The guard proves it by building the same catalog twice, once with the declarations and once without, and comparing every DERIVED map. The three members that
  * are not derived are excluded by construction rather than by exception: `categories` and `options` are the raw inputs preserved verbatim, and `optionsByName`
@@ -2804,7 +2805,7 @@ describe("FeatureOptions - the choices declarations are inert to the engine", ()
 
   test("the legacy dot form's trailing segment is the one reading a declaration settles", () => {
 
-    // The stated exception, pinned as a design fact rather than left to contradict the rows above. The same entry resolves one way against a catalog that
+    // The stated exception, locked in as a design fact rather than left to contradict the rows above. The same entry resolves one way against a catalog that
     // declares the member and another against one that does not, which is what a plugin accepts when it attaches a picker to an option its users configured by
     // hand under the legacy grammar.
     const configured = ["Enable.Motion.Quality.high"];
@@ -3223,7 +3224,7 @@ describe("FeatureOptions - scope addressing", () => {
 
     test("names the controller when neither part is usable, the order the parts take in the composed value", () => {
 
-      // Both parts are unusable here, so the row pins which one the single message names. A composer that checked the device first would answer with the device
+      // Both parts are unusable here, so the row asserts which one the single message names. A composer that checked the device first would answer with the device
       // part instead, which is the reading this rules out.
       assert.throws(() => composeScopeId("", "a=b"), /controller part ""/, "the part that comes first in the composed value is the part the caller hears about");
     });
@@ -3316,7 +3317,7 @@ describe("FeatureOptions - scope addressing", () => {
 
   test("an entry left behind by an option the catalog no longer declares still resolves at its scope", () => {
 
-    // Written as a raw entry rather than through the writer, because what this pins is a configuration that outlived its option: nothing in the catalog claims
+    // Written as a raw entry rather than through the writer, because what this asserts is a configuration that outlived its option: nothing in the catalog claims
     // the key, so the arbitration has nothing to assign it elsewhere and the read lands exactly where it always did.
     const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
     const configIndex = buildConfigIndex(catalog, ["Enable.Retired.Feature.dev1"]);

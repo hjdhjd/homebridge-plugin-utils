@@ -72,7 +72,7 @@ describe("registerOptionsSkinEffect", () => {
     // something else, so it must live and die with this view rather than with the page.
     const text = skinCss();
 
-    assert.match(text, /\.nav-link\s*\{/, "the nav pill rules ride the skin");
+    assert.match(text, /\.nav-link\s*\{/, "the nav pill rules live in the skin");
     assert.match(text, /\.nav-link\.active\s*\{[^}]*background-color:\s*var\(--fo-accent-bg\)/, "including the active pill's accent fill");
   });
 });
@@ -84,7 +84,7 @@ describe("buildOptionsSkinCss - layout rules", () => {
     using _dom = createTestDom();
 
     // The token is the single place the sidebar's width is stated, so a plugin widening it overrides one custom property rather than three declarations. All three
-    // properties must reference it: leaving min-width or max-width on a literal would pin the sidebar at 200px no matter what the token says.
+    // properties must reference it: leaving min-width or max-width on a literal would hold the sidebar fixed at 200px no matter what the token says.
     const text = skinCss();
 
     assert.match(text, /#sidebar\s*\{[^}]*[^-]width:\s*var\(--fo-sidebar-width\)/, "width reads the token");
@@ -282,7 +282,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     const text = skinCss();
 
     /* The surface, the border, and the text move together - a field that corrected only its background would render dark-on-dark - and the placeholder and the
-     * focus state come with them so a field cannot flash a light background the moment it takes focus. Each declared value is pinned to its exact token: a
+     * focus state come with them so a field cannot flash a light background the moment it takes focus. Each declared value is tied to its exact token: a
      * literal here would be a second definition of a color the tokens module already owns.
      */
     assert.match(text, /:root\.fo-dark \.fo-option-value\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
@@ -312,7 +312,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
     using _dom = createTestDom();
 
-    /* The scope is a ruling rather than an oversight, so it is pinned rather than left to the comment beside the rules: every rule that DRESSES a value field is
+    /* The scope is a ruling rather than an oversight, so it is asserted rather than left to the comment beside the rules: every rule that DRESSES a value field is
      * dark-qualified, which is also what keeps the search field's light accent styling from spreading here by a later well-meant edit.
      *
      * The dropdown's sizing rule is the stated exception, and it is stated rather than dodged: a control has one width in both themes, so qualifying that rule
@@ -407,7 +407,7 @@ describe("buildOptionsSkinCss - the heading action's glyph", () => {
     using _dom = createTestDom();
 
     // An unguarded copy of the rule is precisely the failure the guard exists to prevent, and the nested match above would still pass with one present - so the
-    // count is what pins it. One occurrence, placed inside the guard by the assertion above, is the whole contract.
+    // count is what locks it in. One occurrence, placed inside the guard by the assertion above, is the whole contract.
     const occurrences = skinCss().match(/\.nav-header \.fo-action svg/g) ?? [];
 
     assert.equal(occurrences.length, 1, "exactly one rule reaches the heading action's glyph");
@@ -438,7 +438,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
     const rule = globalRule();
 
     // An inline SVG sits on the text baseline and hangs below the label's optical middle. Centering is the fix that holds at any type scale; a constant offset
-    // would drift the moment the scale moved, which is why its absence is pinned alongside the centering itself.
+    // would drift the moment the scale moved, which is why its absence is asserted alongside the centering itself.
     assert.match(rule, /display:\s*flex/, "the row lays its glyph and label out as a row");
     assert.match(rule, /align-items:\s*center/, "centered against each other");
     assert.doesNotMatch(rule, /vertical-align|position:\s*relative|top:/, "with no baseline nudge standing in for the centering");
@@ -473,7 +473,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
 
     /* The row's selector carries an id, so any background it declared would outrank `.nav-link:hover` and `.nav-link.active` - both plain class selectors - and take
      * the tint and the fill with it. A resting nav row is painted by nothing, so the outline needs no background beside it to read as transparent. This absence is
-     * therefore the mechanism rather than an omission, which is why it is pinned.
+     * therefore the mechanism rather than an omission, which is why the test asserts it directly.
      */
     assert.doesNotMatch(globalRule(), /background/, "no background declaration sits in the row's own rule");
     assert.match(skinCss(), /\.nav-link:hover\s*\{[^}]*background-color:\s*var\(--fo-accent-hover\)/, "so the shared hover tint still paints inside the outline");
@@ -485,7 +485,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
     using _dom = createTestDom();
 
     /* The row's affordances are what separate it from a title, and their colors come from `.nav-link:hover` and `.nav-link.active`. A colored state rule of its own
-     * would be a second definition of the same thing, so its absence is the pin. The one state rule the row does carry hides its own border under the selected fill
+     * would be a second definition of the same thing, so its absence is the assertion. The one state rule the row does carry hides its own border under the selected fill
      * and paints nothing, which is why the hover selector is the one this asserts against.
      */
     const rule = globalRule();
@@ -520,7 +520,7 @@ describe("buildOptionsSkinCss - the choice group", () => {
 
     const text = skinCss();
 
-    // The token itself carries the per-mode value, so one unqualified rule is correct in both modes - and pinning it to the token is what keeps a literal color
+    // The token itself carries the per-mode value, so one unqualified rule is correct in both modes - and tying it to the token is what keeps a literal color
     // from becoming a second definition of something the tokens module owns.
     assert.match(text, /\.fo-choice-unknown\s*\{[^}]*color:\s*var\(--fo-text-attention\)/);
 
@@ -568,7 +568,7 @@ describe("buildOptionsSkinCss - the list editor", () => {
 
     /* The fo-option-value class sits on the editor's wrapper, not on the field: `:focus` matches only the element actually holding focus, `::placeholder` exists
      * only on a field, and neither background nor border is inherited. Without these three the field would render light on the dark surface while the text field
-     * in the row above it rendered dark. Each value is pinned to the same token the shared rules read, so the two cannot drift.
+     * in the row above it rendered dark. Each value is tied to the same token the shared rules read, so the two cannot drift.
      */
     assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
     assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*border-color:\s*var\(--fo-form-control-border\)/);

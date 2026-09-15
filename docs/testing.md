@@ -303,7 +303,7 @@ function logCount(
 
 Count the entries at `level` whose rendered line contains `substring`, matching by the same rules as [loggedAt](#loggedat).
 
-Distinct from [loggedAt](#loggedat) because "emitted exactly once" is a stronger claim than "emitted at all", and it is the one worth pinning around retry loops and
+Distinct from [loggedAt](#loggedat) because "emitted exactly once" is a stronger claim than "emitted at all", and it is the one worth asserting around retry loops and
 reconnect handlers: a path that logs its warning on every attempt satisfies a presence check and fails a count of one.
 
 #### Parameters
@@ -413,7 +413,7 @@ Return a no-op [HomebridgePluginLogging](util.md#homebridgepluginlogging) implem
 treat logging as implementation detail and assert against behavior rather than captured log output.
 
 Derives from the production `noOpLog` SSOT in `util.ts` via spread, so the no-op method set has exactly one definition library-wide rather than re-declaring the
-interface shape and per-method void-return annotations here. The spread yields a fresh object per call - the identity contract this helper's tests pin - while every
+interface shape and per-method void-return annotations here. The spread yields a fresh object per call - the identity contract this helper's tests assert - while every
 method is the shared, stateless no-op.
 
 #### Returns

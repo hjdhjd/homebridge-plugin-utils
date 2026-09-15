@@ -9,7 +9,7 @@
 The MQTT topic vocabulary every other MQTT module and every consumer reads: the device-scoped composer both `unsubscribe` verbs spell the `(id, topic)` tuple
 through, the get and set children the client subscribes on, and the catalog a plugin declares its whole topic surface in.
 
-A catalog is one declaration three readers share: the plugin's publish and subscribe sites take their tails and their log labels from it, the documentation
+A catalog is one declaration every reader shares: the plugin's publish and subscribe sites take their tails and their log labels from it, the documentation
 renderer projects it into the plugin's MQTT document, and the builder validates it once when the declaring module is evaluated. Braces are reserved in every tail
 for the catalog's placeholders, so a parameterized tail names what varies rather than enumerating it, and [resolveMqttTopic](#resolvemqtttopic) is the one way a value reaches
 one.

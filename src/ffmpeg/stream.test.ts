@@ -59,7 +59,7 @@ describe("FfmpegStreamingProcess - construction without return port", () => {
     assert.equal(proc.hasError, false);
     assert.equal(proc.isTimedOut, false);
 
-    // The `returnPort` getter projects `init.returnPort` (which was unset here) onto its undefined branch. Pinning the contract directly so a future regression
+    // The `returnPort` getter projects `init.returnPort` (which was unset here) onto its undefined branch. Asserting the contract directly so a future regression
     // that returned a sentinel descriptor instead of `undefined` would surface here rather than via collateral failures elsewhere.
     assert.equal(proc.returnPort, undefined, "without a configured returnPort, the getter must return undefined - not a sentinel descriptor");
   });
@@ -71,7 +71,8 @@ describe("FfmpegStreamingProcess - construction without return port", () => {
     await proc.ready;
 
     // Read one chunk from stdout to prove an external consumer can attach. The talkback path in HBUP reads stdout this way. `events.once` returns a Promise of the
-    // listener arguments - the canonical Node idiom for "await one event."
+    // listener arguments - the canonical Node idiom for "await one event." Stdout here is never switched into string or object mode, so a "data" event always
+    // yields a Buffer, which is what makes the `[Buffer]` cast below safe.
     const [chunk] = await once(proc.stdout, "data") as [Buffer];
 
     assert.equal(chunk.toString(), "two-way-audio-bytes", "stdout should be externally readable on streaming processes - the talkback path depends on it");
@@ -236,8 +237,8 @@ describe("FfmpegStreamingProcess - pre-aborted-signal short circuit", () => {
     // Verification is two complementary checks:
     //
     //   1. INSIDE the holder's lifetime: assert the composed signal still carries the parent's reason. If the short-circuit failed, the process's bind would collide
-    //      with the holder; even though the socket-error handler's `if(!this.aborted)` guard suppresses an aborted-with-failed in that case, the assertion still pins
-    //      the documented rule - the short-circuit must execute before any allocation happens.
+    //      with the holder; even though the socket-error handler's `if(!this.aborted)` guard suppresses an aborted-with-failed in that case, the assertion still
+    //      asserts the documented rule - the short-circuit must execute before any allocation happens.
     //   2. AFTER the holder releases: probe the same port. The proc is disposed via `await using` at try-block exit, the holder is released explicitly in the finally
     //      block - so the only way the probe could fail with `EADDRINUSE` is if the proc allocated and bound a health socket that wasn't properly closed. That's the
     //      exact "no leak" mode the test name promises, surfaced as a probe failure rather than a signal-reason mismatch.
@@ -306,6 +307,8 @@ describe("FfmpegStreamingProcess - health socket error path", () => {
     assert.equal(proc.aborted, true, "a bind failure on the return port must abort the streaming process");
     assert.equal(isHbpuAbortReason(proc.signal.reason, "failed"), true, "the abort reason must be \"failed\" carrying the underlying socket error");
 
+    // Narrows to the `{ cause }` shape `HbpuAbortError("failed", { cause: error })` attaches via the standard Error `cause` option, which the assertion below
+    // then verifies.
     const reason = proc.signal.reason as { cause?: unknown };
 
     assert.ok(reason.cause instanceof Error, "the underlying kernel error must be attached to the signal reason's `cause` field");

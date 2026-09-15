@@ -18,7 +18,7 @@ import { installErmPolyfills } from "./polyfills.ts";
  *
  * Importing this module also runs its own top-level install against the real `globalThis`, which is how a consumer's single side-effect import works. Whether the
  * current runtime ships the constructors natively or sits below the platform floor, that install either supplies the missing shims or is a no-op, so there is nothing
- * observable to assert about it here regardless of which regime the runtime falls into; the tests below pin the installer's behavior on both arms directly instead.
+ * observable to assert about it here regardless of which regime the runtime falls into; the tests below assert the installer's behavior on both arms directly instead.
  */
 
 // Stand-ins that are NOT this package's constructors, so "left untouched" is proven by reference identity rather than by two references that happen to be the same

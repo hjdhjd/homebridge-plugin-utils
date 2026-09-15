@@ -15,8 +15,8 @@ function isComparison(node) {
   return !!node && (node.type === "BinaryExpression") && COMPARISON_OPERATORS.has(node.operator);
 }
 
-// Test whether a node is already parenthesized in source. Duck-types a sourceCode.isParenthesized method for environments that may expose one,
-// falling back to inspecting the tokens immediately surrounding the node when it is absent.
+// Test whether a node is already parenthesized in source. Checks for a sourceCode.isParenthesized method in case a future ESLint version adds one directly
+// to SourceCode, falling back to inspecting the tokens immediately surrounding the node when it is absent.
 function isParenthesized(sourceCode, node) {
 
   if(typeof sourceCode.isParenthesized === "function") {

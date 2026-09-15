@@ -18,8 +18,8 @@ interface FetchCall {
   url: string;
 }
 
-// Build a `fetch` seam double that captures the request and returns a caller-supplied response. The captured call lets a test assert the URL, the colour=yes query, and
-// the Authorization header.
+// Build an injected `fetch` double that captures the request and returns a caller-supplied response. The captured call lets a test assert the URL, the colour=yes
+// query, and the Authorization header.
 function fakeFetch(responder: (url: string, init: RequestInit | undefined) => Response): { calls: FetchCall[]; fetch: typeof fetch } {
 
   const calls: FetchCall[] = [];
@@ -73,7 +73,7 @@ async function collect(options: DownloadLogOptions): Promise<string[]> {
 
 // The captured surface of an abort-observing `fetch` double.
 //
-// @property fetch        - The `fetch` seam to inject.
+// @property fetch        - The `fetch` implementation to inject.
 // @property signalSeen   - The `signal` the download forwarded to `fetch`, captured on the call. `undefined` until `fetch` is invoked, or when no signal was forwarded.
 // @property wasCancelled - Whether the response body's underlying-source `cancel()` has run - i.e., `readLines` cancelled the still-open reader in its `finally` because
 //                          the call was aborted. Proves the body was torn down rather than drained to EOF.

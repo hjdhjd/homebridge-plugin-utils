@@ -2,7 +2,8 @@
  *
  * ui/webUi-featureOptions.test.mjs: Integration-level tests for the webUiFeatureOptions orchestrator. These exercise high-value end-to-end flows (show / hide /
  * cleanup, global-options render, device navigation, config round-trip, category-state persistence) against a Happy-DOM window with the full skeleton template and
- * a fake homebridge bridge. Per-component guarantees live in the Tier 1-3 test files; this file pins the orchestration wiring.
+ * a fake homebridge bridge. Per-component guarantees live in the per-component unit test files (state.test.mjs, selectors.test.mjs, rendering.test.mjs, and its
+ * siblings); this file locks in the orchestration wiring.
  */
 "use strict";
 
@@ -171,7 +172,7 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
     using _dom = createTestDom();
 
     // The group names make the comparator and the plain sort disagree: "attic" is lowercase, which code-unit order places after both capitalized names, and "Scenes"
-    // is pinned last against an alphabetical reading that would seat it in the middle. A sidebar that never receives the comparator renders
+    // is held last against an alphabetical reading that would seat it in the middle. A sidebar that never receives the comparator renders
     // [ "Kitchen", "Scenes", "attic" ], so the ordering read below is what tells the two apart.
     const groupOrder = (a, b) => {
 
@@ -376,7 +377,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
     }
 
     // Every category disclosure must be visible. The search component's projection-driven visibility derives "is this category visible right now?" from the
-    // model walk, not from the count of materialized rows. Asserting `display !== "none"` here pins that visibility is a projection of the model, robust to any
+    // model walk, not from the count of materialized rows. Asserting `display !== "none"` here proves that visibility is a projection of the model, robust to any
     // future change in the row-materialization timing: an empty rows container under lazy rendering must never cause a category to be hidden.
     for(const details of categoryDetails) {
 
@@ -420,7 +421,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
     await flush();
 
     // After a successful show(), revealRegions() is the sole gate that reveals every region container it lists - content is built and scoped first, then revealed
-    // in one coordinated pass. This pins the orchestrator-owns-reveal contract end-to-end: dropping any region from revealRegions (or leaving one hidden) fails
+    // in one coordinated pass. This proves the orchestrator-owns-reveal contract end-to-end: dropping any region from revealRegions (or leaving one hidden) fails
     // here, and it complements the per-view "does not self-reveal" tests that guard the other direction (a view revealing prematurely).
     for(const id of [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ]) {
 
@@ -475,7 +476,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
 
 describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO reconciliation)", () => {
 
-  // show() is the single entry chokepoint, so it re-reads the host config through the session before rendering. These tests pin that "every show is fresh"
+  // show() is the single entry chokepoint, so it re-reads the host config through the session before rendering. These tests prove the "every show is fresh"
   // guarantee: an edit made in the Settings tab while the page was hidden is reflected on the next show() rather than rendering against a frozen open()-time snapshot.
 
   test("re-reads the host config on every show() so getControllers and the options render reflect an external edit made while hidden", async () => {
@@ -647,7 +648,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     const writesBefore = fake.observed.updatedConfigs.length;
 
     // Fail the re-sync, then let the whole failure path settle well past the persist debounce window. The persist effect is registered only after the sync succeeds, so
-    // on the failure path it is never even registered - the write seam (updatePluginConfig, recorded in observed.updatedConfigs) must stay untouched.
+    // on the failure path it is never even registered - the write path (updatePluginConfig, recorded in observed.updatedConfigs) must stay untouched.
     fake.getPluginConfig = async () => { throw new Error("host read failed"); };
 
     await orchestrator.show(session);
@@ -736,7 +737,7 @@ describe("webUiFeatureOptions.show - progressive disclosure (no overlay spinner)
 
   // The orchestrator does not raise a global spinner overlay during show(). The synchronous page-shell transition (revealing `pageFeatureOptions`, hiding
   // `pageSupport`) is the user feedback for "your click was registered"; the async work that follows populates each region against the visible shell so the user
-  // perceives the UI filling in progressively rather than "spinner, then everything at once." The spinner-count assertion is the operational pin for this contract.
+  // perceives the UI filling in progressively rather than "spinner, then everything at once." The spinner-count assertion is the operational proof for this contract.
   test("show() does not raise the global homebridge spinner overlay - each region populates against the visible page-shell", async () => {
 
     using _dom = createTestDom();
@@ -1473,7 +1474,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
   test("a controller whose devices come back empty still carries the in-scope outline through a full show()", async () => {
 
-    // The end-to-end half of the sidebar's in-scope outline: the nav view paints it off devices:loaded, and this pins that a whole boot arrives at the same place a
+    // The end-to-end half of the sidebar's in-scope outline: the nav view paints it off devices:loaded, and this proves that a whole boot arrives at the same place a
     // click on that controller does - the outline on the controller whose list came back empty, and the selection resting on that controller rather than on Global.
     using _dom = createTestDom();
 
@@ -1580,7 +1581,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     /* The hook reports a failure AND hands back a list - the partial result a multi-controller plugin produces when it reaches some controllers and not others. The
      * list is deliberately non-empty and longer than the rendered one, because that is the only shape where the error channel is observable: an error arriving with
      * an empty list would leave the view standing anyway, through the no-controllers rule that predates this contract. A reported failure is authoritative over
-     * whatever list rode back with it, so nothing here reaches the store.
+     * whatever list came back alongside it, so nothing here reaches the store.
      */
     result = { controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "the controller went away" };
 
@@ -1589,7 +1590,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the sidebar the refresh could not improve on must stand untouched");
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']") === null,
-      "the list that rode back with the failure must never reach the sidebar");
+      "the list that came back with the failure must never reach the sidebar");
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning") === null, "a refresh failure must never raise the connection-error view over a working page");
 
     orchestrator.cleanup();
@@ -2068,7 +2069,7 @@ describe("webUiFeatureOptions - connection-error plugin panel", () => {
 
 describe("webUiFeatureOptions - the boot selects its initial controller", () => {
 
-  /* The boot takes the sidebar click's choreography: it selects the first controller before fetching that controller's devices. These tests pin what the shared shape
+  /* The boot takes the sidebar click's choreography: it selects the first controller before fetching that controller's devices. These tests prove what the shared shape
    * buys - a failed boot keeps the controller, so the plugin's repair surface reaches the user - and what it costs nowhere: device-only mode, which has no controller
    * to select, still rests on global. Scope itself is private to the store, so each test reads it where the page shows it, through the sidebar highlight the nav view
    * derives from the scope's kind and controllerId.
@@ -2173,7 +2174,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
   // Option persistence is fire-and-forget: a checkbox change dispatches an option mutation that the persist effect's coalescing drain writes to disk via
   // session.commit (homebridge.updatePluginConfig). A final failure with no superseding mutation dispatches persist:failed - the reducer rolls configuredOptions
   // back to the persisted anchor - and the effect surfaces the error through the host's single "config-persist" toast channel. When the page signal has aborted
-  // (lifecycle teardown), the drain bails before dispatching or toasting, so a teardown-shaped failure stays silent. These tests pin both branches by rejecting
+  // (lifecycle teardown), the drain bails before dispatching or toasting, so a teardown-shaped failure stays silent. These tests cover both branches by rejecting
   // the fake's updatePluginConfig.
 
   test("a regular Error rejected by updatePluginConfig surfaces as a user-facing toast labelled with the operation", async () => {
@@ -2273,7 +2274,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
 describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persistence", () => {
 
   // Every mutation path (checkbox toggle, reset-to-defaults, revert-to-saved) applies optimistically by dispatching an option mutation, and the persist effect awaits
-  // the host write through the session's commit seam. On a final-attempt failure the effect dispatches persist:failed, which the reducer rolls back by restoring
+  // the host write through the session's commit method. On a final-attempt failure the effect dispatches persist:failed, which the reducer rolls back by restoring
   // configuredOptions to the last-persisted anchor; the editedConfig view (derived from the session) follows it, and the failure surfaces via the host's toast channel.
 
   test("a failed checkbox-change persist rolls back the model to the pre-mutation snapshot", async () => {
@@ -2412,7 +2413,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
     orchestrator.cleanup();
   });
 
-  // Pinning the masterclass property of the drain: concurrent mutations cannot cause memory/disk divergence. The drain serializes persists and coalesces in-flight
+  // Proving the masterclass property of the drain: concurrent mutations cannot cause memory/disk divergence. The drain serializes persists and coalesces in-flight
   // dirty state, so if an earlier persist fails but a subsequent one succeeds, the user's intent reaches disk and no rollback fires - the drain swallows the
   // intermediate failure because a superseding iteration is pending. This is the property the per-mutation rollback pattern could NOT provide.
   test("concurrent mutations preserve both intents on disk when the earlier persist fails but the later succeeds", async () => {
@@ -2506,14 +2507,14 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
 
   // Fire-and-forget persistence runs through the persist effect's coalescing drain, which holds the page-level abort signal (#pageAbort.signal) and re-checks it after
   // each await. A cleanup() that races with the async drain aborts that signal, so the post-await work bails rather than dispatching against a torn-down view. These
-  // tests pin that contract by interleaving cleanup() between a destructive action and the underlying I/O's resolution.
+  // tests prove that contract by interleaving cleanup() between a destructive action and the underlying I/O's resolution.
 
   test("cleanup() during a reset whose persist fails suppresses the rollback's re-render", async () => {
 
     // The signal-aware guard lives in the drain's failure path: when a persist fails AND no superseding mutation is pending, the drain re-checks the page signal
     // before dispatching persist:failed (the action the reducer turns into a rollback of configuredOptions to persistedAnchor, which the options view re-renders). A
     // cleanup() during the in-flight persist marks the page aborted, so the drain returns without dispatching - the orchestrator does not touch a torn-down DOM. This
-    // test pins that contract by pausing the persist, cleanup()ing while it's in flight, then releasing it as a rejection. The observable: no re-render happens after
+    // test proves that contract by pausing the persist, cleanup()ing while it's in flight, then releasing it as a rejection. The observable: no re-render happens after
     // cleanup, so configTable stays cleared.
     using _dom = createTestDom();
 
@@ -2789,7 +2790,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
   // End-to-end tests proving the global -> controller -> device inheritance contract holds across the orchestrator's full navigation surface. Each test seeds
   // a multi-tier configuration, walks real user actions (clicks on nav links and checkboxes), and asserts both the rendered DOM and the persisted-config state
-  // at each step. These are the integration-level pin for the contract; the unit-level versions live in `webUi-featureOptions/rendering.test.mjs`, which exercises
+  // at each step. These are the integration-level proof for the contract; the unit-level versions live in `webUi-featureOptions/rendering.test.mjs`, which exercises
   // the pure rendering factories (initial render and tri-state transitions) in isolation.
 
   // Fixture serials. The harness builds its controller and device objects from these constants, tests construct configuredOptions strings that reference them,
@@ -2910,7 +2911,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
     // The override-at-controller path. The user is looking at the controller, sees the inherited global state, and clicks to override at the controller scope.
     // The model must write the controller-scoped Disable AND preserve `Enable.Motion.Detect` (the global) untouched - only the controller scope is being
-    // mutated. This pins both the transition logic and the scope-targeted model write.
+    // mutated. This proves both the transition logic and the scope-targeted model write.
     using _dom = createTestDom();
     using harness = makeControllerHarness({ options: ["Enable.Motion.Detect"] });
 
@@ -2949,7 +2950,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
   test("controller-scope override navigates correctly to a device under that controller: device row inherits from controller (indeterminate)", async () => {
 
     // The mid-tier inheritance case end-to-end. A controller-scope entry exists; we navigate from the controller view to a device under that controller; the
-    // device row must surface as indeterminate, identifying the controller as the inheritance source. The label coloring further pins which scope is the
+    // device row must surface as indeterminate, identifying the controller as the inheritance source. The label coloring further confirms which scope is the
     // delivery point - text-success means "inherited from controller" (vs. text-warning for "inherited from global").
     using _dom = createTestDom();
     using harness = makeControllerHarness({ options: ["Disable.Motion.Detect." + CONTROLLER_SERIAL] });
@@ -3058,8 +3059,8 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     );
 
     // Step 4: navigate back via the controller link to re-populate the device list. Both controller and device links share `data-device-serial` (the controller
-    // is rendered as a device too, per the index-0 convention), so the selector pairs serial with `data-navigation='controller'` to pin the controller-kind link
-    // unambiguously. The wait predicate is the device link reappearing in the sidebar - that's the precondition step 5 needs to click against.
+    // is rendered as a device too, per the index-0 convention), so the selector pairs serial with `data-navigation='controller'` to single out the controller-kind
+    // link unambiguously. The wait predicate is the device link reappearing in the sidebar - that's the precondition step 5 needs to click against.
     clickNav(".nav-link[data-navigation='controller'][data-device-serial='" + CONTROLLER_SERIAL + "']");
     await waitFor(() => document.querySelector(".nav-link[data-navigation='device'][data-device-serial='" + DEVICE_A_SERIAL + "']"),
       { message: "device list must repopulate after navigating back through the controller" });
@@ -3203,7 +3204,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 describe("webUiFeatureOptions - the getDevices contract guard", () => {
 
   // Build a controller-mode orchestrator whose device fetch result is a mutable closure variable. The initial show resolves a valid rich shape so the sidebar
-  // renders a clickable controller link; a test then swaps in an invalid shape and clicks the controller so the fetch routes through the real #devicesFor seam, where
+  // renders a clickable controller link; a test then swaps in an invalid shape and clicks the controller so the fetch routes through the real #devicesFor call, where
   // the contract guard runs. The guard's TypeError surfaces through the nav handler's catch as the connection-error message, so the rendered <code> element is the
   // observable proof that the named guard tripped.
   function makeGuardHarness() {
@@ -3376,7 +3377,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
     assert.match(skeleton.headerInfo.textContent, /The controller refused the connection\./, "the outcome's headline displaces the framework's");
     assert.match(skeleton.headerInfo.textContent, /Correct the controller's API token in the plugin settings, then retry\./,
       "the outcome's guidance displaces the plugin's configured guidance, which speaks for every failure rather than this one");
-    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, FAILURE.error, "the per-fetch message rides along as it always did");
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, FAILURE.error, "the per-fetch message is still carried along as it always did");
 
     orchestrator.cleanup();
   });
@@ -3734,7 +3735,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
 describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", () => {
 
   // Where a user repairs an unreachable controller is plugin topology, so the guidance is the plugin's to write and the framework's default names no place. These
-  // tests pin the default, the override reaching every controller-failure route, and the one route it must not reach: a plugin that stopped answering at all.
+  // tests cover the default, the override reaching every controller-failure route, and the one route it must not reach: a plugin that stopped answering at all.
   const PLUGIN_GUIDANCE = "Open the controller editor on this page to correct its address or credentials.";
 
   const arrange = () => {
@@ -4035,7 +4036,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 describe("webUiFeatureOptions.refreshControllers", () => {
 
   // refreshControllers is the public controllers-only refresh entry point: a consumer calls it after an explicit user action that could have changed the controller
-  // set, and it re-syncs the session then re-invokes getControllers, dispatching controllers:loaded so the nav sidebar repaints. These tests pin its contract - the
+  // set, and it re-syncs the session then re-invokes getControllers, dispatching controllers:loaded so the nav sidebar repaints. These tests prove its contract - the
   // re-synced config reaches the hook and a non-empty list transitions the sidebar (resolves true); a null, empty, sync-failure, device-only, or pre-show() call each
   // leaves the store untouched and resolves false. The caller owns the no-controllers messaging, and a sync failure never tears the working view down as show() does.
 
@@ -4273,7 +4274,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
       }
     });
 
-    // A throw here would fail the test outright, so a plain await pins the "without throwing" half alongside the false-resolution half.
+    // A throw here would fail the test outright, so a plain await proves the "without throwing" half alongside the false-resolution half.
     const result = await orchestrator.refreshControllers();
 
     assert.equal(result, false, "the pre-store window must resolve false");
@@ -4577,7 +4578,7 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
     await waitFor(() => document.getElementById("configTable").querySelector("details[data-category]"),
       { message: "model:loaded to render the options table before the abort" });
 
-    // Abort in the pinned window (after model:loaded, before the reveal), then release the theme gate so the post-theme signal check runs and returns.
+    // Abort in the targeted window (after model:loaded, before the reveal), then release the theme gate so the post-theme signal check runs and returns.
     orchestrator.cleanup();
     lighting.resolve();
 
@@ -5209,7 +5210,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     orchestrator.cleanup();
   });
 
-  test("a superseded cycle's theme failure logs nothing - the warn rides the staleness guard", async (t) => {
+  test("a superseded cycle's theme failure logs nothing - the warn is gated by the staleness guard", async (t) => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
@@ -5252,7 +5253,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
       await flush();
 
       /* Read the channel here, before cycle two's own deadline is anywhere near elapsing: the only theme failure that has settled so far is the superseded
-       * cycle's, so a warning at this point could only be that one. The warn rides the staleness guard, so it says nothing - the user is looking at a page that
+       * cycle's, so a warning at this point could only be that one. The staleness guard suppresses the warning, so it says nothing - the user is looking at a page that
        * rendered fine, and a diagnostic about the cycle they already left would describe a failure that no longer has a page.
        */
       assert.deepEqual(themeWarnings(), [], "a superseded cycle's theme failure must log nothing");
@@ -5359,11 +5360,12 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     await flush();
 
-    /* The window this pins is the one the deadline's own prompt-abort settlement cannot cover. Resolving the hook BEFORE the supersession means the refresh's await wins
-     * its race and resumes with a real controller list in hand - so it never throws, never returns early, and arrives at the dispatch with nothing between it and the
-     * store. Superseding synchronously right after, without draining, puts the abort in place before that continuation runs. What remains is a live, successful refresh
-     * belonging to a cycle that no longer exists, and the staleness guard is the only thing standing between its list and the page the user is now looking at. It is
-     * also the one such path with no repaint behind it: a boot failure lands during the next cycle's own boot, which overwrites it, whereas nothing follows a refresh.
+    /* The window this test targets is the one the deadline's own prompt-abort settlement cannot cover. Resolving the hook BEFORE the supersession means the
+     * refresh's await wins its race and resumes with a real controller list in hand - so it never throws, never returns early, and arrives at the dispatch with
+     * nothing between it and the store. Superseding synchronously right after, without draining, puts the abort in place before that continuation runs. What
+     * remains is a live, successful refresh belonging to a cycle that no longer exists, and the staleness guard is the only thing standing between its list and
+     * the page the user is now looking at. It is also the one such path with no repaint behind it: a boot failure lands during the next cycle's own boot, which
+     * overwrites it, whereas nothing follows a refresh.
      */
     stale.resolve({ controllers: [{ name: "Hub STALE", serialNumber: "CTRL-STALE" }], error: "" });
 

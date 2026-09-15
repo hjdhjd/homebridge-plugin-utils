@@ -48,7 +48,7 @@ async function writeTree(root, files) {
 }
 
 /**
- * Write a fixture repository: a published docs/ tree carrying a page at its root, a page in a subdirectory, the two hand-authored files the prune preserves, and one
+ * Write a fixture repository: a published docs/ tree carrying a page at its root, a page in a subdirectory, the hand-authored files the prune preserves, and one
  * file of another kind, plus whatever the row stages. Each file's content says what it is, so a row reading a page back tells a promoted page from the one it
  * replaced without a second table of expected bytes.
  *
@@ -93,8 +93,8 @@ async function snapshotTree(root) {
 }
 
 /**
- * Run the script's `publish-docs` verb with a fixture repository as its working directory. A non-zero exit is an outcome two of the rows below assert on rather
- * than a failure of the run itself, so the callback's error is read for its exit status instead of being rethrown.
+ * Run the script's `publish-docs` verb with a fixture repository as its working directory. A non-zero exit is an outcome the refusal tests below assert on
+ * rather than a failure of the run itself, so the callback's error is read for its exit status instead of being rethrown.
  *
  * @param cwd - The fixture repository the run resolves docs/ and the staging directory against.
  *

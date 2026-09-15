@@ -107,7 +107,8 @@ export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => 
 
 /**
  * Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
- * service instance. Additionally, the various name characteristics of the service are set to the specified name, and optionally added if necessary.
+ * service instance. For a newly created service, the various name characteristics are also set to the specified name and added where necessary; re-acquiring an
+ * existing service returns it with its name characteristics untouched.
  *
  * @typeParam T          - The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back rather than
  *                         the wider `Service` type.
@@ -121,8 +122,9 @@ export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => 
  * @returns Returns the created or retrieved service. Construction failures throw rather than returning `null`.
  *
  * @remarks
- * This method ensures that the service's display name and available name characteristics are updated to the specified name. If `onServiceCreate` is provided,
- * it will only be called for newly created services, not for existing ones.
+ * This method ensures that a newly created service's display name and available name characteristics are updated to the specified name; re-acquiring an
+ * existing service leaves its name characteristics untouched, so a caller renaming an existing service calls {@link setServiceName} directly. If
+ * `onServiceCreate` is provided, it will only be called for newly created services, not for existing ones.
  *
  * The `ConfiguredName` and `Name` characteristics are conditionally added or updated based on the type of service, in accordance with HomeKit requirements.
  *
@@ -668,6 +670,8 @@ export function getServiceName(service?: Service): string | undefined {
   const configuredName = service.testCharacteristic(characteristic.ConfiguredName) ? service.getCharacteristic(characteristic.ConfiguredName).value : undefined;
   const name = service.testCharacteristic(characteristic.Name) ? service.getCharacteristic(characteristic.Name).value : undefined;
 
+  // ConfiguredName and Name are HAP string-typed characteristics by definition, which is what makes the narrowing below sound despite the wider
+  // `CharacteristicValue` union the reads are declared against.
   return (configuredName ?? name ?? undefined) as string | undefined;
 }
 

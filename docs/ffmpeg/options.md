@@ -93,7 +93,7 @@ const ffmpegOpts = new FfmpegOptions(optionsConfig);
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="audiodecoder"></a> `audioDecoder` | `readonly` | `string` | `"libfdk_aac"` | Returns the audio decoder to use when decoding. |
+| <a id="audiodecoder"></a> `audioDecoder` | `readonly` | `string` | `"libfdk_aac"` | The fixed FFmpeg audio decoder used when decoding. |
 | <a id="config"></a> `config` | `readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | `undefined` | The configuration options used to initialize this instance. This is the single stored state on `FfmpegOptions`: every other public field on this class is either a getter that forwards to `this.config`, or a fixed constant independent of it (`audioDecoder`), so external callers have exactly one canonical path to each config-backed value and internal code never has to keep a parallel field in sync with `config` at construction time. |
 
 #### Accessors
@@ -410,7 +410,7 @@ FfmpegOptions
 | ------ | ------ | ------ |
 | <a id="clock-1"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional time source for the callback timers every process built from these options, and every resource those processes compose, arm: the streaming health watchdog and the segment assembler's inter-segment watchdog. Left undefined, each of those falls back to `systemClock` on its own, so the options object carries the choice unresolved exactly as any other composer does. The clock lives here, beside `log` and `debug`, because these options ARE the per-session substrate a consumer configures once and every process, recording, and livestream is then built from, where an init carries per-construction lifetimes instead. The startup timeout and the codec probe are deadline signals rather than callback timers, and they draw those signals from this same clock, so a consumer's virtual clock drives every shape of time the process family arms. |
 | <a id="codecsupport"></a> `codecSupport` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | FFmpeg codec capabilities and hardware support. |
-| <a id="crop"></a> `crop?` | \{ `height`: `number`; `width`: `number`; `x`: `number`; `y`: `number`; \} | Optional. Cropping rectangle for output video. |
+| <a id="crop"></a> `crop?` | \{ `height`: `number`; `width`: `number`; `x`: `number`; `y`: `number`; \} | Optional. Cropping rectangle for output video. Each of `width`, `height`, `x`, and `y` is a fraction of the source frame's corresponding dimension (0 to 1), not a pixel count or a percentage - `{ width: 1, height: 1, x: 0, y: 0 }` selects the full frame, `{ width: 0.5, height: 0.5, x: 0.25, y: 0.25 }` selects its centered quarter-area crop. |
 | `crop.height` | `number` | - |
 | `crop.width` | `number` | - |
 | `crop.x` | `number` | - |

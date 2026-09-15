@@ -10,7 +10,7 @@ import { describe, mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDom } from "./ui.helpers.mjs";
 
-/* Every expected coordinate in this file is hand-computed from the module's pinned constants rather than read back from the implementation:
+/* Every expected coordinate in this file is hand-computed from the module's fixed constants rather than read back from the implementation:
  *
  *   viewBox 600 x 64, right inset 8, so the plot is 592 wide and a window of n points steps by 592 / (n - 1).
  *   top pad 7, so the plot is 57 tall and y(value) = 64 - (((value - domainMin) / domainSpan) * 57).
@@ -147,7 +147,7 @@ describe("createSparkline - geometry", () => {
     assert.equal(line.getAttribute("d"), "M0.00,61.15 L592.00,7.00", "the spike scales to the data maximum rather than clipping at the anchor");
   });
 
-  test("the end dot rides the last point's coordinates", () => {
+  test("the end dot takes the last point's coordinates", () => {
 
     using _dom = createTestDom();
 
@@ -206,7 +206,7 @@ describe("createSparkline - geometry", () => {
 
     assert.equal(filtered.line.getAttribute("d"), clean.line.getAttribute("d"), "the hostile window renders exactly as the same window without its junk");
     assert.equal(filtered.area.getAttribute("d"), clean.area.getAttribute("d"), "the area matches too");
-    assert.equal(filtered.dot.getAttribute("cy"), "7.00", "the dot rides the last finite sample");
+    assert.equal(filtered.dot.getAttribute("cy"), "7.00", "the dot takes the last finite sample");
   });
 
   test("a non-finite domainAnchor is ignored", () => {
@@ -221,7 +221,7 @@ describe("createSparkline - geometry", () => {
 
 describe("createSparkline - color discipline", () => {
 
-  test("every mark draws in currentColor at the pinned opacities, with the dot ringed in the surface token", () => {
+  test("every mark draws in currentColor at the fixed opacities, with the dot ringed in the surface token", () => {
 
     using _dom = createTestDom();
 
@@ -229,17 +229,17 @@ describe("createSparkline - color discipline", () => {
 
     assert.equal(line.getAttribute("stroke"), "currentColor", "the line inherits the surrounding color");
     assert.equal(line.getAttribute("fill"), "none", "the line is a stroke, not a shape");
-    assert.equal(line.getAttribute("stroke-width"), "2", "the line carries the pinned weight");
+    assert.equal(line.getAttribute("stroke-width"), "2", "the line carries the fixed weight");
     assert.equal(line.getAttribute("vector-effect"), "non-scaling-stroke", "the line keeps its weight through the viewBox stretch");
     assert.equal(area.getAttribute("fill"), "currentColor", "the area inherits the same color as the line");
     assert.equal(area.getAttribute("fill-opacity"), "0.12", "the area reads as a tint rather than a second color statement");
     assert.equal(area.getAttribute("stroke"), "none", "the area is a fill, not a stroke");
     assert.equal(dot.getAttribute("fill"), "currentColor", "the dot inherits the same color");
-    assert.equal(dot.getAttribute("r"), "4", "the dot carries the pinned radius");
+    assert.equal(dot.getAttribute("r"), "4", "the dot carries the fixed radius");
     assert.equal(dot.getAttribute("stroke"), "var(--fo-surface-bg, Canvas)", "the dot's ring reads as a punch-out of the page surface");
-    assert.equal(dot.getAttribute("stroke-width"), "2", "the ring carries the pinned width");
+    assert.equal(dot.getAttribute("stroke-width"), "2", "the ring carries the fixed width");
     assert.equal(hairline.getAttribute("stroke"), "currentColor", "the hairline is a faint tint of the data's own color");
-    assert.equal(hairline.getAttribute("stroke-opacity"), "0.4", "the hairline carries the pinned opacity");
+    assert.equal(hairline.getAttribute("stroke-opacity"), "0.4", "the hairline carries the fixed opacity");
     assert.equal(hairline.getAttribute("stroke-width"), "1", "the hairline is a hairline");
   });
 });
@@ -272,20 +272,20 @@ describe("createSparkline - updating in place", () => {
     const { dot, line } = marksOf(sparkline.element);
 
     assert.equal(line.getAttribute("d"), "M0.00,45.00 L296.00,26.00 L592.00,7.00", "the starting window renders as hand-computed");
-    assert.equal(dot.getAttribute("cy"), "7.00", "the starting dot rides the last sample");
+    assert.equal(dot.getAttribute("cy"), "7.00", "the starting dot takes the last sample");
 
     // A four-point window steps by 592 / 3 = 197.33 and spans 0 to 4, so y = 64 - ((value / 4) * 57): 49.75, 35.50, 21.25, 7.00.
     sparkline.update({ points: [ 1, 2, 3, 4 ] });
 
     assert.equal(line.getAttribute("d"), "M0.00,49.75 L197.33,35.50 L394.67,21.25 L592.00,7.00", "both the spacing and the scale are recomputed");
-    assert.equal(dot.getAttribute("cx"), "592.00", "the newest sample still rides the plot's right edge");
+    assert.equal(dot.getAttribute("cx"), "592.00", "the newest sample still sits at the plot's right edge");
     assert.equal(dot.getAttribute("cy"), "7.00", "the dot follows the new last sample");
 
     // Dropping to a two-point window spanning 0 to 40 moves every y: y(30) = 64 - ((30 / 40) * 57) = 21.25 and y(40) = 7.00.
     sparkline.update({ points: [ 30, 40 ] });
 
     assert.equal(line.getAttribute("d"), "M0.00,21.25 L592.00,7.00", "a shorter window rescales rather than reusing the prior geometry");
-    assert.equal(dot.getAttribute("cy"), "7.00", "the dot rides the new maximum");
+    assert.equal(dot.getAttribute("cy"), "7.00", "the dot takes the new maximum");
   });
 
   test("an update from an empty window brings the dot back", () => {
@@ -384,7 +384,7 @@ describe("createSparkline - the conveyor slide", () => {
 
       sparkline.update({ points: [ 1, 2, 3 ], slide: true });
 
-      assert.equal(group.style.transition, "transform 400ms cubic-bezier(0.25, 0.1, 0.25, 1)", "the group carries the pinned duration and easing");
+      assert.equal(group.style.transition, "transform 400ms cubic-bezier(0.25, 0.1, 0.25, 1)", "the group carries the fixed duration and easing");
       assert.equal(group.style.transform, "translateX(-296.00px)", "the group travels exactly one window step");
 
       // The union is the outgoing 10 plus the new window, drawn at the settled window's own step of 296 - so it reaches one step past the plot's right edge - and
@@ -396,7 +396,7 @@ describe("createSparkline - the conveyor slide", () => {
       assert.equal(union[3].x, 888, "the incoming sample waits one step beyond the plot's right edge");
       assert.equal(union[3].y, 46.9, "the union is scaled on the union's own domain, not the new window's");
       assert.equal(union[0].y, 7, "the outgoing extreme still sets the top of that shared domain");
-      assert.equal(dot.getAttribute("cx"), "888.00", "the dot rides the incoming sample in from beyond the edge");
+      assert.equal(dot.getAttribute("cx"), "888.00", "the dot follows the incoming sample in from beyond the edge");
     } finally {
 
       mock.timers.reset();

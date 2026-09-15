@@ -15,7 +15,7 @@
  */
 // We source the HAP enum types through "homebridge" rather than "@homebridge/hap-nodejs" directly. A consuming plugin runs against homebridge's own bundled copy of
 // hap-nodejs, so type-checking production against that same copy is what keeps it from skewing when HBPU's direct hap-nodejs devDependency drifts from the version
-// homebridge pins - two physically distinct copies of the package yield nominally distinct types even when their declarations are byte-identical. VideoCodecType is
+// homebridge locks in - two physically distinct copies of the package yield nominally distinct types even when their declarations are byte-identical. VideoCodecType is
 // the lone exception: "homebridge" does not re-export it, so that one alias is sourced straight from hap-nodejs. The values below are hand-mirrored regardless of
 // source, since verbatimModuleSyntax forbids value imports of ambient const enums.
 import type { AudioRecordingCodecType as AudioRecordingCodecTypeEnum, AudioRecordingSamplerate as AudioRecordingSamplerateEnum,

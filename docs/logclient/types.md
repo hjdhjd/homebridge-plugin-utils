@@ -74,7 +74,7 @@ The severity level of a single log line.
 
 Severity in homebridge-config-ui-x is conveyed only by the ANSI color of the line, not by a textual label: `31` (red) is error, `33` (yellow) is warn, `90` (bright
 black) is debug, `32` (green) is success, and an uncolored line is info. When the Homebridge process runs without `FORCE_COLOR` the color is usually absent, so a
-record's level is frequently `null` (see [LogRecord.level](#level)); a present level always maps to one of these five values.
+record's level is frequently `null` (see [LogRecord.level](#level)); a present level always maps to one of the values above.
 
 ***
 

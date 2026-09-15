@@ -1,8 +1,8 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ui/webUi-featureOptions-events.test.mjs: Tests for the event delegation that lives in the views (options / search / nav) and the keyboard effect, plus the
- * orchestrator's own window-blur commit-and-flush handler. Companion to webUi-featureOptions.test.mjs - that file pins the show/hide/render/nav lifecycle,
- * this one pins the click / change / input / keydown routes that dispatch user actions into the store, which the reducer and the persistence effect then
+ * orchestrator's own window-blur commit-and-flush handler. Companion to webUi-featureOptions.test.mjs - that file asserts the show/hide/render/nav lifecycle,
+ * this one asserts the click / change / input / keydown routes that dispatch user actions into the store, which the reducer and the persistence effect then
  * consume, along with the blur handler that commits and flushes a pending edit when focus leaves the page. Tests synthesize DOM events on the live
  * orchestrator instance after show() so the full delegation path runs end-to-end.
  */
@@ -205,7 +205,7 @@ describe("webUiFeatureOptions event delegation - change handler", () => {
     await settlePersist();
 
     // The orchestrator should have called updatePluginConfig at least once (post-change). The exact options array shape depends on FeatureOptions internals; we
-    // verify only that a call landed - that pins the change-handler -> updatePluginConfig wiring without coupling to the options serialization format.
+    // verify only that a call landed - that locks in the change-handler -> updatePluginConfig wiring without coupling to the options serialization format.
     assert.ok(harness.fake.observed.updatedConfigs.length > 0, "checkbox change must trigger updatePluginConfig at least once");
   });
 
@@ -346,8 +346,8 @@ describe("webUiFeatureOptions event delegation - keydown handler", () => {
 
 describe("webUiFeatureOptions event delegation - click forwarding via nav links", () => {
 
-  // Sidebar nav-link clicks dispatch to global / controller / device handlers based on the data-navigation attribute. The events test pins each of these routes
-  // by clicking a synthesized nav-link and asserting that the orchestrator's view shifted accordingly.
+  // Sidebar nav-link clicks dispatch to global / controller / device handlers based on the data-navigation attribute. The events test asserts each of these
+  // routes by clicking a synthesized nav-link and asserting that the orchestrator's view shifted accordingly.
 
   test("clicking a controller nav-link dispatches scope:changed for that controller", async () => {
 
@@ -390,7 +390,8 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
     ctrlBLink.click();
     await flush();
 
-    // The active controller is reflected in the nav-link's `.active` class; assert against the visible state to pin the routing without coupling to private fields.
+    // The active controller is reflected in the nav-link's `.active` class; assert against the visible state to lock in the routing without coupling to private
+    // fields.
     assert.ok(ctrlBLink.classList.contains("active"), "clicking the controller nav-link must promote it to active");
 
     orchestrator.cleanup();
@@ -572,7 +573,7 @@ describe("webUiFeatureOptions event delegation - window blur commits and flushes
     const checkbox = harness.skeleton.configTable.querySelector("[id='row-Audio.Capture']").querySelector("input[type='checkbox']");
 
     // Toggle the option - the edit commits into the store and enters the persist debounce - then pull focus from the page before that window can expire. The
-    // sub-debounce wait pins that the flush wrote immediately rather than the debounce having elapsed on its own.
+    // sub-debounce wait asserts that the flush wrote immediately rather than the debounce having elapsed on its own.
     checkbox.click();
     window.dispatchEvent(new Event("blur"));
 

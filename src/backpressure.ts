@@ -18,8 +18,8 @@ import type { Writable } from "node:stream";
 import { once } from "node:events";
 
 /**
- * Thrown synchronously by {@link BackpressureWriter.write} when the pending queue is already at the configured {@link BackpressureWriterInit.highWaterMark} and
- * accepting the new chunk would push it over.
+ * Rejects synchronously from {@link BackpressureWriter.write} when the pending queue is already at the configured {@link BackpressureWriterInit.highWaterMark}
+ * and accepting the new chunk would push it over.
  *
  * Separate from the "writer has aborted" and "underlying stream is dead" failure modes so callers can distinguish backpressure-overflow (back off and retry later)
  * from terminal failures (give up or escalate) by type rather than by inspecting error message text.
@@ -173,9 +173,11 @@ export class BackpressureWriter implements AsyncDisposable {
    *          this entry, immediately if the provider then returns `null` (drop semantics). The promise rejects in the following cases:
    *
    * - `this.signal.reason` - the writer aborted before or during the write.
-   * - {@link BackpressureOverflowError} (thrown synchronously) - `highWaterMark` is configured and the queue depth already equals or exceeds it.
+   * - {@link BackpressureOverflowError} (rejects synchronously) - `highWaterMark` is configured and the queue depth already equals or exceeds it.
    * - {@link BackpressureClosedStreamError} - the provider returned a stream whose `writable` flag is `false`. The writer itself stays alive for a potential later
    *   stream replacement.
+   * - The underlying stream's own error, by reference - the stream emitted an error while writing or draining this entry. The writer aborts itself with
+   *   `"failed"` afterward, which rejects every other queued entry with that abort reason rather than with the stream's error.
    *
    * @throws {@link BackpressureOverflowError} when `highWaterMark` is exceeded.
    */

@@ -247,7 +247,7 @@ export const scopingControllerId = memoize({
 });
 
 /**
- * TablePresentation - What the config-table surface shows. Discriminated by `kind` because the variants are mutually exclusive answers to one question and each
+ * TablePresentation - What the config-table surface shows. Tagged by `kind` because the variants are mutually exclusive answers to one question and each
  * carries exactly what rendering it needs: the empty variant carries the plugin's notice text, and the other two carry nothing because the DOM they imply is the
  * framework's own.
  *
@@ -262,12 +262,12 @@ export const scopingControllerId = memoize({
  * showing. Deriving it once is what keeps the two from drifting - a surface the options view suppressed while the search panel still advertised counts over it
  * would be the page contradicting itself, and no amount of care at two call sites prevents that as reliably as having one answer.
  *
- * Precedence is the whole of the rule, in three steps. A standing `connection-error` wins over everything: that view has taken the frame and owns the message, and
- * the table beneath it would be offering the options of a controller that never confirmed it could be reached. Next comes the nothing-to-list notice, which is a
- * per-controller-view presentation rather than a page state, which is why it is derived from the device facts here rather than carried as a status variant an
- * unrelated persist would destroy. Everything else is the ordinary table.
+ * Precedence is the whole of the rule, evaluated top to bottom. A standing `connection-error` wins over everything: that view has taken the frame and owns the message,
+ * and the table beneath it would be offering the options of a controller that never confirmed it could be reached. Next comes the nothing-to-list notice, which is a
+ * per-controller-view presentation rather than a page state, which is why it is derived from the device facts here rather than carried as a status variant an unrelated
+ * persist would destroy. Everything else is the ordinary table.
  *
- * The empty variant's three gates each rule out a way the message could be shown where it does not belong. The controller-scope gate is what confines it to the
+ * The empty variant's gates each rule out a way the message could be shown where it does not belong. The controller-scope gate is what confines it to the
  * view it describes, and it is also why the variant is unreachable in device-only and global-only modes, whose scope is never a controller kind. The
  * `devicesControllerId` match is what keeps it honest across a navigation: a click away from a notice view moves the optimistic scope first, so for the busy window
  * before the new list lands the match fails and the presentation is the ordinary table, exactly as it is today for a click away from any other view. The message's

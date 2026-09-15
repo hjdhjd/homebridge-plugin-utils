@@ -7,8 +7,8 @@ import { describe, test } from "node:test";
 import { loadConfigFile, resolveConfigPath, resolveConnection } from "./config.ts";
 import assert from "node:assert/strict";
 
-// Build a `readFile` seam double returning a caller-supplied text, or rejecting with an ENOENT-shaped error to model a missing file. The recorded paths let a test assert
-// which path the loader read.
+// Build a `readFile` test double returning a caller-supplied text, or rejecting with an ENOENT-shaped error to model a missing file. The recorded paths let a test
+// assert which path the loader read.
 function fakeReadFile(result: string | { code: string }): { paths: string[]; readFile: (path: string) => Promise<string> } {
 
   const paths: string[] = [];
@@ -32,13 +32,13 @@ function fakeReadFile(result: string | { code: string }): { paths: string[]; rea
   return { paths, readFile };
 }
 
-// Build a `stat` seam double reporting a fixed permission mode, so the group/other-readable warning can be exercised deterministically without a real file.
+// Build a `stat` test double reporting a fixed permission mode, so the group/other-readable warning can be exercised deterministically without a real file.
 function fakeStat(mode: number): (path: string) => Promise<{ readonly mode: number }> {
 
   return async (): Promise<{ readonly mode: number }> => ({ mode });
 }
 
-// A capturing `warn` seam: records every warning message the loader emits so a test asserts both the presence and the count of the security warning.
+// A capturing `warn` double: records every warning message the loader emits so a test asserts both the presence and the count of the security warning.
 function capturingWarn(): { messages: string[]; warn: (message: string) => void } {
 
   const messages: string[] = [];

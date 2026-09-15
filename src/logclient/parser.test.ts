@@ -289,7 +289,8 @@ describe("parseLogTimestamp", () => {
   test("best-effort accepts a wall-clock time in the DST spring-forward gap (not null)", () => {
 
     // In America/New_York, 2026-03-08 02:30 does not exist (clocks jump 02:00 -> 03:00). Because only the CALENDAR fields are round-tripped, the constructed instant
-    // (which the platform rolls to 03:30) is accepted rather than rejected. We pin the timezone so the gap is real regardless of the CI machine's zone, and restore it.
+    // (which the platform rolls to 03:30) is accepted rather than rejected. We set the timezone explicitly so the gap is real regardless of the CI machine's zone, and
+    // restore it.
     const savedTz = process.env["TZ"];
 
     process.env["TZ"] = "America/New_York";

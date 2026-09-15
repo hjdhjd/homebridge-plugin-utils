@@ -28,9 +28,10 @@ import type { Clock } from "../clock.ts";
 import type { FfmpegCodecs } from "./codecs.ts";
 import type { Logger } from "../util.ts";
 
-// Translation tables for the H264 enum values that shape FFmpeg's `-level:v` and `-profile:v` arguments. `as const satisfies Record<...>` pins each map to exhaustively
-// cover every enum member at compile time - a new enum value added upstream forces the build to fail until the table is updated, so encoder-argument emission cannot
-// silently default to a wrong value when consumers extend the upstream enum. The two-key payload (`numeric`/`string`) matches FFmpeg's two emission shapes per argument.
+// Translation tables for the H264 enum values that shape FFmpeg's `-level:v` and `-profile:v` arguments. `as const satisfies Record<...>` holds each map fixed to
+// exhaustively cover every enum member at compile time - a new enum value added upstream forces the build to fail until the table is updated, so encoder-argument
+// emission cannot silently default to a wrong value when consumers extend the upstream enum. The two-key payload (`numeric`/`string`) matches FFmpeg's two emission
+// shapes per argument.
 const H264_LEVEL_NAMES = {
 
   [ H264Level.LEVEL3_1 ]: { numeric: "31", string: "3.1" },
@@ -56,7 +57,9 @@ const H264_PROFILE_NAMES = {
  *                                  the codec probe are deadline signals rather than callback timers, and they draw those signals from this same clock, so a
  *                                  consumer's virtual clock drives every shape of time the process family arms.
  * @property codecSupport         - FFmpeg codec capabilities and hardware support.
- * @property crop                 - Optional. Cropping rectangle for output video.
+ * @property crop                 - Optional. Cropping rectangle for output video. Each of `width`, `height`, `x`, and `y` is a fraction of the source frame's
+ *                                  corresponding dimension (0 to 1), not a pixel count or a percentage - `{ width: 1, height: 1, x: 0, y: 0 }` selects the full
+ *                                  frame, `{ width: 0.5, height: 0.5, x: 0.25, y: 0.25 }` selects its centered quarter-area crop.
  * @property debug                - Optional. Enable debug logging.
  * @property hardwareDecoding     - Enable hardware-accelerated video decoding if available.
  * @property hardwareTranscoding  - Enable hardware-accelerated video encoding if available.
@@ -662,8 +665,8 @@ export class FfmpegOptions {
 
           // FFmpeg 8.x on macOS requires explicit upload when moving from software decoding to VideoToolbox encoding. We convert to nv12 before uploading so the
           // VideoToolbox frames context carries nv12 as its underlying pixel format rather than inheriting the software decoder's yuv420p. hwdownload can only emit
-          // the frames context's own format, so without the pin, a chain that later bridges back to the CPU for caller-supplied filters (hwdownload, format=nv12)
-          // cannot start. nv12 is VideoToolbox's native layout, so the upload itself costs no extra conversion.
+          // the frames context's own format, so without that nv12 format lock, a chain that later bridges back to the CPU for caller-supplied filters (hwdownload,
+          // format=nv12) cannot start. nv12 is VideoToolbox's native layout, so the upload itself costs no extra conversion.
           if(this.#codecSupport.ffmpegAtLeast(8)) {
 
             filters.push("format=nv12", "hwupload");
@@ -876,9 +879,7 @@ export class FfmpegOptions {
   }
 
   /**
-   * Returns the audio decoder to use when decoding.
-   *
-   * @returns The FFmpeg audio decoder string.
+   * The fixed FFmpeg audio decoder used when decoding.
    */
   public readonly audioDecoder: string = "libfdk_aac";
 
@@ -1024,7 +1025,9 @@ export class FfmpegOptions {
    */
   public get cropFilter(): string {
 
-    // If we haven't enabled cropping, tell the crop filter to do nothing.
+    // If we haven't enabled cropping, tell the crop filter to do nothing. FFmpeg's crop filter clamps a width or height expression that exceeds the input
+    // frame's own dimension down to that dimension, so a width and height of a hundred times the frame - far beyond anything the input can be - clamps back
+    // down to the frame's actual size and the filter passes every frame through untouched.
     if(!this.config.crop) {
 
       return "crop=w=iw*100:h=ih*100:x=iw*0:y=ih*0";

@@ -236,7 +236,7 @@ describe("PluginConfigSession.sync", () => {
 describe("PluginConfigSession - the config-write generation", () => {
 
   // A host whose reads are held open by the test. Each getPluginConfig call parks a deferred keyed by the value it will eventually resolve, so a test can start two
-  // reads and settle them in whatever order the race it is pinning requires - the shape a slow page cycle's read resolving after a newer one takes in the field. Its
+  // reads and settle them in whatever order the race it locks in requires - the shape a slow page cycle's read resolving after a newer one takes in the field. Its
   // writes and saves settle immediately; each records what a generation test needs to see, the payloads on `writes` and the call count on `saves`.
   const makeGatedHost = () => {
 

@@ -5,7 +5,7 @@
  *
  * Every row drives a pure function directly with its own strings, since the vocabulary holds no state and reaches nothing. The wire literals the rows assert are the
  * same ones the client and double suites assert on their own registrations, so a drift here and a drift there cannot pass each other. The compile-time half of the
- * placeholder contract lives in `catalogShapeExercises`, which never runs and is owned by the typecheck gate alone; the runtime half is driven here through topics
+ * placeholder contract lives in `_catalogShapeExercises`, which never runs and is owned by the typecheck gate alone; the runtime half is driven here through topics
  * typed `string`, which is the widened form a plugin reaches by declaring its catalog through plain constants.
  */
 import { MQTT_DEVICE_COLUMN, MQTT_GET_SUFFIX, MQTT_SET_SUFFIX, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic, mqttTopicCatalog,
@@ -270,7 +270,7 @@ describe("assertResolvedMqttTopic - the shared refusal", () => {
 
   test("opens its message with the caller that met the topic", () => {
 
-    // The same predicate answers for the client, the double, and the resolver, so the caller's name is the only thing that distinguishes the three sentences.
+    // The same predicate answers for the client, the double, and the resolver, so the caller's name is the only thing that distinguishes every sentence.
     assert.throws(() => assertResolvedMqttTopic("MqttClient", "relay/{output}"), /^Error: MqttClient: the topic "relay\/\{output\}" carries a brace;/);
     assert.throws(() => assertResolvedMqttTopic("TestMqttClient", "relay/output}"), /^Error: TestMqttClient: the topic "relay\/output\}" carries a brace;/);
   });

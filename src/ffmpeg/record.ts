@@ -53,8 +53,8 @@ import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Mp4SegmentAssembler } from "./mp4-assembler.ts";
 import type { Writable } from "node:stream";
 
-// Translation tables for the hap-nodejs enum values that shape the FFmpeg audio encoder args. `as const satisfies` pins the map shape to exhaustively cover every enum
-// member at compile time - a new enum value added upstream would require updating the maps or the build breaks.
+// Translation tables for the hap-nodejs enum values that shape the FFmpeg audio encoder args. `as const satisfies` holds the map shape to exhaustively cover every
+// enum member at compile time - a new enum value added upstream would require updating the maps or the build breaks.
 const translateAudioRecordingCodecType = {
 
   [ AudioRecordingCodecType.AAC_ELD ]:   "38",
@@ -94,7 +94,7 @@ const RTSP_TRANSPORT_PATTERNS = [ "rtsp://", "rtsps://" ];
  * @property audioStream         - Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream).
  * @property codec               - The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`).
  *                                 Defaults to `h264`.
- * @property enableAudio         - Indicates whether to enable audio or not.
+ * @property enableAudio         - Indicates whether to enable audio or not. Defaults to `true`.
  * @property videoStream         - Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream).
  *
  * @category FFmpeg
@@ -157,8 +157,8 @@ export interface FMp4AudioTarget {
  * Options for configuring an fMP4 HKSV recording session. Recording is the fMP4 mode that transcodes, so every option describing the transcode - the audio and video
  * filters, the hardware-acceleration flags, and the audio transcode decision - lives here rather than on the shared base a livestream also carries.
  *
- * @property audioFilters        - Audio filters for FFmpeg to process. These are passed as an array of filters, and they ride inside the audio target, so supplying one
- *                                 forces a transcode. Defaults to none.
+ * @property audioFilters        - Audio filters for FFmpeg to process. These are passed as an array of filters, and they live inside the audio target, so supplying
+ *                                 one forces a transcode. Defaults to none.
  * @property fps                 - The video frames per second for the session. Defaults to 30.
  * @property hardwareDecoding    - Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least
  *                                 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies.
@@ -314,7 +314,9 @@ function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
   // -nostats                      Suppress printing progress reports while encoding in FFmpeg.
   // -fflags flags                 Set the format flags to discard any corrupt packets rather than exit.
   // -err_detect ignore_err        Ignore decoding errors and continue rather than exit.
-  // -max_delay 500000             Set an upper limit on how much time FFmpeg can take in demuxing packets, in microseconds.
+  // -max_delay 500000             Set an upper limit on how much time FFmpeg can take in demuxing packets, in microseconds. Half a second keeps demuxing latency
+  //                               bounded in line with the low-delay, near-realtime goal both fMP4 modes share, without cutting it so close that ordinary jitter
+  //                               in the source stream trips the limit.
   const args: string[] = [
 
     "-hide_banner",
@@ -364,7 +366,7 @@ function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
     // untouched. The target carries its own filters, so filtering-without-transcoding is unrepresentable here by construction rather than enforced by a runtime override.
     if(audioTarget) {
 
-      // Audio filters ride inside the transcode request. When the target supplies them, we apply them ahead of the encoder.
+      // Audio filters live inside the transcode request. When the target supplies them, we apply them ahead of the encoder.
       if(audioTarget.filters?.length) {
 
         args.push("-filter:a", audioTarget.filters.join(", "));
@@ -457,7 +459,7 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
   const { recordingConfig } = init;
 
   // Recording transcodes audio to the HKSV-selected codec whenever transcoding is requested or an audio filter forces it; otherwise the already-encoded audio is copied
-  // through untouched. The filters ride inside the target, so the filters-require-transcoding rule is expressed by the target's presence rather than a runtime override.
+  // through untouched. The filters live inside the target, so the filters-require-transcoding rule is expressed by the target's presence rather than a runtime override.
   const audioTarget: FMp4AudioTarget | undefined = (recording.transcodeAudio || (recording.audioFilters.length > 0)) ? {
 
     channels: recordingConfig.audioCodec.audioChannels,
@@ -683,7 +685,7 @@ export abstract class FfmpegFMp4Process extends FfmpegProcess {
 }
 
 /**
- * The minimal surface a recording consumer reads off a recording process. This is the product half of the recording dependency-inversion seam: an HKSV recording
+ * The minimal surface a recording consumer reads off a recording process. This is the product half of the recording dependency-inversion boundary: an HKSV recording
  * delegate depends on this narrow interface rather than the concrete {@link FfmpegRecordingProcess}, so a test (or any alternative segment source) can substitute a
  * fake without dragging FFmpeg into the consumer's dependency graph. The interface is type-only, so importing it costs a consumer nothing at runtime.
  *
@@ -763,10 +765,10 @@ export interface RecordingProcess {
 }
 
 /**
- * The creational half of the recording dependency-inversion seam: build a {@link RecordingProcess} from the shared options and the recording init. A consumer holds
- * this factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a fake recording process. The production factory is
- * {@link recordingProcessFactory}, whose `create` is exactly the {@link FfmpegRecordingProcess} constructor call - so routing construction through this seam is
- * behavior-neutral, mirroring HBUP's `streamingDelegateFactory` precedent.
+ * The creational half of the recording dependency-inversion boundary: build a {@link RecordingProcess} from the shared options and the recording init. A consumer
+ * holds this factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a fake recording process. The production
+ * factory is {@link recordingProcessFactory}, whose `create` is exactly the {@link FfmpegRecordingProcess} constructor call - so routing construction through this
+ * boundary is behavior-neutral, mirroring HBUP's `streamingDelegateFactory` precedent.
  *
  * @see recordingProcessFactory
  * @see RecordingProcess
@@ -858,7 +860,7 @@ export class FfmpegRecordingProcess extends FfmpegFMp4Process implements Recordi
 
 /**
  * The production {@link RecordingProcessFactory}: builds the concrete FFmpeg-backed recording process. A consumer holds this typed as the abstraction; a test substitutes
- * a fake factory. `create` is exactly the {@link FfmpegRecordingProcess} constructor call, so wiring construction through this seam is behavior-neutral.
+ * a fake factory. `create` is exactly the {@link FfmpegRecordingProcess} constructor call, so wiring construction through this boundary is behavior-neutral.
  *
  * @see RecordingProcessFactory
  *

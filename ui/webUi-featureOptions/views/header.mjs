@@ -15,10 +15,10 @@ import { effect } from "../store.mjs";
  * row labels use, so users have one consistent visual lens for "where does a setting come from."
  *
  * Runs on `model:loaded`, `connection:error`, and `devices:loaded`; other dispatches never invoke it because they are not subscribed, and a subscribed dispatch
- * that leaves the status reference unchanged skips via the memo below. On `connection:error` (and the loading
- * status), `fn` yields inside its `status.kind` checks. In practice the header content renders once, at `model:loaded`. The no-controllers scenario never dispatches
- * `model:loaded` at all, so this view's loading-status guard is what keeps it from rendering; the connection-error case is the only explicit `status.kind` check this
- * view yields to.
+ * that leaves the status reference unchanged skips via the memo below. `fn` returns early inside two `status.kind` checks: the loading check only defers
+ * rendering until `model:loaded` fires, while the connection-error check is the only one that cedes the header's content to another view. In practice the header
+ * content renders once, at `model:loaded`. The no-controllers scenario never dispatches `model:loaded` at all, so the loading-status check is what keeps this
+ * view from rendering.
  *
  * @param {Object} args
  * @param {HTMLElement} args.root - The `#headerInfo` container.

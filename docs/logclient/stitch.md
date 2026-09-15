@@ -13,7 +13,7 @@ begins with a ~500-line seed that overlaps the END of the history and then conti
 output reads as one continuous log: all of history, then exactly the live lines that history did not already contain.
 
 The join's correctness guarantee is asymmetric and deliberately so: it NEVER drops a distinct live line, at the cost of possibly emitting a bounded run of duplicate
-lines at the seam. The hazard is repeated/identical lines - when several adjacent lines share the same text, the longest suffix-equals-prefix match could pair a
+lines at the boundary. The hazard is repeated/identical lines - when several adjacent lines share the same text, the longest suffix-equals-prefix match could pair a
 history line with a live line that is actually a new occurrence and silently swallow it. To avoid that, the join chooses the MINIMAL overlap among the valid matches
 (keeping the most live content), accepting bounded duplicate chatter rather than risking silent loss. Equality is by normalized [LogRecord.raw](types.md#raw). When no overlap
 is found at all, a single visible [gapMarker](#gapmarker) record is emitted between history and live so the boundary discontinuity is never hidden.

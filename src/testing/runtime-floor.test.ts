@@ -3,7 +3,7 @@
  * testing/runtime-floor.test.ts: Unit tests for the shared engines-keyed guard machinery - the regime parser, the plan union and its canary, the checklist composer,
  * the engines reader, and the shipped-source sweep. Every row here VARIES a parameter, because the one thing an adopting guard file cannot prove is that these
  * functions consume their arguments at all: it feeds exactly one configuration, so a function that quietly hardcoded that configuration's values would still pass it.
- * These rows feed each parameter at least two distinct values and pin that the answer moves with them.
+ * These rows feed each parameter at least two distinct values and assert that the answer moves with them.
  */
 import { assertRuntimeFloorCompat, composeSunsetCleanup, parseRuntimeFloor, planRuntimeFloorCheck, readEnginesNode,
   sweepSourceFiles } from "./runtime-floor.ts";

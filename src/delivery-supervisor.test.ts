@@ -77,8 +77,8 @@ function expectSlot<T>(window: DeliveryWindow<T>, name: string): DeliverySlot<T>
 
 /* Open two windows of two slots each, recording every settlement through `onSettle` and throwing `fault` from the first window's first settlement.
  *
- * Four of the close rows below read this same shape, because it is the arrangement a close has the most to lose in: when the throw lands, one slot of its own window
- * and both slots of a sibling window are still unanswered, so a close that stops where the throw lands strands three consumers rather than one.
+ * Several of the close rows below read this same shape, because it is the arrangement a close has the most to lose in: when the throw lands, one slot of its own
+ * window and both slots of a sibling window are still unanswered, so a close that stops where the throw lands strands three consumers rather than one.
  *
  * @returns The first window, which is the one whose callback throws and the one every fault from this shape is reported against.
  */

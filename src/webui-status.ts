@@ -184,7 +184,7 @@ export type StatusRow = StatusChoicesRow | StatusTextRow;
  * The payload a `"row"` event carries: the addressed row's id plus the one thing that changed, stated in that row's own vocabulary - a replacement `value` for a text
  * row, or a whole replacement `choices` list for a choices row. Either way the panel writes the addressed row in place rather than rebuilding the panel around it.
  *
- * The two arms exclude each other through the `never`-typed guards, so a literal carrying both `choices` and `value` fails to compile. That exclusivity is
+ * Each arm excludes every other arm through the `never`-typed guards, so a literal mixing more than one row form's fields fails to compile. That exclusivity is
  * authoring-side protection for a TypeScript composer and nothing more: the panel's runtime authority for what an update MEANS is the kind of the template the
  * addressed row was declared with, never the shape of the payload, so a text row addressed with a choices-shaped update degrades to the placeholder dash rather than
  * changing form.
@@ -209,8 +209,8 @@ export type StatusErrorReason = "auth-invalid" | "auth-missing" | "misconfigured
  * The bridge event, a discriminated union tagged on `kind`. Every DEVICE event carries the device's `serialNumber` - the sidebar device model's universal identity, the
  * protocol's one identity field - and a monotonic `session` token minted server-side from one only-growing counter per feed. The reading side guards per device on
  * strictly-lower tokens; an adapter MUST drop a superseded session's pushes at the source with a session-identity check before every emit, which is what makes the
- * panel's per-mount guard reset safe. The availability variants pin `encrypted: false` when offline because no transport exists, so an encrypted-but-offline event is
- * unrepresentable.
+ * panel's per-mount guard reset safe. The availability variants hold `encrypted: false` fixed when offline because no transport exists, so an encrypted-but-offline event
+ * is unrepresentable.
  *
  * `hello` is the one server-scoped member: a fresh adapter process introduces itself with it, carrying its `generation`, an opaque per-process value whose only contract
  * is uniqueness across that plugin's helper processes. A millisecond boot timestamp is the convenient source; the panel compares generations by equality alone and claims

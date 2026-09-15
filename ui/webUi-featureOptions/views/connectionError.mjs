@@ -99,7 +99,7 @@ export const mountConnectionErrorView = ({ connectionErrorPanel = undefined, onR
       }
 
       // Dock the plugin slot after the framework's error block and hand it over already attached. renderError's replaceChildren has just rebuilt the root, so this
-      // re-appends the same element on every error render rather than creating a new one - the plugin's content rides along on the element and never needs rebuilding.
+      // re-appends the same element on every error render rather than creating a new one - the plugin's content stays on the element and never needs rebuilding.
       pluginPanel ??= createElement("div");
 
       root.appendChild(pluginPanel);

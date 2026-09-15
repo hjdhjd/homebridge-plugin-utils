@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * logclient/socket-double.ts: Reusable test doubles for the WebSocket and LogSocket dependency-inversion seams.
+ * logclient/socket-double.ts: Reusable test doubles for the WebSocket and LogSocket dependency-inversion boundaries.
  */
 
 /**
- * Reusable test doubles for the log client's two socket seams.
+ * Reusable test doubles for the log client's two socket boundaries.
  *
- * Two seams drive the live-log transport: the low-level {@link WebSocketFactory} ({@link logclient/socket!LogSocket | LogSocket} builds a {@link WebSocketLike} from
+ * Two boundaries drive the live-log transport: the low-level {@link WebSocketFactory} ({@link logclient/socket!LogSocket | LogSocket} builds a {@link WebSocketLike} from
  * it) and the high-level {@link LogSocketFactory} (a client builds a {@link LogSocketLike} from it). This module ships the fakes that cash both in, mirroring the
  * shape of `recording-process-double.ts`:
  *
@@ -30,9 +30,9 @@ const WEBSOCKET_CLOSED = 3;
  * A controllable {@link WebSocketLike} test double. It captures every frame the socket under test sends and every close code it issues, and it exposes explicit emit
  * methods so a test can drive the connection through its handshake, ping/pong, streaming, and teardown by hand - no real network, fully deterministic.
  *
- * Fidelity to the seam contract: `readyState` starts OPEN and flips to CLOSED on the first `close()` (or an inbound {@link TestWebSocket.emitClose}), so the socket's
- * teardown gate (send the namespace DISCONNECT only while OPEN) behaves exactly as it would against a real connection; `send` records the frame regardless of state so a
- * test can assert the exact wire sequence including any post-close send attempt.
+ * Fidelity to the `WebSocketLike` contract: `readyState` starts OPEN and flips to CLOSED on the first `close()` (or an inbound {@link TestWebSocket.emitClose}), so the
+ * socket's teardown gate (send the namespace DISCONNECT only while OPEN) behaves exactly as it would against a real connection; `send` records the frame regardless of
+ * state so a test can assert the exact wire sequence including any post-close send attempt.
  *
  * @category Testing
  */
@@ -68,7 +68,7 @@ export class TestWebSocket implements WebSocketLike {
   }
 
   /**
-   * Register a listener. Mirrors the DOM `addEventListener` overloads the {@link WebSocketLike} seam declares; the matching `emit*` method dispatches to every
+   * Register a listener. Mirrors the DOM `addEventListener` overloads the {@link WebSocketLike} interface declares; the matching `emit*` method dispatches to every
    * registered listener of that type.
    *
    * @param type     - The event type to listen for.
@@ -115,13 +115,16 @@ export class TestWebSocket implements WebSocketLike {
 
       default: {
 
+        // Unreachable: the public overloads above constrain `type` to one of the literals already handled. This branch exists only to satisfy the
+        // switch-completeness lint rule.
         return;
       }
     }
   }
 
   /**
-   * Close the socket. Records the close code and flips `readyState` to CLOSED. Safe to repeat in the sense the seam needs: a second close simply records a second code.
+   * Close the socket. Records the close code and flips `readyState` to CLOSED. Safe to repeat in the sense the `WebSocketLike` interface needs: a second close simply
+   * records a second code.
    *
    * @param code - The close code. Defaults to 1000 (normal closure), matching the platform default.
    */
@@ -235,8 +238,8 @@ export class TestWebSocketFactory {
   }
 
   /**
-   * The {@link WebSocketFactory} function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` seam without losing
-   * `this`.
+   * The {@link WebSocketFactory} function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` dependency-inversion
+   * boundary without losing `this`.
    *
    * @param url - The connect URL.
    *
@@ -418,7 +421,7 @@ export class TestLogSocket implements LogSocketLike {
  */
 export class TestLogSocketFactory implements LogSocketFactory {
 
-  // Every create call's init and the socket returned, in order, so a test can assert the seam was exercised with the expected init and can drive the returned socket.
+  // Every create call's init and the socket returned, in order, so a test can assert the boundary was exercised with the expected init and can drive the returned socket.
   public readonly createCalls: { init: LogSocketInit; socket: TestLogSocket }[] = [];
 
   // The pre-configured socket to return from every create, when supplied; otherwise each create returns a fresh default-configured socket.

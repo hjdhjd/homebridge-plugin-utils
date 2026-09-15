@@ -65,7 +65,7 @@ Returns the CPU generation if we're on Linux and have an Intel processor or on m
 
 `number`
 
-Returns the CPU generation or 0 if it can't be detected or an invalid platform.
+The CPU generation, or 0 if it can't be detected or the platform is unsupported.
 
 ##### ffmpegExec
 

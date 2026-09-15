@@ -22,7 +22,7 @@ function includeTrailingSemicolon(sourceCode, end) {
 
 // Slide an exclusive end offset back past a trailing semicolon. The mirror of `includeTrailingSemicolon` for the case where range[1] already covers the
 // terminator: when the character just before `end` is `;`, return `end - 1` so the resulting offset stops at the last token of the declaration's body.
-// Together the two helpers keep offset math correct whether or not the declaration's reported range happens to include the trailing semicolon.
+// Together these helpers keep offset math correct whether or not the declaration's reported range happens to include the trailing semicolon.
 function excludeTrailingSemicolon(sourceCode, end) {
 
   return (sourceCode.text[end - 1] === ";") ? (end - 1) : end;
@@ -46,8 +46,8 @@ function specifierTextStripped(sourceCode, specifier) {
 // Compute the [start, end] offsets of the declaration's post-source clause. The clause covers everything between the source string's closing quote and
 // the terminating semicolon (or the declaration's end when the parser already excludes the semicolon). For most declarations the slice is empty; for
 // declarations carrying `with { type: "json" }` import attributes (or the legacy `assert { ... }` form) it spans the attribute clause. This is the single
-// source of truth for what counts as "the tail" - both the text-slicing path in `declarationTail` and the comment-membership check in
-// `isCommentPreservable` derive their bounds from this helper so they cannot drift apart.
+// source of truth for what counts as "the tail" - every reader of the tail's bounds, including the text-slicing path in `declarationTail` and the
+// comment-membership check in `isCommentPreservable`, derives them from this helper so they cannot drift apart.
 function declarationTailRange(sourceCode, node) {
 
   return [ node.source.range[1], excludeTrailingSemicolon(sourceCode, node.range[1]) ];
@@ -263,15 +263,15 @@ function renderSplit({ defaultSpec, flavor, node, sourceCode, typeSpecs, valueSp
 //  * `import { type A, foo } from "x"`                  flagged; autofix splits into `import type { A } from "x";\nimport { foo } from "x";`.
 //  * `import { type A, type B } from "x"`               flagged; autofix collapses to `import type { A, B } from "x";` (no value side).
 //  * `import { type A as Aa, foo } from "x"`            flagged; autofix preserves aliases via range-based slicing.
-//  * `import D, { type A, foo } from "x"`               flagged; autofix splits with the default riding the value declaration.
+//  * `import D, { type A, foo } from "x"`               flagged; autofix splits with the default kept on the value declaration.
 //  * `import D, { type A } from "x"`                    flagged; autofix splits and omits the empty value brace (`import D from "x";`).
 //  * `export { type A, foo } from "x"`                  flagged; same split for re-exports.
 //  * Import attributes (`with { type: "json" }`)        carried verbatim into both emitted declarations.
 //  * `import type { A } from "x"`                       canonical; ignored.
 //  * `import { foo } from "x"`                          no type specifier; ignored (upstream owns the unmarked-type case).
 //
-// Comment safety: the autofix is suppressed and the rule falls back to report-only when a comment in the declaration falls outside the two preservable
-// regions (any specifier's own range, and the post-source tail slice). Comments between brace tokens, between `from` and the source string, or attached
+// Comment safety: the autofix is suppressed and the rule falls back to report-only when a comment in the declaration falls outside every region the
+// autofix preserves (any specifier's own range, and the post-source tail slice). Comments between brace tokens, between `from` and the source string, or attached
 // to the same line as the declaration are unpreservable and disqualify the autofix.
 const ruleSplitTypeImports = {
 

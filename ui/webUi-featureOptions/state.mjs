@@ -13,13 +13,14 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * and derives its view via selectors. Scope and LifecycleStatus are the discriminated unions encoding the variant types the UI moves through; Catalog is a
  * third, differently-motivated bundled type listed alongside them below, for the same overview of what state shape looks like:
  *
- *   - {@link Scope} - `{kind: "global"}` | `{kind: "controller", controllerId}` | `{kind: "device", controllerId, deviceId}`. The selection pointer. Discriminated
- *     because each kind carries different data; merging them into a flat record would smear the guarantees across two fields and force consumers to recover the
- *     kind via predicates.
- *   - {@link LifecycleStatus} - `loading` | `ready` | `persisting` | `persist-error` | `connection-error`. The page-state pointer. Discriminated because the
- *     variants carry different per-state payloads (a snapshot when persisting, an error when failed, the full display copy when the connection broke).
- *   - {@link Catalog} - `CatalogIndex` (from featureOptions.ts) extended with plugin-provided validator callbacks. Bundled as one value because both the index and
- *     the validators are plugin-provided immutable config moving together; splitting them would force every consumer that needs both to take two parameters.
+ *   - {@link Scope} - `{kind: "global"}` | `{kind: "controller", controllerId}` | `{kind: "device", controllerId, deviceId}`. The selection pointer. Each kind
+ *     carries different data, so merging them into a flat record would smear the guarantees across two fields and force consumers to recover the kind via
+ *     predicates.
+ *   - {@link LifecycleStatus} - `loading` | `ready` | `persisting` | `persist-error` | `connection-error`. The page-state pointer. The variants carry different
+ *     per-state payloads (a snapshot when persisting, an error when failed, the full display copy when the connection broke).
+ *   - {@link Catalog} - `CatalogIndex` (from featureOptions.ts) extended with plugin-provided validator callbacks and choice-source resolvers. Bundled as one
+ *     value because the index, the validators, and the choice sources are plugin-provided immutable config moving together; splitting them would force every
+ *     consumer that needs more than one piece to take multiple parameters.
  *
  * The action vocabulary names past-tense domain events. Each action below corresponds to a {@link reducer} case and to at least one effect or view subscriber.
  * Names use a `domain:event` shape so they group naturally and read as natural language at dispatch sites.
@@ -31,9 +32,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     eventually answers it can be told apart from a superseded one.
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
  *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error, taking the
- *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not. Two suppliers reach that
- *     copy: the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw. A clean
- *     outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry. A clean outcome
+ *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not. The suppliers that reach
+ *     that copy are the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw.
+ *     A clean outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry. A clean outcome
  *     that carried no devices and an `emptyMessage` also records that message, which is how a plugin says its controller is reachable with nothing to list.
  *   - `scope:changed` - selection pointer moved (global / controller / device).
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
@@ -83,8 +84,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
 /**
  * Catalog - The plugin-provided immutable configuration bundle. `CatalogIndex` from featureOptions.ts carries the catalog data and its derived indices; the
  * `validators` field adds the webUI-specific predicates plugins supply for device-aware visibility, and `choiceSources` the resolvers behind whatever pickers the
- * catalog declares by name. All three halves are set once at {@link model:loaded} and never change during a session; consumers can rely on reference stability for
- * memoization.
+ * catalog declares by name. Every field of the bundle is set once at {@link model:loaded} and never changes during a session; consumers can rely on reference
+ * stability for memoization.
  *
  * @typedef {Object} Catalog
  * @property {readonly import("../featureOptions.js").FeatureCategoryEntry[]} categories
@@ -102,7 +103,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  */
 
 /**
- * Scope - The selection pointer through the global / controller / device hierarchy. Discriminated by `kind` so each variant carries exactly its required data
+ * Scope - The selection pointer through the global / controller / device hierarchy. Distinguished by `kind` so each variant carries exactly its required data
  * and invalid combinations (a "device" view without a deviceId, a "controller" view without a controllerId) are unrepresentable.
  *
  * The `device` variant carries `controllerId: string | null` because two device-view shapes exist: a device under a controller (controllerId is the parent
@@ -113,13 +114,13 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  */
 
 /**
- * LifecycleStatus - The page-state pointer. Discriminated because the variants carry different per-state payloads. Drop a status variant when it stops being a
+ * LifecycleStatus - The page-state pointer. The variants carry different per-state payloads. Drop a status variant when it stops being a
  * named UI state; add one when a new named state surfaces.
  *
  * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps each text slot
  * without hardcoding any prose. Each supplier (the reducer's fetch-failure transition on {@link devices:loaded} and the orchestrator's config-sync-failure
- * {@link connection:error} dispatch) carries copy appropriate to its failure. It stands until one of two things ends it: a clean device outcome applying, which
- * is the evidence that a controller is reachable again, or the page re-entering through `show()`. Nothing else clears it, so a view rendering against it can
+ * {@link connection:error} dispatch) carries copy appropriate to its failure. It stands until a clean device outcome applies - the evidence that a controller
+ * is reachable again - or the page re-enters through `show()`. Nothing else clears it, so a view rendering against it can
  * treat it as the whole truth about the page's reachability for as long as it holds.
  *
  * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "persisting", snapshot: readonly string[]} | {kind: "persist-error", error: Error}
@@ -156,12 +157,12 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   `devices:requested` records the latest fetch here; the `devices:loaded` that carries the same sequence clears it, and any other outcome is dropped.
  * @property {number} devicesRequestSeq - The persistent monotonic fetch counter. Never reset within a store's life, so every fetch across the session gets a unique,
  *   increasing sequence and last-request-wins holds even for two fetches against the same controller.
- * @property {{mode: "all" | "modified", query: string}} filter - Search and filter state. Two-field record because the dimensions are independent (every combination
- *                                                                is valid and meaningful).
+ * @property {{mode: "all" | "modified", query: string}} filter - Search and filter state, holding its dimensions in one record because they are independent
+ *                                                                (every combination is valid and meaningful).
  * @property {readonly string[]} initialOptions - The at-show() snapshot for "Revert to Saved." Stable across the session except when re-show() loads an option
  *                                                 set that is not set-equal to the prior snapshot, in which case the snapshot is replaced.
  * @property {"controller-based" | "device-only" | "global-only"} mode - Operating mode. Set once at model:loaded: "controller-based" when the plugin provided
- *   `getControllers`, "global-only" when it declared `globalOnly`, otherwise "device-only". In "global-only" the scope is pinned to global for the page's life and the
+ *   `getControllers`, "global-only" when it declared `globalOnly`, otherwise "device-only". In "global-only" the scope is locked to global for the page's life and the
  *   reducer refuses any other scope kind.
  * @property {readonly string[]} persistedAnchor - The last-known-on-disk state. Updated on every successful persist; restored to configuredOptions on a final
  *                                                  persist failure (memory then matches disk).
@@ -364,7 +365,7 @@ const refuseWrite = (state, error) => {
  * action lives below; an unknown type is a bug at the dispatch site, surfaced loudly.
  *
  * @param {FeatureOptionsState} state - The current state.
- * @param {{type: string}} action - The action to apply. Discriminated by `type`; the switch below enumerates every legitimate value.
+ * @param {{type: string}} action - The action to apply. Distinguished by `type`; the switch below enumerates every legitimate value.
  * @returns {FeatureOptionsState} The new state.
  */
 export const reducer = (state, action) => {
@@ -480,7 +481,7 @@ export const reducer = (state, action) => {
 
     case "scope:changed": {
 
-      // Global-only mode pins the scope to global for the page's life. A dispatch carrying any other scope kind is a bug at the dispatch site - the orchestrator never
+      // Global-only mode locks the scope to global for the page's life. A dispatch carrying any other scope kind is a bug at the dispatch site - the orchestrator never
       // fires one in this mode - so surface it loudly rather than rendering a device or controller view the page mounts no navigation for.
       if((state.mode === "global-only") && (action.scope.kind !== "global")) {
 

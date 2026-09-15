@@ -17,9 +17,9 @@ import { recordingProcessFactory } from "./record.ts";
 const sentinelOptions = { hbupTestSentinel: "ffmpeg-options" } as unknown as FfmpegOptions;
 const sentinelInit = { hbupTestSentinel: "recording-init" } as unknown as FfmpegRecordingInit;
 
-describe("RecordingProcess seam - compile-time conformance", () => {
+describe("RecordingProcess boundary - compile-time conformance", () => {
 
-  test("the production FfmpegRecordingProcess and recordingProcessFactory conform to the seam types (no cast)", () => {
+  test("the production FfmpegRecordingProcess and recordingProcessFactory conform to the boundary types (no cast)", () => {
 
     // The no-drift proof is purely type-level: the compiler enforces that the production class is assignable to the product interface and the production factory is
     // assignable to the creational interface. We do NOT construct a real FfmpegRecordingProcess here - its constructor spawns a child synchronously, and a bare

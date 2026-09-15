@@ -6,7 +6,8 @@
 // HomeKit prefers an I-frame interval of 5 seconds when livestreaming.
 export const HOMEKIT_IDR_INTERVAL = 5;
 
-// Additional headroom for bitrates beyond what HomeKit is requesting when streaming to improve quality with a minor additional bandwidth cost.
+// Additional headroom, in kilobits per second, added to bitrates beyond what HomeKit is requesting when streaming to improve quality with a minor additional
+// bandwidth cost.
 export const HOMEKIT_STREAMING_HEADROOM = 64;
 
 // HomeKit Secure Video fragment length, in milliseconds. HomeKit only supports this value currently.

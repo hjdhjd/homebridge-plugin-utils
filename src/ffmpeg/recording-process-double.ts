@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/recording-process-double.ts: A reusable, FFmpeg-free test double for the RecordingProcess dependency-inversion seam.
+ * ffmpeg/recording-process-double.ts: A reusable, FFmpeg-free test double for the RecordingProcess dependency-inversion boundary.
  */
 
 /**
- * Reusable test doubles for the recording dependency-inversion seam.
+ * Reusable test doubles for the recording dependency-inversion boundary.
  *
- * The {@link RecordingProcess} / {@link RecordingProcessFactory} seam in `ffmpeg/record.ts` exists so a consuming plugin's HKSV recording path can be driven without
+ * The {@link RecordingProcess} / {@link RecordingProcessFactory} boundary in `ffmpeg/record.ts` exists so a consuming plugin's HKSV recording path can be driven without
  * spawning a real FFmpeg child. This module ships the fakes that cash that in: a configurable {@link TestRecordingProcess} that yields caller-supplied init and media
  * segments deterministically, and a {@link TestRecordingProcessFactory} that records every `create` call and hands back the process. Any HKSV-capable plugin can hold
  * the test factory in place of {@link ffmpeg/record!recordingProcessFactory | recordingProcessFactory} to exercise its recording delegate FFmpeg-free, in CI, with
@@ -240,7 +240,8 @@ export class TestRecordingProcess implements RecordingProcess {
  */
 export class TestRecordingProcessFactory implements RecordingProcessFactory {
 
-  // Every create call's arguments and the process returned, in order, so a test can assert the seam was exercised exactly once with exactly the expected options/init.
+  // Every create call's arguments and the process returned, in order, so a test can assert the boundary was exercised exactly once with exactly the expected
+  // options/init.
   public readonly createCalls: { init: FfmpegRecordingInit; options: FfmpegOptions; process: TestRecordingProcess }[] = [];
 
   // The pre-configured process to return from every create, when supplied; otherwise each create returns a fresh default-configured process.

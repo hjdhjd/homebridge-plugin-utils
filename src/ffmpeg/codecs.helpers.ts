@@ -47,7 +47,8 @@ export interface CodecsInit {
  * compare logic that could drift from production.
  *
  * @param init - Optional overrides for individual fields. Defaults: empty decoder / encoder sets, no hardware accelerators, `hostSystem: "generic"`, FFmpeg version
- *               `"6.1.1"`, CPU generation / GPU memory zero, `ffmpegExec: "ffmpeg"`, `verbose: false`.
+ *               `"6.1.1"` (an FFmpeg 6 release, so `ffmpegAtLeast(7)` and `ffmpegAtLeast(8)` read false against the default unless a test overrides the version), CPU
+ *               generation / GPU memory zero, `ffmpegExec: "ffmpeg"`, `verbose: false`.
  *
  * @returns An `FfmpegCodecs`-typed stand-in safe to pass to any module that accepts one.
  *

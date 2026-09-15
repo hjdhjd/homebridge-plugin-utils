@@ -1089,7 +1089,7 @@ Base options shared by both fMP4 recording and livestream sessions.
 | ------ | ------ | ------ |
 | <a id="audiostream"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). |
 | <a id="codec-1"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`). Defaults to `h264`. |
-| <a id="enableaudio"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. |
+| <a id="enableaudio"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. Defaults to `true`. |
 | <a id="videostream"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). |
 
 ***
@@ -1113,7 +1113,7 @@ FMp4AudioInputConfig
 | <a id="audioinput"></a> `audioInput?` | `string` \| [`FMp4AudioInputConfig`](#fmp4audioinputconfig) | Optional. A separate audio input source. When provided, audio is read from this source instead of the primary `url`. Can be a URL string for self-describing sources (e.g., RTSP), or an `FMp4AudioInputConfig` object for raw audio streams that require format metadata. | - |
 | <a id="audiostream-1"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-2"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`). Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec-1) |
-| <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
+| <a id="enableaudio-1"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. Defaults to `true`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="url-1"></a> `url` | `string` | Source URL for livestream (RTSP) remuxing to fMP4. | - |
 | <a id="videostream-1"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
 
@@ -1132,10 +1132,10 @@ filters, the hardware-acceleration flags, and the audio transcode decision - liv
 
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
-| <a id="audiofilters"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters, and they ride inside the audio target, so supplying one forces a transcode. Defaults to none. | - |
+| <a id="audiofilters"></a> `audioFilters` | `string`[] | Audio filters for FFmpeg to process. These are passed as an array of filters, and they live inside the audio target, so supplying one forces a transcode. Defaults to none. | - |
 | <a id="audiostream-2"></a> `audioStream` | `number` | Audio stream input to use, if the input contains multiple audio streams. Defaults to `0` (the first audio stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`audioStream`](#audiostream) |
 | <a id="codec-3"></a> `codec` | `string` | The codec for the input video stream. Valid values are `av1`, `h264`, and `hevc` (`h265` is accepted as an alias for `hevc`). Defaults to `h264`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`codec`](#codec-1) |
-| <a id="enableaudio-2"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
+| <a id="enableaudio-2"></a> `enableAudio` | `boolean` | Indicates whether to enable audio or not. Defaults to `true`. | [`FMp4BaseOptions`](#fmp4baseoptions).[`enableAudio`](#enableaudio) |
 | <a id="fps"></a> `fps` | `number` | The video frames per second for the session. Defaults to 30. | - |
 | <a id="hardwaredecoding"></a> `hardwareDecoding` | `boolean` | Enable hardware-accelerated video decoding if available. Defaults to what was specified in `ffmpegOptions` when FFmpeg is at least 8.x; on an older FFmpeg the default is always `false` regardless of what `ffmpegOptions` specifies. | - |
 | <a id="hardwaretranscoding"></a> `hardwareTranscoding` | `boolean` | Enable hardware-accelerated video transcoding if available. Defaults to what was specified in `ffmpegOptions`. | - |
@@ -1149,7 +1149,7 @@ filters, the hardware-acceleration flags, and the audio transcode decision - liv
 
 ### RecordingProcess
 
-The minimal surface a recording consumer reads off a recording process. This is the product half of the recording dependency-inversion seam: an HKSV recording
+The minimal surface a recording consumer reads off a recording process. This is the product half of the recording dependency-inversion boundary: an HKSV recording
 delegate depends on this narrow interface rather than the concrete [FfmpegRecordingProcess](#ffmpegrecordingprocess), so a test (or any alternative segment source) can substitute a
 fake without dragging FFmpeg into the consumer's dependency graph. The interface is type-only, so importing it costs a consumer nothing at runtime.
 
@@ -1257,10 +1257,10 @@ An async generator yielding one `"init"` segment followed by `"media"` segments 
 
 ### RecordingProcessFactory
 
-The creational half of the recording dependency-inversion seam: build a [RecordingProcess](#recordingprocess) from the shared options and the recording init. A consumer holds
-this factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a fake recording process. The production factory is
-[recordingProcessFactory](#recordingprocessfactory-1), whose `create` is exactly the [FfmpegRecordingProcess](#ffmpegrecordingprocess) constructor call - so routing construction through this seam is
-behavior-neutral, mirroring HBUP's `streamingDelegateFactory` precedent.
+The creational half of the recording dependency-inversion boundary: build a [RecordingProcess](#recordingprocess) from the shared options and the recording init. A consumer
+holds this factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a fake recording process. The production
+factory is [recordingProcessFactory](#recordingprocessfactory-1), whose `create` is exactly the [FfmpegRecordingProcess](#ffmpegrecordingprocess) constructor call - so routing construction through this
+boundary is behavior-neutral, mirroring HBUP's `streamingDelegateFactory` precedent.
 
 #### See
 
@@ -1299,7 +1299,7 @@ const recordingProcessFactory: RecordingProcessFactory;
 ```
 
 The production [RecordingProcessFactory](#recordingprocessfactory): builds the concrete FFmpeg-backed recording process. A consumer holds this typed as the abstraction; a test substitutes
-a fake factory. `create` is exactly the [FfmpegRecordingProcess](#ffmpegrecordingprocess) constructor call, so wiring construction through this seam is behavior-neutral.
+a fake factory. `create` is exactly the [FfmpegRecordingProcess](#ffmpegrecordingprocess) constructor call, so wiring construction through this boundary is behavior-neutral.
 
 #### See
 

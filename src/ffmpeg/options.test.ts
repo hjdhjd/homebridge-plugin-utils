@@ -104,8 +104,9 @@ const BASE_ENCODER_OPTIONS: VideoEncoderOptions = {
   width: 1920
 };
 
-// Caller-supplied CPU-side filters used by the videoFilters-seam rows. Opaque to the encoder: it appends them at the chain tail in caller order, bridging a download
-// transfer ahead of them only when the platform scaler left frames on the GPU. More than one entry, so the rows also pin that the encoder joins them with ", ".
+// Caller-supplied CPU-side filters used by the videoFilters boundary rows. Opaque to the encoder: it appends them at the chain tail in caller order, bridging a
+// download transfer ahead of them only when the platform scaler left frames on the GPU. More than one entry, so the rows also lock in that the encoder joins
+// them with ", ".
 const CALLER_VIDEO_FILTERS = [ "fps=30", "minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc" ];
 
 // Assert an ordered `-key value` pair is present in the args array. FFmpeg option parsing is strictly positional, so the key and value must appear adjacently.
@@ -640,8 +641,8 @@ describe("FfmpegOptions - streamEncoder (hardware paths)", () => {
 
   test("macOS.Intel hardware path has no smartQuality fork: always -b:v, smartQuality only affects -maxrate headroom", () => {
 
-    // Invariance contract: macOS.Intel's hardware encoder lacks a quality-constraint mode, so -b:v is unconditional regardless of smartQuality. smartQuality still
-    // affects -maxrate (adds HOMEKIT_STREAMING_HEADROOM when true), but no -q:v ever appears. This pins both the presence of -b:v and the absence of -q:v across both
+    // macOS.Intel's hardware encoder lacks a quality-constraint mode, so -b:v is unconditional regardless of smartQuality. smartQuality still affects -maxrate
+    // (adds HOMEKIT_STREAMING_HEADROOM when true), but no -q:v ever appears. This locks in both the presence of -b:v and the absence of -q:v across both
     // smartQuality values.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, hostSystem: "macOS.Intel" }, HW_FULL);
     const smartTrue = options.streamEncoder({ ...BASE_ENCODER_OPTIONS, smartQuality: true });
@@ -658,7 +659,7 @@ describe("FfmpegOptions - streamEncoder (hardware paths)", () => {
 
   test("raspbian hardware path has no smartQuality fork: always -b:v, smartQuality only affects -maxrate headroom", () => {
 
-    // Same invariance contract for raspbian's v4l2m2m encoder: always -b:v, no quality-constraint mode available. smartQuality only shifts -maxrate.
+    // The same guarantee holds for raspbian's v4l2m2m encoder: always -b:v, no quality-constraint mode available. smartQuality only shifts -maxrate.
     const { options } = makeOptions(RASPBIAN_CODECS, HW_FULL);
     const smartTrue = options.streamEncoder({ ...BASE_ENCODER_OPTIONS, smartQuality: true });
     const smartFalse = options.streamEncoder({ ...BASE_ENCODER_OPTIONS, smartQuality: false });
@@ -725,7 +726,7 @@ describe("FfmpegOptions - streamEncoder (hardware paths)", () => {
   test("macOS.Intel hardware path emits -r <fps> when fps differs from inputFps", () => {
 
     // macOS.Intel has its own copy of the `-r` conditional inside streamEncoder's switch case. An explicit emit test guards against a future refactor that accidentally
-    // drops the conditional from just the Intel branch; every other hardware platform already has its emit case pinned.
+    // drops the conditional from just the Intel branch; every other hardware platform already has its emit case locked in by a test.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, hostSystem: "macOS.Intel" }, HW_FULL);
     const args = options.streamEncoder({ ...BASE_ENCODER_OPTIONS, fps: 15, inputFps: 30 });
 
@@ -947,8 +948,9 @@ describe("FfmpegOptions - hardwareDownloadFilters", () => {
   test("generic (QSV-like) platforms emit a plain hwdownload", () => {
 
     // A generic host with hardware decoding on and transcoding off corresponds to "downloaded for software encode" - the base platform path emits the simple
-    // hwdownload filter. QSV advertisement causes configureHwAccel to promote hardwareDecoding to true. The `hardwareDownloadFilters` getter then internally pins
-    // `hardwareTranscoding: false` when delegating to `getHardwareTransferFilters`, which routes to the generic-host download branch and emits a plain `hwdownload`.
+    // hwdownload filter. QSV advertisement causes configureHwAccel to promote hardwareDecoding to true. The `hardwareDownloadFilters` getter then internally holds
+    // `hardwareTranscoding: false` fixed when delegating to `getHardwareTransferFilters`, which routes to the generic-host download branch and emits a plain
+    // `hwdownload`.
     const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
 
     assert.deepEqual(options.hardwareDownloadFilters, ["hwdownload"]);
@@ -963,11 +965,11 @@ describe("FfmpegOptions - hardwareDownloadFilters", () => {
     assert.deepEqual(options.hardwareDownloadFilters, [ "hwdownload", "format=nv12" ]);
   });
 
-  test("raspbian emits no download filters (path is unreachable under real config but pinned here)", () => {
+  test("raspbian emits no download filters (path is unreachable under real config but asserted here)", () => {
 
     // On raspbian, configureHwAccel force-disables hardwareDecoding, so `hardwareDownloadFilters` (gated by `this.config.hardwareDecoding`) always returns [] in a
     // real config. The assertion is about the unreachable-by-config code path in `getHardwareTransferFilters`: the raspbian download branch is an explicit break (no
-    // download needed on Raspberry Pi). Pinning the behavior keeps the branch honest if someone later lifts the RPi hardwareDecoding force-disable.
+    // download needed on Raspberry Pi). Asserting the behavior keeps the branch honest if someone later lifts the RPi hardwareDecoding force-disable.
     const { options } = makeOptions({ gpuMem: 256, hostSystem: "raspbian" });
 
     assert.deepEqual(options.hardwareDownloadFilters, []);
@@ -987,7 +989,7 @@ describe("FfmpegOptions - hardware transfer filter matrix (upload paths)", () =>
     const uploadIdx = chain.indexOf("hwupload");
 
     assert.ok(uploadIdx >= 0, "macOS 8.x hardware-transcode-from-software-decode must splice in hwupload - got " + chain);
-    assert.ok((pinIdx >= 0) && (pinIdx < uploadIdx), "the nv12 pin must precede hwupload so the frames context carries nv12 - got " + chain);
+    assert.ok((pinIdx >= 0) && (pinIdx < uploadIdx), "the nv12 marker must precede hwupload so the frames context carries nv12 - got " + chain);
   });
 
   test("macOS pre-8.x emits no upload filter for software-decode + hardware-transcode", () => {
@@ -1097,8 +1099,8 @@ describe("FfmpegOptions - maxSourcePixels", () => {
 
   test("returns Infinity for the stream context on macOS.Intel with hardware transcoding enabled (only raspbian is capped)", () => {
 
-    // The raspbian-specific cap is the only special case in maxSourcePixels. Explicitly pin Intel Mac (distinct from the Apple Silicon case covered above) so the
-    // absence of a per-Intel cap is frozen behavior.
+    // The raspbian-specific cap is the only special case in maxSourcePixels. This test explicitly locks in Intel Mac (distinct from the Apple Silicon case covered
+    // above) so the absence of a per-Intel cap is frozen behavior.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, hostSystem: "macOS.Intel" }, HW_FULL);
 
     assert.equal(options.maxSourcePixels("stream"), Infinity);
@@ -1135,7 +1137,7 @@ describe("FfmpegOptions - maxSourcePixels", () => {
   });
 
   // Agreement rule. The ceiling and the encoder choice both derive from hardwareEncodes, so on a fully-hardware Pi the record context must report both an uncapped
-  // source (Infinity) AND a software encoder (libx264, never h264_v4l2m2m). Pinning the pair co-located freezes the shared-predicate wiring: a future change that flips
+  // source (Infinity) AND a software encoder (libx264, never h264_v4l2m2m). Asserting the pair co-located freezes the shared-predicate wiring: a future change that flips
   // one without the other would fail here. This deliberately restates the libx264 fact from the recordEncoder block, kept to the single assertion pair the rule
   // needs.
   test("agreement rule on raspbian: the record context is uncapped AND recordEncoder emits the software encoder", () => {
@@ -1149,7 +1151,7 @@ describe("FfmpegOptions - maxSourcePixels", () => {
 
   // Per-call-downgrade regression test, protecting the per-call downgrade path that production code exercises (record.ts passes a per-call hardwareTranscoding flag into
   // recordEncoder). On a non-raspbian hardware-capable host, recordEncoder consults the CLASS predicate (hardware) and delegates to streamEncoder, which then re-resolves
-  // the per-call flag to software. Pinning that the per-call downgrade still wins protects the guarantee the whole behavior-neutrality proof rests on: the predicate
+  // the per-call flag to software. Asserting that the per-call downgrade still wins protects the guarantee the whole behavior-neutrality proof rests on: the predicate
   // only gates the short-circuit, never the final encoder choice.
   test("honors a per-call hardwareTranscoding:false downgrade on a non-raspbian hardware host (emits the software encoder)", () => {
 
@@ -1162,8 +1164,8 @@ describe("FfmpegOptions - maxSourcePixels", () => {
 
 describe("FfmpegOptions - hardwareEncodes", () => {
 
-  // A host that resolves hardware transcoding true and imposes no record-context exclusion (VideoToolbox) runs both contexts on the hardware encoder. This pins the
-  // baseline the marker and the source ceiling both key on.
+  // A host that resolves hardware transcoding true and imposes no record-context exclusion (VideoToolbox) runs both contexts on the hardware encoder. This asserts
+  // the baseline the marker and the source ceiling both key on.
   test("reports both contexts on the hardware encoder for a resolved-hardware non-raspbian host", () => {
 
     const { options } = makeOptions(VIDEOTOOLBOX_CODECS, HW_FULL);
@@ -1172,7 +1174,7 @@ describe("FfmpegOptions - hardwareEncodes", () => {
     assert.equal(options.hardwareEncodes("record"), true);
   });
 
-  // The record-context exclusion pinned: on a fully-hardware Raspberry Pi the live stream runs on h264_v4l2m2m while HKSV recording software-encodes, so the stream
+  // The record-context exclusion asserted: on a fully-hardware Raspberry Pi the live stream runs on h264_v4l2m2m while HKSV recording software-encodes, so the stream
   // context is on the hardware encoder and the record context is not.
   test("excludes only the record context on a fully-hardware raspbian host", () => {
 
@@ -1192,7 +1194,7 @@ describe("FfmpegOptions - hardwareEncodes", () => {
     assert.equal(options.hardwareEncodes("record"), false);
   });
 
-  // The resolved-versus-requested distinction pinned: a generic host requests hardware transcoding but advertises no QSV, so configureHwAccel resolves the flag to
+  // The resolved-versus-requested distinction asserted: a generic host requests hardware transcoding but advertises no QSV, so configureHwAccel resolves the flag to
   // false and both contexts report software - the caller asked for hardware and the probe said no.
   test("reports software for both contexts when hardware was requested but the probe found no accelerator", () => {
 
@@ -1400,7 +1402,8 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
   test("macOS.Apple VideoToolbox 7.x SW decode + HW transcode (no init, no hwupload, swScale)", () => {
 
     // Pre-8.x macOS emits no `-init_hw_device` (the break in getHardwareDeviceInit) and no `hwupload` in the filter chain (the break in getHardwareTransferFilters).
-    // The scaler falls back to swScale on pre-8.x. This snapshot pins the complete shape so a refactor that accidentally merges the 8.x and 7.x branches fails visibly.
+    // The scaler falls back to swScale on pre-8.x. This snapshot locks in the complete shape so a refactor that accidentally merges the 8.x and 7.x branches fails
+    // visibly.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "7.1" }, HW_FULL);
 
     assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false }), [
@@ -1585,11 +1588,11 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
   });
 });
 
-describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)", () => {
+describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filters)", () => {
 
-  // Full-argv snapshots for the caller-filter seam. Each row pins the complete emission via deepEqual so a filter appended in the wrong position, a missing download
-  // bridge, or a spurious one fails loudly. The platform scaler chains match the golden snapshots above; the caller filters are appended at the tail, preceded by
-  // the platform download transfer only when the scaler left frames on the GPU.
+  // Full-argv snapshots for the caller-filter boundary. Each row locks in the complete emission via deepEqual so a filter appended in the wrong position, a
+  // missing download bridge, or a spurious one fails loudly. The platform scaler chains match the golden snapshots above; the caller filters are appended at
+  // the tail, preceded by the platform download transfer only when the scaler left frames on the GPU.
   const swScaleChain = "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto";
   const scaleVtChain = "scale_vt=-2:min(ih\\, 1080)";
   const vppQsvChain = "vpp_qsv=format=same:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)";
@@ -1620,7 +1623,7 @@ describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)",
   test("software path with hardware decoding keeps the pre-existing download ahead of scale, caller filters at the tail", () => {
 
     // The download transfer (GPU->CPU, from the hardware-decode pairing) is the pre-existing software-path behavior and stays at the head of the pixel chain. The caller
-    // filters go at the very tail, after scale - pinning the ordering interaction: download, scale, then the caller's own filters.
+    // filters go at the very tail, after scale - asserting the ordering interaction: download, scale, then the caller's own filters.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_DECODE);
 
     assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
@@ -1730,7 +1733,7 @@ describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)",
 
     // Software decode paired with hardware transcode: the chain uploads (format=nv12, hwupload) into the GPU scaler, scale_vt runs GPU-resident, then the caller's
     // CPU-side filters pull the frames back down (hwdownload, format=nv12) before running. Both transfer directions compose correctly around the scaler in one chain,
-    // and the nv12 pin on the upload side is what lets the download side name nv12 as its output format.
+    // and the nv12 assertion on the upload side is what lets the download side name nv12 as its output format.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
 
     assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS }), [
@@ -1755,8 +1758,9 @@ describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)",
   test("a software chain adds no transfer token for the caller filters even with hardware available and FFmpeg 8.x", () => {
 
     // The resolved shape is hardwareDecoding false with a per-call hardwareTranscoding: false override, so the call runs the software chain despite the class having
-    // hardware available on FFmpeg 8.x. The hardwareDecoding pin matters: a decode-true construction would legitimately emit the pre-existing decode-side download. This
-    // row isolates the fact that the caller-filter mechanism adds nothing to a software chain - the outcome that replaces the consumer's hand-written raw-hint bridge.
+    // hardware available on FFmpeg 8.x. The hardwareDecoding assertion matters: a decode-true construction would legitimately emit the pre-existing decode-side
+    // download. This row isolates the fact that the caller-filter mechanism adds nothing to a software chain - the outcome that replaces the consumer's
+    // hand-written raw-hint bridge.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
 
     assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, hardwareTranscoding: false, videoFilters: CALLER_VIDEO_FILTERS }), [
@@ -1845,8 +1849,8 @@ describe("FfmpegOptions - videoFilters seam (caller-supplied CPU-side filters)",
 
   test("recordEncoder threads the caller filters through its delegation to streamEncoder", () => {
 
-    // recordEncoder overrides smartQuality and delegates to streamEncoder; the videoFilters ride the full options object with no explicit threading. The emitted
-    // -filter:v value is pinned exactly to prove the filters survive the delegation.
+    // recordEncoder overrides smartQuality and delegates to streamEncoder; the videoFilters are carried by the full options object with no explicit threading.
+    // The emitted -filter:v value is asserted exactly to prove the filters survive the delegation.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
     const chain = filterChain(options.recordEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }));
 
@@ -1882,8 +1886,8 @@ describe("FfmpegOptions - recordEncoder equivalence with streamEncoder", () => {
   test("recordEncoder does not mutate the caller's options (safe to pass shared fixtures)", () => {
 
     // Read-only input contract: recordEncoder must treat the caller's options as immutable so shared fixtures can pass safely across multiple encoder invocations
-    // without surprise cross-test pollution. Internally, recordEncoder clones with `{ ...options, smartQuality: false }` rather than mutating; this test pins the
-    // contract so any future shortcut that writes back to the input surfaces as a visible failure.
+    // without surprise cross-test pollution. Internally, recordEncoder clones with `{ ...options, smartQuality: false }` rather than mutating; this test locks
+    // in the contract so any future shortcut that writes back to the input surfaces as a visible failure.
     const { options } = makeOptions({ hostSystem: "generic" });
     const caller: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, smartQuality: true };
 
@@ -1896,7 +1900,7 @@ describe("FfmpegOptions - recordEncoder equivalence with streamEncoder", () => {
 describe("FfmpegOptions - post-construction config observability sweep", () => {
 
   // configureHwAccel mutates `config.hardwareDecoding` and `config.hardwareTranscoding` during construction based on the (platform, advertised codecs, flags) triple.
-  // This parametric sweep pins the resolved state across the canonical (platform preset x mode preset) matrix so any future change to configureHwAccel's resolution
+  // This parametric sweep locks in the resolved state across the canonical (platform preset x mode preset) matrix so any future change to configureHwAccel's resolution
   // rules surfaces as an explicit test-expectation update rather than silently shifting observable behavior.
 
   interface ResolutionCase {
@@ -2125,7 +2129,7 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
 
     /* The one chain that carries both transfer directions: the upload pairing puts frames on the GPU for scale_vt, and the caller's CPU-side filters pull them back
      * down again. The two ends have to agree on the frames context's pixel format, and only a real FFmpeg graph configuration can prove they do - the unit snapshots
-     * pin the argument order but cannot tell a working agreement from a broken one. This chain failed in the field with "[hwdownload] Invalid output format nv12"
+     * lock in the argument order but cannot tell a working agreement from a broken one. This chain failed in the field with "[hwdownload] Invalid output format nv12"
      * because the download names nv12 while the upload had let the frames context inherit the software decoder's yuv420p, so the format conversion has to sit ahead
      * of the upload for the download to have anything it can emit.
      */

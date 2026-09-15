@@ -296,7 +296,7 @@ describe("reducer - devices:loaded", () => {
     assert.equal(next.status.kind, "connection-error", "the failure still transitions the status");
     assert.equal(next.status.headline, "The plugin stopped responding while retrieving the device list.", "the supplied headline is what renders");
     assert.equal(next.status.guidance, "Retry once the plugin is responding again.", "the supplied guidance is what renders");
-    assert.equal(next.status.message, "The request did not complete within 30 seconds.", "the per-fetch message rides along as it always did");
+    assert.equal(next.status.message, "The request did not complete within 30 seconds.", "the per-fetch message is still carried along as it always did");
   });
 
   test("copy overrides are preferred per-field, so a headline alone keeps the shared guidance", () => {
@@ -398,7 +398,7 @@ describe("reducer - devices:loaded", () => {
     assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a", emptyMessage: NOTICE }).devicesEmptyMessage, NOTICE,
       "clean + no devices + a message is the one shape that records");
     assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: DEVICES, emptyMessage: NOTICE }).devicesEmptyMessage, null,
-      "an outcome that carried devices is not empty, whatever message rode along");
+      "an outcome that carried devices is not empty, whatever message came along");
     assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a", emptyMessage: NOTICE, error: "Controller unreachable." }).devicesEmptyMessage, null,
       "a failure is never also an empty - the fold inherits the null through the applied spread");
     assert.equal(requestThenLoad(initialState(), { controllerId: "ctrl-a" }).devicesEmptyMessage, null,
@@ -521,7 +521,7 @@ describe("reducer - scope:changed", () => {
     const controllerScope = { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" };
     const deviceScope = { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" };
 
-    // Global-only mode pins the scope to global: a controller-kind or device-kind dispatch is a bug at the dispatch site and throws.
+    // Global-only mode holds the scope fixed at global: a controller-kind or device-kind dispatch is a bug at the dispatch site and throws.
     assert.throws(() => reducer(globalOnly, controllerScope), /not permitted in global-only mode/, "a controller scope throws in global-only mode");
     assert.throws(() => reducer(globalOnly, deviceScope), /not permitted in global-only mode/, "a device scope throws in global-only mode");
 

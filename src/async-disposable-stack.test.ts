@@ -195,7 +195,7 @@ async function scenarioUseNullPassthrough(makeStack: StackFactory): Promise<{ or
   const stack = makeStack();
 
   // Both calls sit in statement position, where a void-typed result is unremarkable... the disposal order below proves neither registered a disposer, and the contract
-  // suite pins the returned-unchanged behavior separately.
+  // suite asserts the returned-unchanged behavior separately.
   stack.use(null);
   stack.use(undefined);
   stack.defer(() => void order.push("d"));

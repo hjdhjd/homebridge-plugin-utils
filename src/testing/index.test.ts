@@ -43,7 +43,7 @@ describe("expectAt", () => {
   test("narrows readonly arrays the same way as mutable ones", () => {
 
     // Type-level confirmation that the single readonly T[] parameter accepts a readonly array the same way it accepts a mutable one. The runtime path is the
-    // same; this test pins the type contract for `readonly T[]` callers (e.g., test bodies that walk a `readonly` snapshot of accumulator state).
+    // same; this test locks in the type contract for `readonly T[]` callers (e.g., test bodies that walk a `readonly` snapshot of accumulator state).
     const items: readonly string[] = ["alpha"];
 
     assert.equal(expectAt(items, 0, "alpha slot"), "alpha", "readonly arrays must narrow through expectAt the same as mutable ones");
@@ -54,7 +54,7 @@ describe("silentLog", () => {
 
   test("returns an object with debug/error/info/warn methods that do nothing", () => {
 
-    // Trivial factory, but the test pins the current method surface explicitly rather than relying on structural typing to catch drift. Because silentLog
+    // Trivial factory, but the test locks in the current method surface explicitly rather than relying on structural typing to catch drift. Because silentLog
     // spreads the typed noOpLog object, TypeScript already rejects a HomebridgePluginLogging addition that noOpLog fails to implement - the real gap this
     // test guards is a method that compiles cleanly on both the interface and noOpLog but is never added to the assertions below.
     const log = silentLog();
@@ -106,7 +106,7 @@ describe("capturingLog", () => {
 
   test("preserves emission order (entries array is FIFO)", () => {
 
-    // Order matters for tests asserting on log sequences; if entries were stored in a Set or unordered structure, race-sensitive tests would silently fail. Pin the
+    // Order matters for tests asserting on log sequences; if entries were stored in a Set or unordered structure, race-sensitive tests would silently fail. Assert the
     // FIFO contract so a future refactor that swaps in an alternate container surfaces here.
     const log = capturingLog();
     const seq = [ 1, 2, 3, 4, 5 ];
@@ -171,7 +171,7 @@ describe("loggedAt and logCount", () => {
 
   test("finds a value that lives only in params, where a raw message match cannot see it", () => {
 
-    // This is the whole reason the family exists, so both halves are asserted together: the value the caller wants to pin is a format parameter, and the captured
+    // This is the whole reason the family exists, so both halves are asserted together: the value the caller wants to hold fixed is a format parameter, and the captured
     // message carries only the token that will consume it.
     const entries: TestLogEntry[] = [{ level: "warn", message: "Retrying in %d seconds.", params: [30] }];
     const entry = expectAt(entries, 0, "the retry entry");
@@ -278,7 +278,7 @@ describe("waitUntil", () => {
 
   test("resolves on the first read when the predicate already holds", async () => {
 
-    // The helper reads the predicate before it ever sleeps, so a state that has already settled costs no wait at all. Counting the reads is what pins that: a helper
+    // The helper reads the predicate before it ever sleeps, so a state that has already settled costs no wait at all. Counting the reads is what proves that: a helper
     // that slept first would still resolve, just a poll interval later than it needed to, and no assertion on the outcome alone would notice.
     let reads = 0;
 
@@ -294,8 +294,8 @@ describe("waitUntil", () => {
 
   test("keeps polling until the predicate turns true", async () => {
 
-    // The case the helper exists for: a state that settles later than the read that first asked about it. Counting the reads keeps the row deterministic - it pins
-    // the loop rather than a duration, so nothing here depends on how a loaded CI runner schedules the sleeps.
+    // The case the helper exists for: a state that settles later than the read that first asked about it. Counting the reads keeps the row deterministic - it holds
+    // the loop count fixed rather than a duration, so nothing here depends on how a loaded CI runner schedules the sleeps.
     let reads = 0;
 
     await waitUntil(() => {

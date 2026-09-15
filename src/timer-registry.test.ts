@@ -1,8 +1,10 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * timer-registry.test.ts: Unit tests for TimerRegistry - keyed one-shots and intervals, anonymous tracked one-shots, replace-on-register, delete-before-callback, the
- * anonymous handle's cancel, the inert handle a retired registry answers with, the lifetime-signal / dispose() drain that makes every later registration inert, and
- * the unref policy the registry forwards to its clock on every arm.
+ * anonymous handle's cancel, the inert handle a retired registry answers with, clearAll()'s drain-without-retirement, the lifetime-signal / dispose() drain that
+ * permanently retires the registry and makes every later registration inert, the unref policy the registry forwards to its clock on every arm, and keys()'s
+ * enumeration - arming order, re-arming to the end, its interaction with clear() / clearAll() / dispose(), and safe mutation of the registry while walking its own
+ * iterator.
  */
 import { describe, test } from "node:test";
 import { NO_OP_DISPOSABLE } from "./util.ts";

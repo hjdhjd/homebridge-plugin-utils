@@ -3,8 +3,9 @@
  * mqtt-topics-docs.test.ts: Unit tests for the MQTT topic-catalog documentation renderer - the two marked-region fragments it projects a catalog into.
  *
  * The worked example is an Access-shaped catalog carrying every row that plugin's document prints, asserted byte for byte, so a regression in a cell, a width, a
- * heading, or the row set fails here as a diff a reader can read. The rest of the rows isolate one clause each: the parameterized markup and the widths measured on
- * it, the sort, the vocabulary-order join, the omitted empty group, the empty section beside it, the column-separator escape, and every refusal the renderer owns.
+ * heading, or the row set fails here as a diff a reader can read. The rest of the rows isolate one clause each: a flat catalog with no grouping, the parameterized
+ * markup and the widths measured on it, the sort, the vocabulary-order join, the omitted empty group, the empty section beside it, the column-separator escape,
+ * per-verb device narrowing, every refusal the renderer owns, and the marked regions the renderer's output splices into a real document.
  */
 import { MQTT_DEVICE_COLUMN, mqttTopicCatalog } from "./mqtt-topics.ts";
 import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END,

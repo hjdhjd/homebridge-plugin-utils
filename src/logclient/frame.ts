@@ -62,7 +62,7 @@ export type ProtocolEvent = { readonly kind: "message"; readonly event: string; 
   { readonly kind: "unknown"; readonly raw: string };
 
 /**
- * An outbound protocol event to serialize, discriminated on `kind`.
+ * An outbound protocol event to serialize, tagged by `kind`.
  *
  * The OutboundEvent union models the namespace connect (`connect`), namespace event with a JSON payload (`event` - this is how `tail-log` is requested), and
  * heartbeat pong (`pong`) frame shapes. The namespace DISCONNECT is hand-assembled separately (see {@link LOG_NAMESPACE_PATH}) because its fixed, argument-free shape

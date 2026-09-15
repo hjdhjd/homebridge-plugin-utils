@@ -1949,8 +1949,8 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
 
     using _dom = createTestDom();
 
-    // Two devices whose source answers differently. The per-device DOM cache is what makes this worth pinning: device A's row DOM is what device B would be shown
-    // if the cache were served without a re-derive.
+    // Two devices whose source answers differently. The per-device DOM cache is what makes this worth asserting: device A's row DOM is what device B would be
+    // shown if the cache were served without a re-derive.
     const devices = [ { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "A", serialNumber: "dev-a" },
       { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "B", serialNumber: "dev-b" } ];
 
@@ -2094,6 +2094,6 @@ describe("mountOptionsView - the list editor", () => {
     control.dispatchEvent(new Event("change", { bubbles: true }));
 
     assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Plates=a,b,typed-not-entered"],
-      "the pending text rode along with the entries rather than being dropped");
+      "the pending text came along with the entries rather than being dropped");
   });
 });

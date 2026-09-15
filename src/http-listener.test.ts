@@ -94,7 +94,7 @@ async function request(options: { body?: Buffer | string; headers?: Record<strin
 
 /* Send one request over a raw socket and answer the status of the first response line the listener writes.
  *
- * A raw socket rather than the HTTP client, for the two arms whose request is refused before its body has been read. The client is then left owing a body nobody
+ * A raw socket rather than the HTTP client, for arms whose request is refused before its body has been read. The client is then left owing a body nobody
  * consumed, and what it reports afterwards is the connection's own outcome - a reset, or the unread bytes parsed as a second request - rather than the answer the
  * listener wrote. Reading the first bytes off the wire asks nothing further of them.
  *

@@ -17,7 +17,7 @@ import { waitUntil } from "../testing/index.ts";
 
 // Build a minimal RTP-shaped datagram. The parser reads the second byte's low seven bits for payload type - values above 90 and the distinguished 0 are RTP,
 // everything else is RTCP. We pick 96 (a typical dynamic media payload type) for the "is this RTP?" assertions and 72 (a sender report identifier) for RTCP coverage.
-// The optional `suffix` lets tests distinguish multiple sent datagrams by content so receiver assertions can pin which packet arrived.
+// The optional `suffix` lets tests distinguish multiple sent datagrams by content so receiver assertions can tell which packet arrived.
 function makeRtpDatagram(payloadType = 96, suffix: Buffer = Buffer.alloc(10)): Buffer {
 
   return Buffer.concat([ Buffer.from([ 0x80, payloadType & 0x7F ]), suffix ]);
@@ -28,8 +28,8 @@ describe("RtpDemuxer - construction and bind", () => {
   test("binds the socket on construction with kernel-assigned ephemeral port", async () => {
 
     // Construct with `inputPort: 0` to request kernel-assigned ephemeral allocation. The bind is atomic against whatever the kernel picks, eliminating the
-    // reserve-then-rebind race a separate {@link reserveEphemeralPort} call would carry. The assigned port becomes observable on {@link RtpDemuxer.inputPort} once
-    // {@link RtpDemuxer.ready} resolves.
+    // reserve-then-rebind race a separate `reserveEphemeralPort` call would carry. The assigned port becomes observable on `RtpDemuxer.inputPort` once
+    // `RtpDemuxer.ready` resolves.
     await using rtpReceiver = await bindReceiver();
     await using rtcpReceiver = await bindReceiver();
     await using demuxer = new RtpDemuxer({ inputPort: 0, rtcpPort: rtcpReceiver.port, rtpPort: rtpReceiver.port });
@@ -292,7 +292,7 @@ describe("RtpDemuxer - mediaReady milestone", () => {
 
 describe("RtpDemuxer - heartbeat (always-on RTCP replay)", () => {
 
-  // Heartbeat tests are unavoidably slow: the cadence is fixed at the canonical {@link RTCP_HEARTBEAT_INTERVAL} (3000 ms) because the constant is the demuxer's own
+  // Heartbeat tests are unavoidably slow: the cadence is fixed at the canonical `RTCP_HEARTBEAT_INTERVAL` (3000 ms) because the constant is the demuxer's own
   // always-on keepalive cadence (not an FFmpeg timeout), so the tests must run at that real cadence. The tests below run sequentially and wait additively, collectively
   // costing roughly three and a half to four heartbeat windows of wall-clock time - acceptable for catching the heartbeat-related correctness guarantees of an always-on
   // contract that no production consumer can opt out of.
@@ -487,6 +487,8 @@ describe("RtpDemuxer - socket errors", () => {
       assert.equal(collider.aborted, true, "collider must have aborted after failing to bind to a port held by another demuxer");
       assert.equal(isHbpuAbortReason(collider.signal.reason, "failed"), true, "bind failure must surface as HbpuAbortError(\"failed\")");
 
+      // The assertion above already establishes, at runtime, that signal.reason is a failed HbpuAbortError carrying the kernel error as its cause. signal.reason
+      // itself stays typed unknown at the AbortSignal boundary, so this cast narrows only for the type checker, not for a fact TypeScript could otherwise see.
       const reason = collider.signal.reason as { cause?: unknown };
 
       assert.ok(reason.cause instanceof Error, "the underlying kernel error must be attached to `cause` so operators can see the root failure");
@@ -568,7 +570,7 @@ describe("RtpDemuxer - signal-driven teardown", () => {
 
     await demuxer[Symbol.asyncDispose]();
 
-    // A successful rebind on the same port proves the demuxer's socket was released. {@link probePortAvailable} awaits Node's close callback so callers do not need
+    // A successful rebind on the same port proves the demuxer's socket was released. `probePortAvailable` awaits Node's close callback so callers do not need
     // to paper over a handle-release window with a polling delay - the dispose contract guarantees the port is releasable by the time it resolves.
     await probePortAvailable(boundPort);
 

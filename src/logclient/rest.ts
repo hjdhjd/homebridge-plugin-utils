@@ -10,7 +10,7 @@
  * `AsyncIterable<string>` of raw lines (ANSI escapes intact). The server has no range/tail parameter - it always streams the whole file - so this is the deep-history
  * channel paid only when the user explicitly asks for history beyond the socket's ~500-line seed (see the cost model on `TailRequest` in `types.ts`).
  *
- * Two details matter here:
+ * A few details matter here:
  *
  * - The response body is streamed, not buffered. We feed each chunk through the shared {@link LogLineSplitter} so a multi-MB log never has to be materialized in memory
  *   as one string, and the consumer can begin processing lines as they arrive. The splitter handles lines split across chunk boundaries and the mixed newline
@@ -50,9 +50,9 @@ export interface DownloadLogOptions extends SocketTarget {
   readonly signal?: AbortSignal;
 }
 
-// Decode a streamed byte chunk to text. We hold a single `TextDecoder` across the whole response with `{ stream: true }` so a multi-byte UTF-8 sequence split across two
-// chunks is reassembled correctly rather than producing a replacement character at the boundary. The final `decode()` with no argument flushes any trailing partial
-// sequence.
+// Read a streamed response body to completion, decoding and splitting it into raw lines as they arrive, and release the reader whether the stream ends normally or is
+// aborted. We hold a single `TextDecoder` across the whole response with `{ stream: true }` so a multi-byte UTF-8 sequence split across two chunks is reassembled
+// correctly rather than producing a replacement character at the boundary. The final `decode()` with no argument flushes any trailing partial sequence.
 async function *readLines(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncIterable<string> {
 
   const splitter = new LogLineSplitter();
@@ -63,6 +63,8 @@ async function *readLines(body: ReadableStream<Uint8Array>, signal?: AbortSignal
 
     for(;;) {
 
+      // A single `ReadableStreamDefaultReader` serves only one `read()` at a time, so this await cannot be fanned out across iterations - the loop is sequential by
+      // the reader's own contract, not by an avoidable choice.
       // eslint-disable-next-line no-await-in-loop
       const { done, value } = await reader.read();
 
@@ -99,9 +101,9 @@ async function *readLines(body: ReadableStream<Uint8Array>, signal?: AbortSignal
   } finally {
 
     // When the download was aborted (the hedge superseded it, or the caller tore the stream down), actively cancel the body first so undici aborts the request and the
-    // connection is released immediately rather than draining to completion in the background as a pinned connection; the cancel's rejection on an already-aborted body
-    // is expected, so it is swallowed. In every case release the reader lock - normal completion, an early `break` by the consumer, or a thrown error - so the underlying
-    // stream is never left locked.
+    // connection is released immediately rather than staying held open while it drains to completion in the background; the cancel's rejection on an already-aborted
+    // body is expected, so it is swallowed. In every case release the reader lock - normal completion, an early `break` by the consumer, or a thrown error - so the
+    // underlying stream is never left locked.
     if(signal?.aborted) {
 
       void reader.cancel().catch(() => { /* The body is already torn down by the abort, so the cancel rejection is expected and carries no actionable information. */ });
@@ -122,7 +124,7 @@ async function *readLines(body: ReadableStream<Uint8Array>, signal?: AbortSignal
  * immediately rather than draining in the background, and a pre-aborted signal short-circuits before any request is made. This is what lets the windowed hedge supersede
  * a speculative deep-history download the moment the socket seed is shown to cover the window.
  *
- * @param options - The connection target, the raw token, the injectable `fetch` seam, and the optional abort signal. See {@link DownloadLogOptions}.
+ * @param options - The connection target, the raw token, the injectable `fetch` implementation, and the optional abort signal. See {@link DownloadLogOptions}.
  *
  * @returns An async iterable of raw log lines (escapes intact, terminators removed), in file order.
  *

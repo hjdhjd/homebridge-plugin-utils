@@ -184,7 +184,7 @@ describe("HBPU runtime floor - shim guard enforcement", () => {
 
     installErmPolyfills(target);
 
-    // A behavioral pin rather than a text search: a grep over the module's source cannot tell a real install line from a mention of the same name in its
+    // A behavioral assertion rather than a text search: a grep over the module's source cannot tell a real install line from a mention of the same name in its
     // documentation, and the sunset checklist is only worth trusting if what it promises to remove is what the module actually installs.
     assert.deepEqual(Object.keys(target).sort(), [ "AsyncDisposableStack", "DisposableStack", "SuppressedError" ]);
   });
@@ -197,7 +197,8 @@ describe("HBPU runtime floor - live conformance", () => {
     const plan = planRuntimeFloorCheck({ enginesNode: await readEnginesNode(new URL("../", import.meta.url)), sunsetMajor: NODE_ERM_GLOBAL_MAJOR,
       sunsetMessage: SUNSET_CLEANUP });
 
-    // The floor reached the platform-global release: fail with the enumerated cleanup so the shims cannot silently outlive the runtime they work around.
+    // Once the floor reaches the platform-global release, this fails with the enumerated cleanup so the shims cannot silently outlive the runtime they work
+    // around; until then this call is a no-op.
     assertRuntimeFloorCompat(plan);
 
     const files = await sweepSourceFiles({ roots: [new URL(".", import.meta.url)], skipBasenames: SHIM_BASENAMES });

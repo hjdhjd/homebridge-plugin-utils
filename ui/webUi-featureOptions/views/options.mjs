@@ -13,7 +13,7 @@ import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { effect } from "../store.mjs";
 
 // The marker class on the nothing-to-list notice. It is what the outgoing capture below recognizes to keep notice DOM out of the DOM cache, so the class is
-// structural rather than decorative and the two sites that depend on agreeing about it read one constant.
+// structural rather than decorative, and every site that depends on agreeing about it reads one constant.
 const DEVICES_NOTICE_CLASS = "fo-devices-notice";
 
 /**
@@ -29,7 +29,7 @@ const DEVICES_NOTICE_CLASS = "fo-devices-notice";
  *      the first projection pass that finds the category open. A category nobody has opened carries no rows at all.
  *   4. **Per-row updates** on `option:set` / `option:cleared` / `options:reset` / `model:reverted` / `persist:failed`: walks the projection and re-derives each
  *      row's full state (tri-state, value-input, label color, visibility, dependency badge) in place through the shared `applyRowState` writer - attribute and class
- *      swaps on rows that already exist, run through the same writer construction uses so the two paths cannot diverge. The walk first builds whatever rows an open
+ *      swaps on rows that already exist, run through the same writer construction uses, so no path can diverge from it. The walk first builds whatever rows an open
  *      category is missing, so what it derives is always the whole of what that category should be showing.
  *   5. **Visibility updates** on `filter:changed`: the same projection walk, doing the same two jobs - materializing what an open category lacks, then re-deriving
  *      each row, which includes its visibility and the "requires parent" badge.
@@ -520,7 +520,7 @@ const buildCategoryShells = ({ configTable, state }) => {
   configTable.appendChild(fragment);
 };
 
-// Materialize the rows for a single category, serving the two occasions a category comes to need them: the user's own expand, where the rows appear while they
+// Materialize the rows for a single category, serving every occasion a category comes to need them: the user's own expand, where the rows appear while they
 // watch, and the projection walk, which materializes any category it finds open. Guarded by dataset.rowsRendered, so a call for an already-built category does
 // nothing at all.
 const ensureRowsRendered = ({ details, state }) => {
@@ -626,7 +626,7 @@ const applyProjectionToDom = ({ configTable, state }) => {
   applyBusyState({ configTable, state });
 };
 
-// Whether the option table must render inert: the scope names a controller whose settled device list is not what the table is showing. Two facts the store
+// Whether the option table must render inert: the scope names a controller whose settled device list is not what the table is showing. Facts the store
 // already carries answer that together - the loaded list belongs to a different controller, which is a first visit, or a fetch naming this controller is still
 // outstanding, which is a revisit, where the sidebar click refetches while the list already on screen still names the same controller. Every other scope kind
 // reads false: a global or device scope keys its writes from the selection itself and has no in-flight window to protect.
@@ -689,7 +689,7 @@ const cssEscape = (value) => ((typeof CSS !== "undefined") && CSS.escape) ? CSS.
 // group's members are checkboxes too and one of them sits ahead of it in document order for no reason but layout. Returns null when the element sits outside a
 // materialized row or the projection no longer carries the option.
 //
-// The presented view scope rides back alongside the entry, read off the same projection the entry came from, so a handler re-deriving a single row describes the
+// The presented view scope is carried back alongside the entry, read off the same projection the entry came from, so a handler re-deriving a single row describes the
 // page at exactly the scope the render pass gave every other row.
 const rowContext = ({ state, target }) => {
 

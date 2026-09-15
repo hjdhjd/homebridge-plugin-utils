@@ -9,7 +9,7 @@
  * The platform ships `DisposableStack` as a runtime global starting in Node 24, but the package's `engines.node` floor is lower, so on that floor evaluating
  * `new DisposableStack()` against the global throws a `ReferenceError`. This module provides the identical contract as a normal import, so every call site reads
  * exactly as it would against the native class and the by-construction acquire-with-cleanup pairing is preserved. When the `engines.node` floor reaches Node 24 the
- * platform global takes over and this module and its imports are deleted... the runtime-floor conformance test in `runtime-floor.test.ts` enforces exactly that
+ * platform global takes over and this module and its imports are deleted...the runtime-floor conformance test in `runtime-floor.test.ts` enforces exactly that
  * deletion the moment the floor is bumped. The class is intentionally not re-exported from `src/index.ts`: the platform global is its eventual owner and no consumer
  * may couple to it.
  *
@@ -94,7 +94,7 @@ export class DisposableStack implements InstanceType<typeof globalThis.Disposabl
       return value;
     }
 
-    // Capture the dispose method now, at registration time, matching the spec's registration-time capture... a later mutation of `value[Symbol.dispose]` must not change
+    // Capture the dispose method now, at registration time, matching the spec's registration-time capture...a later mutation of `value[Symbol.dispose]` must not change
     // what runs. We read it through `unknown` because use() is a trust boundary: a value can satisfy the Disposable type nominally yet present a non-callable member at
     // runtime, which the spec requires we reject with a TypeError.
     const disposeMethod: unknown = value[Symbol.dispose];

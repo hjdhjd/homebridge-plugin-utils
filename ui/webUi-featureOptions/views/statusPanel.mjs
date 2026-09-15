@@ -107,7 +107,7 @@ import { selectedDevice } from "../selectors.mjs";
  * @property {(args: { device: (import("../state.mjs").Device | undefined), panel: HTMLElement, signal: AbortSignal }) => void} [contentPanel] - Renders
  *   plugin-owned content beneath the panel grid for the current selection, on the same bag contract as the page's `infoPanel` hook, so one body of docked-rendering
  *   code serves either surface. `device` is per-render data - the selection, or undefined when no device is in scope; `panel` is a plugin-owned element the component
- *   creates once per mount, positions after its own grid, and never writes into, holding one identity for the mount's life so plugin content rides across selection
+ *   creates once per mount, positions after its own grid, and never writes into, holding one identity for the mount's life so plugin content is carried across selection
  *   changes and the panel's own rebuilds alike; `signal` is the mount's lifecycle signal, likewise one identity for the mount's life, so a hook that registers
  *   listeners keys its once-ness on it. The hook runs on every selection render - a selection change, a same-device re-render, and the no-device render alike - and
  *   deliberately not on the push-driven grid rebuilds, which leave the element untouched and so have nothing to tell it.
@@ -194,8 +194,9 @@ const resolveErrorCopy = (reason, overrides) => {
 // override is a single object.
 const DEFAULT_LINK_LOST_COPY = { label: "Link lost", message: "The connection to the Homebridge UI was lost." };
 
-// The link-lost reload action's label, carried by the shared recovery button on its own full-width line beneath the message. The refresh glyph rides the builder, so this
-// constant is the bare label without it. It is a plain constant, not part of the override table, because the action is fixed browser behavior a plugin does not re-word.
+// The link-lost reload action's label, carried by the shared recovery button on its own full-width line beneath the message. The refresh glyph is drawn by the builder,
+// so this constant is the bare label without it. It is a plain constant, not part of the override table, because the action is fixed browser behavior a plugin does not
+// re-word.
 const LINK_LOST_RELOAD_TEXT = "Refresh Homebridge UI";
 
 // The default deadline, in seconds, before a watched request that has produced no liveness reads as a lost link. It sits well above a healthy bridge's millisecond-scale
@@ -557,7 +558,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
    * cell onto a line by itself. A classified message, when present, renders as a line spanning every track inside the same box; in the link-lost state that message
    * line takes a prominence modifier and a second full-span line below it carries the reload action.
    *
-   * Everything rendered is derived here from three things and nothing else: the device, its entry in the state map, and the link-lost marker. A device the panel has
+   * Everything rendered is derived here from the device, its entry in the state map, and the link-lost marker, and nothing else. A device the panel has
    * heard nothing from has no entry, and the defaults below are what a first selection deserves - the placeholder skeleton under the connecting label. The marker is
    * an overlay rather than a state of its own: it stands in for the status text and the message while it is set, and retires leaving the entry's own presentation
    * whole underneath it. statusValueEl and rowValueEls are rebuilt here, so a value-cell reference never outlives its own panel.
@@ -838,9 +839,9 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
    */
   const watchRequest = (request) => watchdog.watch(request);
 
-  // Fire the view request as its own liveness probe. The RAW promise feeds the watchdog on one chain, while the console diagnostic rides a SEPARATE chain off the same
-  // promise: the watch must observe the raw promise so a rejection reaches its two-armed hook as a rejection - composing the watch after the .catch would convert every
-  // rejection into a resolution and blind the rejection-is-liveness path. Results ride push events, not this response.
+  // Fire the view request as its own liveness probe. The RAW promise feeds the watchdog on one chain, while the console diagnostic goes through a SEPARATE chain off the
+  // same promise: the watch must observe the raw promise so a rejection reaches its two-armed hook as a rejection - composing the watch after the .catch would convert
+  // every rejection into a resolution and blind the rejection-is-liveness path. Results arrive over push events, not this response.
   const requestView = (serialNumber) => {
 
     const request = homebridge.request(STATUS_VIEW_ROUTE, { serialNumber });
@@ -856,8 +857,8 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
    * grid is mounted (or the root emptied, on the no-device render) and the view request, where the branch fires one, is already away. With no hook configured this
    * returns at once and no element is ever created, which is what keeps an unconfigured panel's rendered DOM exactly what it is without a dock at all.
    *
-   * The element is minted once and kept for the mount's life, so the plugin writes its content once and that content rides every later render. The parent check is
-   * what holds that across the wholesale renders, which sweep the dock out of the root along with the grid and want it back, while a same-selection re-render finds it
+   * The element is minted once and kept for the mount's life, so the plugin writes its content once and that content is carried by every later render. The parent check
+   * is what holds that across the wholesale renders, which sweep the dock out of the root along with the grid and want it back, while a same-selection re-render finds it
    * still attached and leaves it where it is: re-inserting an attached node moves a live element, which blurs any focused descendant the plugin put inside it.
    */
   const renderContentPanel = () => {
@@ -1173,7 +1174,7 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
     store
   });
 
-  // Subscribe to the host's status push events. The host delivers a MessageEvent whose payload rides `event.data`; the listener is `{ signal }`-scoped, so the page
+  // Subscribe to the host's status push events. The host delivers a MessageEvent whose payload lives on `event.data`; the listener is `{ signal }`-scoped, so the page
   // signal tears it down.
   homebridge.addEventListener(STATUS_EVENT, handleStatusEvent, { signal });
 
@@ -1181,8 +1182,8 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
    * the reason it reads a clock rather than trusting visibilitychange - and the panel supplies only the policy: probe when a device is on screen. The gate is what makes
    * a no-device wake silent, and it is evaluated immediately before the callback, so the serialNumber read below can never run without one. The probe is the panel's own
    * view request - the existing watched chokepoint - fired REGARDLESS of the link-lost marker: on a healed bridge it answers and refreshes the panel after the nap, on a
-   * dead one it re-trips the same honest state. A probe landing while a pre-suspension deadline is already pending rides that overdue deadline; with none pending it arms
-   * a fresh full one. The subscription is `{ signal }`-scoped like every other listener here, and a page that supplied no detector simply has no subscription.
+   * dead one it re-trips the same honest state. A probe landing while a pre-suspension deadline is already pending reuses that overdue deadline; with none pending it
+   * arms a fresh full one. The subscription is `{ signal }`-scoped like every other listener here, and a page that supplied no detector simply has no subscription.
    */
   resumeDetector?.subscribe(() => requestView(viewedDevice.serialNumber), { shouldProbe: () => Boolean(viewedDevice), signal });
 

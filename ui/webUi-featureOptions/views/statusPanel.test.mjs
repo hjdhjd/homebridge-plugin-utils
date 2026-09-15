@@ -1157,7 +1157,7 @@ describe("statusPanel - lifecycle", () => {
 
     // A pre-aborted mount short-circuits the effect and registers no push listener, so a selection and a push both render nothing. This suite installs no timer mock, so
     // the detector's setInterval is a REAL Node timer here - and the subscribe call's `if(signal?.aborted) return` guard is what keeps a pre-aborted mount from ever
-    // calling arm. That guard is pinned at runtime: this mount's controller is never handed to mountPanel, so the suite-wide afterEach cannot reclaim it, and a leaked
+    // calling arm. That guard is asserted at runtime: this mount's controller is never handed to mountPanel, so the suite-wide afterEach cannot reclaim it, and a leaked
     // real interval would keep the node:test process alive - the suite's prompt exit is the proof the guard held. A missing guard would also skip on this null-device
     // tick, so counting a probe cannot catch it; the leak is what does.
     const preAborted = new AbortController();
@@ -2446,8 +2446,8 @@ describe("statusPanel - the shared liveness delegation", () => {
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 10, placeholderRows: PLACEHOLDER_ROWS }, store);
 
     // This test body runs synchronously with no flush, so the initial view request's watchdog timer armed by selectDevice is still pending when the first
-    // handle.watchRequest call below runs - that call rides the same still-armed deadline rather than starting from a healed state. The shared-timer assertion below
-    // holds either way, since the pending timer is never cleared in between.
+    // handle.watchRequest call below runs - that call goes through the same still-armed deadline rather than starting from a healed state. The shared-timer
+    // assertion below holds either way, since the pending timer is never cleared in between.
     selectDevice(store, "AA");
 
     handle.watchRequest(hangingPromise());
@@ -2866,7 +2866,7 @@ describe("statusPanel - the plugin content dock", () => {
     const dock = calls.at(-1).panel;
     const marker = dock.querySelector(".plugin-marker");
 
-    // Pin the dock's attachment before focusing anything inside it. Focusing a descendant of a detached dock and then arming the observer below sends Happy-DOM
+    // Assert the dock's attachment before focusing anything inside it. Focusing a descendant of a detached dock and then arming the observer below sends Happy-DOM
     // into a microtask spin that starves the per-test timeout, so a regression that leaves the dock unattached has to land here as a bounded assertion failure
     // rather than downstream as a suite that hangs until something outside the runner kills it.
     assert.ok(root.contains(dock), "precondition: the dock is attached to the root");
@@ -2876,7 +2876,7 @@ describe("statusPanel - the plugin content dock", () => {
 
     /* Watch the root's own child list across the re-render. The observer comes from the test window's registry because the harness installs no such global, and
      * takeRecords drains the queue synchronously, so the records are read without yielding. The same-device branch rebuilds the grid in place, which is itself a
-     * child-list mutation on the root, so records naming the grid swap are expected; what this pins is that none of them names the dock. A missing attachment guard
+     * child-list mutation on the root, so records naming the grid swap are expected; what this asserts is that none of them names the dock. A missing attachment
      * would re-append the dock and show up here - and blur the focused input, which the assertion below reads from the other side.
      */
     const observer = new dom.window.MutationObserver(() => {});

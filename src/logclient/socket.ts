@@ -127,7 +127,7 @@ export const webSocketFactory: WebSocketFactory = (url: string): WebSocketLike =
  * @property host             - The hostname or IP of the homebridge-config-ui-x server.
  * @property log              - Logger for connection lifecycle and overflow diagnostics.
  * @property port             - The TCP port the server listens on. Defaults to `8581`.
- * @property random           - Injectable source of `[0, 1)` randomness for backoff jitter. Defaults to `Math.random`; pinned in tests for deterministic backoff.
+ * @property random           - Injectable source of `[0, 1)` randomness for backoff jitter. Defaults to `Math.random`; held fixed in tests for deterministic backoff.
  * @property refreshable      - Whether the credential backing {@link LogSocketInit.tokenProvider} can mint a fresh token on a reconnect. `true` for `password`/`noauth`
  *                              credentials (each connect re-authenticates), `false` for a static `token`. When `false`, a handshake/namespace auth rejection is raised as
  *                              a permanent {@link LogAuthError} so the connect-phase retry veto makes it terminal rather than retrying a token that cannot be refreshed.
@@ -156,8 +156,9 @@ export interface LogSocketInit {
 }
 
 // Add up-to-`JITTER_FRACTION` upward random jitter to a base delay. Jitter spreads reconnect attempts so a fleet of clients does not stampede the server in lockstep
-// after a shared outage. The `random` source is injected so the jittered delay is deterministic in tests; with `random` pinned near zero the delay is effectively the
-// base, which is how the reconnect tests drive the loop without real waits.
+// after a shared outage. The `random` source is injected so the jittered delay is deterministic in tests; with `random` held fixed near zero the delay is effectively
+// the base, which is how a bare unit test of this schedule drives it without real waits. The `LogSocket` reconnect tests instead override `backoff` directly to drive
+// their loop without real waits.
 function withJitter(base: number, random: () => number): number {
 
   return Math.round(base + (base * JITTER_FRACTION * random()));
@@ -174,12 +175,12 @@ const reconnectLadder = exponentialBackoff({ ceilingMs: RECONNECT_CAP_MS, seedMs
  * dev tool should resume the tail promptly after the frequent Homebridge restarts a plugin developer does rather than back off to a half-minute lag. Up to
  * `JITTER_FRACTION` of the computed base is added as upward jitter so a fleet of clients does not reconnect in lockstep after a shared outage.
  *
- * It is exported (rather than left inline in the constructor) so the bare schedule is a directly unit-testable function: with `random` pinned to `0` the curve yields the
- * exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. The curve itself is {@link exponentialBackoff}'s ladder built from `RECONNECT_BASE_MS` and
- * `RECONNECT_CAP_MS`, so the attempt numbering is the one that factory documents.
+ * It is exported (rather than left inline in the constructor) so the bare schedule is a directly unit-testable function: with `random` held fixed at `0` the curve
+ * yields the exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. The curve itself is {@link exponentialBackoff}'s ladder built from
+ * `RECONNECT_BASE_MS` and `RECONNECT_CAP_MS`, so the attempt numbering is the one that factory documents.
  *
  * @param attempt - The 1-indexed connect attempt about to run. Called only for the second and later attempts (the first runs with no wait).
- * @param random  - Source of `[0, 1)` randomness for the jitter. Defaults to `Math.random`; pinned in tests for a deterministic schedule.
+ * @param random  - Source of `[0, 1)` randomness for the jitter. Defaults to `Math.random`; held fixed in tests for a deterministic schedule.
  *
  * @returns The delay, in milliseconds, to wait before running `attempt`.
  *
@@ -193,9 +194,8 @@ export function reconnectBackoff(attempt: number, random: () => number = Math.ra
 // A single connected session: the live WebSocket, the per-session controller whose signal ends the streaming phase, the ping cadence the Engine.IO open handshake
 // advertised (used to size the liveness watchdog), and a one-shot `closed` latch. A composed signal built fresh from the socket's lifetime signal and the controller's
 // own signal governs both the connect-phase and streaming-phase teardown, so a socket-level abort ends the session too; a session-level abort (close, error, watchdog)
-// ends only this session and lets the outer loop reconnect. The `closed` latch makes the WebSocket
-// teardown safe to run twice: both the streaming phase's post-end cleanup and the socket-level teardown can race to close the same session, and the latch ensures the
-// DISCONNECT-and-close sequence runs exactly once rather than twice.
+// ends only this session and lets the outer loop reconnect. The `closed` latch makes the WebSocket teardown safe to run twice: both the streaming phase's post-end
+// cleanup and the socket-level teardown can race to close the same session, and the latch ensures the DISCONNECT-and-close sequence runs exactly once rather than twice.
 interface Session {
 
   closed: boolean;

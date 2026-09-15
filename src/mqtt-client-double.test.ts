@@ -27,6 +27,10 @@
  *   passing the lowercased value, the raw value, and the double's signal; a suffix matching no live registration throwing with the registered topics of that kind
  *   named, whether nothing of the kind was ever registered or the registration was released by its own signal; and the class example's call shape running as
  *   written.
+ * - The unresolved-placeholder refusal: publish and publishGuarded refusing a brace-carrying tail - the raw rejection and the guarded path's single error line -
+ *   ahead of the offline refusal and counting nothing; subscribe, subscribeGet, subscribeSet, and unsubscribe throwing synchronously and registering nothing on
+ *   the same tail, while a brace-free tail passes every verb untouched; and the abort and empty-id guards answering ahead of the refusal, so a torn-down double
+ *   and an empty id stay no-ops rather than reaching it.
  */
 import { assertNoUnhandledRejections, capturingLog, expectAt, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
@@ -1108,7 +1112,7 @@ describe("TestMqttClient - drivers", () => {
 
   test("the class example's call shape runs as written: a registration on the parent topic, driven on the suffixed tail", async () => {
 
-    // The example in the class documentation is shipped guidance, so it is pinned executable here...a plugin registers its setter on the parent topic and the test
+    // The example in the class documentation is shipped guidance, so it is kept executable here...a plugin registers its setter on the parent topic and the test
     // drives the recorded topic, which carries the suffix the client appends. Drift in either half fails this row rather than a consumer's first attempt.
     const mqtt = new TestMqttClient();
     const device = { power: false };

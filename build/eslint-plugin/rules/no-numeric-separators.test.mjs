@@ -71,7 +71,7 @@ ruleTester.run("no-numeric-separators", rule, {
       output: "const x = -1000;"
     },
 
-    // Two literals in one array report independently and are fixed in one pass.
+    // Multiple literals in one array report independently and are fixed in one pass.
     {
 
       code: "const x = [ 1_000, 2_000 ];",

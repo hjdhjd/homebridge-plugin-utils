@@ -100,6 +100,7 @@ export async function startTestBroker(options: { port?: number } = {}): Promise<
     });
   });
 
+  // The cast is safe because the server above is bound to a host and port rather than a Unix-socket path, so address() always answers an AddressInfo here.
   const port = (server.address() as AddressInfo).port;
 
   return {

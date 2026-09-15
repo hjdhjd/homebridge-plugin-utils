@@ -253,7 +253,7 @@ Construction-time options for [LogSocket](#logsocket).
 | <a id="host"></a> `host` | `readonly` | `string` | The hostname or IP of the homebridge-config-ui-x server. |
 | <a id="log"></a> `log` | `readonly` | [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) | Logger for connection lifecycle and overflow diagnostics. |
 | <a id="port"></a> `port?` | `readonly` | `number` | The TCP port the server listens on. Defaults to `8581`. |
-| <a id="random"></a> `random?` | `readonly` | () => `number` | Injectable source of `[0, 1)` randomness for backoff jitter. Defaults to `Math.random`; pinned in tests for deterministic backoff. |
+| <a id="random"></a> `random?` | `readonly` | () => `number` | Injectable source of `[0, 1)` randomness for backoff jitter. Defaults to `Math.random`; held fixed in tests for deterministic backoff. |
 | <a id="refreshable"></a> `refreshable` | `readonly` | `boolean` | Whether the credential backing [LogSocketInit.tokenProvider](#tokenprovider) can mint a fresh token on a reconnect. `true` for `password`/`noauth` credentials (each connect re-authenticates), `false` for a static `token`. When `false`, a handshake/namespace auth rejection is raised as a permanent [LogAuthError](auth.md#logautherror) so the connect-phase retry veto makes it terminal rather than retrying a token that cannot be refreshed. |
 | <a id="signal-1"></a> `signal?` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) composed with the socket's internal controller. When the parent aborts, the socket tears down. |
 | <a id="stdouthighwater"></a> `stdoutHighWater?` | `readonly` | `number` | Optional high-water mark for the bounded stdout queue. Defaults to `10000`. Overflow drops the oldest lines. |
@@ -544,16 +544,16 @@ connect attempt, plateauing at the `RECONNECT_CAP_MS` ceiling (5 s) - deliberate
 dev tool should resume the tail promptly after the frequent Homebridge restarts a plugin developer does rather than back off to a half-minute lag. Up to
 `JITTER_FRACTION` of the computed base is added as upward jitter so a fleet of clients does not reconnect in lockstep after a shared outage.
 
-It is exported (rather than left inline in the constructor) so the bare schedule is a directly unit-testable function: with `random` pinned to `0` the curve yields the
-exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. The curve itself is [exponentialBackoff](../util.md#exponentialbackoff)'s ladder built from `RECONNECT_BASE_MS` and
-`RECONNECT_CAP_MS`, so the attempt numbering is the one that factory documents.
+It is exported (rather than left inline in the constructor) so the bare schedule is a directly unit-testable function: with `random` held fixed at `0` the curve
+yields the exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence. The curve itself is [exponentialBackoff](../util.md#exponentialbackoff)'s ladder built from
+`RECONNECT_BASE_MS` and `RECONNECT_CAP_MS`, so the attempt numbering is the one that factory documents.
 
 #### Parameters
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `attempt` | `number` | `undefined` | The 1-indexed connect attempt about to run. Called only for the second and later attempts (the first runs with no wait). |
-| `random` | () => `number` | `Math.random` | Source of `[0, 1)` randomness for the jitter. Defaults to `Math.random`; pinned in tests for a deterministic schedule. |
+| `random` | () => `number` | `Math.random` | Source of `[0, 1)` randomness for the jitter. Defaults to `Math.random`; held fixed in tests for a deterministic schedule. |
 
 #### Returns
 

@@ -6,9 +6,9 @@
 
 # logclient/socket-double
 
-Reusable test doubles for the log client's two socket seams.
+Reusable test doubles for the log client's two socket boundaries.
 
-Two seams drive the live-log transport: the low-level [WebSocketFactory](socket.md#websocketfactory-1) ([LogSocket](socket.md#logsocket) builds a [WebSocketLike](socket.md#websocketlike) from
+Two boundaries drive the live-log transport: the low-level [WebSocketFactory](socket.md#websocketfactory-1) ([LogSocket](socket.md#logsocket) builds a [WebSocketLike](socket.md#websocketlike) from
 it) and the high-level [LogSocketFactory](socket.md#logsocketfactory) (a client builds a [LogSocketLike](socket.md#logsocketlike) from it). This module ships the fakes that cash both in, mirroring the
 shape of `recording-process-double.ts`:
 
@@ -253,9 +253,9 @@ The log-socket double.
 A controllable [WebSocketLike](socket.md#websocketlike) test double. It captures every frame the socket under test sends and every close code it issues, and it exposes explicit emit
 methods so a test can drive the connection through its handshake, ping/pong, streaming, and teardown by hand - no real network, fully deterministic.
 
-Fidelity to the seam contract: `readyState` starts OPEN and flips to CLOSED on the first `close()` (or an inbound [TestWebSocket.emitClose](#emitclose)), so the socket's
-teardown gate (send the namespace DISCONNECT only while OPEN) behaves exactly as it would against a real connection; `send` records the frame regardless of state so a
-test can assert the exact wire sequence including any post-close send attempt.
+Fidelity to the `WebSocketLike` contract: `readyState` starts OPEN and flips to CLOSED on the first `close()` (or an inbound [TestWebSocket.emitClose](#emitclose)), so the
+socket's teardown gate (send the namespace DISCONNECT only while OPEN) behaves exactly as it would against a real connection; `send` records the frame regardless of
+state so a test can assert the exact wire sequence including any post-close send attempt.
 
 #### Implements
 
@@ -319,7 +319,7 @@ The current readyState: [WEBSOCKET\_OPEN](socket.md#websocket_open) until the fi
 addEventListener(type, listener): void;
 ```
 
-Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) seam declares; the matching `emit*` method dispatches to every
+Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) interface declares; the matching `emit*` method dispatches to every
 registered listener of that type.
 
 ###### Parameters
@@ -343,7 +343,7 @@ registered listener of that type.
 addEventListener(type, listener): void;
 ```
 
-Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) seam declares; the matching `emit*` method dispatches to every
+Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) interface declares; the matching `emit*` method dispatches to every
 registered listener of that type.
 
 ###### Parameters
@@ -367,7 +367,7 @@ registered listener of that type.
 addEventListener(type, listener): void;
 ```
 
-Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) seam declares; the matching `emit*` method dispatches to every
+Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) interface declares; the matching `emit*` method dispatches to every
 registered listener of that type.
 
 ###### Parameters
@@ -391,7 +391,7 @@ registered listener of that type.
 addEventListener(type, listener): void;
 ```
 
-Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) seam declares; the matching `emit*` method dispatches to every
+Register a listener. Mirrors the DOM `addEventListener` overloads the [WebSocketLike](socket.md#websocketlike) interface declares; the matching `emit*` method dispatches to every
 registered listener of that type.
 
 ###### Parameters
@@ -415,7 +415,8 @@ registered listener of that type.
 close(code?): void;
 ```
 
-Close the socket. Records the close code and flips `readyState` to CLOSED. Safe to repeat in the sense the seam needs: a second close simply records a second code.
+Close the socket. Records the close code and flips `readyState` to CLOSED. Safe to repeat in the sense the `WebSocketLike` interface needs: a second close simply
+records a second code.
 
 ###### Parameters
 
@@ -551,7 +552,7 @@ Construct a WebSocket-factory double.
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="create-1"></a> `create` | `readonly` | [`WebSocketFactory`](socket.md#websocketfactory-1) | `undefined` | The [WebSocketFactory](socket.md#websocketfactory-1) function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` seam without losing `this`. **Param** **url** The connect URL. |
+| <a id="create-1"></a> `create` | `readonly` | [`WebSocketFactory`](socket.md#websocketfactory-1) | `undefined` | The [WebSocketFactory](socket.md#websocketfactory-1) function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` dependency-inversion boundary without losing `this`. **Param** **url** The connect URL. |
 | <a id="sockets"></a> `sockets` | `readonly` | [`TestWebSocket`](#testwebsocket)[] | `[]` | - |
 | <a id="urls"></a> `urls` | `readonly` | `string`[] | `[]` | - |
 

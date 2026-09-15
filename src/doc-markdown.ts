@@ -154,8 +154,9 @@ export function spliceMarkedRegion(source: string, content: string, { beginMarke
     throw new Error("spliceMarkedRegion: end marker not found in source: \"" + endMarker + "\".");
   }
 
-  // The opening marker must come before the closing marker. We compare against the end of the begin marker so an end marker that overlaps or sits immediately after
-  // the begin marker is still rejected as malformed rather than producing a negative-length region.
+  // The end marker must not begin before the begin marker ends, so the comparison is against the end of the begin marker rather than its start. An end marker that
+  // overlaps the begin marker is rejected as malformed rather than producing a negative-length region. One that sits immediately after it splices an empty region...the
+  // legitimate state of a fresh marker pair with nothing between it yet.
   const regionStart = beginIndex + beginMarker.length;
 
   if(endIndex < regionStart) {

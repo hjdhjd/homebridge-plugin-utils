@@ -215,7 +215,7 @@ function parseDateExpression(text: string): Nullable<{ end: number; start: numbe
 }
 
 // Arm 4: a standalone clock applied to NOW's local calendar date, at the clock's OWN form-determined precision - the same span arm 3 uses for a date-plus-clock - so a
-// bare 24-hour `14:30` covers its whole minute exactly as `2026-06-29 14:30`, while a meridiem time (`7am`) or an explicit-seconds time pins an exact second. A clock
+// bare 24-hour `14:30` covers its whole minute exactly as `2026-06-29 14:30`, while a meridiem time (`7am`) or an explicit-seconds time locks in an exact second. A clock
 // in the future relative to `now` is NOT rolled back to yesterday: if it is 3am and the user types `--since 7am`, the window starts at today 07:00 (an empty result until
 // 7am), matching journalctl. Returns `null` when the text is not a clock.
 function parseClockToday(text: string, now: number): Nullable<{ end: number; start: number }> {

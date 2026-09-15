@@ -65,7 +65,7 @@ ruleTester.run("split-type-imports", rule, {
       output: "import type { A, B, C } from \"x\";"
     },
 
-    // Default specifier riding alongside inline types and values. The default joins the value declaration (`import D, { ... } from "x"`) since its
+    // Default specifier carried alongside inline types and values. The default joins the value declaration (`import D, { ... } from "x"`) since its
     // runtime semantics are preserved by staying on the value side.
     {
 
@@ -116,8 +116,8 @@ ruleTester.run("split-type-imports", rule, {
       output: "import type { A } from \"x\" with { type: \"json\" };\nimport { foo } from \"x\" with { type: \"json\" };"
     },
 
-    // Intra-specifier block comments are preserved by range-based slicing. The comment lives inside the specifier's range and rides along when its text
-    // is sliced into the type-declaration output.
+    // Intra-specifier block comments are preserved by range-based slicing. The comment lives inside the specifier's range and is carried along when its
+    // text is sliced into the type-declaration output.
     {
 
       code: "import { type /* note */ A, foo } from \"x\";",

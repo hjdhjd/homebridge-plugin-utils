@@ -6,7 +6,7 @@
 
 // Capture the platform's CustomEvent constructor at module load. `extends EventTarget` below resolves at the same moment - both come from the same DOM
 // implementation, so the dispatched event matches the EventTarget's expected event family. Without this capture, a test environment that swaps `globalThis.CustomEvent`
-// to a different implementation after module load would dispatch events that the originally-resolved EventTarget rejects (silently or throwing); pinning both at
+// to a different implementation after module load would dispatch events that the originally-resolved EventTarget rejects (silently or throwing); resolving both at
 // the same load timestamp keeps the implementation family coherent.
 const ModuleCustomEvent = CustomEvent;
 

@@ -7,16 +7,16 @@
  * The log client's public surface, re-exported for consumption through the package barrel (`import { HomebridgeLogClient } from "homebridge-plugin-utils"`).
  *
  * This is a curated barrel, not an `export *` of every module: the subsystem has a deliberate public/internal split. The consumer-facing engine (the client, its options
- * and stream type, the domain vocabulary, the line parser/splitter, the filter), the dependency-inversion seams power users need to substitute their own transport (the
- * socket and WebSocket factories plus their production defaults), the lower-level transports that power users may compose directly (`acquireToken`, `downloadLog`,
+ * and stream type, the domain vocabulary, the line parser/splitter, the filter), the dependency-inversion boundaries power users need to substitute their own transport
+ * (the socket and WebSocket factories plus their production defaults), the lower-level transports that power users may compose directly (`acquireToken`, `downloadLog`,
  * `LogSocket`) are surfaced here. The purely-internal machinery - the Engine.IO/Socket.IO frame codec, the history-plus-live stitch, the
  * URL builders, the scalar settings, the time-range internals (`parseTimeExpression`, `timeWindow`, `normalizeClock`), and the CLI layer (`config.ts`, `cli-run.ts`,
  * `cli.ts`) - is intentionally NOT re-exported, so those internals can be refactored without a breaking change to the published surface. The subsystem's test doubles
  * (`socket-double.ts`) are shipped surface as well, but they reach consumers through the `homebridge-plugin-utils/testing` entry point that carries every test-support
  * export in the library, rather than through this barrel. Every symbol below carries an `@category Log Client` tag.
  *
- * The CLI bin (`cli.ts`) does not ride this barrel: a bin must reach its engine through a realpath-canonicalized dynamic import rather than a package specifier, so it is
- * deliberately absent here. See `cli.ts` for that rationale.
+ * The CLI bin (`cli.ts`) is not reached through this barrel: a bin must reach its engine through a realpath-canonicalized dynamic import rather than a package
+ * specifier, so it is deliberately absent here. See `cli.ts` for that rationale.
  *
  * @module
  */

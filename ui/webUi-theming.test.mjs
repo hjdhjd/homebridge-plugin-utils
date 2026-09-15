@@ -345,7 +345,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
     seedBootstrapProbeShim();
 
-    // The query answers before the host has retinted anything, and on an install pinned to one mode it fires when nothing about the page changed - so the effect
+    // The query answers before the host has retinted anything, and on an install fixed to one mode it fires when nothing about the page changed - so the effect
     // must not even ask for it. Spying the constructor rather than the listener is what makes that provable: a query that is never built cannot be subscribed to.
     const queries = [];
     const realMatchMedia = window.matchMedia;
@@ -513,7 +513,7 @@ describe("buildBaseCss - page rules", () => {
 
     const text = await baseCss();
 
-    // Bootstrap pins its own grey on these utilities with `!important`, so the correction has to carry the same weight to reach them at all - and it reads the
+    // Bootstrap sets its own grey on these utilities with `!important`, so the correction has to carry the same weight to reach them at all - and it reads the
     // muted token rather than a literal so the page has one definition of muted text in either mode.
     assert.match(text, /:root\.fo-dark \.text-body\s*\{[^}]*color:\s*var\(--fo-text-muted\)\s*!important/);
     assert.match(text, /:root\.fo-dark \.text-muted\s*\{[^}]*color:\s*var\(--fo-text-muted\)\s*!important/);
@@ -549,7 +549,7 @@ describe("buildBaseCss - page rules", () => {
     }
   });
 
-  test("the menu tabs pin their colors through hover, focus, and press, leaving the focus ring to the host", async () => {
+  test("the menu tabs hold their colors fixed through hover, focus, and press, leaving the focus ring to the host", async () => {
 
     using _dom = createTestDom();
 
@@ -563,14 +563,14 @@ describe("buildBaseCss - page rules", () => {
 
     assert.match(text, /\.fo-menu-active,\s*\.fo-menu-active:hover,\s*\.fo-menu-active:focus,\s*\.fo-menu-active:active\s*\{/,
       "the accent fill is declared for the resting active tab and for each of its interactive states in one rule");
-    assert.match(text, statePin, "every state of both vocabularies is named in one pinning rule");
+    assert.match(text, statePin, "every state of both vocabularies is named in one shared rule");
     assert.match(text, new RegExp(statePin.source + "[^}]*border-color:\\s*var\\(--fo-border-accent\\)"), "the ghost holds its accent hairline through its states");
     assert.match(text, new RegExp(statePin.source + "[^}]*color:\\s*var\\(--fo-text-muted\\)"), "and its muted text with it");
 
     // Background is deliberately absent from the ghost's state rule: the tint rule owns the hover fill and the resting ghost is already transparent.
     assert.doesNotMatch(text, new RegExp(statePin.source + "[^}]*background:"), "the ghost's state rule leaves the background to the tint rule that owns it");
 
-    // Focus indication belongs to the host. Pinning a box-shadow or an outline here would take the focus ring with it, so neither appears in any ghost rule.
+    // Focus indication belongs to the host. Setting a box-shadow or an outline here would take the focus ring with it, so neither appears in any ghost rule.
     for(const rule of text.split("\n").filter((line) => line.includes(".fo-menu") || line.includes(".fo-action"))) {
 
       assert.doesNotMatch(rule, /box-shadow|outline/, "no ghost rule touches the properties the host's focus ring is drawn with");
@@ -707,7 +707,7 @@ describe("buildBaseCss - the page kit", () => {
     const text = await baseCss();
 
     /* The surface, the border, and the text move together - a field that corrected only its background would render dark-on-dark - and the placeholder and the
-     * focus state come with them so a field cannot flash a light background the moment it takes focus. Each declared value is pinned to its exact token: a
+     * focus state come with them so a field cannot flash a light background the moment it takes focus. Each declared value holds its exact token fixed: a
      * literal here would be a second definition of a color the tokens module already owns.
      */
     assert.match(text, /:root\.fo-dark \.fo-page \.form-control\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);

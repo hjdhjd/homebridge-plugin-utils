@@ -373,7 +373,7 @@ export const valueCommitTransition = ({ catalog, configIndex, control, controlle
   const emptyCommit = !hasValueContent(controlValueText(control));
 
   // An empty commit means two different things depending on what the row edits. On a list it is the explicit empty selection, a state the grammar spells, so it
-  // rides through to the write rule below. On every other row it is the clear gesture the two exits answer. The two readings are complements by construction,
+  // flows through to the write rule below. On every other row it is the clear gesture the two exits answer. The two readings are complements by construction,
   // so no row can take both paths or neither.
   const emptySelectionCommit = emptyCommit && entry.multiple;
   const clearingCommit = emptyCommit && !entry.multiple;
@@ -717,8 +717,8 @@ const commitPendingEntry = (editor) => {
 // same event on itself and every commit - the delegation, the write rule, the store - runs the path a text field's own commit runs.
 const announceListChange = (editor) => editor.dispatchEvent(new Event("change", { bubbles: true }));
 
-// Build one entry of a list editor: its text and the control that removes it. The value rides on the element as data rather than being read back out of its text,
-// so the rebuild comparison and the value read both address what the entry IS rather than how it happens to render.
+// Build one entry of a list editor: its text and the control that removes it. The value is carried by the element as data rather than being read back out of its
+// text, so the rebuild comparison and the value read both address what the entry IS rather than how it happens to render.
 const createListItem = (value) => createElement("span", { classList: ["fo-list-item"], "data-value": value }, [ value, createElement("button", {
 
   "aria-label": "Remove " + value + ".",
@@ -730,6 +730,8 @@ const createListItem = (value) => createElement("span", { classList: ["fo-list-i
 // it takes the color and the scale of the text beside it.
 const REMOVE_GLYPH_PATH = "M4.5 4.5l7 7M11.5 4.5l-7 7";
 
+// Hidden from assistive tech for the same reason createEyeGlyph's glyph is: the button's own aria-label already names the action, so a decorative graphic beside
+// it would only repeat what assistive tech has already read.
 const createRemoveGlyph = () => {
 
   const glyph = createSvgElement({
@@ -769,9 +771,9 @@ const createChoiceLabel = ({ member, name, type }) => createElement("label", {
 }, [ createElement("input", { classList: ["fo-choice-checkbox"], ...((type === "radio") ? { name } : {}), type, value: member.value }), member.label ]);
 
 /**
- * Read the value a control currently holds, in the storage grammar. One of the three places the control kinds are told apart, and the single answer to "what would
- * committing this control store" - the transitions, the write rule, and the view's abandonment check all ask here rather than reaching for a `.value` that only
- * some controls have.
+ * Read the value a control currently holds, in the storage grammar. One of the functions that branch on control kind to read, write, or focus its value, and the
+ * single answer to "what would committing this control store" - the transitions, the write rule, and the view's abandonment check all ask here rather than
+ * reaching for a `.value` that only some controls have.
  *
  * A boolean row has no control at all and reads as the empty string, which is what lets every caller pass whatever the row carries without checking first.
  *
@@ -805,8 +807,8 @@ export const controlValueText = (control) => {
   return control.value;
 };
 
-/* Write a control's value from the projection entry. The second of the three kind-aware functions, and the only writer of a control's value. Its one caller has
- * already found a control on the row, so unlike the two functions either side of it there is no boolean-row case to answer here.
+/* Write a control's value from the projection entry - one of the functions that branch on control kind to read, write, or focus its value, and the only writer
+ * of a control's value. Its one caller has already found a control on the row, so unlike its sibling functions there is no boolean-row case to answer here.
  *
  * Where an uncommitted edit is possible the write yields to it: text sitting in a focused field has not been committed yet - the `change` event does that on blur
  * or Enter - so re-deriving over it would destroy what the user is typing. A dropdown and a checkbox group have no such state, since operating either one commits
@@ -846,10 +848,10 @@ const writeControlValue = ({ armed, control, entry }) => {
 };
 
 /**
- * Hand focus to whatever part of a control the user would act in. The third kind-aware function, called when an arming gesture opens a row and owes the user
- * somewhere to go next. A group's focus belongs on its first member, since the fieldset itself is not focusable, and a row with no control at all is a quiet
- * no-op. The first member serves both flavors: an armed group has nothing checked, so there is no picked member for focus to prefer over it, and taking focus
- * is not taking a choice - a radio is selected by being operated, never by being focused.
+ * Hand focus to whatever part of a control the user would act in. One of the functions that branch on control kind to read, write, or focus its value, called
+ * when an arming gesture opens a row and owes the user somewhere to go next. A group's focus belongs on its first member, since the fieldset itself is not
+ * focusable, and a row with no control at all is a quiet no-op. The first member serves both flavors: an armed group has nothing checked, so there is no picked
+ * member for focus to prefer over it, and taking focus is not taking a choice - a radio is selected by being operated, never by being focused.
  *
  * @param {HTMLElement | null} control - The row's value control, or null when the row has none.
  */
@@ -1102,7 +1104,7 @@ const hasUpstreamOption = ({ catalog, configIndex, controllerId, deviceId, expan
 };
 
 /* Whether the committed value differs from what the option would resolve to on its own. The comparison is by what the value MEANS, which is not the same question
- * as whether the text matches, and the three answers below are the three grammars a value control speaks.
+ * as whether the text matches, and each control family below compares its own committed text against the default through its own grammar.
  *
  * A choice group's value is a SET. The same members chosen in a different order say the same thing, and every member chosen says exactly what an all-choices
  * default says - so the two sides are read through the shared selection derivation and compared as selections. That is what lets a group the user brings back to
@@ -1149,7 +1151,7 @@ const storedText = ({ committed, entry }) => (entry.multiple && !entry.choices) 
 //
 // An empty value normally composes no payload at all, which is what a checkbox gesture on a global list row needs: checking the box with an untouched picker is
 // a bare valueless enable, not a claim about the selection. `emptySelectionCommit` is the caller's statement that the empty text IS the gesture - the value
-// transition sets it when a list row's own control was committed empty - so the marker rides on what the user did rather than on the row's kind, which is what
+// transition sets it when a list row's own control was committed empty - so the marker is carried by what the user did rather than by the row's kind, which is what
 // keeps the two callers of this shared writer apart.
 const writeAction = ({ control, deviceId, emptySelectionCommit = false, enabled, entry, expandedName, upstream, valueCentric }) => {
 

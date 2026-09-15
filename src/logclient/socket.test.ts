@@ -368,8 +368,9 @@ describe("LogSocket - default reconnect backoff curve", () => {
   test("follows the dev-tuned 500/1000/2000/4000/5000 exponential-with-ceiling sequence", () => {
 
     // The exported `reconnectBackoff` is the single source of truth for the socket's default connect-phase backoff (the constructor's default closes over it with the
-    // injected `random`). Pinning `random` to 0 zeroes the jitter so the bare schedule is deterministic: `retry` calls the policy 1-indexed for the second-and-later
-    // connect attempts, so attempt 2 (the first reconnect) waits 500 ms, the curve doubles to 1000, 2000, 4000, then plateaus at the 5000 ms ceiling from attempt 6 on.
+    // injected `random`). Holding `random` fixed at 0 zeroes the jitter so the bare schedule is deterministic: `retry` calls the policy 1-indexed for the
+    // second-and-later connect attempts, so attempt 2 (the first reconnect) waits 500 ms, the curve doubles to 1000, 2000, 4000, then plateaus at the 5000 ms ceiling
+    // from attempt 6 on.
     const zeroJitter = (): number => 0;
     const schedule = [ 2, 3, 4, 5, 6, 7 ].map((attempt) => reconnectBackoff(attempt, zeroJitter));
 
@@ -379,7 +380,7 @@ describe("LogSocket - default reconnect backoff curve", () => {
 
   test("layers upward jitter onto the base delay", () => {
 
-    // With `random` pinned to its maximum, the jitter adds the full `JITTER_FRACTION` of the base, so the 500 ms first-reconnect delay becomes 750 ms - proving the
+    // With `random` held fixed at its maximum, the jitter adds the full `JITTER_FRACTION` of the base, so the 500 ms first-reconnect delay becomes 750 ms - proving the
     // jitter is layered on top of the curve rather than replacing it.
     const maxJitter = (): number => 0.9999999;
 
@@ -630,7 +631,7 @@ describe("LogSocket - teardown and abort", () => {
     await completeHandshake(ws0);
 
     // Simulate the peer half-closing the connection (readyState -> CLOSED) on ws0 before our teardown. The reconnect loop then opens a fresh socket, and the assertion
-    // below pins the always-close guarantee: teardown issues close(1000) on the live reconnected socket regardless of the prior socket's state.
+    // below proves the always-close guarantee: teardown issues close(1000) on the live reconnected socket regardless of the prior socket's state.
     ws0.emitClose(1006);
     await settle(2);
 

@@ -181,8 +181,8 @@ export interface ReceivedDatagram {
  *
  * @property port     - The kernel-assigned loopback port the receiver is bound to. Pass to the subject under test as a forwarding destination.
  * @property received - Append-only list of every datagram observed in arrival order. Tests inspect `length` for "no datagrams arrived" assertions and index into the
- *                      array for content / source-endpoint assertions. The `msg` payload is a fresh `Buffer.from(...)` copy so subsequent kernel reuse of the receive
- *                      buffer cannot corrupt held entries.
+ *                      array for content / source-endpoint assertions. The `msg` payload is a fresh `Buffer.from(...)` copy so no entry holds a live reference to
+ *                      the raw event buffer across an await, keeping every entry stable for the life of the receiver.
  */
 export interface DatagramReceiver extends AsyncDisposable {
 
@@ -196,9 +196,9 @@ export interface DatagramReceiver extends AsyncDisposable {
  * Used by tests that need to verify a subject under test forwarded a datagram to the expected destination. The receiver records every datagram's payload bytes and
  * source `rinfo` so tests can assert both content and source-endpoint properties (e.g., the source-port-symmetry guarantee of {@link RtpDemuxer}).
  *
- * Payload bytes are copied into a fresh `Buffer` on receipt because Node's dgram subsystem reuses its receive buffers across messages - holding a reference to the
- * raw event buffer would risk later messages overwriting earlier entries in tests that buffer multiple datagrams across awaits. The copy keeps every entry stable for
- * the lifetime of the receiver.
+ * Payload bytes are copied into a fresh `Buffer` on receipt so the receiver never holds a live reference to the raw event buffer across an await - tests here
+ * buffer multiple datagrams across awaits, and copying eagerly keeps every entry stable for the lifetime of the receiver without depending on how the underlying
+ * socket manages its own buffers.
  *
  * @param ipFamily - The IP family to bind on. Defaults to `"ipv4"`.
  *

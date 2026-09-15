@@ -239,7 +239,7 @@ describe("mountNavView - devices container", () => {
     using _dom = createTestDom();
 
     // The group names are chosen so the comparator and the plain sort disagree: "attic" is lowercase, which code-unit order places after both capitalized names,
-    // and "Scenes" is pinned last against an alphabetical reading that would place it in the middle. A sidebar ignoring the comparator renders
+    // and "Scenes" is forced last against an alphabetical reading that would place it in the middle. A sidebar ignoring the comparator renders
     // [ "Kitchen", "Scenes", "attic" ], so this row fails on any implementation that does not consult it.
     const devices = [
 
@@ -248,7 +248,8 @@ describe("mountNavView - devices container", () => {
       { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-at", sidebarGroup: "attic" }
     ];
 
-    // The shape a plugin with one section that belongs at the end writes: everything else by locale, the pinned name answered last whichever side it lands on.
+    // The shape a plugin with one section that belongs at the end writes: everything else by locale, the name forced last answered last whichever side of the
+    // comparison it lands on.
     const groupOrder = (a, b) => {
 
       if(a === "Scenes") {
@@ -294,7 +295,7 @@ describe("mountNavView - devices container", () => {
     using _dom = createTestDom();
 
     // A comparator sitting above the derivation filter would receive the reserved "hidden" group and the group the controller device carries alongside the real
-    // ones. Only the real groups may arrive, which is what pins the sort downstream of the filter.
+    // ones. Only the real groups may arrive, which is what keeps the sort downstream of the filter.
     const devices = [
 
       { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device C", serialNumber: "dev-c", sidebarGroup: "Cameras" },
@@ -394,7 +395,8 @@ describe("mountNavView - click dispatch", () => {
     assert.equal(store.state.scope.kind, "device", "scope moves to the controller-as-device entry");
   });
 
-  test("clicking a controller whose getDevices carries an error dispatches connection:error with that message", async () => {
+  test("clicking a controller whose getDevices carries an error dispatches devices:loaded with that error, and the reducer moves the status to " +
+    "connection-error", async () => {
 
     using _dom = createTestDom();
 
@@ -599,8 +601,8 @@ describe("mountNavView - click dispatch", () => {
 
     using _dom = createTestDom();
 
-    // The plugin's device hook rides the same bridge every other host call does, so a click against a dead relay would otherwise leave the sidebar highlighted on a
-    // controller whose devices never arrive. The bound turns that silence into the same outcome the reject path already produces.
+    // The plugin's device hook goes through the same bridge every other host call does, so a click against a dead relay would otherwise leave the sidebar
+    // highlighted on a controller whose devices never arrive. The bound turns that silence into the same outcome the reject path already produces.
     const getDevices = () => new Promise(() => {});
     const { rootControllers, store } = setup({ deadlineSeconds: 30, devices: DEVICES, getDevices });
 
@@ -674,7 +676,7 @@ describe("mountNavView - the heading refresh action", () => {
     assert.equal(button.getAttribute("title"), "Refresh controllers", "and what a hover reveals");
     assert.equal(button.type, "button", "the control submits nothing");
     assert.equal(button.classList.contains("btn-xs"), true, "it takes its geometry from the shared extra-small button class");
-    assert.equal(button.classList.contains("ms-auto"), true, "and pins to the heading's trailing edge, which is what makes wrapping impossible at any width");
+    assert.equal(button.classList.contains("ms-auto"), true, "and anchors to the heading's trailing edge, which is what makes wrapping impossible at any width");
     assert.equal(actionIn(rootDevices), null, "and the devices heading carries none, since it is not the primary list in this mode");
   });
 

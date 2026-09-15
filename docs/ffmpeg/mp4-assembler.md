@@ -12,7 +12,8 @@ The assembler composes a [Mp4BoxParser](mp4-parser.md#mp4boxparser) against an a
 fMP4 bytes works - including in-memory fixtures for tests) and exposes complementary views over the single-pass box pipeline:
 
   - `initSegment: Promise<Buffer>` - resolves once with the concatenated bytes of every box that appeared before the first `moof` (typically ftyp + moov).
-  - `segments(): AsyncGenerator<Buffer>` - yields each subsequent `moof` / `mdat` pair concatenated into a single Buffer.
+  - `segments(): AsyncGenerator<Buffer>` - yields each subsequent media segment concatenated into a single Buffer (typically a `moof` / `mdat` pair, though any
+    additional boxes between them are included verbatim).
   - `stream(): AsyncGenerator<Mp4Segment>` - yields the whole sequence tagged by kind: one `"init"` item carrying the initialization bytes, then a `"media"`
     item per fragment, so a caller can forward init and media through one loop.
 
@@ -29,7 +30,7 @@ AsyncDisposable fMP4 segment assembler that converts a Readable byte source into
 
 Construction kicks off a background drain loop that feeds [Mp4BoxParser](mp4-parser.md#mp4boxparser) from the source's `data` events and routes each parsed box through a small state
 machine: everything before the first `moof` accumulates into the initialization segment; from the first `moof` onward, boxes accumulate into the current media
-segment until an `mdat` flushes the accumulated pair to the output queue.
+segment until an `mdat` flushes the accumulated boxes to the output queue.
 
 The single public teardown verb is [Mp4SegmentAssembler.abort](#abort), mirroring `AbortController.abort()`. `Symbol.asyncDispose` is implemented in terms of it and
 awaits the drain loop's completion before returning, so `await using` guarantees the assembler has fully unwound by the time the surrounding scope exits.
@@ -186,7 +187,8 @@ for the same reason.
 segments(init?): AsyncGenerator<Buffer<ArrayBufferLike>>;
 ```
 
-Async generator yielding each completed media segment (concatenated `moof` + `mdat` pair) as a single Buffer.
+Async generator yielding each completed media segment as a single Buffer, its boxes concatenated in order (typically a `moof` + `mdat` pair, though any
+additional boxes between them are included verbatim).
 
 Yields only after [Mp4SegmentAssembler.initSegment](#initsegment) has resolved - the init segment is not surfaced through this stream. Terminates cleanly when the source
 ends, the assembler aborts, or the optional caller signal aborts; in every case the queue is drained before the generator returns, so a consumer never loses a
@@ -207,7 +209,7 @@ resolves only the later parker. If fan-out is needed, tee at the consumer side b
 
 `AsyncGenerator`\<`Buffer`\<`ArrayBufferLike`\>\>
 
-An async generator yielding concatenated `moof` + `mdat` pair buffers in stream order.
+An async generator yielding each media segment's concatenated boxes as a Buffer, in stream order.
 
 ##### stream()
 
@@ -250,7 +252,7 @@ media fragments that follow it without relying on positional ordering.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="bytes"></a> `bytes` | `Buffer` | The complete segment bytes: for `"init"`, the concatenated initialization boxes (typically `ftyp` + `moov`); for `"media"`, a concatenated `moof` + `mdat` pair. |
+| <a id="bytes"></a> `bytes` | `Buffer` | The complete segment bytes: for `"init"`, the concatenated initialization boxes (typically `ftyp` + `moov`); for `"media"`, the concatenated boxes making up the fragment (typically a `moof` + `mdat` pair, though any additional boxes between them are included verbatim). |
 | <a id="kind"></a> `kind` | [`Mp4SegmentKind`](#mp4segmentkind-1) | `"init"` for the single leading initialization segment, `"media"` for each subsequent media fragment. |
 
 ***

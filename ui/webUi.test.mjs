@@ -445,7 +445,7 @@ describe("webUi.show - menu wiring", () => {
     await flushPending();
 
     // The settings tab is the schema-form view: the orchestrator hides the inner feature-options instance, calls homebridge.showSchemaForm, and paints the menu with
-    // menuSettings active. Both halves are pinned - the active mark on one tab and its absence on the siblings - because a paint that marked every tab, or none,
+    // menuSettings active. Both halves are checked - the active mark on one tab and its absence on the siblings - because a paint that marked every tab, or none,
     // would leave the user without the "you are here" reading the accent fill exists to give.
     assert.deepEqual(harness.featureOptionsCalls, ["hide"], "menuSettings click must hide the inner feature-options view");
     assert.equal(harness.fake.observed.state.schemaFormVisible, true, "menuSettings click must surface the schema form");
@@ -492,8 +492,8 @@ describe("webUi.show - menu wiring", () => {
      *
      * The featureOptionsCalls and toasts assertions below are the ones that tell a page that tolerates the gap from a page that merely survives it. An
      * unconditional bind throws on the absent button BEFORE the launch routes to the initial view, and show()'s catch turns that throw into a toast rather than
-     * a rethrow - so a launch that leaves the feature-options view unshown and an error toast behind is the failure this pins, and clicking afterwards would not
-     * reveal it (the menu-button handler re-runs the launch on its own when no session was established).
+     * a rethrow - so a launch that leaves the feature-options view unshown and an error toast behind is the failure this test guards against, and clicking
+     * afterwards would not reveal it (the menu-button handler re-runs the launch on its own when no session was established).
      */
     harness.skeleton.menuSettings.remove();
 
@@ -533,7 +533,7 @@ describe("webUi.show - the feature-options view paints the menu whenever it show
     });
 
     // The real pipeline, not the stub: the menu paint belongs to the feature-options view rather than to the orchestrator's tab-switch handlers, so it is only
-    // observable when that view actually shows. The inactive halves are pinned alongside the active one because "exactly one tab is marked" is the whole reading.
+    // observable when that view actually shows. The inactive halves are checked alongside the active one because "exactly one tab is marked" is the whole reading.
     await harness.ui.show();
 
     assert.equal(harness.skeleton.menuFeatureOptions.classList.contains("fo-menu-active"), true, "the feature-options tab is the active one while its view shows");
@@ -602,7 +602,7 @@ describe("webUi.show - menu listener idempotence across repeated launches", () =
 
 describe("webUi - tab-switch reconciliation ordering (real feature-options pipeline)", () => {
 
-  // These tests drive the REAL inner feature-options pipeline (the harness `unstubbed` mode) so an actual sync()/persist drain runs. They pin the orderings
+  // These tests drive the REAL inner feature-options pipeline (the harness `unstubbed` mode) so an actual sync()/persist drain runs. They lock in the orderings
   // the reconciliation depends on, observed through the host call log: the page re-reads the config before rendering (sync-before-show), and a pending edit is
   // flushed to the host before the Settings schema form renders (flush-before-schemaform). A stub's call record cannot express these orderings, so the real
   // pipeline is required here.
@@ -728,7 +728,7 @@ describe("webUi - first-run handler normalization", () => {
   test("partial firstRun overrides leave the unspecified handlers at their defaults", async () => {
 
     // The constructor merges caller-supplied firstRun keys over the no-op defaults via a single spread. A caller providing only onSubmit must still get the
-    // default isRequired (returns false) and default onStart (returns true) - this test pins that contract by supplying only onSubmit and observing the
+    // default isRequired (returns false) and default onStart (returns true) - this test asserts that contract by supplying only onSubmit and observing the
     // feature-options route gets taken (i.e., default isRequired returned false).
     using harness = makeWebUiHarness({
 
@@ -745,7 +745,7 @@ describe("webUi - first-run handler normalization", () => {
 
     // Exercise of the onStart / onSubmit no-op defaults in one cycle. The plugin supplies only `isRequired: () => true` to opt into the first-run route; onStart
     // and onSubmit stay at their `() => true` defaults. onStart's default lets the first-run page render; onSubmit's default lets the click handler swap to the
-    // menu and enable save. This pins that a plugin author who provides only the gate - the minimal first-run opt-in - drives a working end-to-end flow through
+    // menu and enable save. This confirms that a plugin author who provides only the gate - the minimal first-run opt-in - drives a working end-to-end flow through
     // the unmodified defaults.
     using harness = makeWebUiHarness({ firstRun: { isRequired: () => true }, name: "MyPlugin" });
 
@@ -1502,7 +1502,7 @@ describe("webUi.on - the epoch-scoped listener registration surface", () => {
     using harness = arrange();
 
     // Capture is what tells the two boolean spellings apart: a capturing ancestor sees the event on the way down, ahead of the target's own listener, while a
-    // non-capturing one sees it on the way back up. Asserting the phase and the ordering together pins both the flag's delivery and its effect.
+    // non-capturing one sees it on the way back up. Asserting the phase and the ordering together confirms both the flag's delivery and its effect.
     const ancestor = document.createElement("div");
     const child = document.createElement("button");
 
@@ -1667,7 +1667,7 @@ describe("webUi.epochBounded - the public epoch-composition surface", () => {
 
     spent.abort();
 
-    // The platform's own AbortSignal.any semantics carry this, so the row pins the behavior a caller can rely on rather than any handling of its own: a resource
+    // The platform's own AbortSignal.any semantics carry this, so the row asserts the behavior a caller can rely on rather than any handling of its own: a resource
     // registered against the result is retired at once instead of running unbounded.
     assert.equal(harness.ui.epochBounded(spent.signal).aborted, true, "composing over a spent signal is spent from the start");
     assert.equal(harness.ui.epochSignal.aborted, false, "and the epoch is untouched by it");
@@ -2166,7 +2166,7 @@ describe("webUi - the resume detector threads end to end", () => {
     // Supersede. The copy above keeps its rendered DOM, its store, and its mounted views; nothing but the epoch tells it that it is finished.
     const _successor = new webUi({ name: "Successor" });
 
-    // The threaded handle's half: the panel's probe subscription rode the wrapper, so it dies with the epoch exactly as the public surface's do.
+    // The threaded handle's half: the panel's probe subscription went through the wrapper, so it dies with the epoch exactly as the public surface's do.
     t.mock.timers.setTime(Date.now() + (6 * THRESHOLD_MS));
     t.mock.timers.tick(INTERVAL_MS);
 

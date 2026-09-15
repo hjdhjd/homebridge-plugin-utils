@@ -313,7 +313,7 @@ describe("BackpressureWriter - abort and teardown", () => {
 
   test("stream-error escalation rejects every queued resolver, not just the in-flight one", async () => {
 
-    // Pins the rule that when a stream error escalates (drain catch shifts the in-flight entry, then calls `controller.abort()`), `#teardown` rejects all of the
+    // Asserts the rule that when a stream error escalates (drain catch shifts the in-flight entry, then calls `controller.abort()`), `#teardown` rejects all of the
     // remaining queued entries - not just entries past index 0. The drain loop and teardown can both try to reject the same in-flight resolver under overlapping
     // abort paths; promise resolvers are inert after first settlement, so the double-settle is intentional and harmless.
     const streamError = new Error("boom");

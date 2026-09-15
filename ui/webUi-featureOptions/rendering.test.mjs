@@ -577,7 +577,7 @@ describe("triStateTransition - was indeterminate (readOnly)", () => {
     const configIndex = buildConfigIndex(catalog, state.configuredOptions);
     const entry = findEntry(state, "Motion", "Detect");
 
-    // Simulate the click on an indeterminate checkbox.
+    // The readOnly and indeterminate flags are what the readOnly transition branch reads; checked is left at its default because that branch never consults it.
     const checkbox = document.createElement("input");
 
     checkbox.type = "checkbox";
@@ -1348,7 +1348,7 @@ describe("the choice controls - construction", () => {
     using _dom = createTestDom();
 
     // The fixture declares an inputSize, which a select does not read: sizing belongs to the skin, where `width: auto` takes the control's width from its own
-    // widest member. An inline width here would outrank that rule and pin every dropdown to the same arbitrary ch count whatever it holds.
+    // widest member. An inline width here would outrank that rule and lock every dropdown to the same arbitrary ch count whatever it holds.
     const control = pickerRow(pickerState(), "Tier").querySelector(".fo-option-value");
 
     assert.equal(control.tagName, "SELECT", "one choice is a dropdown");
@@ -1396,7 +1396,7 @@ describe("the choice controls - construction", () => {
 });
 
 /* Which face a single choice wears. The rule reads the catalog declaration and nothing else: a declared style wins, a source-backed list is always a dropdown,
- * and an inline list is measured by its own length. The rows below pin each of those answers, and the boundary is pinned from both sides rather than from
+ * and an inline list is measured by its own length. The rows below assert each of those answers, and the boundary is asserted from both sides rather than from
  * the radio side alone, since a threshold is only held by the pair of rows that straddle it.
  */
 describe("the choice presentation - what a declaration renders as", () => {
@@ -1529,7 +1529,7 @@ describe("the radio group - construction and rest state", () => {
 });
 
 /* The radio group's gestures, driven by real clicks rather than by a synthesized event, because exclusivity is the platform's own behavior and a test that set
- * `.checked` by hand would prove nothing about it. The per-row name is what binds it, so the independence of two rows on one page is pinned beside it.
+ * `.checked` by hand would prove nothing about it. The per-row name is what binds it, so the independence of two rows on one page is asserted beside it.
  */
 describe("the radio group - clicking a member", () => {
 

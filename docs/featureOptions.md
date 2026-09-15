@@ -1544,7 +1544,7 @@ lookup-index keys are case-insensitive anyway. Values are emitted only when mean
 [applyClearOption](#applyclearoption) or [applySetOption](#applysetoption) addressing the same scope cleanly replaces whatever was there, in either the canonical or the legacy form,
 because the matcher decodes entries through the same parser.
 
-A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
+A value always sits behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
 need no escaping. Surrounding whitespace is trimmed first, and a value persists only when content survives the trim - see [hasValueContent](#hasvaluecontent). At the
 global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope there is
 no such spelling for an option storing a single value - a scoped entry carries one - so an enable without content reduces to clearing the scope: any entry

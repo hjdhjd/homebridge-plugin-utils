@@ -1,10 +1,10 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/udp.helpers.test.ts: Unit tests for the UDP loopback helpers exercised here (reserveEphemeralPort, probePortAvailable, holdPort, sendDatagram), together
- * with bindReceiver (covered by the rtp suite), compose every test that needs the udp.helpers loopback abstraction (dgram-util.test.ts exercises the lower-level
- * socket primitives directly and is intentionally out of scope); a regression in their bind/release semantics or in the await-on-completion contract would cascade
- * into the rtp and stream test suites as race-condition flakiness. Tests pin: the kernel-port-assignment contract, the deterministic release semantics (probe-after-
- * release works), the disposal contract (holdPort releases on dispose), and the round-trip datagram delivery.
+ * ffmpeg/udp.helpers.test.ts: This suite covers reserveEphemeralPort, probePortAvailable, holdPort, and sendDatagram; the rtp suite covers bindReceiver. Together
+ * the two suites cover every test that needs the udp.helpers loopback abstraction (dgram-util.test.ts exercises the lower-level socket primitives directly and is
+ * intentionally out of scope); a regression in their bind/release semantics or in the await-on-completion contract would cascade into the rtp and stream test
+ * suites as race-condition flakiness. Tests assert: the kernel-port-assignment contract, the deterministic release semantics (probe-after-release works), the
+ * disposal contract (holdPort releases on dispose), and the round-trip datagram delivery.
  */
 import { describe, test } from "node:test";
 import { holdPort, probePortAvailable, reserveEphemeralPort, sendDatagram } from "./udp.helpers.ts";
@@ -17,7 +17,7 @@ describe("reserveEphemeralPort", () => {
   test("returns a positive integer port assigned by the kernel", async () => {
 
     // Port 0 means "kernel chooses." The OS picks a port in its ephemeral range (typically 32768-60999 on Linux, 49152-65535 elsewhere), and the helper returns the
-    // chosen port after deterministically releasing the socket. We pin only the structural shape (positive 16-bit integer) since the exact range is OS-dependent.
+    // chosen port after deterministically releasing the socket. We assert only the structural shape (positive 16-bit integer) since the exact range is OS-dependent.
     const port = await reserveEphemeralPort();
 
     assert.equal(typeof port, "number", "reserveEphemeralPort must return a number");
@@ -47,8 +47,8 @@ describe("reserveEphemeralPort", () => {
   test("returns distinct ports across two consecutive calls", async () => {
 
     // While the kernel reuses ports over time, two back-to-back ephemeral assignments are overwhelmingly likely to differ. Exact non-equality isn't strictly
-    // guaranteed (the kernel could in principle reuse) but in practice the test pins reliable behavior. If this ever flakes in CI, the helper's release-then-return
-    // ordering is suspect and the failure is informative.
+    // guaranteed (the kernel could in principle reuse) but in practice the test asserts reliable behavior. If this ever flakes in CI, the helper's release-then-
+    // return ordering is suspect and the failure is informative.
     const a = await reserveEphemeralPort();
     const b = await reserveEphemeralPort();
 
@@ -102,8 +102,8 @@ describe("holdPort", () => {
 
   test("the disposable's [Symbol.asyncDispose] is callable directly (not just via using)", async () => {
 
-    // For tests that can't use the `await using` form (e.g., conditional disposal), the asyncDispose Symbol must be reachable as a function. Pin that contract so
-    // a future refactor that wraps the symbol in a private property surfaces here.
+    // For tests that can't use the `await using` form (e.g., conditional disposal), the asyncDispose Symbol must be reachable as a function. Lock that contract in
+    // so a future refactor that wraps the symbol in a private property surfaces here.
     const port = await reserveEphemeralPort();
     const holder = await holdPort(port);
 
@@ -161,6 +161,8 @@ describe("sendDatagram", () => {
 
     await sendDatagram(port, Buffer.from("payload"));
 
+    // A dgram socket's "message" event always fires as (msg: Buffer, rinfo: RemoteInfo); the second element is left unknown here because this assertion only
+    // reads the payload.
     const args = await message as [ Buffer, unknown ];
 
     assert.deepEqual(args[0], Buffer.from("payload"), "the receiver must observe the exact payload bytes the sender wrote");

@@ -166,7 +166,7 @@ export class webUi {
    * and at no other time. The retirement itself belongs to {@link webUi.constructor}, which documents what a supersession reaches, so the mechanism stays described
    * in one place.
    *
-   * Which signal a resource is scoped to is the question this surface exists to answer. A plugin holds resources with two different lifetimes and each has its own
+   * Which signal a resource is scoped to is the question this surface exists to answer. A plugin holds resources with different lifetimes, and each has its own
    * signal. The mount signal a render hook receives - the infoPanel bag's `signal` - ends when the panel it drew into is torn down, by a navigation away or by a
    * re-show, and is the right scope for anything that serves the panel currently on screen. This signal ends only when a successor copy claims the window, and is
    * the right scope for anything belonging to the module copy itself and meant to outlive any one panel: a recurring poll whose cache survives a navigation, or a
@@ -206,7 +206,7 @@ export class webUi {
    * the window, and composing that lifetime by hand at every registration is where the composition gets forgotten. This method owns it, so a plugin writes the
    * registration it means and the epoch bound comes with it.
    *
-   * Which of the page's two lifetimes a resource wants is the question {@link webUi.epochSignal} answers at length, and the answer decides between this method and
+   * Which of the page's lifetimes a resource wants is the question {@link webUi.epochSignal} answers at length, and the answer decides between this method and
    * the mount signal: this scopes to the module copy, which suits a listener on an object the frame keeps across copies, while a listener serving the panel
    * currently on screen belongs on the mount signal a render hook receives, registered directly with that signal.
    *
@@ -311,7 +311,7 @@ export class webUi {
    * with a signal, it hands back a composition that ends when either side does - the caller's own lifetime, or a supersession, whichever comes first. An
    * already-aborted input yields an already-aborted composition, by the platform's own `AbortSignal.any` semantics rather than by anything added here.
    *
-   * Which of the page's two lifetimes a resource actually wants is the question {@link webUi.epochSignal} answers at length. This method is how that answer gets
+   * Which of the page's lifetimes a resource actually wants is the question {@link webUi.epochSignal} answers at length. This method is how that answer gets
    * applied once it is the epoch's.
    *
    * @example
@@ -471,9 +471,10 @@ export class webUi {
   /**
    * Show the feature-options tab from the menu.
    *
-   * The menuFeatureOptions button re-enters the feature-options view. `featureOptions.show()` can reject - a plugin `getDevices` hook that resolves the wrong shape
-   * trips the device-list contract guard, for one - and the click listener drops the returned promise, so this method brackets the re-entry in a try/catch that
-   * surfaces a failed re-show as an error toast rather than an unobserved rejection.
+   * The menuFeatureOptions button re-enters the feature-options view. `featureOptions.show()` can reject - a catalog fault such as a picker source with no resolver
+   * throws straight through by design, since no retry could repair a catalog, and so does a caller-supplied loaded-model hook that throws - and the click listener
+   * drops the returned promise, so this method brackets the re-entry in a try/catch that surfaces a failed re-show as an error toast rather than an unobserved
+   * rejection.
    *
    * When no session exists, the click re-runs the launch instead. That is the recovery path for a launch whose config read never answered: the menu is bound and the
    * user is looking at a toast, so the one affordance they have must re-attempt the open rather than hand `show()` a session that was never established. The
@@ -523,7 +524,8 @@ export class webUi {
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the schema form so any debounced-but-unwritten option edit is flushed into Homebridge's in-memory config model
    * first - the Settings form then renders against the flushed config rather than a stale snapshot. The try/finally guarantees the spinner comes down and the tab
-   * reveals even if the drain rejects (the drain's own failure path already toasts via `persist:failed`), so a persistence error never strands the user on a spinner.
+   * reveals on every path - the flush drain's own failure surfaces via `persist:failed`'s toast rather than through a rejection here - so nothing strands the user
+   * on a spinner.
    *
    * @returns {Promise<void>}
    * @private
@@ -555,7 +557,8 @@ export class webUi {
    * paint to mask transient layout shifts.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the support page so any debounced-but-unwritten option edit is flushed first, matching the Settings path. The
-   * try/finally guarantees the spinner comes down and the tab reveals even if the drain rejects (the drain's own failure path already toasts via `persist:failed`).
+   * try/finally guarantees the spinner comes down and the tab reveals on every path - the flush drain's own failure surfaces via `persist:failed`'s toast rather
+   * than through a rejection here.
    *
    * @returns {Promise<void>}
    * @private
@@ -640,11 +643,13 @@ export class webUi {
    * two different sessions. Binding on the epoch retires this copy's set at the moment the successor claims the window.
    *
    * Menu click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
-   * async handler's promise is dropped; the handlers own their error handling so the drop carries no unobserved rejection. #showFeatureOptions wraps
-   * featureOptions.show() in a try/catch that toasts a failed re-entry - the show pipeline can reject (a plugin getDevices hook that resolves the wrong shape trips
-   * the device-list contract guard, for one), and without the wrapper that rejection would surface nowhere. #showSettings and #showSupport each bracket their
-   * navigate-away flush in a try/finally that reveals the next tab and drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's
-   * toast).
+   * async handler's promise is dropped; the handlers own their error handling so the drop carries no unobserved rejection. #showFeatureOptions serves both the first
+   * click before a session exists and every re-entry, and wraps both in one try/catch that toasts a failure. The launch path rejects by design when the session open
+   * expires or the host refuses it and when a caller-supplied first-run hook throws; featureOptions.show() routes the failures a retry can repair (the config read, the
+   * controller and device lists, the feature catalog) into the connection-error view, and lets a catalog fault - a picker source with no resolver - and a
+   * caller-supplied loaded-model hook that throws go straight through, because each is the plugin's own code and no retry could repair it. Without the wrapper each of
+   * those would vanish into the dropped promise. #showSettings and #showSupport each bracket their navigate-away flush in a try/finally that reveals the next tab and
+   * drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's toast).
    *
    * @private
    */

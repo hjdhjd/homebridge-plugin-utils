@@ -33,8 +33,8 @@ const VIEW_WIDTH = 600;
 const VIEW_HEIGHT = 64;
 const VIEW_BOX = "0 0 " + String(VIEW_WIDTH) + " " + String(VIEW_HEIGHT);
 
-// The plot's right inset. The newest sample's dot rides the right edge of the plot, so the plot stops short of the viewBox edge by enough room for the dot and its
-// ring to render whole rather than clipped in half.
+// The plot's right inset. The newest sample's dot sits at the right edge of the plot, so the plot stops short of the viewBox edge by enough room for the dot and
+// its ring to render whole rather than clipped in half.
 const RIGHT_INSET = 8;
 const PLOT_WIDTH = VIEW_WIDTH - RIGHT_INSET;
 
@@ -68,8 +68,8 @@ const SLIDE_EASING = "cubic-bezier(0.25, 0.1, 0.25, 1)";
 // never arrives - a detached element, a host that suppressed the transition, a dropped event - so the margin just has to clear normal event delivery.
 const SETTLE_FALLBACK_MARGIN_MS = 60;
 
-// The decimal places coordinates are written to. Two is far below a rendered pixel at any strip size, and it keeps the path attributes short enough to read while
-// debugging.
+// The decimal places coordinates are written to. COORDINATE_PRECISION is far below a rendered pixel at any strip size, and it keeps the path attributes short
+// enough to read while debugging.
 const COORDINATE_PRECISION = 2;
 
 /**
@@ -464,7 +464,7 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
 
     // The conveyor. The outgoing sample and the whole new window are drawn together on one shared scale, at the settled window's own spacing, so the visible points
     // start exactly where they already were and the newest one waits one step beyond the right edge. Translating the group left by that one step then carries the
-    // new sample in as the oldest rides out.
+    // new sample in as the oldest one leaves.
     const union = [ previousPoints[0], ...nextPoints ];
 
     slideGroup.style.transition = "";

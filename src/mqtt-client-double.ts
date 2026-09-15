@@ -182,12 +182,12 @@ export class TestMqttClient implements AsyncDisposable {
    * the client clears its own. The comparison and keeping rules are {@link mqtt-publish!MqttLastPayloads | MqttLastPayloads}'s. A suppressed publish records
    * nothing, counts nothing, and says nothing.
    *
+   * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic} once the composed signal has answered,
+   * ahead of the session and lever admissions, which is where the client's own publish refuses one.
+   *
    * @param topic   - The relative topic (tail) to publish to. Recorded verbatim; the double expands nothing.
    * @param payload - The payload to publish. Buffers and strings are recorded unchanged.
    * @param init    - Optional per-publish options. See {@link MqttPublishInit}.
-   *
-   * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic} once the composed signal has answered,
-   * ahead of the session and lever admissions, which is where the client's own publish refuses one.
    *
    * @returns A promise that resolves once the publish is recorded - or at once, with nothing recorded, when `ifChanged` finds the payload unchanged - or rejects
    *          with the composed signal's reason, with {@link MqttOfflineError}, or with the armed refusal.
@@ -354,7 +354,8 @@ export class TestMqttClient implements AsyncDisposable {
    * Record an unsubscribe of the `(id, topic)` tuple and release every registration on the topic it names, mirroring
    * {@link mqttClient!MqttClient.unsubscribe | MqttClient.unsubscribe}.
    *
-   * A tail still carrying a brace is refused through {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after those guards.
+   * An aborted double or an empty `id` is a no-op, releasing nothing. A tail still carrying a brace is refused through
+   * {@link mqtt-topics!assertResolvedMqttTopic | assertResolvedMqttTopic}, after those guards.
    *
    * @param id    - The device or accessory identifier portion of the topic. An empty string short-circuits the whole call, as it does on the client.
    * @param topic - The topic tail relative to the id.
@@ -500,6 +501,7 @@ export class TestMqttClient implements AsyncDisposable {
       throw new Error(this.#missMessage("get", topicSuffix));
     }
 
+    // The same `kind`-established assertion the delivery path makes.
     const value = (entry.handler as MqttGetHandler)();
 
     // The recorded topic carries the `/get` suffix the client appended, so the republish goes to that topic with the suffix taken back off. The client's get path

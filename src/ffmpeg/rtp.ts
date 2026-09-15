@@ -205,11 +205,11 @@ export class RtpDemuxer implements AsyncDisposable {
   }
 
   // The port requested at construction (verbatim from `init.inputPort`). Equals the bound port for specific-port constructions; `0` for ephemeral constructions until
-  // the kernel hands one out. Read through the {@link RtpDemuxer.inputPort} getter, which prefers {@link #assignedInputPort} once the bind settles.
+  // the kernel hands one out. Read through the `RtpDemuxer.inputPort` getter, which prefers `#assignedInputPort` once the bind settles.
   readonly #requestedInputPort: number;
 
   // The port the kernel actually bound to, captured from `socket.address().port` once the `"listening"` event fires. Undefined until then. For specific-port binds
-  // this duplicates {@link #requestedInputPort} but the assignment keeps the post-bind read path uniform across both construction modes.
+  // this duplicates `#requestedInputPort` but the assignment keeps the post-bind read path uniform across both construction modes.
   #assignedInputPort: number | undefined;
 
   // The RTP destination port, supplied at construction. The destination of all RTP-classified forwards AND of the heartbeat replay (FFmpeg ignores the RTCP shape on
@@ -236,7 +236,7 @@ export class RtpDemuxer implements AsyncDisposable {
   readonly #parser: RtpPacketParser;
 
   // Self-rearming heartbeat watchdog: when the inbound-RTCP gap exceeds RTCP_HEARTBEAT_INTERVAL, the watchdog's onFire replays the last observed RTCP datagram to
-  // {@link #rtpPort} (keeping FFmpeg's RTP input fed during silence) and immediately re-arms itself so the cadence continues in the absence of fresh RTCP. Inbound
+  // `#rtpPort` (keeping FFmpeg's RTP input fed during silence) and immediately re-arms itself so the cadence continues in the absence of fresh RTCP. Inbound
   // RTCP arrivals also call `arm()` to push the next fire forward - busy RTCP traffic suppresses the heartbeat naturally, quiet periods synthesize one.
   readonly #heartbeat: Watchdog;
 
@@ -247,7 +247,7 @@ export class RtpDemuxer implements AsyncDisposable {
   // Optional logger. Debug traces are emitted when present; absent logger is silent.
   readonly #log: HomebridgePluginLogging | undefined;
 
-  // Promise that resolves when the socket emits `"close"` - i.e., the kernel has released the bound port. {@link RtpDemuxer.[Symbol.asyncDispose]} awaits this so the
+  // Promise that resolves when the socket emits `"close"` - i.e., the kernel has released the bound port. `RtpDemuxer.[Symbol.asyncDispose]` awaits this so the
   // `await using` contract truly means "the port is releasable again" by the time the surrounding scope exits, not merely "teardown has been scheduled."
   readonly #closed: Promise<void>;
 
@@ -298,7 +298,7 @@ export class RtpDemuxer implements AsyncDisposable {
       readyResolvers.resolve();
     });
 
-    // Socket `"close"` handler. The kernel has released the bound port. Resolve the `#closed` promise so {@link [Symbol.asyncDispose]} can deterministically await
+    // Socket `"close"` handler. The kernel has released the bound port. Resolve the `#closed` promise so `[Symbol.asyncDispose]` can deterministically await
     // the port release, eliminating the rebind race a fire-and-forget close would carry.
     this.#socket.once("close", () => closedResolvers.resolve());
 

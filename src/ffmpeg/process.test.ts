@@ -140,8 +140,8 @@ describe("FfmpegProcess - construction and readiness", () => {
 
     await proc.exited;
 
-    // Pin the stored vector positively as well: a view answering with an empty array would satisfy the negative log assertion below while telling a caller nothing
-    // true about what the process was spawned with. Frozenness is pinned beside the content because the content pin alone cannot see the difference: a getter
+    // Assert the stored vector positively as well: a view answering with an empty array would satisfy the negative log assertion below while telling a caller nothing
+    // true about what the process was spawned with. Frozenness is asserted beside the content because the content assertion alone cannot see the difference: a getter
     // answering a fresh copy on every read would satisfy it while handing every caller a mutable array, and the readonly type that says otherwise is erased at
     // runtime.
     assert.deepEqual([...proc.commandLine], expected, "the exposed command line must be the vector supplied at construction, untouched by the caller's later push");

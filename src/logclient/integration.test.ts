@@ -42,8 +42,10 @@ class CapturedStream implements CliStream {
 }
 
 // Poll a captured stream until it has received at least one chunk or the time budget is exhausted. This is real network I/O, so a microtask flush is not enough - we
-// await a real timer between polls. Used by the follow tests to know the live tail has produced output before we send the SIGINT that tears it down. An exhausted
-// budget returns silently without signaling a timeout; a stalled live server surfaces instead as a caller's downstream assertion failing on the empty output.
+// await a real timer between polls. Used by the follow tests to know the live tail has produced output before we send the SIGINT that tears it down. The default
+// budget is ten seconds (100 attempts at 100ms), leaving roughly twenty seconds of margin under the follow tests' thirty-second timeouts for authentication, SIGINT
+// teardown, and assertions. An exhausted budget returns silently without signaling a timeout; a stalled live server surfaces instead as a caller's downstream
+// assertion failing on the empty output.
 async function waitForOutput(stream: CapturedStream, attempts = 100, intervalMs = 100): Promise<void> {
 
   for(let attempt = 0; attempt < attempts; attempt++) {
@@ -58,9 +60,10 @@ async function waitForOutput(stream: CapturedStream, attempts = 100, intervalMs 
   }
 }
 
-// Build the live RunHblogOptions for a given argument vector. We deliberately leave `fetch`, `socketFactory`, `readFile`, `stat`, and `now` at their real defaults so the
-// run uses the actual `~/.hblog.json`, the real environment, and the real homebridge-config-ui-x server - this suite's whole purpose is to exercise the production
-// transports, config resolution, and credential derivation that the unit fakes cannot model. Only the streams are captured so assertions can inspect what was emitted.
+// Build the live RunHblogOptions for a given argument vector. We deliberately leave `fetch`, `socketFactory`, `readFile`, `stat`, and `clock` at their real defaults
+// so the run uses the actual `~/.hblog.json`, the real environment, and the real homebridge-config-ui-x server - this suite's whole purpose is to exercise the
+// production transports, config resolution, and credential derivation that the unit fakes cannot model. Only the streams are captured so assertions can inspect
+// what was emitted.
 function liveOptions(argv: readonly string[]): { options: RunHblogOptions; stderr: CapturedStream; stdout: CapturedStream } {
 
   const stderr = new CapturedStream();
@@ -87,7 +90,8 @@ function liveOptions(argv: readonly string[]): { options: RunHblogOptions; stder
 describe("hblog integration (live server)", { skip: !hblogIntegrationEnabled }, () => {
 
   // History mode pulls the whole REST log file, authenticates, downloads, and parses it. `--json` makes each output line a parseable record so we can assert the parse
-  // shape end to end. Pulling the entire file is the documented cost of `-n`, so this test carries a long timeout.
+  // shape end to end. Pulling the entire file is the documented cost of `-n`, so this test carries a long timeout; two minutes is a deliberately generous ceiling
+  // for a live download rather than a figure tied to a measured worst case.
   test("history (-n) authenticates, downloads, and parses real log lines", { timeout: 120000 }, async () => {
 
     const { options, stdout } = liveOptions([ "-n", "5", "--json" ]);
@@ -98,7 +102,7 @@ describe("hblog integration (live server)", { skip: !hblogIntegrationEnabled }, 
     const lines = stdout.text.split("\n").filter((line) => line.length > 0);
 
     // The cast is trusted rather than validated: `--json` mode serializes each line through `formatRecord` in `cli-run.ts` as `JSON.stringify(record)` of the
-    // same `LogRecord` shape defined in `types.ts`, and `plugin` and `raw` are exactly the two fields the assertions below read from that record.
+    // same `LogRecord` shape defined in `types.ts`, and every field the assertions below read (`plugin`, `raw`) matches that shape.
     const records = lines.map((line) => JSON.parse(line) as { plugin: unknown; raw: unknown });
 
     assert.ok(records.length >= 1, "history mode must produce at least one parsed record");

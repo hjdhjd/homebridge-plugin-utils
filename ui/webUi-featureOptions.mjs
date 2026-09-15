@@ -107,7 +107,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 
 /**
  * The resolved shape of a `getDevices` hook: the single contract every device fetch crosses. It carries the device list and the connection outcome together, so a
- * failure travels back with the response it belongs to rather than through a separate side-channel a concurrent probe could rewrite. The display copy rides the
+ * failure travels back with the response it belongs to rather than through a separate side-channel a concurrent probe could rewrite. The display copy travels the
  * same way and for the same reason: the outcome is what knows which failure this was, so the words describing it belong to the outcome rather than to a static
  * setting that has to speak for every failure at once.
  *
@@ -146,7 +146,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   {@link DeviceListResult}. Called with the selected controller and an options bag carrying the live platform config. The result is where a plugin says which
  *   of the three outcomes this fetch was: a device list, a failure it may name with its own `headline` and `guidance`, or a reachable controller with nothing to
  *   list, which an `emptyMessage` both declares and supplies the notice copy for.
- * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is pinned to
+ * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is locked to
  *   global for the page's life (the reducer refuses any other scope in this mode), and the {@link FeatureOptionsConfig.infoPanel} callback always receives an undefined
  *   device. Mutually exclusive with `getControllers`, an explicitly supplied `getDevices`, and `statusPanel` - each throws a TypeError at construction. The `sidebar`
  *   labels and `ui.isController` are inert here (its consumers - the nav view's grouping filter and the projection's scoping-identity derivation - never run in this
@@ -189,7 +189,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {Function} [sidebar.groupOrder] - Comparator over two group names deciding the order of the grouped sidebar sections: `(a, b) => number`, in
  *   `Array#sort`'s own terms. It is called only with the names that render as sections, so neither the reserved `hidden` group nor a controller's own group reaches
  *   it, and the ungrouped section holds its place ahead of every group whatever the comparator answers. Absent, the sections fall in plain string order, which is what
- *   a plugin supplying nothing gets. A plugin pinning one group to the end sorts the rest by locale and answers the pinned name last.
+ *   a plugin supplying nothing gets. A plugin locking one group to the end sorts the rest by locale and answers the fixed name last.
  * @property {Object} [sidebar.refresh] - A refresh action docked inline on the sidebar's primary list heading, rendered as an icon-only button in the framework's
  *   quiet action treatment. Which heading is primary follows the mode: the controllers heading where the plugin has controllers, the top-level devices heading where
  *   it does not. Where that heading does not exist, neither does the action - global-only mode mounts no navigation at all, and a device list whose every entry
@@ -622,8 +622,8 @@ export class webUiFeatureOptions {
     // Fresh page-level abort controller for this show() cycle.
     this.#pageAbort = new AbortController();
 
-    /* Compose this cycle into the page epoch, so a supersession tears the whole cycle down through the machinery every effect and view already rides rather than
-     * through any new signal plumbing. What that reaches matters most for the listeners registered on objects that OUTLIVE a module copy - statusPanel's
+    /* Compose this cycle into the page epoch, so a supersession tears the whole cycle down through the machinery every effect and view already goes through rather
+     * than through any new signal plumbing. What that reaches matters most for the listeners registered on objects that OUTLIVE a module copy - statusPanel's
      * STATUS_EVENT subscription on the `homebridge` host object above all - because an un-retired cycle keeps rendering pushes into detached DOM and arming latch
      * timers for as long as the frame lives.
      *
@@ -753,13 +753,13 @@ export class webUiFeatureOptions {
       void this.#flushPersist?.();
     }, { signal });
 
-    // Wait for controllers (if configured), bounded so a plugin hook riding a dead bridge cannot strand the page. The result carries the list and the connection
+    // Wait for controllers (if configured), bounded so a plugin hook that depends on a dead bridge cannot strand the page. The result carries the list and the connection
     // outcome together, so the two questions are answered in order: did the fetch reach the controllers at all, and only then, did it find any.
     let controllerResult;
 
     try {
 
-      // The contract check rides inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A plugin still on the
+      // The contract check runs inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A plugin still on the
       // bare-array contract is the case this exists for, and the alternative - letting the array fall through - is the silent degradation into "no controllers are
       // configured" that this whole channel exists to prevent.
       controllerResult = assertControllerListResult(await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal }));
@@ -800,7 +800,7 @@ export class webUiFeatureOptions {
 
     const initialController = controllers[0] ?? null;
 
-    // The device machinery is inert in global-only mode: with scope pinned to global there is no controller device to fetch or select, so the pre-fire here and the
+    // The device machinery is inert in global-only mode: with scope locked to global there is no controller device to fetch or select, so the pre-fire here and the
     // matching devices await, applied-sequence gate, and scope decision further down all sit on the device-bearing path. The global-only branch after the theme await
     // returns before reaching them, so these bindings are read only when they were assigned.
     let devicesSeq;
@@ -967,9 +967,9 @@ export class webUiFeatureOptions {
         site: "devices"
       });
 
-      // Clearing the affordance and rendering the failure are one terminal action, so they ride the staleness guard together. A cycle superseded while parked on this
-      // await reaches this catch after the cycle that replaced it has installed an affordance of its own, and its own was retired by its abort listener the moment it
-      // was superseded - so a dead cycle has nothing of its own left to clear here, and clearing unguarded would take the live page's frame away on its behalf.
+      // Clearing the affordance and rendering the failure are one terminal action, so they go through the staleness guard together. A cycle superseded while parked on
+      // this await reaches this catch after the cycle that replaced it has installed an affordance of its own, and its own was retired by its abort listener the moment
+      // it was superseded - so a dead cycle has nothing of its own left to clear here, and clearing unguarded would take the live page's frame away on its behalf.
       this.#unlessStale({ run: () => {
 
         this.#removeBootAffordance();
@@ -996,7 +996,7 @@ export class webUiFeatureOptions {
 
     const { devices, error } = outcome;
 
-    /* The display copy rides along unconditionally, the way the nav view's click carries it: this is the dispatch a hook that REPORTS a failure travels through - an
+    /* The display copy travels along unconditionally, the way the nav view's click carries it: this is the dispatch a hook that REPORTS a failure travels through - an
      * empty device list beside a non-empty error - and the reducer reads the copy only on the fold that error triggers, ignoring it entirely on a success. Carrying
      * it here is what makes a boot that cannot reach its controller read exactly as a click that cannot, whichever way the hook reported it.
      *
@@ -1199,14 +1199,14 @@ export class webUiFeatureOptions {
    * Route a failed page await into the connection-error view.
    *
    * The site names which await failed so the copy table can say the honest thing about it, and the {@link DeadlineExpiredError} test is what separates a host that went
-   * quiet from one that answered with an error - two failures a user responds to differently. The dispatch rides the staleness guard, so a superseded cycle's late
+   * quiet from one that answered with an error - two failures a user responds to differently. The dispatch goes through the staleness guard, so a superseded cycle's late
    * failure never lands on the cycle that replaced it.
    *
    * The failure value is whatever the await produced: a thrown value, or the message a hook reported on its own result. Both go through {@link errorMessage}, which
    * reads an Error's message and stringifies anything else, so the two arrive at the view as the same kind of thing and neither needs a channel of its own.
    *
-   * This is also the single place the boot affordance yields the frame on a failed boot: every failing await routes here, so clearing it once covers the config sync,
-   * the controller fetch, and the feature catalog alike. The clear rides the staleness guard beside the dispatch, as one terminal action rather than two, because a
+   * This is also the single place the boot affordance yields the frame on a failed boot: every failing await routes here, so clearing it once covers the config sync, the
+   * controller fetch, and the feature catalog alike. The clear goes through the staleness guard beside the dispatch, as one terminal action rather than two, because a
    * superseded cycle reaches this catch after the cycle that replaced it has installed an affordance of its own. Its own was retired by its abort listener at the moment
    * it was superseded, so a dead cycle has nothing of its own left to clear here and an unguarded clear would only take the live page's frame away on its behalf.
    *
@@ -1252,7 +1252,7 @@ export class webUiFeatureOptions {
    * registers after the config sync and this has to look right before that.
    *
    * A missing page container is a no-op, matching the posture every view mount takes toward the page skeleton. Removal is registered on the cycle's own signal, so
-   * teardown, supersession, and navigate-away all retire it through the machinery every other per-cycle resource already rides.
+   * teardown, supersession, and navigate-away all retire it through the machinery every other per-cycle resource already uses.
    *
    * @param {AbortSignal} signal - The signal of the cycle the affordance belongs to.
    * @private
@@ -1508,7 +1508,7 @@ export class webUiFeatureOptions {
       mountOptionsView({ configTable, platform: () => this.#session?.platform?.platform, signal, store });
     }
 
-    // The nav view does not mount in global-only mode: with scope pinned to global there is no controller or device list to navigate, so its grouping filter is inert
+    // The nav view does not mount in global-only mode: with scope locked to global there is no controller or device list to navigate, so its grouping filter is inert
     // here, as is the projection's scoping-identity derivation, which also consults ui.isController and short-circuits with no controller ever in scope.
     if(controllersContainer && devicesContainer && !this.#config.globalOnly) {
 

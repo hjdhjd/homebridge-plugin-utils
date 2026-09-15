@@ -147,7 +147,7 @@ describe("makeCodecs - type contract", () => {
 
   test("CodecsInit accepts a partial bag - missing fields fall to defaults", () => {
 
-    // Type-level confirmation: passing `{}` is a valid CodecsInit. The factory returns a working stand-in. This pins the partial contract that tests rely on.
+    // Type-level confirmation: passing `{}` is a valid CodecsInit. The factory returns a working stand-in. This locks in the partial contract that tests rely on.
     const init: CodecsInit = {};
     const codecs = makeCodecs(init);
 

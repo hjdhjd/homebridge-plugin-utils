@@ -33,8 +33,8 @@ async function clean(paths) {
   await Promise.all(paths.map((path) => rm(path, { force: true, recursive: true })));
 }
 
-// Ensure dist/ui exists and copy the browser-side UI assets into it. Runs during the clean and build-ui phases, before tsc emits the compiled featureOptions.js,
-// so the directory has to exist up front and the featureOptions copy step runs separately after tsc. We filter to shippable artifacts by excluding the
+// Ensure dist/ui exists and copy the browser-side UI assets into it. Runs during the clean and build-ui phases, before tsc emits the compiled browser modules,
+// so the directory has to exist up front and the browser-modules copy step runs separately after tsc. We filter to shippable artifacts by excluding the
 // test-only file shapes: `*.test.mjs` (suite files), `*.fixtures.mjs` (shared test data), `*.helpers.mjs` (shared test code), and `test-*.mjs` (test infrastructure,
 // currently the `registerHooks` module-resolution loader). Suffix matches are centralized in `TEST_ONLY_SUFFIXES` so adding a new test-file shape is a one-line edit
 // rather than a chain of `&& !entry.endsWith(...)` clauses. The resulting dist/ui/ contains only the browser runtime files consumers execute.

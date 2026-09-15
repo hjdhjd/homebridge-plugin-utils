@@ -800,7 +800,8 @@ export class MqttClient implements AsyncDisposable {
 
     // Per-subscription cleanup: compose the caller's signal with the connection-level signal so either teardown path fires the listener exactly once. Attaching the
     // listener to the composed signal (rather than to `init.signal` directly) ensures the listener auto-releases when the client aborts even if the caller never
-    // aborts their per-subscription controller - the composed signal is what prevents the closure from pinning the handler past the connection's lifetime.
+    // aborts their per-subscription controller - the composed signal is what prevents the closure from keeping the handler referenced past the connection's
+    // lifetime.
     if(init.signal) {
 
       const composed = composeSignals(this.signal, init.signal);

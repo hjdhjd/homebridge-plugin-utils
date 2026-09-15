@@ -362,7 +362,7 @@ describe("registerPersistEffect - lifecycle", () => {
 describe("registerPersistEffect - flush (navigate-away drain)", () => {
 
   // flush() is the navigate-away drain: it drives any debounced-but-unwritten edit to disk NOW, skipping the debounce wait, while preserving single-writer
-  // serialization and coalescing. These tests pin the single-writer mechanism (loop on pending || flushing, in-loop dirty check, flushing reset in every drain
+  // serialization and coalescing. These tests assert the single-writer mechanism (loop on pending || flushing, in-loop dirty check, flushing reset in every drain
   // finally) against the failure modes the pre-mortem enumerates.
 
   test("flush() within the debounce window persists the pending edit exactly once (no 300ms wait)", async () => {
@@ -464,7 +464,8 @@ describe("registerPersistEffect - flush (navigate-away drain)", () => {
 describe("registerPersistEffect - model-load boundary", () => {
 
   // The write path's floor: a store whose model never loaded holds placeholder state, and the options it would write describe nothing the user configured. These
-  // pin the refusal at the drain - the one point both start-sites pass through - across the page states an unloaded store can be sitting in when a write is asked for.
+  // lock in the refusal at the drain - the one point both start-sites pass through - across the page states an unloaded store can be sitting in when a write is
+  // asked for.
 
   test("a store that never loaded its model writes nothing, even with a mutation dispatched and flushed", async () => {
 

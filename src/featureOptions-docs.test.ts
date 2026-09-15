@@ -35,7 +35,7 @@ const WORKED_OPTIONS: Record<string, FeatureOptionEntry[]> = {
 // The canonical worked-example output, reproduced exactly as the renderer emits it. The printed whitespace here is illustrative only and the column padding is
 // cosmetic, not part of the semantic contract; the renderer's column math sizes each table to its own widest cell, so the Nvr table aligns consistently rather than
 // matching a hand-typed (and internally inconsistent) Nvr spacing. Every semantic line - the bullets, the anchors, the value/toggle key cells, the raw defaults -
-// is the contract this fixture pins.
+// is the contract this fixture asserts.
 const WORKED_OUTPUT = [
 
   " * [Audio](#audio): Audio",
@@ -508,9 +508,8 @@ describe("buildFixedScopeDescribers", () => {
   test("agrees with the live consumer hooks on every scope shape their real catalogs declare", () => {
 
     /* The acceptance bar for retiring the hand-written copies is output equivalence over the real inputs, not equivalence of the decision procedure. The live hooks
-     * branch on a membership test where this builder matches the exact set, so the two agree only where it matters: over the shapes those catalogs actually carry.
-     * Those are exactly two - [ "device", "global" ] on 27 ratgdo entries plus [ "global" ] on one, and [ "global" ] on all four comed entries - and this row runs
-     * both decisions side by side over both of them.
+     * branch on a membership test where this builder matches the exact set, so the two agree only where it matters: over the scope shapes ratgdo and comed's
+     * catalogs are known to carry - [ "device", "global" ] and [ "global" ] - and this row runs both decisions side by side over both of them.
      */
     const liveMembershipHook = (scopes: readonly FeatureOptionScope[]): string => {
 
@@ -572,7 +571,7 @@ describe("buildComposedScopeDescribers", () => {
 
   test("opens with \"Configurable\" by default, and with the caller's word when overridden", () => {
 
-    // Both halves are pinned: a hardcoded leading word passes the default row and must fail the override row.
+    // Both halves are locked in: a hardcoded leading word passes the default row and must fail the override row.
     assert.equal(buildComposedScopeDescribers({ vocabulary }).describeOptionScope({ ...SCOPE_OPTION, scopes: ["global"] }, SCOPE_CATEGORY),
       " <BR>*Configurable globally.*", "the grounded default");
     assert.equal(buildComposedScopeDescribers({ leadingWord: "Settable", vocabulary }).describeOptionScope({ ...SCOPE_OPTION, scopes: ["global"] }, SCOPE_CATEGORY),
@@ -591,7 +590,7 @@ describe("buildComposedScopeDescribers", () => {
 
   test("the composed suffix lands in the rendered table exactly as the hook produced it", () => {
 
-    // The end-to-end pin: the renderer passes hook-owned markup through verbatim, so the italics and the leading break survive into the description cell.
+    // The end-to-end assertion: the renderer passes hook-owned markup through verbatim, so the italics and the leading break survive into the description cell.
     const { describeCategoryScope, describeOptionScope } = buildComposedScopeDescribers({ vocabulary });
     const output = renderFeatureOptionsReference({
 

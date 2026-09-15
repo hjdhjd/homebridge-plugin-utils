@@ -67,7 +67,7 @@ export class DeadlineExpiredError extends Error {
   }
 }
 
-// Validate a caller-supplied duration. Both primitives that take one route through here, so "a duration is a finite positive number of seconds" is one rule with one
+// Validate a caller-supplied duration. Every primitive that takes one routes through here, so "a duration is a finite positive number of seconds" is one rule with one
 // implementation and one message shape. The label names the parameter at the caller's own boundary, so the throw reads as an error about the call rather than about
 // this module's internals.
 const requireDurationSeconds = ({ label, value }) => {
@@ -217,7 +217,7 @@ export const createRequestWatchdog = ({ onTrip, signal, timeoutSeconds }) => {
  * The gap is read from the wall clock via `Date.now` DELIBERATELY: the wall clock is what accrues while JS is frozen, whereas a monotonic `performance.now` is not
  * guaranteed to advance across an OS suspension - a clock that freezes with the page cannot measure the freeze. The detector consults no visibility state at all, since
  * the same plumbing that drops the change event also leaves the reported state stale, so gap magnitude alone separates the two cases: a throttled hidden tab's ticks
- * are cadence-bounded and stay under the threshold, while a genuine suspension runs to minutes and clears it. Two honest costs ride the threshold - a suspension
+ * are cadence-bounded and stay under the threshold, while a genuine suspension runs to minutes and clears it. Two honest costs come with the threshold - a suspension
  * shorter than it that still killed the helper goes unseen until the next trigger, and a forward system-clock step larger than it fires one false notification (benign,
  * identical to a probe on a live bridge) while a backward step masks one real resume until the next tick.
  *

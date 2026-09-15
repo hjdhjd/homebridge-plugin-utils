@@ -60,9 +60,9 @@ whose protocol it is.
 
 #### Remarks
 
-This is a deliberate widening of the transport's own retry defaults, which cover the 5xx family and 429 alone. Real APIs answer well-formed requests with
-a transient 400 or 404 while a device is rebooting or a backend is under load, and treating either as permanent gives up on a request that would have succeeded a
-second later.
+This is a deliberate widening of the transport's own retry defaults, which cover 429, 500, 502, 503, and 504 alone. Real APIs answer well-formed requests
+with a transient 400 or 404 while a device is rebooting or a backend is under load, and treating either as permanent gives up on a request that would have succeeded
+a second later.
 
 ***
 

@@ -20,6 +20,8 @@ function ownPropertyShape(instance: object): string[] {
 // Extract the observable shape of a constructed instance so two call forms, or the in-package constructor and the platform global, can be compared on equal terms.
 function shapeOf(thrown: unknown): { error: unknown; isError: boolean; message: string; name: string; ownProperties: string[]; suppressed: unknown } {
 
+  // The narrowing is sound because every caller passes a value freshly constructed by SuppressedError (in-package or the platform global), so it always carries
+  // the error and suppressed fields this shape reads.
   const instance = thrown as Error & { error: unknown; suppressed: unknown };
 
   return {

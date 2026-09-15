@@ -262,8 +262,8 @@ export function classifyTransportError(error: unknown, signal?: AbortSignal): Tr
 
       return { cause: error, code: walk.code, kind: "dns" };
 
-    // A real failure with nothing recognizable on it. Any code the chain did carry rides along regardless, because a code nobody has a kind for is still the most
-    // useful thing a caller can put in a log line.
+    // A real failure with nothing recognizable on it. Any code the chain did carry is carried through regardless, because a code nobody has a kind for is still
+    // the most useful thing a caller can put in a log line.
     default:
 
       return { cause: error, code: walk.code, kind: "transport" };

@@ -537,7 +537,10 @@ export class HomebridgeLogClient implements AsyncDisposable {
     // non-rejecting value the gate's race can win on.
     const downloadPromise = this.#collectHistory("all", downloadSignal);
 
-    downloadPromise.catch((): void => { /* Observed via `downloadTag`; on a seed-covers abort the rejection is expected and intentionally discarded. */ });
+    downloadPromise.catch((): void => {
+
+      // Observed via `downloadTag`; on a seed-covers abort the rejection is expected and intentionally discarded.
+    });
 
     const downloadTag: Promise<WindowDownloadOutcome> = downloadPromise.then((): WindowDownloadOutcome => ({ kind: "done" }),
       (error: unknown): WindowDownloadOutcome => ({ error, kind: "failed" }));
@@ -803,8 +806,8 @@ export class HomebridgeLogClient implements AsyncDisposable {
   }
 
   // Arm `callback` at the hard cap: SEED_WINDOW_MAX_MS past the snapshot horizon, clamped at zero so a horizon already that old fires immediately rather than
-  // reaching backward. Both places that need this deadline - the seed-served one-shot's cap and the Phase 2 gate - go through here, so the arithmetic and the clock
-  // it reads have one home and the two deadlines cannot drift apart.
+  // reaching backward. Every caller that needs this deadline - the seed-served one-shot's cap and the Phase 2 gate among them - goes through here, so the arithmetic
+  // and the clock it reads have one home and no caller's deadline can drift from another's.
   #scheduleAtHardCap(horizonNow: number, callback: () => void): Disposable {
 
     return this.#clock.schedule(callback, Math.max(0, (horizonNow + SEED_WINDOW_MAX_MS) - this.#clock.now()));

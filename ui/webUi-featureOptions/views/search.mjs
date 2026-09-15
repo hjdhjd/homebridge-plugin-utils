@@ -8,6 +8,7 @@ import { createElement, setCategoryExpanded } from "../utils.mjs";
 import { projection, tablePresentation } from "../selectors.mjs";
 import { effect } from "../store.mjs";
 
+// Long enough to absorb a fast typist's keystrokes between dispatches, short enough that the filtered table still feels like it is responding to each edit.
 const SEARCH_DEBOUNCE_MS = 300;
 
 /**
@@ -22,7 +23,7 @@ const SEARCH_DEBOUNCE_MS = 300;
  *   - **Reset button group** (Reset... -> Reset to Defaults / Revert to Saved) - dispatches `options:reset` or `model:reverted`.
  *
  * The panel re-builds on `model:loaded` (and only then). Subsequent dispatches update individual elements (counts, pill active-state, toggle-all label, and whether
- * the panel's two bars are shown at all) without rebuilding the DOM. The view's footprint is small because the heavy work - the projection walk - is shared with
+ * the panel's bars are shown at all) without rebuilding the DOM. The view's footprint is small because the heavy work - the projection walk - is shared with
  * view-options through the memoized selector, and so is the question of whether the option table is what the surface is showing, which this panel follows rather
  * than decides.
  *
@@ -383,6 +384,9 @@ const handleClick = ({ configTable, event, refs, store }) => {
 
     refs.resetDefaults.classList.toggle("d-none");
     refs.resetRevert.classList.toggle("d-none");
+
+    // The revealed state borrows updateToggleAllLabel's "▶ means collapse" glyph convention, so this reads as "click to collapse the destructive actions" rather
+    // than an unexplained one-off character.
     refs.resetToggle.textContent = refs.resetDefaults.classList.contains("d-none") ? "Reset..." : "▶";
 
     return;

@@ -496,7 +496,7 @@ async function livestreamArgsWithAudio(audioInput: unknown, overrides: { enableA
 
     // audioInput arrives typed unknown so each call site can hand this helper a bare string, a partial FMp4AudioInputConfig object, or any other loosely-shaped test
     // value without pre-satisfying the union up front. Casting through never - TypeScript's bottom type, assignable to any position - forces the value into the
-    // livestream config's audioInput field without pinning it to a specific member of the FMp4AudioInputConfig | string union at this call site.
+    // livestream config's audioInput field without committing it to a specific member of the FMp4AudioInputConfig | string union at this call site.
     livestream: { audioInput: audioInput as never, enableAudio: overrides.enableAudio, url: "rtsp://primary/stream" }
   });
 
@@ -686,7 +686,7 @@ describe("FfmpegRecordingProcess - audio target parity", () => {
   });
 });
 
-describe("FfmpegRecordingProcess - caller video filters ride the encoder chain", () => {
+describe("FfmpegRecordingProcess - caller video filters join the encoder chain", () => {
 
   // The encoder composes the one `-filter:v` chain a recording carries: its own scale and pixel-format work first, then the caller's filters at the tail. This block
   // builds a REAL FfmpegOptions rather than the stand-in the rest of the file uses, because that stand-in answers `recordEncoder` with a fixed two-token vector that
@@ -814,9 +814,9 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
 
   test("explicit init.recording.hardwareDecoding overrides the version gate", async () => {
 
-    // When the caller explicitly provides `recording.hardwareDecoding`, the defaulting logic is skipped entirely - the gate only sets the default. This test pins the
-    // rule that explicit caller input wins over version-based defaulting, so a plugin that knows better (e.g., has validated its own decoder availability) can
-    // opt in on a 7.x host if it wants to.
+    // When the caller explicitly provides `recording.hardwareDecoding`, the defaulting logic is skipped entirely - the gate only sets the default. This test locks
+    // in the rule that explicit caller input wins over version-based defaulting, so a plugin that knows better (e.g., has validated its own decoder availability)
+    // can opt in on a 7.x host if it wants to.
     const spy = makeSpyingOptions("7.0", false);
 
     await using proc = new FfmpegRecordingProcess(spy.options, {
@@ -832,7 +832,7 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
 
   test("caller video filters reach the encoder, and an omitted list resolves to empty", async () => {
 
-    // The recording assembler is the in-repo caller of the encoder's `videoFilters` input, so this pins the hand-off itself rather than the composed chain the
+    // The recording assembler is the in-repo caller of the encoder's `videoFilters` input, so this locks in the hand-off itself rather than the composed chain the
     // encoder builds from it.
     const withFilters = makeSpyingOptions("8.0", false);
 
@@ -935,7 +935,7 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
     // base class's stdout Readable with a synthetic error after the assembler has started draining. The drain loop observes the error, wraps it in
     // `HbpuAbortError("failed", { cause: syntheticError })` at the single classification point in `mp4-assembler.ts`, and the bridge's listener forwards that reason
     // to `process.abort(reason)`. Reaching past the public surface to `_stdout` is unusual but intentional: the internal stream error is the only trigger for the
-    // bridge's propagation branch, and the structural cast makes the test-time coupling explicit rather than hiding it behind a production seam.
+    // bridge's propagation branch, and the structural cast makes the test-time coupling explicit rather than hiding it behind a production interface.
     await using proc = new FfmpegRecordingProcess(makeOptions(), {
 
       args: buildInitOnlyIdleScript(),
@@ -968,8 +968,8 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
   test("external abort wins over the assembler's subsequent signal propagation (double-abort guard)", async () => {
 
     // Complementary guard on the same bridge: when the process is aborted externally first, the assembler's signal aborts as a consequence (through AbortSignal.any
-    // composition), and the bridge fires - but finds `process.aborted === true` and short-circuits. The externally-supplied reason survives unchanged. This pins the
-    // ordering contract: external abort is authoritative; the bridge never overwrites an already-set reason.
+    // composition), and the bridge fires - but finds `process.aborted === true` and short-circuits. The externally-supplied reason survives unchanged. This locks
+    // in the ordering contract: external abort is authoritative; the bridge never overwrites an already-set reason.
     await using proc = new FfmpegRecordingProcess(makeOptions(), {
 
       args: buildInitOnlyIdleScript(),

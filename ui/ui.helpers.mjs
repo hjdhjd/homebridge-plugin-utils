@@ -4,9 +4,7 @@
  */
 
 /**
- * Shared test helpers for the webUI test suite.
- *
- * Three primitives:
+ * Shared test helpers for the webUI test suite, anchored by three foundational primitives:
  *
  *   - {@link createTestDom} - builds a Happy-DOM window, installs `document` / `window` / `HTMLElement` / `Event` / `CSSStyleSheet` / `getComputedStyle` as globals,
  *     and returns a `Disposable` handle whose `Symbol.dispose` restores the previous globals and closes the window. Matches the `using dom = createTestDom()`
@@ -17,6 +15,10 @@
  *     one fixture serves every mode, and its `misnestDeviceStats` option reproduces the misconfigured shell the reveal diagnostic exists for.
  *   - {@link createFakeHomebridge} - an object with every `homebridge.*` method the UI code calls. Default behaviors are quiet no-ops (spinners and save-button
  *     toggles) or minimal stubs (getPluginConfig returns the seeded config). Individual tests override the methods they care about on a per-test basis.
+ *
+ * Layered on top are the module's remaining exports, each documented at its own definition: session and timing helpers ({@link openTestSession},
+ * {@link waitFor}), global-installation helpers ({@link installHomebridge}, {@link installWebUiBoot}, {@link installPageEpoch}), and DOM-interaction and
+ * probe-shim helpers ({@link clickCategoryHeader}, {@link BOOTSTRAP_PROBE_ACCENT}, {@link seedBootstrapProbeShim}).
  *
  * Files under `ui/` are copied to `dist/ui/` during `npm run build-ui`; the step's shippable filter (see `build/fs-ops.mjs`) excludes every test-only file shape
  * so nothing from this module ships in the published package.
@@ -253,8 +255,8 @@ export function createFakeHomebridge(init = {}) {
   // The event surface backing the fake's addEventListener / removeEventListener / dispatchEvent, mirroring the real host, which is a native EventTarget. createTestDom
   // swaps neither EventTarget nor MessageEvent onto globalThis, so both bare references here resolve to Node's own classes - the same realm for both sides. That
   // coherence matters: sourcing one constructor from happy-dom's `window` while the other stays Node's can reject dispatches and silently vacate every push test, the
-  // same discipline store.mjs's ModuleCustomEvent comment documents. emitPush dispatches the host's exact delivery shape - a MessageEvent whose payload rides `data` -
-  // so a component's `event.data` read path is exercised for real.
+  // same discipline store.mjs's ModuleCustomEvent comment documents. emitPush dispatches the host's exact delivery shape - a MessageEvent whose payload is carried
+  // on `data` - so a component's `event.data` read path is exercised for real.
   const eventTarget = new EventTarget();
   const emitPush = (name, data) => eventTarget.dispatchEvent(new MessageEvent(name, { data }));
 
@@ -341,7 +343,7 @@ export function createFakeHomebridge(init = {}) {
 
 /**
  * Open a {@link PluginConfigSession} against the installed fake homebridge bridge - the test-side equivalent of what the orchestrator's `#launchWebUI` does before
- * it hands the session to `featureOptions.show()`. Tests that drive `webUiFeatureOptions` directly call this to obtain the session their `show()` now requires; tests
+ * it hands the session to `featureOptions.show()`. Tests that drive `webUiFeatureOptions` directly call this to obtain the session their `show()` requires; tests
  * that drive the full `webUi` orchestrator do not, since it opens the session itself.
  *
  * @param {string} [name="Plugin"] - The platform name used to seed an empty configuration.

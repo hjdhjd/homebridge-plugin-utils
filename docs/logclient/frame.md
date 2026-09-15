@@ -40,7 +40,7 @@ type OutboundEvent =
 };
 ```
 
-An outbound protocol event to serialize, discriminated on `kind`.
+An outbound protocol event to serialize, tagged by `kind`.
 
 The OutboundEvent union models the namespace connect (`connect`), namespace event with a JSON payload (`event` - this is how `tail-log` is requested), and
 heartbeat pong (`pong`) frame shapes. The namespace DISCONNECT is hand-assembled separately (see [LOG\_NAMESPACE\_PATH](#log_namespace_path)) because its fixed, argument-free shape

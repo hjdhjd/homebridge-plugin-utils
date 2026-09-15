@@ -100,7 +100,7 @@ describe("makeHdlrBox", () => {
   test("emits a truncated 16-byte hdlr when truncate=true (skips handler_type)", () => {
 
     // The truncate path emits a payload of exactly 8 bytes (version/flags + pre_defined), without the handler_type slot. The predicate's bounds check must reject
-    // this shape, so we pin the byte count so the negative test in the predicate suite cannot drift away from the helper's promise.
+    // this shape, so we lock in the byte count so the negative test in the predicate suite cannot drift away from the helper's promise.
     const truncated = makeHdlrBox(HDLR_TYPE_SOUN, true);
 
     assert.equal(truncated.length, 8 + 8, "truncated hdlr must be exactly 16 bytes (header + 8-byte payload, no handler_type)");
@@ -154,7 +154,7 @@ describe("makeTrunBox", () => {
   test("orders per-sample slots correctly: duration, size, flags", () => {
 
     // The ISO BMFF spec mandates per-sample slot order: duration (if flag set), size (if flag set), flags (if flag set). The helper emits them in this order so the
-    // predicate's offset arithmetic finds them where it expects. We pin the order here by writing distinguishable values to each slot through the helper's options
+    // predicate's offset arithmetic finds them where it expects. We assert the order here by writing distinguishable values to each slot through the helper's options
     // and verifying the read-back positions.
     const sentinel = SAMPLE_FLAG_NON_SYNC;
     const trun = makeTrunBox({ includeDuration: true, includeSize: true, sampleFlagsValue: sentinel, usePerSampleFlags: true });

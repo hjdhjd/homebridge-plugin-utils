@@ -951,7 +951,7 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
     const payloadIndex = remainder.indexOf("=");
 
     // The payload delimiter gives the value a separator of its own, so dots are left to do one job: addressing. Everything ahead of the first "=" addresses the
-    // option, everything behind it is the value - periods, further "=" characters, and interior spaces all ride through verbatim, which is why this is the form
+    // option, everything behind it is the value - periods, further "=" characters, and interior spaces all pass through verbatim, which is why this is the form
     // the composer writes and the form entries normalize into. The delimiter only claims the entry when the canonical reading holds, though: a shape it cannot
     // account for falls through to the legacy dot grammar below, so an entry authored before the delimiter existed keeps its original meaning even when its
     // value happens to contain "=".
@@ -1543,7 +1543,7 @@ export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOpti
  * {@link applyClearOption} or {@link applySetOption} addressing the same scope cleanly replaces whatever was there, in either the canonical or the legacy form,
  * because the matcher decodes entries through the same parser.
  *
- * A value always rides behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
+ * A value always sits behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
  * need no escaping. Surrounding whitespace is trimmed first, and a value persists only when content survives the trim - see {@link hasValueContent}. At the
  * global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope there is
  * no such spelling for an option storing a single value - a scoped entry carries one - so an enable without content reduces to clearing the scope: any entry
@@ -1693,7 +1693,6 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
   // written it - which is what makes the declaration true for every query built on this one traversal.
   const declaredScopes = catalog.scopes[normalizedOption];
 
-  // Check to see if we have a device-level option first.
   if(device && (!declaredScopes || declaredScopes.includes("device"))) {
 
     const deviceEntry = scopedEntry({ catalog, configIndex, id: device, optionKey: normalizedOption });
@@ -1704,7 +1703,6 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
     }
   }
 
-  // Now check to see if we have a controller-level option.
   if(controller && (!declaredScopes || declaredScopes.includes("controller"))) {
 
     const controllerEntry = scopedEntry({ catalog, configIndex, id: controller, optionKey: normalizedOption });
@@ -1715,8 +1713,8 @@ export function resolveScope({ catalog, configIndex, controller, defaultReturnVa
     }
   }
 
-  // Finally, we check for a global-level value. The key at this level is the option's own name, which the arbitration assigns to that option by rule, so there is
-  // nothing here for a scoped read's guard to decide.
+  // The key at this level is the option's own name, which the arbitration assigns to that option by rule, so there is nothing here for a scoped read's guard
+  // to decide.
   if(!declaredScopes || declaredScopes.includes("global")) {
 
     const globalEntry = configIndex.get(normalizedOption);

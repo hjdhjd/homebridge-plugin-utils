@@ -6,9 +6,9 @@
 
 # ffmpeg/recording-process-double
 
-Reusable test doubles for the recording dependency-inversion seam.
+Reusable test doubles for the recording dependency-inversion boundary.
 
-The [RecordingProcess](record.md#recordingprocess) / [RecordingProcessFactory](record.md#recordingprocessfactory) seam in `ffmpeg/record.ts` exists so a consuming plugin's HKSV recording path can be driven without
+The [RecordingProcess](record.md#recordingprocess) / [RecordingProcessFactory](record.md#recordingprocessfactory) boundary in `ffmpeg/record.ts` exists so a consuming plugin's HKSV recording path can be driven without
 spawning a real FFmpeg child. This module ships the fakes that cash that in: a configurable [TestRecordingProcess](#testrecordingprocess) that yields caller-supplied init and media
 segments deterministically, and a [TestRecordingProcessFactory](#testrecordingprocessfactory) that records every `create` call and hands back the process. Any HKSV-capable plugin can hold
 the test factory in place of [recordingProcessFactory](record.md#recordingprocessfactory-1) to exercise its recording delegate FFmpeg-free, in CI, with

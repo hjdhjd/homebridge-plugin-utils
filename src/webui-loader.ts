@@ -125,6 +125,8 @@ export function parseWebUiLoaderConfig(html: string, htmlPath: string): WebUiLoa
     throw new Error("webui-loader: the `WEBUI LOADER CONFIG` in " + htmlPath + " must be a JSON object with an `entry` string and an optional `bust` string array.");
   }
 
+  // The typeof/null check above guarantees `parsed` is a non-null object, which is what lets `.entry` and `.bust` be read without a null-property throw; the
+  // checks below establish each field's actual type before either one is used.
   const config = parsed as { bust?: unknown; entry?: unknown };
 
   if(typeof config.entry !== "string") {

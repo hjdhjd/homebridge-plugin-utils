@@ -11,7 +11,7 @@ import { withDeadline } from "../../webUi-liveness.mjs";
 /**
  * Mount the sidebar navigation view.
  *
- * The sidebar has two containers (controllers + devices) and the following kinds of links:
+ * The sidebar's containers (controllers and devices) host the following kinds of links:
  *
  *   - **Global Options** (always present, in the controllers container): `data-navigation="global"`. Clicked -> dispatch `scope:changed` with `kind: "global"`.
  *   - **Controller links** (one per controller, in the controllers container, only when mode is controller-based): `data-navigation="controller"` +
@@ -130,8 +130,8 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
     store
   });
 
-  /* Repaint both containers' highlighting without rebuilding their content, on every transition that moves the state the highlights read. That state is two things:
-   * the selection pointer, which `scope:changed` moves, and the serial of the controller whose device list is loaded, which `devices:loaded` records.
+  /* Repaint both containers' highlighting without rebuilding their content, on every transition that moves the state the highlights read: the selection pointer,
+   * which `scope:changed` moves, and the serial of the controller whose device list is loaded, which `devices:loaded` records.
    *
    * The controllers highlight reads both, which is why `devices:loaded` belongs here and not only on the devices-build effect above. A device fetch that comes back
    * empty moves only the second - the selection stays where it was, and the devices container rebuilds to nothing - so without this subscription nothing would
@@ -491,8 +491,8 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
 
         const controller = store.state.controllers.find((c) => c.serialNumber === deviceSerial);
 
-        // Bound the fetch. The plugin's hook rides the same bridge every other host call does, so an unanswered click would otherwise leave the sidebar highlighted on
-        // a controller whose devices never arrive - the deadline turns that into the rejection the catch below already knows how to render.
+        // Bound the fetch. The plugin's hook goes through the same bridge every other host call does, so an unanswered click would otherwise leave the sidebar
+        // highlighted on a controller whose devices never arrive - the deadline turns that into the rejection the catch below already knows how to render.
         const { devices, emptyMessage, error, guidance, headline } = await withDeadline({ promise: getDevices(controller ?? null), seconds: deadlineSeconds, signal });
 
         // Bail if the page tore down; a torn-down store must not be dispatched against. Staleness itself is the reducer's job - it drops an outcome whose sequence no
@@ -502,7 +502,7 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
           return;
         }
 
-        // The copy rides along unconditionally: the reducer reads it only on the fold a non-empty error triggers and ignores it on a success, so one dispatch shape
+        // The copy is included unconditionally: the reducer reads it only on the fold a non-empty error triggers and ignores it on a success, so one dispatch shape
         // serves both outcomes. What the result named wins over the configured guidance, which stands in for every failure this plugin can have rather than for the
         // one that just happened; a result naming neither leaves both fallbacks in place.
         store.dispatch({ controllerId: deviceSerial, devices, emptyMessage, error, guidance: guidance ?? failureGuidance, headline, seq, type: "devices:loaded" });

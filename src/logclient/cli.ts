@@ -21,8 +21,8 @@
  * - The directory the engine is loaded from is the bin's OWN real directory, recovered with `realpathSync` exactly the way `cli/index.ts` recovers its source root, so
  *   the symlink indirection is collapsed before the join and the engine loads from the real package layout under every install mode.
  *
- * The programmatic API ({@link logclient/client!HomebridgeLogClient | HomebridgeLogClient}) rides the existing package barrel; only the bin uses this dynamic-import
- * path.
+ * The programmatic API ({@link logclient/client!HomebridgeLogClient | HomebridgeLogClient}) is exposed through the existing package barrel; only the bin uses this
+ * dynamic-import path.
  *
  * @module
  */

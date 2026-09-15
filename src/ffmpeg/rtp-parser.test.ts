@@ -72,6 +72,25 @@ describe("RtpPacketParser - classification", () => {
     assert.equal(packet.payloadType, 96);
     assert.equal(packet.kind, "rtp");
   });
+
+  test("refuses an assignment to a packet's fields at compile time", () => {
+
+    const parser = new RtpPacketParser();
+    const packets = Array.from(parser.consume(makeDatagram(96)));
+    const packet = expectAt(packets, 0, "readonly packet");
+
+    assert.equal(packet.payloadType, 96, "the packet must carry the payload type the datagram's header encodes");
+    assert.equal(packet.kind, "rtp", "the packet must carry the classification that payload type selects");
+
+    // Type-level refusal only. `readonly` is erased at runtime, so the reads above run before the assignments below - each would land if the compiler admitted it.
+    // The directives fail typecheck if any field of RtpPacket drops its modifier, so the contract is policed by `tsc --noEmit` rather than by the runner.
+    // @ts-expect-error - bytes is readonly.
+    packet.bytes = Buffer.alloc(0);
+    // @ts-expect-error - kind is readonly.
+    packet.kind = "rtp";
+    // @ts-expect-error - payloadType is readonly.
+    packet.payloadType = 0;
+  });
 });
 
 describe("RtpPacketParser - framing", () => {

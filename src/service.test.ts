@@ -415,13 +415,14 @@ describe("acquireService - name characteristic management", () => {
 
         super(displayName, subtype);
 
-        // Strip Name out of the optional catalog so the add-Name branch in acquireService has work to do.
-        const cast = this.optionalCharacteristics as { UUID: string }[];
+        // Strip Name out of the optional catalog so the add-Name branch in acquireService has work to do. HAP declares the catalog as a mutable `Characteristic[]`,
+        // so we rewrite it in place through the declared type.
+        const optional = this.optionalCharacteristics;
         const nameUuid = hap.Characteristic.Name.UUID;
-        const filtered = cast.filter((c) => c.UUID !== nameUuid);
+        const filtered = optional.filter((c) => c.UUID !== nameUuid);
 
-        cast.length = 0;
-        cast.push(...filtered);
+        optional.length = 0;
+        optional.push(...filtered);
       }
     }
 
@@ -445,9 +446,9 @@ describe("acquireService - name characteristic management", () => {
 
         super(displayName, subtype);
 
-        // Force an empty characteristics array so the getCharacteristicConstructor's defensive check fires. The cast through unknown sidesteps HAP's `readonly` typing
-        // on the array - the field is mutable at runtime, but the type annotates it as a get-only view.
-        (this as unknown as { characteristics: unknown[] }).characteristics = [];
+        // Force an empty characteristics array so the getCharacteristicConstructor's defensive check fires. HAP declares the array as a mutable `Characteristic[]`,
+        // so we clear it through the declared type.
+        this.characteristics = [];
       }
     }
 

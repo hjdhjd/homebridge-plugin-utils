@@ -71,8 +71,8 @@ export type Mp4SegmentKind = "init" | "media";
  */
 export interface Mp4Segment {
 
-  bytes: Buffer;
-  kind: Mp4SegmentKind;
+  readonly bytes: Buffer;
+  readonly kind: Mp4SegmentKind;
 }
 
 /**

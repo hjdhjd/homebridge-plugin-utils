@@ -90,8 +90,8 @@ const HDLR_TYPE_OFFSET = BOX_HEADER_SIZE + 8;
  */
 export interface FMp4Box {
 
-  offset: number;
-  size: number;
+  readonly offset: number;
+  readonly size: number;
 }
 
 /**

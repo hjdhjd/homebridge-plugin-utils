@@ -104,10 +104,10 @@ A complete parsed ISO BMFF box emitted by [Mp4BoxParser](#mp4boxparser).
 
 #### Properties
 
-| Property | Type | Description |
-| ------ | ------ | ------ |
-| <a id="bytes"></a> `bytes` | `Buffer` | The complete box bytes, including the 8-byte header. The buffer is typically a zero-copy subarray view over the feed chunk; consumers that need to hold it past the iteration loop should copy with `Buffer.from()` if the upstream chunk lifetime is suspect. |
-| <a id="type"></a> `type` | `number` | The box type encoded as a 32-bit big-endian integer. Compare against the `BOX_TYPE_*` constants exported from this module; numeric comparison avoids the per-box string allocation that an ASCII tag comparison would incur. |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="bytes"></a> `bytes` | `readonly` | `Buffer` | The complete box bytes, including the 8-byte header. The buffer is typically a zero-copy subarray view over the feed chunk; consumers that need to hold it past the iteration loop should copy with `Buffer.from()` if the upstream chunk lifetime is suspect. |
+| <a id="type"></a> `type` | `readonly` | `number` | The box type encoded as a 32-bit big-endian integer. Compare against the `BOX_TYPE_*` constants exported from this module; numeric comparison avoids the per-box string allocation that an ASCII tag comparison would incur. |
 
 ***
 

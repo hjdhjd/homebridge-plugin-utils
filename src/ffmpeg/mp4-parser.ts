@@ -65,8 +65,8 @@ const EMPTY_BUFFER = Buffer.alloc(0);
  */
 export interface Mp4Box {
 
-  bytes: Buffer;
-  type: number;
+  readonly bytes: Buffer;
+  readonly type: number;
 }
 
 /**

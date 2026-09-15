@@ -114,6 +114,23 @@ describe("findBox", () => {
     assert.ok(result, "findBox must locate the moov box when the start range begins at its offset");
     assert.equal(result.offset, ftyp.length);
   });
+
+  test("refuses an assignment to a located box's fields at compile time", () => {
+
+    const box = makeBox("moov", Buffer.from("abcd"));
+    const result = findBox(box, "moov");
+
+    assert.ok(result, "findBox must locate the moov box the fixture carries");
+    assert.equal(result.offset, 0, "the located box must report the offset the walk stopped at");
+    assert.equal(result.size, box.length, "the located box must report the box's total size, header included");
+
+    // Type-level refusal only. `readonly` is erased at runtime, so the reads above run before the assignments below - each would land if the compiler admitted it.
+    // The directives fail typecheck if any field of FMp4Box drops its modifier, so the contract is policed by `tsc --noEmit` rather than by the runner.
+    // @ts-expect-error - offset is readonly.
+    result.offset = 0;
+    // @ts-expect-error - size is readonly.
+    result.size = 0;
+  });
 });
 
 describe("isKeyframe", () => {

@@ -94,11 +94,11 @@ A single classified RTP or RTCP packet.
 
 #### Properties
 
-| Property | Type | Description |
-| ------ | ------ | ------ |
-| <a id="bytes"></a> `bytes` | `Buffer` | The complete UDP datagram bytes. Emitted as-is from the parser; consumers that need to hold it past the iteration loop should copy with `Buffer.from()` if the upstream datagram lifetime is suspect. |
-| <a id="kind"></a> `kind` | [`RtpPacketKind`](#rtppacketkind-1) | `"rtp"` or `"rtcp"`, derived from the header's payload type field. |
-| <a id="payloadtype"></a> `payloadType` | `number` | The 7-bit payload type value from the second byte of the header, masked against `0x7F`. Provided raw so consumers can match specific RTP payload types (e.g., opus, g711) without re-parsing the header. |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="bytes"></a> `bytes` | `readonly` | `Buffer` | The complete UDP datagram bytes. Emitted as-is from the parser; consumers that need to hold it past the iteration loop should copy with `Buffer.from()` if the upstream datagram lifetime is suspect. |
+| <a id="kind"></a> `kind` | `readonly` | [`RtpPacketKind`](#rtppacketkind-1) | `"rtp"` or `"rtcp"`, derived from the header's payload type field. |
+| <a id="payloadtype"></a> `payloadType` | `readonly` | `number` | The 7-bit payload type value from the second byte of the header, masked against `0x7F`. Provided raw so consumers can match specific RTP payload types (e.g., opus, g711) without re-parsing the header. |
 
 ***
 

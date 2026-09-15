@@ -140,7 +140,8 @@ export function makeHdlrBox(handlerType: number, truncate = false): Buffer {
  *
  * @category Testing
  */
-export function makeTrunBox(options: {
+export function makeTrunBox({ includeDuration = false, includeSize = false, sampleFlagsValue, truncate = false, useFirstSampleFlags = false,
+  usePerSampleFlags = false }: {
   includeDuration?: boolean;
   includeSize?: boolean;
   sampleFlagsValue: number;
@@ -148,8 +149,6 @@ export function makeTrunBox(options: {
   useFirstSampleFlags?: boolean;
   usePerSampleFlags?: boolean;
 }): Buffer {
-
-  const { includeDuration = false, includeSize = false, sampleFlagsValue, truncate = false, useFirstSampleFlags = false, usePerSampleFlags = false } = options;
 
   // Always include the data_offset flag so the parser walks past it - matches real-world FFmpeg output and exercises the offset-skip branch without a dedicated test.
   let flags = TRUN_FLAG_DATA_OFFSET;

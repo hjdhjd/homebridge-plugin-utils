@@ -526,4 +526,33 @@ describe("Mp4SegmentAssembler - kind-tagged stream", () => {
     // A pre-init abort ends the stream with nothing yielded, mirroring segments()'s return-on-init-reject behavior.
     await assertDone(iter, "pre-init abort");
   });
+
+  test("refuses an assignment to a stream item's fields at compile time", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    const ftyp = makeBox("ftyp", Buffer.from("isomavc1"));
+    const moov = makeBox("moov", Buffer.from("movie-metadata"));
+
+    source.write(ftyp);
+    source.write(moov);
+
+    // The first moof is what resolves init, so the pair below has to reach the assembler before the stream can answer its opening item.
+    source.write(Buffer.concat([ makeBox("moof", Buffer.from([0x01])), makeBox("mdat", Buffer.from([0x02])) ]));
+
+    const iter = assembler.stream();
+    const first = await nextStreamItem(iter, "the init item");
+
+    assert.equal(first.kind, "init", "the first stream item must be the initialization segment");
+    assert.deepEqual(first.bytes, Buffer.concat([ ftyp, moov ]), "the init item must carry the concatenated pre-moof bytes verbatim");
+
+    // Type-level refusal only. `readonly` is erased at runtime, so the reads above run before the assignments below - each would land if the compiler admitted it.
+    // The directives fail typecheck if any field of Mp4Segment drops its modifier, so the contract is policed by `tsc --noEmit` rather than by the runner.
+    // @ts-expect-error - bytes is readonly.
+    first.bytes = Buffer.alloc(0);
+    // @ts-expect-error - kind is readonly.
+    first.kind = "media";
+  });
 });

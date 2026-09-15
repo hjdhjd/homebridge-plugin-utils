@@ -250,10 +250,10 @@ media fragments that follow it without relying on positional ordering.
 
 #### Properties
 
-| Property | Type | Description |
-| ------ | ------ | ------ |
-| <a id="bytes"></a> `bytes` | `Buffer` | The complete segment bytes: for `"init"`, the concatenated initialization boxes (typically `ftyp` + `moov`); for `"media"`, the concatenated boxes making up the fragment (typically a `moof` + `mdat` pair, though any additional boxes between them are included verbatim). |
-| <a id="kind"></a> `kind` | [`Mp4SegmentKind`](#mp4segmentkind-1) | `"init"` for the single leading initialization segment, `"media"` for each subsequent media fragment. |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="bytes"></a> `bytes` | `readonly` | `Buffer` | The complete segment bytes: for `"init"`, the concatenated initialization boxes (typically `ftyp` + `moov`); for `"media"`, the concatenated boxes making up the fragment (typically a `moof` + `mdat` pair, though any additional boxes between them are included verbatim). |
+| <a id="kind"></a> `kind` | `readonly` | [`Mp4SegmentKind`](#mp4segmentkind-1) | `"init"` for the single leading initialization segment, `"media"` for each subsequent media fragment. |
 
 ***
 

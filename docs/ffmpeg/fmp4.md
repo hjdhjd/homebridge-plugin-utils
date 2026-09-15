@@ -22,10 +22,10 @@ Describes the location of an ISO BMFF box within a buffer.
 
 #### Properties
 
-| Property | Type | Description |
-| ------ | ------ | ------ |
-| <a id="offset"></a> `offset` | `number` | The byte offset of the box start (including the header). |
-| <a id="size"></a> `size` | `number` | The total box size in bytes (including the header). |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="offset"></a> `offset` | `readonly` | `number` | The byte offset of the box start (including the header). |
+| <a id="size"></a> `size` | `readonly` | `number` | The total box size in bytes (including the header). |
 
 ***
 

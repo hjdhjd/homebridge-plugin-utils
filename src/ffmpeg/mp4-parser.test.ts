@@ -49,6 +49,24 @@ describe("Mp4BoxParser - single-chunk parsing", () => {
 
     assert.deepEqual(Array.from(parser.consume(Buffer.from([ 0x00, 0x00 ]))), []);
   });
+
+  test("refuses an assignment to a box's fields at compile time", () => {
+
+    const parser = new Mp4BoxParser();
+    const chunk = makeBox("moov", Buffer.from("abcd"));
+    const boxes = Array.from(parser.consume(chunk));
+    const box = expectAt(boxes, 0, "readonly box");
+
+    assert.deepEqual(Buffer.from(box.bytes), chunk, "the box must carry the chunk's bytes verbatim");
+    assert.equal(box.type, BOX_TYPE_MOOV, "the box must carry the type code its header encodes");
+
+    // Type-level refusal only. `readonly` is erased at runtime, so the reads above run before the assignments below - each would land if the compiler admitted it.
+    // The directives fail typecheck if any field of Mp4Box drops its modifier, so the contract is policed by `tsc --noEmit` rather than by the runner.
+    // @ts-expect-error - bytes is readonly.
+    box.bytes = Buffer.alloc(0);
+    // @ts-expect-error - type is readonly.
+    box.type = 0;
+  });
 });
 
 describe("Mp4BoxParser - cross-chunk reassembly", () => {

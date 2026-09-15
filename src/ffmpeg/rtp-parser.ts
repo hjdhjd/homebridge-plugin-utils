@@ -39,9 +39,9 @@ export type RtpPacketKind = "rtcp" | "rtp";
  */
 export interface RtpPacket {
 
-  bytes: Buffer;
-  kind: RtpPacketKind;
-  payloadType: number;
+  readonly bytes: Buffer;
+  readonly kind: RtpPacketKind;
+  readonly payloadType: number;
 }
 
 /**

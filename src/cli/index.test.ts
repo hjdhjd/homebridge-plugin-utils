@@ -17,6 +17,7 @@ import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { spliceJsonStringValue } from "../doc-json.ts";
 import { spliceMarkedRegion } from "../doc-markdown.ts";
@@ -64,6 +65,31 @@ async function setupSource({ files, root, version }: { files: readonly string[];
     await mkdir(dirname(absolute), { recursive: true });
     await writeFile(absolute, relative);
   }));
+}
+
+/**
+ * Compute the content hash `prepare-ui` writes into its manifest, consuming the named `dist/ui` files in the caller's order. Mirrors the CLI's hash-input
+ * construction - the relative POSIX path, a null delimiter, the file's bytes, a null delimiter - over the {@link setupSource} convention that each file's content is
+ * its own relative path, then truncates to the same 16 hex characters the manifest carries. Taking the order from the caller is what lets a test state the canonical
+ * ordering as an expectation and contrast it against a different one.
+ *
+ * @param order - The `dist/ui`-relative POSIX paths, in the order the hasher consumes them.
+ *
+ * @returns The truncated hex digest.
+ */
+function expectedHash(order: readonly string[]): string {
+
+  const hasher = createHash("sha256");
+
+  for(const rel of order) {
+
+    hasher.update(rel);
+    hasher.update("\0");
+    hasher.update(Buffer.from(rel));
+    hasher.update("\0");
+  }
+
+  return hasher.digest("hex").slice(0, 16);
 }
 
 /**
@@ -154,7 +180,7 @@ describe("prepareUi", () => {
 
     const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string; subdir: string; version: string };
 
-    // The subdir format is part of the consumer contract - plugins that parse the manifest field rely on the `<semver>-<16hex>` shape. Pinning it here so any
+    // The subdir format is part of the consumer contract - plugins that parse the manifest field rely on the `<semver>-<16hex>` shape. Asserting it here so any
     // future drift surfaces as a test failure before reaching consumers.
     assert.match(manifest.hash, /^[0-9a-f]{16}$/, "hash is the truncated SHA-256 prefix (16 hex chars)");
     assert.match(manifest.subdir, /^2\.0\.0-[0-9a-f]{16}$/, "subdir combines semver + hash with a hyphen");
@@ -258,6 +284,33 @@ describe("prepareUi", () => {
     const secondManifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string };
 
     assert.notEqual(secondManifest.hash, firstManifest.hash, "rename without content change must still produce a different hash");
+  });
+
+  test("hashes every file in relative-POSIX-path order, so the digest does not depend on the host's separator", async () => {
+
+    await using scratch = await makeScratchRoot();
+
+    const sourceRoot = join(scratch.path, "source");
+    const dest = join(scratch.path, "dest");
+
+    await mkdir(sourceRoot, { recursive: true });
+
+    /* `ui` and `uiZ` are the sibling pair whose ordering depends on the separator joining them to their children. Read as POSIX paths the tree sorts `ui/a.js` ahead
+     * of `uiZ/b.js`, because "/" (0x2F) sorts below "Z" (0x5A); read as Windows paths "\" (0x5C) sorts above "Z", putting `uiZ\b.js` first. The hash input is built
+     * from the relative POSIX path on every host, so the expectation below is the digest a Windows run produces as well.
+     */
+    const files = [ "ui/a.js", "uiZ/b.js" ];
+
+    await setupSource({ files, root: sourceRoot, version: "2.0.0" });
+    await prepareUi({ dest, sourceRoot });
+
+    const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string };
+
+    assert.equal(manifest.hash, expectedHash(files), "the digest must equal the one computed over the relative POSIX ordering");
+
+    // The control for the assertion above: the same two files hashed in the order a native-separator sort yields on Windows. The two digests must differ, which is
+    // what shows the expectation tracks the ordering rather than agreeing with any sequence of these files.
+    assert.notEqual(manifest.hash, expectedHash([ "uiZ/b.js", "ui/a.js" ]), "hashing the same files in a different order must produce a different digest");
   });
 
   test("removes stale prior-build subdirs while keeping the current build", async () => {

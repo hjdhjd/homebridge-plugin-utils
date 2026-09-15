@@ -62,9 +62,9 @@ export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
 
 /**
  * Compute a deterministic content hash over `root`'s file tree. Walks every file in lexicographic order of relative POSIX path so two runs against the same content
- * produce the same hash regardless of underlying filesystem ordering or the absolute path the tree sits at. Mixes both the relative path and the file bytes into
- * the hash so renames produce a different output even when content bytes are unchanged - that is the correct cache-bust semantic, since a rename is a visible
- * difference to any consumer importing the file by name.
+ * produce the same hash regardless of underlying filesystem ordering, the host's path separator, or the absolute path the tree sits at. Mixes both the relative
+ * path and the file bytes into the hash so renames produce a different output even when content bytes are unchanged - that is the correct cache-bust semantic,
+ * since a rename is a visible difference to any consumer importing the file by name.
  *
  * The null-byte (`\0`) delimiters between path and content prevent the synthetic boundary-blurring case where a long path concatenated with a short content could
  * share its hash input with a shorter path concatenated with a longer content. SHA-256's preimage resistance covers anything more contrived, but the explicit
@@ -83,24 +83,46 @@ async function computeContentHash(root: string): Promise<string> {
   // older Node versions required. `parentPath` is the non-deprecated way to recover each entry's directory (the `path` alias was deprecated in Node 20.12 /
   // 21.4); using it here keeps the implementation aligned with current Node idioms.
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  const filePaths = entries
+
+  /* Each file is carried as the absolute path the read needs beside the POSIX-normalized relative path that serves as both the sort key and the hashed key. Deriving
+   * that relative path once is what makes the digest identical on every platform: the ordering and the bytes handed to the hasher come from one derivation rather
+   * than two that agree only where the native separator is already "/". A tree holding `ui/a.js` and `uiZ/b.js` is the case that shows why it matters - "/" (0x2F)
+   * sorts below "Z" (0x5A) while "\" (0x5C) sorts above it, so native-separator ordering would feed the hasher those two files in the opposite order on Windows.
+   * The relative path also anchors the hash to the tree structure rather than the absolute location, so the same source tree built into `/tmp/a/dist/ui` and
+   * `/var/build/b/dist/ui` produces an identical hash. We order by the relative path's code units rather than through `localeCompare` so the sequence is the same
+   * on every build machine regardless of the host's locale.
+   */
+  const files = entries
     .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name))
-    .toSorted();
+    .map((entry) => {
+
+      const path = join(entry.parentPath, entry.name);
+
+      return { path, rel: relative(root, path).split(sep).join("/") };
+    })
+    .toSorted((left, right) => {
+
+      if(left.rel < right.rel) {
+
+        return -1;
+      }
+
+      if(left.rel > right.rel) {
+
+        return 1;
+      }
+
+      return 0;
+    });
 
   // Read every file's bytes in parallel, then feed them into the hasher sequentially. Parallel reads keep the I/O latency bound to the slowest single file rather
   // than the sum of all files; the sequential hash update is required because the hasher is stateful and must consume bytes in the canonical sorted order to
   // produce the same digest every run.
-  const fileBytes = await Promise.all(filePaths.map(async (path) => ({ bytes: await readFile(path), path })));
+  const fileBytes = await Promise.all(files.map(async ({ path, rel }) => ({ bytes: await readFile(path), rel })));
 
   const hasher = createHash("sha256");
 
-  for(const { bytes, path } of fileBytes) {
-
-    // Normalize separators to POSIX form so a hash computed on a Windows build matches a hash computed on Linux for the same tree contents. The relative path
-    // anchors the hash to the tree structure (not the absolute location), so the same source tree built into `/tmp/a/dist/ui` and `/var/build/b/dist/ui` produces
-    // an identical hash.
-    const rel = relative(root, path).split(sep).join("/");
+  for(const { bytes, rel } of fileBytes) {
 
     hasher.update(rel);
     hasher.update("\0");
@@ -927,7 +949,10 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
 
       // Reach HBPU's own loader renderer and the splice primitive through computed dynamic imports of their compiled modules - never static relative imports - so the
       // single-file bin stays symlink-safe. A dist complete enough to mirror `dist/ui` yet missing these is a build inconsistency that must fail loudly rather than
-      // silently skip the wanted stamp, exactly as prepare-docs hard-fails on its own missing renderer.
+      // silently skip the wanted stamp, exactly as prepare-docs hard-fails on its own missing renderer. The cast onto each module's interface below, here and in
+      // every sibling verb, carries no runtime shape check: both sides are generated by this same package's own build, so a mismatch can only accompany a
+      // missing-file build inconsistency, which the catch below already turns into the same "HBPU has not been built" diagnostic. That trust does not extend to
+      // the plugin-supplied catalog modules loaded elsewhere in this file, which HBPU does not control the shape of and validates explicitly before use.
       const loaderPath = join(sourceRoot, "dist", "webui-loader.js");
       const uiSplicePath = join(sourceRoot, "dist", "doc-markdown.js");
 

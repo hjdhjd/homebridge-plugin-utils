@@ -1352,7 +1352,7 @@ describe("the choice controls - construction", () => {
     const control = pickerRow(pickerState(), "Tier").querySelector(".fo-option-value");
 
     assert.equal(control.tagName, "SELECT", "one choice is a dropdown");
-    assert.equal(control.classList.contains("fo-option-value"), true, "the class the view, the theme, and the busy lock all address it by");
+    assert.equal(control.classList.contains("fo-option-value"), true, "the class the view finds the control by, whatever control the row is edited through");
     assert.equal(control.classList.contains("form-control"), true, "dressed as a form control like the text field beside it");
     assert.equal(control.style.width, "", "no inline width, whatever inputSize the option happens to declare");
     assert.equal(control.style.maxWidth, "", "and no inline cap, since the skin's rule carries the narrow-panel guard with it");
@@ -1392,6 +1392,28 @@ describe("the choice controls - construction", () => {
     assert.equal(control.classList.contains("fo-option-value"), true, "the group is the control, so the class sits on it");
     assert.equal(control.classList.contains("fo-choice-group"), true);
     assert.equal(control.style.fontFamily, "", "member labels read in the inherited body font");
+  });
+
+  test("the skin's field marker sits on the typed fields alone, never on a group or a wrapper", () => {
+
+    using _dom = createTestDom();
+
+    /* The two classes answer different questions. `fo-option-value` is how the view finds whatever control a row is edited through, and `fo-field` is how the
+     * skin finds a field to dress. A picker's fieldset and a list editor's wrapper are controls without being fields - each is a box around native inputs of its
+     * own - so a field's surface keyed to either of them would paint a hard-edged rectangle behind the members it holds.
+     */
+    const state = pickerState();
+    const field = pickerRow(state, "Plain").querySelector(".fo-option-value");
+    const select = pickerRow(state, "Tier").querySelector(".fo-option-value");
+    const group = pickerRow(state, "Types").querySelector(".fo-option-value");
+    const editor = pickerRow(state, "Plates").querySelector(".fo-option-value");
+
+    assert.equal(field.classList.contains("fo-field"), true, "a free-text field is a field");
+    assert.equal(select.classList.contains("fo-field"), true, "and so is a dropdown, which reads one value out of its list");
+    assert.equal(editor.querySelector(".fo-list-entry").classList.contains("fo-field"), true, "and so is the entry the next item is typed into");
+
+    assert.equal(group.classList.contains("fo-field"), false, "a picker group is a control without being a field");
+    assert.equal(editor.classList.contains("fo-field"), false, "and so is the editor holding the entries, whose own field carries the marker instead");
   });
 });
 

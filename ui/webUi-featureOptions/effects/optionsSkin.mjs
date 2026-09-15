@@ -303,18 +303,23 @@ const buildOptionsSkinCss = () => [
   ":root.fo-dark #search .form-control::placeholder { color: var(--fo-form-control-placeholder); }",
   ":root.fo-dark #statusInfo .text-muted { color: var(--fo-statusinfo-muted) !important; }",
 
-  /* A value option's field, dressed from the same tokens the search field reads and keyed on the class the renderer stamps on every value input. A masked secret
-   * field is that same construction with its type swapped, so this reaches it through the same hook rather than through a rule of its own. The correction is
-   * needed because Bootstrap locks in an explicit white background on a form control, which outranks the native `color-scheme` rendering - so a field left alone
-   * renders white on the dark surface while the search field beside it renders dark.
+  /* A value option's field, dressed from the same tokens the search field reads and keyed on the marker the renderer stamps on every typed field: the free-text
+   * input, the dropdown, and the list editor's entry. A masked secret field is that same construction with its type swapped, so this reaches it through the same
+   * marker rather than through a rule of its own. The correction is needed because Bootstrap locks in an explicit white background on a form control, which
+   * outranks the native `color-scheme` rendering - so a field left alone renders white on the dark surface while the search field beside it renders dark.
+   *
+   * The marker names what the treatment is for, a field, which is why the class the view finds a control by is deliberately not the skin's key: a control the view
+   * finds is not always a field. A picker group is a fieldset around native inputs and a list editor is a wrapper around its entries, and either one keyed into
+   * this treatment would paint a field's surface across the whole of itself as a hard-edged rectangle behind what it holds. Naming the field directly is also what
+   * lets the entry field take the treatment from this one trio: the marker sits on the field itself, where `:focus` and `::placeholder` can reach it.
    *
    * Light mode is deliberately Bootstrap's own, the same stance the page kit takes on its own fields, and the search field's light-mode accent styling is
    * pointedly not extended here: these fields sit inside the bordered category frame that already carries the accent, so the asymmetry with the trio above is a
    * choice about where accent belongs rather than an omission.
    */
-  ":root.fo-dark .fo-option-value { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); color: var(--fo-text-on-elevated); }",
-  ":root.fo-dark .fo-option-value::placeholder { color: var(--fo-form-control-placeholder); }",
-  ":root.fo-dark .fo-option-value:focus { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-focus-border); " +
+  ":root.fo-dark .fo-field { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); color: var(--fo-text-on-elevated); }",
+  ":root.fo-dark .fo-field::placeholder { color: var(--fo-form-control-placeholder); }",
+  ":root.fo-dark .fo-field:focus { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-focus-border); " +
     "box-shadow: var(--fo-focus-ring); color: var(--fo-text-on-elevated); }",
 
   /* A single choice's dropdown, sized by what it holds. `width: auto` hands the width back to the browser's own intrinsic sizing, which settles on one stable
@@ -324,15 +329,15 @@ const buildOptionsSkinCss = () => [
    * The rule is layout rather than theme, so it is deliberately not dark-qualified the way the treatment above is: a control has one width in both themes, and
    * qualifying the width per theme would say the sizing was a dark-mode opinion.
    */
-  "select.fo-option-value { max-width: 100%; width: auto; }",
+  "select.fo-field { max-width: 100%; width: auto; }",
 
   /* A picker group, which is what a multiple choice always renders as and what a single choice renders as when it reads as radio buttons. The members lay out as
    * a wrapping row so a long list reads across the content cell rather than down it, and each member's input sits beside its own text. The fieldset surrenders
    * the browser's default margin and padding, which exist for a bordered fieldset and read as stray indentation on one that carries no border.
    *
    * A member the option no longer offers reads in the attention color, which is the page's existing vocabulary for "this is here but is not ordinary." Nothing
-   * else is needed: the members are native inputs and follow `color-scheme` in both themes, and the group's own dark-mode surface comes from the
-   * `.fo-option-value` rules above, which the fieldset carries.
+   * else is needed: the members are native inputs and follow `color-scheme` in both themes, and the group sits on the row's surface with none of its own, which
+   * is why it carries no field marker and the treatment above passes it by.
    */
   ".fo-choice-group { display: flex; flex-wrap: wrap; gap: var(--fo-space-xs) var(--fo-space-md); border: 0; margin: 0; padding: 0; min-width: 0; }",
   ".fo-choice { display: inline-flex; align-items: center; gap: var(--fo-space-xs); margin: 0; cursor: pointer; }",
@@ -345,17 +350,6 @@ const buildOptionsSkinCss = () => [
   ".fo-list-editor { display: flex; flex-wrap: wrap; align-items: center; gap: var(--fo-space-xs) var(--fo-space-sm); min-width: 0; }",
   ".fo-list-item { display: inline-flex; align-items: center; gap: var(--fo-space-xs); padding: 0 var(--fo-space-xs); border-radius: var(--fo-radius-sm); " +
     "background-color: var(--fo-accent-bg); color: var(--fo-accent-fg); }",
-  ".fo-list-remove { display: inline-flex; align-items: center; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }",
-
-  /* The entry field's own dark treatment. The `.fo-option-value` rules above cannot reach it: that class sits on the editor's wrapper, `:focus` matches only the
-   * element actually holding focus, `::placeholder` exists only on a field, and neither background nor border is inherited - so the field would render light on
-   * the dark surface while the text field in the row above it rendered dark. These are the same rule variants as the `.fo-option-value` dark treatment above,
-   * read from the same tokens, addressed to the field as a descendant.
-   */
-  ":root.fo-dark .fo-list-editor .fo-list-entry { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); " +
-    "color: var(--fo-text-on-elevated); }",
-  ":root.fo-dark .fo-list-editor .fo-list-entry::placeholder { color: var(--fo-form-control-placeholder); }",
-  ":root.fo-dark .fo-list-editor .fo-list-entry:focus { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-focus-border); " +
-    "box-shadow: var(--fo-focus-ring); color: var(--fo-text-on-elevated); }"
+  ".fo-list-remove { display: inline-flex; align-items: center; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; }"
 
 ].join("\n");

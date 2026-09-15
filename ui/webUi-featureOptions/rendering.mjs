@@ -92,7 +92,9 @@ export const categoryShell = ({ category, scopeKind }) => {
  *
  * The row structure is uniform regardless of option kind: one row, one stacked content cell, so a long descriptive label and a compact value render through exactly
  * the same path and differ only in the control the value is edited through. Every value control carries the `fo-option-value` class, which is how the view finds
- * it, how the theme dresses it, and how the busy lock reaches it, so the row's DOM shape is one contract regardless of which control fills the slot.
+ * it - the delegation, the row writer, the focus hand-off, and the lock all reach a control by that class - so the row's DOM shape is one contract regardless of
+ * which control fills the slot. A typed field carries `fo-field` beside it, which is how the skin finds a field to dress. The two are separate because a control
+ * the view finds is not always a field: a picker group and a list editor are boxes around native inputs of their own.
  *
  * The element factories ({@link createCheckbox}, {@link createLabel}, {@link createValueInput}) build only the bare, state-independent shape. Every state-dependent
  * attribute - the checkbox tri-state, the value-input's value / disabled state, the label color, row visibility, the dependency badge - is set by {@link applyRowState}
@@ -532,7 +534,7 @@ const scopeColorClass = ({ entry, inheriting }) => {
 const createValueInput = ({ option }) => createElement("input", {
 
   ...(option.secret ? { autocomplete: "new-password" } : {}),
-  classList: [ "form-control", "shadow-none", "fo-option-value" ],
+  classList: [ "form-control", "shadow-none", "fo-option-value", "fo-field" ],
   style: {
 
     boxSizing: "content-box",
@@ -552,8 +554,9 @@ const RADIO_AUTOSELECT_MAX = 6;
 
 // Build the control a value-centric option is edited through, chosen by what the option declares. A picker offers a list - a group of checkboxes for several
 // choices, and for one choice whichever face {@link choicePresentation} settles on - and an option declaring no list keeps the free-text field, masked when it
-// holds a secret. Every branch returns an element carrying `fo-option-value`, which is the one class the view, the theme, and the busy lock all address the
-// control by.
+// holds a secret. Every branch returns an element carrying `fo-option-value`, which is the one class the view addresses the control by whatever fills the slot.
+// The skin's marker, `fo-field`, is stamped separately on the typed fields alone, since a group's fieldset and a list editor's wrapper are controls without being
+// fields.
 const createValueControl = ({ option }) => {
 
   if(option.choices !== undefined) {
@@ -601,7 +604,7 @@ const choicePresentation = (option) => {
 // programmatically - neither of those attributes binds a scripted selection - and never a row the user can pick, so the dropdown offers no blank choice at all.
 const createChoiceSelect = () => {
 
-  const select = createElement("select", { classList: [ "form-control", "shadow-none", "fo-option-value" ] });
+  const select = createElement("select", { classList: [ "form-control", "shadow-none", "fo-option-value", "fo-field" ] });
 
   select.appendChild(createElement("option", { disabled: true, hidden: true, value: "" }));
 
@@ -610,7 +613,8 @@ const createChoiceSelect = () => {
 
 // Build a picker group's fieldset. Pure and empty: every member comes from the projection's resolved list, written by {@link applyRowState}, which is also where
 // the members take their flavor - checkboxes for a multiple choice, radio buttons for a single one that reads as a group. The fieldset is what makes them one
-// control rather than several - the class the view finds, the lock addresses, and the theme lays out as a wrapping row.
+// control rather than several - the class the view finds and the lock addresses, beside the class the skin lays out as a wrapping row. It carries the view's marker
+// alone, since a fieldset is a control without being a field and its members follow `color-scheme` on their own.
 const createChoiceGroup = () => createElement("fieldset", { classList: [ "fo-option-value", "fo-choice-group" ] });
 
 // Build one member of a dropdown. An unknown member - a stored value the list no longer offers - carries its own class and a title saying so, since it is on
@@ -630,12 +634,15 @@ const createChoiceOption = (member) => createElement("option", {
  * The gestures live here, on the elements they belong to, rather than in the view's delegation, because they are how this control edits ITSELF - the same way a
  * text field's own caret handling is not the view's business. What the view sees is what it sees from a text field: one `change` event on the control, carrying
  * the whole value.
+ *
+ * The two markers land on different elements here. The wrapper is the control the view finds, so it carries `fo-option-value`, while the entry the next item is
+ * typed into is the only field in the editor, so it alone carries `fo-field` and the skin's field treatment reaches it directly.
  */
 const createListEditor = ({ option }) => {
 
   const field = createElement("input", {
 
-    classList: ["fo-list-entry"],
+    classList: [ "fo-list-entry", "fo-field" ],
     style: {
 
       boxSizing: "content-box",

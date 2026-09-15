@@ -285,14 +285,14 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
      * focus state come with them so a field cannot flash a light background the moment it takes focus. Each declared value is tied to its exact token: a
      * literal here would be a second definition of a color the tokens module already owns.
      */
-    assert.match(text, /:root\.fo-dark \.fo-option-value\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
-    assert.match(text, /:root\.fo-dark \.fo-option-value\s*\{[^}]*border-color:\s*var\(--fo-form-control-border\)/);
-    assert.match(text, /:root\.fo-dark \.fo-option-value\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)/);
-    assert.match(text, /:root\.fo-dark \.fo-option-value::placeholder\s*\{[^}]*color:\s*var\(--fo-form-control-placeholder\)/);
-    assert.match(text, /:root\.fo-dark \.fo-option-value:focus\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
-    assert.match(text, /:root\.fo-dark \.fo-option-value:focus\s*\{[^}]*border-color:\s*var\(--fo-form-control-focus-border\)/);
-    assert.match(text, /:root\.fo-dark \.fo-option-value:focus\s*\{[^}]*box-shadow:\s*var\(--fo-focus-ring\)/);
-    assert.match(text, /:root\.fo-dark \.fo-option-value:focus\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field\s*\{[^}]*border-color:\s*var\(--fo-form-control-border\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field::placeholder\s*\{[^}]*color:\s*var\(--fo-form-control-placeholder\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field:focus\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field:focus\s*\{[^}]*border-color:\s*var\(--fo-form-control-focus-border\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field:focus\s*\{[^}]*box-shadow:\s*var\(--fo-focus-ring\)/);
+    assert.match(text, /:root\.fo-dark \.fo-field:focus\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)/);
   });
 
   test("a dropdown takes its width from its own widest member rather than from the container", () => {
@@ -304,8 +304,8 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
     // long member from pushing the control past the content cell on a narrow panel.
     const text = skinCss();
 
-    assert.match(text, /select\.fo-option-value\s*\{[^}]*width:\s*auto/);
-    assert.match(text, /select\.fo-option-value\s*\{[^}]*max-width:\s*100%/);
+    assert.match(text, /select\.fo-field\s*\{[^}]*width:\s*auto/);
+    assert.match(text, /select\.fo-field\s*\{[^}]*max-width:\s*100%/);
   });
 
   test("the value-field THEME treatment is dark-only - light mode is left to Bootstrap", () => {
@@ -318,13 +318,18 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
      * The dropdown's sizing rule is the stated exception, and it is stated rather than dodged: a control has one width in both themes, so qualifying that rule
      * per theme to satisfy the sweep would have said the width was a dark-mode opinion. What the population asserts is therefore theme treatment, not every line
      * that happens to name the class.
+     *
+     * The second half holds the division the marker exists for: the class the view finds a control by carries no skin rule whatsoever, so a control that is not a
+     * field - a picker group, a list editor's wrapper - cannot take a field's surface merely by being findable.
      */
-    const valueRules = skinCss().match(/^.*\.fo-option-value.*$/gm) ?? [];
-    const isSizingRule = (rule) => rule.startsWith("select.fo-option-value");
+    const fieldRules = skinCss().match(/^.*\.fo-field.*$/gm) ?? [];
+    const hookRules = skinCss().match(/^.*\.fo-option-value.*$/gm) ?? [];
+    const isSizingRule = (rule) => rule.startsWith("select.fo-field");
 
-    assert.ok(valueRules.length > 0, "precondition: the skin does declare value-field rules");
-    assert.equal(valueRules.filter(isSizingRule).length, 1, "precondition: the sizing rule is among them, exactly once");
-    assert.ok(valueRules.every((rule) => rule.startsWith(":root.fo-dark ") || isSizingRule(rule)), "and every rule that dresses one is dark-qualified");
+    assert.ok(fieldRules.length > 0, "precondition: the skin does declare value-field rules");
+    assert.equal(fieldRules.filter(isSizingRule).length, 1, "precondition: the sizing rule is among them, exactly once");
+    assert.ok(fieldRules.every((rule) => rule.startsWith(":root.fo-dark ") || isSizingRule(rule)), "and every rule that dresses one is dark-qualified");
+    assert.deepEqual(hookRules, [], "the class the view finds a control by carries no skin rule at all");
   });
 });
 
@@ -530,13 +535,15 @@ describe("buildOptionsSkinCss - the choice group", () => {
     assert.equal(unknownRules[0].startsWith(":root.fo-dark"), false, "and it is deliberately not mode-qualified");
   });
 
-  test("the group inherits the dark surface through the shared value class rather than restating it", () => {
+  test("the group declares no surface of its own, since what a member looks like is the member's own business", () => {
 
     using _dom = createTestDom();
 
-    // The fieldset carries fo-option-value, so the dark form-control treatment above already reaches it; a rule of its own would be a second place to keep in step.
+    // A fieldset is what makes the members one control rather than a field in its own right: the members are native inputs that follow `color-scheme` in both
+    // modes, and the group sits on the row's surface. A fill declared here would paint a rectangle behind them and be a second place to keep in step besides.
     const groupRules = skinCss().match(/^.*\.fo-choice-group.*$/gm) ?? [];
 
+    assert.ok(groupRules.length > 0, "precondition: the skin does declare group rules");
     assert.equal(groupRules.every((rule) => !rule.includes("background-color")), true, "the group declares no surface of its own");
   });
 });
@@ -560,32 +567,15 @@ describe("buildOptionsSkinCss - the list editor", () => {
     assert.match(text, /\.fo-list-remove\s*\{[^}]*color:\s*inherit/);
   });
 
-  test("dresses the entry field for dark mode as a descendant, since the shared value rules cannot reach it", () => {
+  test("the editor's own rules touch no surface the field treatment owns, so the two do not fight", () => {
 
     using _dom = createTestDom();
 
-    const text = skinCss();
+    // The entry field wears the skin's field marker and takes its whole dark treatment from that one trio, which is dark-only. What the editor declares for
+    // itself is how the entries lay out, in both modes and with no surface among it, so nothing here can disagree with the trio about what a field looks like.
+    const editorRules = skinCss().match(/^.*\.fo-list-editor.*$/gm) ?? [];
 
-    /* The fo-option-value class sits on the editor's wrapper, not on the field: `:focus` matches only the element actually holding focus, `::placeholder` exists
-     * only on a field, and neither background nor border is inherited. Without these three the field would render light on the dark surface while the text field
-     * in the row above it rendered dark. Each value is tied to the same token the shared rules read, so the two cannot drift.
-     */
-    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*background-color:\s*var\(--fo-form-control-bg\)/);
-    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*border-color:\s*var\(--fo-form-control-border\)/);
-    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry\s*\{[^}]*color:\s*var\(--fo-text-on-elevated\)/);
-    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry::placeholder\s*\{[^}]*color:\s*var\(--fo-form-control-placeholder\)/);
-    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry:focus\s*\{[^}]*border-color:\s*var\(--fo-form-control-focus-border\)/);
-    assert.match(text, /:root\.fo-dark \.fo-list-editor \.fo-list-entry:focus\s*\{[^}]*box-shadow:\s*var\(--fo-focus-ring\)/);
-  });
-
-  test("the light-mode editor rules touch no surface the dark rules own, so the two do not fight", () => {
-
-    using _dom = createTestDom();
-
-    // The entry field's own treatment is dark-only, matching the stance the shared value rules take: light mode is Bootstrap's.
-    const fieldRules = skinCss().match(/^.*\.fo-list-entry.*$/gm) ?? [];
-
-    assert.ok(fieldRules.length > 0, "precondition: the skin does declare entry-field rules");
-    assert.ok(fieldRules.every((rule) => rule.startsWith(":root.fo-dark ")), "and every one of them is dark-qualified");
+    assert.ok(editorRules.length > 0, "precondition: the skin does declare editor rules");
+    assert.ok(editorRules.every((rule) => !rule.includes("background-color") && !rule.includes("border-color")), "the wrapper declares no field surface");
   });
 });

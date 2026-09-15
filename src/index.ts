@@ -3,6 +3,7 @@
  * index.ts: Homebridge plugin utilities.
  */
 export * from "./api-dispatcher.ts";
+export * from "./async-queue.ts";
 export * from "./backpressure.ts";
 export * from "./clock.ts";
 export * from "./coalesce.ts";

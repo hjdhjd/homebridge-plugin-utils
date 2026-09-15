@@ -24,6 +24,7 @@
  */
 import { BOX_TYPE_MDAT, BOX_TYPE_MOOF, Mp4BoxParser } from "./mp4-parser.ts";
 import { HbpuAbortError, Watchdog, composeSignals, isTimeoutReason, markHandled, onAbort, waitWithSignal } from "../util.ts";
+import { AsyncQueue } from "../async-queue.ts";
 import type { Clock } from "../clock.ts";
 import type { Mp4Box } from "./mp4-parser.ts";
 import type { Readable } from "node:stream";
@@ -145,13 +146,9 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
   // Accumulated box bytes for the media segment currently being built. Reset to empty each time an `mdat` flushes the accumulated boxes into the output queue.
   #segmentParts: Buffer[] = [];
 
-  // Completed media segments waiting to be yielded from `segments()`. A FIFO queue decouples the drain loop (producer) from the generator (consumer), which lets the
-  // consumer fall behind momentarily without dropping data.
-  #segmentQueue: Buffer[] = [];
-
-  // Parked waiter the generator uses to block until a segment is pushed or the signal aborts. A single-slot optional field is enough because the class is
-  // single-consumer by design.
-  #segmentWaiter: PromiseWithResolvers<void> | undefined;
+  // Completed media segments waiting for `segments()` to hand them over. The queue lets the consumer fall behind momentarily without dropping data, and it is why
+  // this class is single-consumer: one read parks on it at a time.
+  readonly #segmentQueue = new AsyncQueue<Buffer>();
 
   // The drain loop's promise. Held so `[Symbol.asyncDispose]` can await actual completion before returning, so callers using `await using` are guaranteed all drain
   // listeners have been detached by the time the block exits.
@@ -278,84 +275,33 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
    */
   public get bufferedSegments(): number {
 
-    return this.#segmentQueue.length;
+    return this.#segmentQueue.size;
   }
 
   /**
    * Async generator yielding each completed media segment as a single Buffer, its boxes concatenated in order (typically a `moof` + `mdat` pair, though any
    * additional boxes between them are included verbatim).
    *
-   * Yields only after {@link Mp4SegmentAssembler.initSegment} has resolved - the init segment is not surfaced through this stream. Terminates cleanly when the source
-   * ends, the assembler aborts, or the optional caller signal aborts; in every case the queue is drained before the generator returns, so a consumer never loses a
-   * segment that was already assembled before teardown.
+   * The first segment it yields follows {@link Mp4SegmentAssembler.initSegment}: nothing is queued before the first `moof`, so the init-first contract holds by
+   * construction, and the init segment itself is never surfaced through this stream. Terminates cleanly when the source ends, the assembler aborts, or the optional
+   * caller signal aborts; in every case the queue is drained before the generator returns, so a consumer never loses a segment that was already assembled before
+   * teardown - a call made after the lifetime has ended reads what was assembled and not yet handed over, then returns at once.
    *
-   * **Single-consumer only.** The internal parked-waiter slot is single-writer; calling `segments()` concurrently with another consumer on the same assembler - including
-   * the {@link Mp4SegmentAssembler.stream} view, which drives this generator internally - is unsupported and will hang one of the consumers when the producer's wake-up
-   * resolves only the later parker. If fan-out is needed, tee at the consumer side by replicating each yielded Buffer into per-consumer queues external to the assembler.
+   * **Single-consumer only.** The queue parks one read at a time; calling `segments()` concurrently with another consumer on the same assembler - including the
+   * {@link Mp4SegmentAssembler.stream} view, which drives this generator internally - is unsupported and will hang one of the consumers, because the push that wakes
+   * one park is a wake the other sleeps through. If fan-out is needed, tee at the consumer side by replicating each yielded Buffer into per-consumer queues external
+   * to the assembler.
    *
    * @param init - Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler.
    *
    * @returns An async generator yielding each media segment's concatenated boxes as a Buffer, in stream order.
    */
-  public async *segments(init: { signal?: AbortSignal } = {}): AsyncGenerator<Buffer> {
+  public segments(init: { signal?: AbortSignal } = {}): AsyncGenerator<Buffer> {
 
-    // Compose the per-call signal with the assembler's own signal upfront so every wait in this method honors caller cancellation uniformly. A caller who passes
-    // `init.signal` can terminate just this iterator (e.g., to drop a per-session consumer while the assembler keeps running for another session), while the
-    // assembler's signal still governs the underlying pipeline.
-    const composed = composeSignals(this.signal, init.signal);
-
-    // Gate media-segment delivery on the init-first contract. `waitWithSignal` races the init promise against the composed signal so a caller abort during the init
-    // wait terminates the iterator immediately rather than hanging until the assembler's own signal settles init.
-    try {
-
-      await waitWithSignal(this.initSegment, composed);
-    } catch {
-
-      return;
-    }
-
-    for(;;) {
-
-      // Swap-drain the queue: hand ourselves whatever the producer has staged, leave a fresh empty array for the producer to push into, then yield the snapshot. The
-      // outer for-loop re-enters on every yielded batch so segments pushed while the consumer awaited a previous yield are picked up on the next pass. Drain
-      // unconditionally before checking abort - "no bytes lost" is the rule for segments already assembled before teardown.
-      while(this.#segmentQueue.length > 0) {
-
-        const drained = this.#segmentQueue;
-
-        this.#segmentQueue = [];
-
-        for(const segment of drained) {
-
-          yield segment;
-        }
-      }
-
-      if(composed.aborted) {
-
-        return;
-      }
-
-      // Park until either a new segment is pushed (producer resolves the waiter) or the composed signal aborts. A per-iteration resolver is used so the waiter is
-      // always fresh; sharing a resolver across iterations would require manual reset logic.
-      const waiter: PromiseWithResolvers<void> = Promise.withResolvers();
-
-      this.#segmentWaiter = waiter;
-
-      // `onAbort` handles listener registration, the pre-aborted-signal pitfall, and the one-shot `{ once: true }` semantic through one primitive; the returned
-      // `Disposable` is handed to `using` so the listener is deterministically removed on every scope-exit path (segment push via `#handleBox`, caller signal abort,
-      // assembler abort, thrown error in the generator). The single unified primitive matches the shape `waitWithSignal` uses for exactly the same kind of parked wait.
-      using _abortRegistration = onAbort(composed, () => waiter.resolve());
-
-      try {
-
-        // eslint-disable-next-line no-await-in-loop
-        await waiter.promise;
-      } finally {
-
-        this.#segmentWaiter = undefined;
-      }
-    }
+    // The read is the queue's drain under a signal composed from the assembler's own and the caller's: the drain hands over everything assembled before it honors
+    // that signal, and the per-call half ends this read alone - the assembler goes on running for whoever else is reading it. No init gate stands here because none
+    // is needed: nothing reaches the queue before the first `moof`, so the first segment a read meets already follows the initialization segment.
+    return this.#segmentQueue.drain(composeSignals(this.signal, init.signal));
   }
 
   /**
@@ -367,7 +313,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
    * before the generator returns, so no assembled segment is lost. If the assembler is aborted before the initialization segment arrives, the generator returns without
    * yielding anything.
    *
-   * **Single-consumer only.** `stream()` drives {@link segments} internally, so it shares the one parked-waiter slot. Use `stream()` OR the {@link initSegment} /
+   * **Single-consumer only.** `stream()` drives {@link segments} internally, so it shares the one queue. Use `stream()` OR the {@link initSegment} /
    * {@link segments} pair on a single assembler, never both concurrently - mixing them competes for the same drain and hangs one consumer.
    *
    * @param init - Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler.
@@ -390,8 +336,8 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
       return;
     }
 
-    // The one init item, then every media segment relabeled. The media loop delegates to segments() so the swap-drain, the parked wait, and the no-bytes-lost teardown
-    // stay in exactly one place rather than being reimplemented here.
+    // The one init item, then every media segment relabeled. The media loop delegates to segments() so the queue's drain under the per-call signal stays in exactly
+    // one place rather than being reimplemented here.
     yield { bytes: initBytes, kind: "init" };
 
     for await (const segment of this.segments(init)) {
@@ -402,11 +348,11 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
 
   // Drain loop. Attaches the source's `end` listener, then iterates `events.on(source, "data", { signal })` until the composed signal aborts. For each chunk, the
   // parser is fed and every complete box is dispatched through `#handleBox`. Every exit path - source end, source error, external abort - converges on the signal
-  // being aborted, which lets the generator's park loop unwind uniformly via `composed.aborted`.
+  // being aborted, which every `segments()` read observes through its composed signal, so the queue's drain ends the same way whichever path fired.
   async #drain(): Promise<void> {
 
-    // Source end: the byte producer has nothing more to say. Drive teardown through the signal with reason `"closed"`; the signal's teardown listener will resolve the
-    // generator's parked waiter and reject any pending init. Guard against double-abort when the signal already fired (e.g., external teardown that destroyed the
+    // Source end: the byte producer has nothing more to say. Drive teardown through the signal with reason `"closed"`; the signal's teardown listener rejects any
+    // pending init, and the queue's own drain observes the abort. Guard against double-abort when the signal already fired (e.g., external teardown that destroyed the
     // source and produced both `end` and our own abort).
     const onEnd = (): void => {
 
@@ -488,20 +434,17 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
 
       this.#segmentParts = [];
       this.#segmentQueue.push(segment);
-      this.#segmentWaiter?.resolve();
       this.#watchdog?.arm();
     }
   }
 
-  // Single teardown convergence point, fired exactly once when `this.signal` aborts. Rejects a pending init promise and unblocks the generator so the drain-and-return
-  // sequence can run. The watchdog self-cleans through its own signal listener, and `exited`-style promises are not in this class's contract - the generator is the
-  // exit surface and it wakes up via the resolved waiter.
+  // Single teardown convergence point, fired exactly once when `this.signal` aborts. Rejects a pending init promise; the queue's drain observes the signal itself,
+  // so there is nothing here to wake it with. The watchdog self-cleans through its own signal listener, and `exited`-style promises are not in this class's
+  // contract - the generator is the exit surface.
   #teardown(): void {
 
     // Promise resolvers are inert after first settlement, so calling reject on an already-resolved init promise is a safe no-op. This lets us keep the teardown
     // path uniform regardless of whether init arrived before the abort or not.
     this.#initResolvers.reject(this.signal.reason);
-
-    this.#segmentWaiter?.resolve();
   }
 }

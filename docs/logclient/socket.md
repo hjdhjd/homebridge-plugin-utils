@@ -29,8 +29,8 @@ Lifecycle, in one pass:
 - A Socket.IO CONNECT_ERROR (`44/log,`) on the namespace is surfaced as a connect-phase failure - transient and retried for a refreshable credential (password/noauth),
   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
 
-Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, and settles
-the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. One optional
+Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN and ALWAYS issues `close(1000)`; the
+session's watchdog self-disposes through its own composed-signal listener rather than through teardown. One optional
 [Clock](../clock.md#clock) carries both of the socket's timing concerns - the per-session liveness window and the reconnect backoff - so a test injects a `TestClock` and drives
 the whole reconnect-and-liveness story from one lever, while the backoff shape stays independently steerable through the injected `backoff` policy.
 
@@ -189,13 +189,12 @@ stdout(): AsyncGenerator<string>;
 The bounded push-to-pull stream of raw log lines (ANSI intact, terminators removed) the server streams over the log namespace's `stdout` events.
 
 The server delivers `stdout` as raw text chunks whose boundaries do not align with log lines; the socket runs each chunk through a per-session
-[LogLineSplitter](parser.md#loglinesplitter), yields complete lines here, and flushes it on each session's close so the final line is never stranded. Mirroring
-`Mp4SegmentAssembler.segments`, a bounded queue decouples the WebSocket producer from this consumer, and a single parked waiter blocks the consumer when the queue is
-empty until a line is pushed or the socket aborts. The queue survives reconnects - the same iterable keeps yielding across a drop-and-reconnect - so a consumer
-iterates it once for the whole socket lifetime. The stream terminates (returns) when the socket aborts; the queue is drained before it returns, so a line already
-staged before teardown is never lost.
+[LogLineSplitter](parser.md#loglinesplitter), yields complete lines here, and flushes it on each session's close so the final line is never stranded. The lines are kept in an
+[AsyncQueue](../async-queue.md#asyncqueue) bounded by the high-water mark, which decouples the WebSocket producer from this consumer. The queue belongs to the socket rather than to any
+one session, so it survives reconnects - the same iterable keeps yielding across a drop-and-reconnect - and a consumer iterates it once for the whole socket
+lifetime. The stream terminates (returns) when the socket aborts; the queue is drained before it returns, so a line already staged before teardown is never lost.
 
-**Single-consumer only.** The parked-waiter slot is single-writer; iterating `stdout()` concurrently from two consumers is unsupported.
+**Single-consumer only.** The queue parks one read at a time; iterating `stdout()` concurrently from two consumers is unsupported.
 
 ###### Returns
 
@@ -256,7 +255,7 @@ Construction-time options for [LogSocket](#logsocket).
 | <a id="random"></a> `random?` | `readonly` | () => `number` | Injectable source of `[0, 1)` randomness for backoff jitter. Defaults to `Math.random`; held fixed in tests for deterministic backoff. |
 | <a id="refreshable"></a> `refreshable` | `readonly` | `boolean` | Whether the credential backing [LogSocketInit.tokenProvider](#tokenprovider) can mint a fresh token on a reconnect. `true` for `password`/`noauth` credentials (each connect re-authenticates), `false` for a static `token`. When `false`, a handshake/namespace auth rejection is raised as a permanent [LogAuthError](auth.md#logautherror) so the connect-phase retry veto makes it terminal rather than retrying a token that cannot be refreshed. |
 | <a id="signal-1"></a> `signal?` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) composed with the socket's internal controller. When the parent aborts, the socket tears down. |
-| <a id="stdouthighwater"></a> `stdoutHighWater?` | `readonly` | `number` | Optional high-water mark for the bounded stdout queue. Defaults to `10000`. Overflow drops the oldest lines. |
+| <a id="stdouthighwater"></a> `stdoutHighWater?` | `readonly` | `number` | Optional high-water mark for the bounded stdout queue, a positive integer. Defaults to `10000`. Overflow drops the oldest lines. |
 | <a id="tls"></a> `tls?` | `readonly` | `boolean` | When `true`, use the secure (`wss`) scheme; when `false` or omitted, plaintext (`ws`). |
 | <a id="tokenprovider"></a> `tokenProvider` | `readonly` | [`TokenProvider`](#tokenprovider-1) | Re-acquires a fresh token per connect attempt. See [TokenProvider](#tokenprovider-1). |
 | <a id="websocketfactory"></a> `webSocketFactory?` | `readonly` | [`WebSocketFactory`](#websocketfactory-1) | The factory that constructs the underlying WebSocket. Defaults to [webSocketFactory](#websocketfactory-2). |

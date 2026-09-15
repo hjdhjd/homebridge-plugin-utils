@@ -74,8 +74,8 @@ describe("Mp4SegmentAssembler - init segment contract", () => {
 
     const iter = assembler.segments();
 
-    // Feed a complete init + first media segment. Until the init resolves, the generator must block on the init promise - a premature yield would signal that the
-    // ftyp / moov boxes leaked into the media stream.
+    // Feed a complete init + first media segment. Nothing reaches the queue before the first moof, so the read parks until the first media segment is pushed - a
+    // premature yield would signal that the ftyp / moov boxes leaked into the media stream.
     source.write(makeBox("ftyp"));
     source.write(makeBox("moov"));
     source.write(makeBox("moof"));
@@ -183,6 +183,156 @@ describe("Mp4SegmentAssembler - signal-aware termination", () => {
     assert.equal(assembler.signal.reason, reason);
   });
 
+  test("segments assembled before an explicit abort still surface after it, then the generator returns", async () => {
+
+    const source = new PassThrough();
+    const assembler = new Mp4SegmentAssembler(source);
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xAA])));
+
+    const iter = assembler.segments();
+
+    await nextSegment(iter, "the first segment, read before anything else happens");
+
+    // Two more pairs are assembled while nothing is pulling, so both are queued when the abort fires. Each pair's `mdat` carries its own payload byte, which ends
+    // up as that segment's last byte, so the bytes the assertions below read are what proves the order they were handed over in.
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xBB])));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xCC])));
+
+    await delay(10);
+
+    // The proof this row exists for: both segments were sitting in the queue when the abort fired, and the drain hands them over before it honors the signal.
+    assembler.abort(new HbpuAbortError("shutdown"));
+
+    const second = await nextSegment(iter, "the second segment, queued before the abort");
+    const third = await nextSegment(iter, "the third segment, queued before the abort");
+
+    assert.equal(second.at(-1), 0xBB, "the segment queued first must be handed over first");
+    assert.equal(third.at(-1), 0xCC, "the segment queued second must be handed over second");
+
+    await assertDone(iter, "the generator must return once the queue is empty and the signal has aborted");
+  });
+
+  test("a second segments() call after the first has returned ends at once", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xAA])));
+    source.end();
+
+    const segments: Buffer[] = [];
+
+    for await (const segment of assembler.segments()) {
+
+      segments.push(segment);
+    }
+
+    assert.equal(segments.length, 1, "the one assembled segment must be handed over before the generator returns");
+
+    // The lifetime ended with the source, so a fresh call meets an empty queue and a signal that has already aborted.
+    await assertDone(assembler.segments(), "a second segments() call after the first has returned must end at once");
+    assert.equal(isHbpuAbortReason(assembler.signal.reason, "closed"), true, "a natural source end must abort the assembler's signal with reason \"closed\"");
+  });
+
+  test("a per-call abort while the generator is parked between segments ends that generator alone", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    const perCall = new AbortController();
+    const iter = assembler.segments({ signal: perCall.signal });
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xAA])));
+
+    await nextSegment(iter, "the one segment assembled before the per-call abort");
+
+    // Leave the generator parked on an empty queue, then abort the caller's own signal. The park is under the composed signal, so the caller's signal ends this
+    // read and nothing else: the assembler goes on running for whoever else is reading it.
+    const parked = iter.next();
+
+    await delay(10);
+
+    perCall.abort(new HbpuAbortError("replaced"));
+
+    const result = await parked;
+
+    assert.equal(result.done, true, "a per-call abort must end the read that was parked under it");
+    assert.equal(assembler.aborted, false, "a per-call abort must not propagate to the assembler's own signal");
+  });
+
+  test("bufferedSegments counts the segments assembled and not yet handed to a read", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xAA])));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xBB])));
+
+    await delay(10);
+
+    assert.equal(assembler.bufferedSegments, 2, "both assembled segments must be counted while nothing is reading");
+
+    const iter = assembler.segments();
+
+    await nextSegment(iter, "the first of the two segments assembled before any read");
+
+    // A read takes the whole batch at once, so nothing is left buffered even though the second of the two has not been yielded yet.
+    assert.equal(assembler.bufferedSegments, 0, "a read that has taken the batch must leave nothing buffered");
+
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xCC])));
+
+    await delay(10);
+
+    assert.equal(assembler.bufferedSegments, 1, "a segment assembled after the batch was taken must be counted again");
+  });
+
+  test("a segments() call that starts after the lifetime has ended still hands over what was assembled and not yet read", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xAA])));
+
+    await delay(10);
+
+    assert.equal(assembler.bufferedSegments, 1, "the segment must be assembled and queued before the lifetime ends");
+
+    // The lifetime ends with a segment queued and nobody reading. A read that starts only now is the queue's drain under a signal that has already aborted, which
+    // hands over what is queued before it returns: the init-first contract needs no gate for that to hold, because nothing was queued before the init boxes.
+    assembler.abort(new HbpuAbortError("shutdown"));
+
+    const iter = assembler.segments();
+    const segment = await nextSegment(iter, "the segment assembled before the lifetime ended");
+
+    assert.equal(segment.at(-1), 0xAA, "a read that starts after the abort must still hand over the segment assembled before it");
+
+    await assertDone(iter, "the generator must return once the queue is empty and the signal has aborted");
+  });
+
   test("parent signal abort propagates through AbortSignal.any to the assembler's composed signal", async () => {
 
     const parent = new AbortController();
@@ -209,8 +359,8 @@ describe("Mp4SegmentAssembler - signal-aware termination", () => {
 
   test("per-call signal aborts the generator while the initSegment wait is still pending", async () => {
 
-    // Guards the init-first contract's cancellation semantics: `waitWithSignal` races the init promise against the composed signal, so a per-call abort during the
-    // init-wait window terminates the iterator immediately rather than waiting for the assembler's own signal to settle init.
+    // Guards the cancellation half of the init-first contract: the read parks on the empty queue under the composed signal, so a per-call abort before the first
+    // media segment arrives ends the iterator immediately rather than waiting for the assembler's own signal.
     const source = new PassThrough();
 
     await using assembler = new Mp4SegmentAssembler(source);
@@ -222,7 +372,7 @@ describe("Mp4SegmentAssembler - signal-aware termination", () => {
     const perCall = new AbortController();
     const iter = assembler.segments({ signal: perCall.signal });
 
-    // Kick the next() so the generator reaches its init-wait phase, then abort the caller's per-call signal. The generator must return without hanging.
+    // Kick the next() so the read parks on the empty queue, then abort the caller's per-call signal. The generator must return without hanging.
     const firstNext = iter.next();
 
     await delay(10);
@@ -523,7 +673,7 @@ describe("Mp4SegmentAssembler - kind-tagged stream", () => {
 
     assembler.abort(new HbpuAbortError("replaced"));
 
-    // A pre-init abort ends the stream with nothing yielded, mirroring segments()'s return-on-init-reject behavior.
+    // A pre-init abort ends the stream with nothing yielded: the init wait rejects before the media loop is reached.
     await assertDone(iter, "pre-init abort");
   });
 

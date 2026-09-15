@@ -190,13 +190,15 @@ segments(init?): AsyncGenerator<Buffer<ArrayBufferLike>>;
 Async generator yielding each completed media segment as a single Buffer, its boxes concatenated in order (typically a `moof` + `mdat` pair, though any
 additional boxes between them are included verbatim).
 
-Yields only after [Mp4SegmentAssembler.initSegment](#initsegment) has resolved - the init segment is not surfaced through this stream. Terminates cleanly when the source
-ends, the assembler aborts, or the optional caller signal aborts; in every case the queue is drained before the generator returns, so a consumer never loses a
-segment that was already assembled before teardown.
+The first segment it yields follows [Mp4SegmentAssembler.initSegment](#initsegment): nothing is queued before the first `moof`, so the init-first contract holds by
+construction, and the init segment itself is never surfaced through this stream. Terminates cleanly when the source ends, the assembler aborts, or the optional
+caller signal aborts; in every case the queue is drained before the generator returns, so a consumer never loses a segment that was already assembled before
+teardown - a call made after the lifetime has ended reads what was assembled and not yet handed over, then returns at once.
 
-**Single-consumer only.** The internal parked-waiter slot is single-writer; calling `segments()` concurrently with another consumer on the same assembler - including
-the [Mp4SegmentAssembler.stream](#stream) view, which drives this generator internally - is unsupported and will hang one of the consumers when the producer's wake-up
-resolves only the later parker. If fan-out is needed, tee at the consumer side by replicating each yielded Buffer into per-consumer queues external to the assembler.
+**Single-consumer only.** The queue parks one read at a time; calling `segments()` concurrently with another consumer on the same assembler - including the
+[Mp4SegmentAssembler.stream](#stream) view, which drives this generator internally - is unsupported and will hang one of the consumers, because the push that wakes
+one park is a wake the other sleeps through. If fan-out is needed, tee at the consumer side by replicating each yielded Buffer into per-consumer queues external
+to the assembler.
 
 ###### Parameters
 
@@ -225,7 +227,7 @@ Terminates cleanly on the same conditions as [segments](#segments): the source e
 before the generator returns, so no assembled segment is lost. If the assembler is aborted before the initialization segment arrives, the generator returns without
 yielding anything.
 
-**Single-consumer only.** `stream()` drives [segments](#segments) internally, so it shares the one parked-waiter slot. Use `stream()` OR the [initSegment](#initsegment) /
+**Single-consumer only.** `stream()` drives [segments](#segments) internally, so it shares the one queue. Use `stream()` OR the [initSegment](#initsegment) /
 [segments](#segments) pair on a single assembler, never both concurrently - mixing them competes for the same drain and hangs one consumer.
 
 ###### Parameters

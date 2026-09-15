@@ -234,6 +234,42 @@ describe("LogSocket - reconnect", () => {
     assert.deepEqual(ws1.sent, [ "40/log,", "42/log,[\"tail-log\",{\"cols\":80,\"rows\":24}]" ]);
   });
 
+  test("a line staged before a reconnect is read after the new session is up, from the same iterator", async () => {
+
+    const factory = new TestWebSocketFactory();
+
+    await using socket = new LogSocket(makeInit(factory));
+
+    // The iterator is created and never pulled, so the line staged under the first session is still queued when that session drops.
+    const iter = socket.stdout();
+
+    await settle();
+
+    const ws0 = factory.sockets[0];
+
+    assert.ok(ws0 !== undefined);
+
+    await completeHandshake(ws0);
+
+    ws0.emitMessage("42/log,[\"stdout\",\"before\\r\\n\"]");
+    await settle();
+
+    ws0.emitClose(1006);
+
+    const ws1 = await factory.socketCreated(1);
+
+    await completeHandshake(ws1);
+
+    ws1.emitMessage("42/log,[\"stdout\",\"after\\r\\n\"]");
+    await settle();
+
+    const first = await iter.next();
+    const second = await iter.next();
+
+    assert.equal(first.value, "before", "a line staged under the session that dropped must survive the reconnect");
+    assert.equal(second.value, "after", "the same iterator must go on yielding under the session that came up in its place");
+  });
+
   test("retries a transient connect failure", async () => {
 
     const factory = new TestWebSocketFactory();
@@ -591,6 +627,79 @@ describe("LogSocket - teardown and abort", () => {
     await socket[Symbol.asyncDispose]();
   });
 
+  test("lines staged before an abort surface after it, then the stream ends", async () => {
+
+    const factory = new TestWebSocketFactory();
+
+    const socket = new LogSocket(makeInit(factory));
+
+    // The iterator is created and never pulled, so both lines are still staged in the queue when the abort fires.
+    const iter = socket.stdout();
+
+    await settle();
+
+    const ws0 = factory.sockets[0];
+
+    assert.ok(ws0 !== undefined);
+
+    await completeHandshake(ws0);
+
+    // Each line ends on the two-character break. The per-session splitter holds a line whose chunk ends on a lone terminator until the session's close flush,
+    // because the next chunk may carry the partner half of a pair, so a row that stages a line before an abort has to stage it unambiguously.
+    ws0.emitMessage("42/log,[\"stdout\",\"l1\\r\\nl2\\r\\n\"]");
+    await settle();
+
+    socket.abort();
+
+    const first = await iter.next();
+    const second = await iter.next();
+    const third = await iter.next();
+
+    assert.equal(first.value, "l1", "the line staged first must be handed over first");
+    assert.equal(second.value, "l2", "the line staged second must be handed over second");
+    assert.equal(third.done, true, "the stream must end once the staged lines have been read and the socket has aborted");
+
+    await socket[Symbol.asyncDispose]();
+  });
+
+  test("a second stdout() call after the stream has ended returns at once", async () => {
+
+    const factory = new TestWebSocketFactory();
+
+    await using socket = new LogSocket(makeInit(factory));
+
+    await settle();
+
+    const ws0 = factory.sockets[0];
+
+    assert.ok(ws0 !== undefined);
+
+    await completeHandshake(ws0);
+
+    ws0.emitMessage("42/log,[\"stdout\",\"l1\\r\\n\"]");
+    await settle();
+
+    socket.abort();
+
+    const lines: string[] = [];
+
+    for await (const line of socket.stdout()) {
+
+      lines.push(line);
+    }
+
+    assert.deepEqual(lines, ["l1"], "the line staged before the abort must be read before the stream ends");
+
+    const afterwards: string[] = [];
+
+    for await (const line of socket.stdout()) {
+
+      afterwards.push(line);
+    }
+
+    assert.deepEqual(afterwards, [], "a second stdout() call after the stream has ended must return at once");
+  });
+
   test("double abort is a no-op", async () => {
 
     const factory = new TestWebSocketFactory();
@@ -691,6 +800,41 @@ describe("LogSocket - bounded stdout queue", () => {
     }
 
     assert.deepEqual(remaining, [ "l4", "l5", "l6" ], "the bound must retain the most recent lines, dropping the oldest");
+  });
+
+  test("a stdoutHighWater that is not a positive integer is refused at construction", () => {
+
+    const factory = new TestWebSocketFactory();
+
+    // The socket refuses the value in its own words before it builds the queue, so the sentence a caller reads names the option the caller wrote.
+    const refusal = (error: unknown): boolean => (error instanceof TypeError) && error.message.includes("stdoutHighWater");
+
+    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: 0 })), refusal, "a mark of zero is a queue that could never hold a line");
+    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: -1 })), refusal, "a negative mark describes no bound at all");
+    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: 1.5 })), refusal, "a fractional mark is a ceiling no integer depth reaches exactly");
+    assert.equal(factory.sockets.length, 0, "a socket refused at construction must not have connected");
+  });
+
+  test("a socket that has dropped nothing logs no overflow warning", async () => {
+
+    const factory = new TestWebSocketFactory();
+    const log = capturingLog();
+
+    await using _socket = new LogSocket(makeInit(factory, { log }));
+
+    await settle();
+
+    const ws0 = factory.sockets[0];
+
+    assert.ok(ws0 !== undefined);
+
+    await completeHandshake(ws0);
+
+    // The warning belongs to the drop, not to the line. A condition that read the count the other way round would fire here, where nothing has been dropped at all.
+    ws0.emitMessage("42/log,[\"stdout\",\"one\\r\\n\"]");
+    await settle();
+
+    assert.equal(log.entries.filter((entry) => entry.level === "warn").length, 0, "a socket that has dropped nothing must log no overflow warning");
   });
 });
 

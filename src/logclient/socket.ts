@@ -27,8 +27,8 @@
  * - A Socket.IO CONNECT_ERROR (`44/log,`) on the namespace is surfaced as a connect-phase failure - transient and retried for a refreshable credential (password/noauth),
  *   permanent and made terminal by the `shouldRetry` veto for a static token that cannot be refreshed.
  *
- * Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN, ALWAYS issues `close(1000)`, and settles
- * the parked stdout waiter exactly once; the session's watchdog self-disposes through its own composed-signal listener rather than through teardown. One optional
+ * Teardown is safe to repeat and state-gated: it sends a namespace DISCONNECT (`41/log,`) only when the socket is still OPEN and ALWAYS issues `close(1000)`; the
+ * session's watchdog self-disposes through its own composed-signal listener rather than through teardown. One optional
  * {@link Clock} carries both of the socket's timing concerns - the per-session liveness window and the reconnect backoff - so a test injects a `TestClock` and drives
  * the whole reconnect-and-liveness story from one lever, while the backoff shape stays independently steerable through the injected `backoff` policy.
  *
@@ -38,6 +38,7 @@ import { DEFAULT_PORT, JITTER_FRACTION, LOG_NAMESPACE, MARGIN_MS, PTY_COLUMNS, P
 import { HbpuAbortError, Watchdog, composeSignals, exponentialBackoff, formatErrorMessage, onAbort, retry } from "../util.ts";
 import { LOG_NAMESPACE_PATH, decodeFrame, encodeFrame } from "./frame.ts";
 import { LogAuthError, isPermanentAuthError } from "./auth.ts";
+import { AsyncQueue } from "../async-queue.ts";
 import type { Clock } from "../clock.ts";
 import type { HomebridgePluginLogging } from "../util.ts";
 import { LogLineSplitter } from "./parser.ts";
@@ -132,7 +133,7 @@ export const webSocketFactory: WebSocketFactory = (url: string): WebSocketLike =
  *                              credentials (each connect re-authenticates), `false` for a static `token`. When `false`, a handshake/namespace auth rejection is raised as
  *                              a permanent {@link LogAuthError} so the connect-phase retry veto makes it terminal rather than retrying a token that cannot be refreshed.
  * @property signal           - Optional parent {@link AbortSignal} composed with the socket's internal controller. When the parent aborts, the socket tears down.
- * @property stdoutHighWater  - Optional high-water mark for the bounded stdout queue. Defaults to `10000`. Overflow drops the oldest lines.
+ * @property stdoutHighWater  - Optional high-water mark for the bounded stdout queue, a positive integer. Defaults to `10000`. Overflow drops the oldest lines.
  * @property tls              - When `true`, use the secure (`wss`) scheme; when `false` or omitted, plaintext (`ws`).
  * @property tokenProvider    - Re-acquires a fresh token per connect attempt. See {@link TokenProvider}.
  * @property webSocketFactory - The factory that constructs the underlying WebSocket. Defaults to {@link webSocketFactory}.
@@ -311,19 +312,16 @@ export class LogSocket implements LogSocketLike {
   readonly #port: number;
   readonly #random: () => number;
   readonly #refreshable: boolean;
-  readonly #stdoutHighWater: number;
   readonly #tls: boolean;
   readonly #tokenProvider: TokenProvider;
   readonly #webSocketFactory: WebSocketFactory;
 
-  // The bounded queue of raw stdout lines staged for the `stdout()` consumer, plus the single parked waiter the consumer blocks on when the queue is empty. The class is
-  // single-consumer by design, mirroring `Mp4SegmentAssembler`: one parked-waiter slot is sufficient.
-  #stdoutQueue: string[] = [];
-  #stdoutWaiter: PromiseWithResolvers<void> | undefined;
+  // The raw stdout lines staged for the `stdout()` consumer, in a queue built with the socket's high-water mark. What the queue does when it reaches that mark is
+  // the queue's own contract; the socket owns the value and the one-time warning, and nothing else about it.
+  readonly #stdoutQueue: AsyncQueue<string>;
 
-  // The number of lines dropped because the stdout queue hit its high-water mark, and a one-time flag so a chronically-slow consumer is warned exactly once rather than
-  // on every drop. Tracking the count lets the single warning report the magnitude of the loss.
-  #droppedLines = 0;
+  // A one-time flag so a chronically-slow consumer is warned exactly once rather than on every drop. The queue's own count of what it has discarded is what that
+  // warning reports and what `droppedLines` reads.
   #overflowLogged = false;
 
   // The background reconnect loop's promise, retained so `[Symbol.asyncDispose]` can await its completion before returning.
@@ -341,13 +339,22 @@ export class LogSocket implements LogSocketLike {
    */
   public constructor(init: LogSocketInit) {
 
+    const stdoutHighWater = init.stdoutHighWater ?? DEFAULT_STDOUT_HIGH_WATER;
+
+    // A mark that is not a positive integer describes no bound at all. The socket refuses it in its own words because stdoutHighWater is the option the caller
+    // wrote; the queue guards its own option the same way for a caller that builds one directly, so each boundary names what it received.
+    if(!Number.isInteger(stdoutHighWater) || (stdoutHighWater < 1)) {
+
+      throw new TypeError("LogSocket: `stdoutHighWater` must be a positive integer.");
+    }
+
     this.#clock = init.clock;
     this.#host = init.host;
     this.#log = init.log;
     this.#port = init.port ?? DEFAULT_PORT;
     this.#random = init.random ?? Math.random;
     this.#refreshable = init.refreshable;
-    this.#stdoutHighWater = init.stdoutHighWater ?? DEFAULT_STDOUT_HIGH_WATER;
+    this.#stdoutQueue = new AsyncQueue({ highWaterMark: stdoutHighWater });
     this.#tls = init.tls ?? false;
     this.#tokenProvider = init.tokenProvider;
     this.#webSocketFactory = init.webSocketFactory ?? webSocketFactory;
@@ -362,7 +369,7 @@ export class LogSocket implements LogSocketLike {
     this.signal = composeSignals(init.signal, this.#controller.signal);
 
     // Single teardown convergence point. `onAbort` registers the one-shot teardown for the normal abort path AND runs it inline when the signal is already aborted at
-    // construction time (a pre-aborted parent), so the stdout waiter is settled and the live connection closed regardless of which path fired.
+    // construction time (a pre-aborted parent), so the live connection is closed regardless of which path fired.
     onAbort(this.signal, () => this.#teardown());
 
     if(this.signal.aborted) {
@@ -426,64 +433,27 @@ export class LogSocket implements LogSocketLike {
    */
   public get droppedLines(): number {
 
-    return this.#droppedLines;
+    return this.#stdoutQueue.dropped;
   }
 
   /**
    * The bounded push-to-pull stream of raw log lines (ANSI intact, terminators removed) the server streams over the log namespace's `stdout` events.
    *
    * The server delivers `stdout` as raw text chunks whose boundaries do not align with log lines; the socket runs each chunk through a per-session
-   * {@link LogLineSplitter}, yields complete lines here, and flushes it on each session's close so the final line is never stranded. Mirroring
-   * `Mp4SegmentAssembler.segments`, a bounded queue decouples the WebSocket producer from this consumer, and a single parked waiter blocks the consumer when the queue is
-   * empty until a line is pushed or the socket aborts. The queue survives reconnects - the same iterable keeps yielding across a drop-and-reconnect - so a consumer
-   * iterates it once for the whole socket lifetime. The stream terminates (returns) when the socket aborts; the queue is drained before it returns, so a line already
-   * staged before teardown is never lost.
+   * {@link LogLineSplitter}, yields complete lines here, and flushes it on each session's close so the final line is never stranded. The lines are kept in an
+   * {@link AsyncQueue} bounded by the high-water mark, which decouples the WebSocket producer from this consumer. The queue belongs to the socket rather than to any
+   * one session, so it survives reconnects - the same iterable keeps yielding across a drop-and-reconnect - and a consumer iterates it once for the whole socket
+   * lifetime. The stream terminates (returns) when the socket aborts; the queue is drained before it returns, so a line already staged before teardown is never lost.
    *
-   * **Single-consumer only.** The parked-waiter slot is single-writer; iterating `stdout()` concurrently from two consumers is unsupported.
+   * **Single-consumer only.** The queue parks one read at a time; iterating `stdout()` concurrently from two consumers is unsupported.
    *
    * @returns An async generator yielding raw log lines in stream order.
    */
-  public async *stdout(): AsyncGenerator<string> {
+  public stdout(): AsyncGenerator<string> {
 
-    for(;;) {
-
-      // Swap-drain the queue: take whatever the producer has staged, leave a fresh empty array for it to push into, then yield the snapshot. Draining unconditionally
-      // before the abort check preserves the "no staged line lost on teardown" guarantee.
-      while(this.#stdoutQueue.length > 0) {
-
-        const drained = this.#stdoutQueue;
-
-        this.#stdoutQueue = [];
-
-        for(const line of drained) {
-
-          yield line;
-        }
-      }
-
-      if(this.signal.aborted) {
-
-        return;
-      }
-
-      // Park until a line is pushed (producer resolves the waiter) or the socket aborts (teardown resolves it). A per-iteration resolver keeps the waiter always fresh.
-      const waiter: PromiseWithResolvers<void> = Promise.withResolvers();
-
-      this.#stdoutWaiter = waiter;
-
-      // `onAbort` unifies registration, the pre-aborted-signal pitfall, and one-shot `{ once: true }` semantics; the disposer is handed to `using` so the listener is
-      // removed on every scope-exit path. Matches the parked-wait shape `Mp4SegmentAssembler` uses.
-      using _abortRegistration = onAbort(this.signal, () => waiter.resolve());
-
-      try {
-
-        // eslint-disable-next-line no-await-in-loop
-        await waiter.promise;
-      } finally {
-
-        this.#stdoutWaiter = undefined;
-      }
-    }
+    // The read is the queue's drain under the socket's signal: it hands over what is staged before it honors the abort, which is the no-staged-line-lost guarantee -
+    // a line the splitter surfaced before teardown reaches the consumer even though the lifetime has already ended.
+    return this.#stdoutQueue.drain(this.signal);
   }
 
   // The background reconnect loop. Runs for the socket's lifetime: each iteration `retry()`s the connect phase to obtain a live session, then streams until the session
@@ -777,25 +747,18 @@ export class LogSocket implements LogSocketLike {
     }
   }
 
-  // Enqueue a complete log line for the `stdout()` consumer, enforcing the high-water bound. When the queue is at capacity the OLDEST line is dropped (a live tail cares
-  // about recent output, not stale backlog), the drop counter is incremented, and a single warning is logged so a chronically-slow consumer learns it is lossy without
-  // the log being flooded. Resolving the parked waiter wakes a blocked consumer.
+  // Hand a complete log line to the `stdout()` consumer. The queue enforces the bound: at the high-water mark the OLDEST line goes, because a live tail cares about
+  // recent output rather than stale backlog. The one-time warning fires on the first push that finds the queue reporting a drop, so a chronically-slow consumer
+  // learns it is lossy without the log being flooded.
   #enqueueStdout(line: string): void {
 
-    if(this.#stdoutQueue.length >= this.#stdoutHighWater) {
-
-      this.#stdoutQueue.shift();
-      this.#droppedLines++;
-
-      if(!this.#overflowLogged) {
-
-        this.#overflowLogged = true;
-        this.#log.warn("The Homebridge log stream is producing output faster than it is being consumed; the oldest buffered lines are being dropped.");
-      }
-    }
-
     this.#stdoutQueue.push(line);
-    this.#stdoutWaiter?.resolve();
+
+    if((this.#stdoutQueue.dropped > 0) && !this.#overflowLogged) {
+
+      this.#overflowLogged = true;
+      this.#log.warn("The Homebridge log stream is producing output faster than it is being consumed; the oldest buffered lines are being dropped.");
+    }
   }
 
   // Render a WebSocket `"error"` event for diagnostics. The DOM error event carries no structured detail; a Node `ws` error event may carry an `error` field. We surface
@@ -851,8 +814,8 @@ export class LogSocket implements LogSocketLike {
   }
 
   // Single teardown convergence point, fired exactly once when `this.signal` aborts. Closes the live session's WebSocket (sending the namespace DISCONNECT if OPEN, then
-  // always close(1000)) and settles the parked stdout waiter so the consumer's `stdout()` generator wakes, drains the queue, and returns. The reconnect loop observes the
-  // aborted signal and exits on its next iteration boundary; the watchdog self-cleans through its own composed-signal listener.
+  // always close(1000)); the stdout drain observes the signal itself, so there is nothing here to wake it with. The reconnect loop observes the aborted signal and
+  // exits on its next iteration boundary; the watchdog self-cleans through its own composed-signal listener.
   #teardown(): void {
 
     if(this.#session !== undefined) {
@@ -860,8 +823,6 @@ export class LogSocket implements LogSocketLike {
       this.#closeSession(this.#session);
       this.#session = undefined;
     }
-
-    this.#stdoutWaiter?.resolve();
   }
 }
 

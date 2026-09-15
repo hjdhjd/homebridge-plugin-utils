@@ -18,7 +18,8 @@ subsystem's `rtp.ts` and `stream.ts` and the test fixtures beside them are examp
 [localAddressFor](#localaddressfor) lives here for the same reason: it is a datagram helper, answering which local address the operating system would route toward a host by
 connecting a socket and reading what the kernel bound, and the translation tables above are what it opens that socket through.
 
-This module imports `node:dgram` and `node:dns/promises` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve those imports.
+This module imports `node:dgram`, `node:dns`, `node:dns/promises`, and `node:net` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot
+resolve those imports.
 
 ## Utilities
 
@@ -41,6 +42,11 @@ function createDgramSocket(ipFamily, options?): Socket;
 
 Create a `node:dgram` socket for the supplied IP family. Equivalent to `createSocket("udp4")` / `createSocket("udp6")` but routes the family -> socket-type lookup
 through the single table above, so every call site shares one mapping.
+
+Every socket the factory makes answers an address-literal destination without a resolver round trip, while a name resolves through the platform resolver. A
+datagram to a literal is therefore on the wire before `send` returns, so a caller that sets the socket's multicast interface before each send has the
+interface it set when the kernel takes the datagram. A `bind` or a `connect` to a literal completes inside the call for the same reason, so a caller registers
+its `listening` or `connect` listener before calling, which is the platform's own documented order.
 
 #### Parameters
 

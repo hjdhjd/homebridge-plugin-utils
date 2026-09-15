@@ -17,10 +17,14 @@ import { once } from "node:events";
 // Bring `socket` up on the loopback interface and resolve once `"listening"` fires (or reject on `"error"`). Awaiting the listening event before inspecting
 // `socket.address()` is the contract the dgram API documents; calling `address()` against an unbound socket throws on every supported Node version. The helper is
 // inline rather than imported from `udp.helpers.ts` because that helper returns the bound port and immediately closes - this test wants the live socket to inspect.
+// The listener is registered before the bind because a socket from the factory completes a bind to a literal inside the call, which leaves no turn for a listener
+// registered afterward to arrive in.
 async function bindLoopback(socket: Socket, address: string): Promise<void> {
 
+  const listening = once(socket, "listening");
+
   socket.bind(0, address);
-  await once(socket, "listening");
+  await listening;
 }
 
 describe("loopbackAddress", () => {
@@ -51,9 +55,10 @@ describe("loopbackAddress", () => {
     await bindLoopback(holder, "127.0.0.1");
 
     const shared = holder.address().port;
+    const listening = once(sharer, "listening");
 
     sharer.bind(shared, "127.0.0.1");
-    await once(sharer, "listening");
+    await listening;
 
     // This is what lets a multicast listener sit beside the operating system's own responder on a well-known port, each receiving every datagram delivered.
     assert.equal(sharer.address().port, shared, "the second socket must be bound to the port the first one holds");
@@ -71,9 +76,13 @@ describe("loopbackAddress", () => {
     });
 
     await bindLoopback(holder, "127.0.0.1");
+
+    // Registered before the bind, for the reason the helper above gives: the refusal is emitted inside the call, and a listener attached afterward misses it.
+    const failed = once(intruder, "error");
+
     intruder.bind(holder.address().port, "127.0.0.1");
 
-    const [error] = await once(intruder, "error") as [Error];
+    const [error] = await failed as [Error];
 
     assert.equal(hasErrorCode(error, "EADDRINUSE"), true, "a bind without the option must be refused the held port");
   });
@@ -136,6 +145,82 @@ describe("createDgramSocket", () => {
     // Identity check: two consecutive calls must hand back distinct Socket instances. A cached / shared socket would share lifecycle and break the per-consumer
     // bind/close pattern that callers rely on.
     assert.notEqual(a, b, "createDgramSocket must return a new Socket per call, never a shared instance");
+  });
+
+  test("D3: a datagram to an IPv4 literal is on the wire before send returns", async (t) => {
+
+    const payload = Buffer.from("hbpu");
+    const receiver = createSocket("udp4");
+    const sender = createDgramSocket("ipv4");
+
+    t.after(() => receiver.close());
+
+    await bindLoopback(receiver, "127.0.0.1");
+    await bindLoopback(sender, "127.0.0.1");
+
+    // Registered before the send, so a datagram delivered in the same turn as the send has a listener waiting for it. The deadline bounds a row that would
+    // otherwise hang on a datagram that never comes.
+    const delivered = once(receiver, "message", { signal: AbortSignal.timeout(2000) });
+
+    /* This is the proof the row holds: the sender closes on the line after the send, before any resolver tick could run, so a datagram that arrives at all could
+     * only have left inside `send`. Nothing is awaited between the two calls and no send callback is passed.
+     */
+    sender.send(payload, receiver.address().port, "127.0.0.1");
+    sender.close();
+
+    const [datagram] = await delivered as [Buffer];
+
+    assert.deepEqual(datagram, payload, "a datagram to an IPv4 literal must reach the receiver from a sender that closed on the next line");
+  });
+
+  test("D4: a datagram to an IPv6 literal is on the wire before send returns", async (t) => {
+
+    const payload = Buffer.from("hbpu");
+    const receiver = createSocket("udp6");
+    const sender = createDgramSocket("ipv6");
+
+    t.after(() => receiver.close());
+
+    await bindLoopback(receiver, "::1");
+    await bindLoopback(sender, "::1");
+
+    const delivered = once(receiver, "message", { signal: AbortSignal.timeout(2000) });
+
+    // The IPv6 arm of the same proof, and the family the mDNS browser's per-link fan-out runs over: the close on the next line leaves no tick for a resolver to
+    // answer in.
+    sender.send(payload, receiver.address().port, "::1");
+    sender.close();
+
+    const [datagram] = await delivered as [Buffer];
+
+    assert.deepEqual(datagram, payload, "a datagram to an IPv6 literal must reach the receiver from a sender that closed on the next line");
+  });
+
+  test("D5: a name resolves through the platform resolver", async (t) => {
+
+    const payload = Buffer.from("hbpu");
+    const receiver = createSocket("udp4");
+    const sender = createDgramSocket("ipv4");
+
+    t.after(() => {
+
+      receiver.close();
+      sender.close();
+    });
+
+    await bindLoopback(receiver, "127.0.0.1");
+
+    const delivered = once(receiver, "message", { signal: AbortSignal.timeout(2000) });
+    const port = receiver.address().port;
+
+    /* A name has no answer to give inline, so it travels the platform resolver's path and the datagram leaves on a later tick. The send callback is what the
+     * platform documents as the way to know a datagram has left, so this row awaits it rather than closing the sender underneath the resolver.
+     */
+    await new Promise<void>((resolve, reject) => sender.send(payload, port, "localhost", (error) => (error === null) ? resolve() : reject(error)));
+
+    const [datagram] = await delivered as [Buffer];
+
+    assert.deepEqual(datagram, payload, "a datagram addressed by name must resolve through the platform resolver and arrive");
   });
 
   test("rejects values outside the IpFamily union at the type level", () => {

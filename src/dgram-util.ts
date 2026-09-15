@@ -16,13 +16,16 @@
  * {@link localAddressFor} lives here for the same reason: it is a datagram helper, answering which local address the operating system would route toward a host by
  * connecting a socket and reading what the kernel bound, and the translation tables above are what it opens that socket through.
  *
- * This module imports `node:dgram` and `node:dns/promises` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot resolve those imports.
+ * This module imports `node:dgram`, `node:dns`, `node:dns/promises`, and `node:net` and is therefore Node-only, like `util.ts`. A browser-targeted consumer cannot
+ * resolve those imports.
  *
  * @module
  */
-import type { Socket } from "node:dgram";
+import type { Socket, SocketOptions } from "node:dgram";
 import { createSocket } from "node:dgram";
+import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
+import { lookup as lookupByCallback } from "node:dns";
 import { once } from "node:events";
 import { waitWithSignal } from "./util.ts";
 
@@ -46,6 +49,26 @@ const LOOPBACK_ADDRESS = { ipv4: "127.0.0.1", ipv6: "::1" } as const;
 // only to give the kernel a destination to consult its routing table about. Port zero cannot serve: `connect` refuses it outright.
 const ROUTE_PROBE_PORT = 9;
 
+/* The destination lookup every socket from this factory sends through. The platform resolves a destination before it writes, and answers even an address literal
+ * on a later tick of the event loop; a literal is answered here at once, so the kernel takes the datagram inside `send`, and whatever the caller set on the
+ * socket just before - the multicast interface above all - is what the datagram leaves under. A name is handed to the platform resolver unchanged. The callback
+ * runs synchronously for a literal by design, and the socket's send path accepts either timing. It is declared against the socket option's own type, so the
+ * two cannot drift apart; the platform hands the family as a bare number where that type declares an options object, and it is passed through untouched.
+ */
+const lookupDestination: NonNullable<SocketOptions["lookup"]> = (hostname, options, callback): void => {
+
+  const family = isIP(hostname);
+
+  if(family !== 0) {
+
+    callback(null, hostname, family);
+
+    return;
+  }
+
+  lookupByCallback(hostname, options, callback);
+};
+
 /**
  * Resolve the loopback address string for the supplied IP family. The returned literal is suitable for passing to `socket.bind(port, address)` or
  * `socket.send(..., address, ...)`.
@@ -65,6 +88,11 @@ export function loopbackAddress(ipFamily: IpFamily): (typeof LOOPBACK_ADDRESS)[I
  * Create a `node:dgram` socket for the supplied IP family. Equivalent to `createSocket("udp4")` / `createSocket("udp6")` but routes the family -> socket-type lookup
  * through the single table above, so every call site shares one mapping.
  *
+ * Every socket the factory makes answers an address-literal destination without a resolver round trip, while a name resolves through the platform resolver. A
+ * datagram to a literal is therefore on the wire before `send` returns, so a caller that sets the socket's multicast interface before each send has the
+ * interface it set when the kernel takes the datagram. A `bind` or a `connect` to a literal completes inside the call for the same reason, so a caller registers
+ * its `listening` or `connect` listener before calling, which is the platform's own documented order.
+ *
  * @param ipFamily             - The IP family for the new socket.
  * @param options              - Optional socket options.
  * @param options.reuseAddr    - Whether the socket shares its port with every other reuse-bound socket on the host. That is what lets a multicast listener sit
@@ -77,7 +105,7 @@ export function loopbackAddress(ipFamily: IpFamily): (typeof LOOPBACK_ADDRESS)[I
  */
 export function createDgramSocket(ipFamily: IpFamily, { reuseAddr = false }: { readonly reuseAddr?: boolean } = {}): Socket {
 
-  return createSocket({ reuseAddr, type: DGRAM_SOCKET_TYPE[ipFamily] });
+  return createSocket({ lookup: lookupDestination, reuseAddr, type: DGRAM_SOCKET_TYPE[ipFamily] });
 }
 
 /**

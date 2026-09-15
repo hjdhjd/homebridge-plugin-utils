@@ -262,6 +262,15 @@ describe("runHblog - usage errors", () => {
     assert.match(stderr.text, /Both --user and --pass/, "the error must name the missing half of the credential pair");
   });
 
+  test("an --otp with neither --user nor --pass is a usage error (exit 2)", async () => {
+
+    const { options, stderr } = makeOptions({ argv: [ "--otp", "123456", "-n", "1" ] });
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "a one-time passcode without the password pair it belongs to must be a usage error, not a no-auth connection");
+    assert.match(stderr.text, /An --otp requires --user and --pass/, "the error must name the OTP case rather than the credential-pair case");
+  });
+
   test("an unknown flag is a usage error (exit 2)", async () => {
 
     const { options, stderr } = makeOptions({ argv: ["--nonsense"] });

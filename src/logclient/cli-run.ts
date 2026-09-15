@@ -306,8 +306,9 @@ function environmentSlice(env: NodeJS.ProcessEnv): HblogEnv {
 }
 
 // Derive the credential discriminated union from the resolved connection. A token wins outright; otherwise a complete username+password pair (with an optional OTP) is a
-// password login; otherwise, with no credential material at all, the noauth path is used. A half-supplied username/password pair is a usage error - the user meant to log
-// in but left out half of it, and silently falling back to noauth would mask the mistake.
+// password login; otherwise, with no credential material at all, the noauth path is used. Incomplete credential material is a usage error rather than a quiet fallback,
+// because the user plainly meant to log in and a silent noauth connection would mask the mistake. That covers a half-supplied username/password pair, and it covers an
+// `--otp` supplied without that pair: a one-time passcode is the second factor of a password login, so connecting with no factor at all discards what the user gave us.
 function deriveCredentials(connection: ResolvedConnection): LogClientCredentials {
 
   if(connection.token !== null) {
@@ -317,8 +318,9 @@ function deriveCredentials(connection: ResolvedConnection): LogClientCredentials
 
   const hasUser = connection.username !== null;
   const hasPass = connection.password !== null;
+  const hasOtp = connection.otp !== null;
 
-  if((connection.username !== null) && (connection.password !== null)) {
+  if(hasUser && hasPass) {
 
     // A complete login pair. Include the `otp` key only when present so the password arm stays exactly the declared shape (the field has a home only when meaningful).
     if(connection.otp !== null) {
@@ -332,6 +334,11 @@ function deriveCredentials(connection: ResolvedConnection): LogClientCredentials
   if(hasUser || hasPass) {
 
     throw new UsageError("Both --user and --pass are required for password authentication (or supply --token, or omit both for a no-auth server).");
+  }
+
+  if(hasOtp) {
+
+    throw new UsageError("An --otp requires --user and --pass; a one-time passcode is the second factor of a password login, not a credential on its own.");
   }
 
   return { kind: "noauth" };
@@ -521,7 +528,7 @@ function shouldColor(flags: ParsedFlags, env: NodeJS.ProcessEnv, stdout: CliStre
 }
 
 // Read the package version for `--version` from the package's own `package.json`, resolved relative to this compiled module (dist/logclient/cli-run.js -> ../../). Uses
-// the injected `readFile` so a test pins the version without the real package file. A read or parse failure degrades to "unknown" rather than failing the command.
+// the injected `readFile` so a test locks in the version without the real package file. A read or parse failure degrades to "unknown" rather than failing the command.
 async function readVersion(readFile: (path: string) => Promise<string>): Promise<string> {
 
   try {
@@ -739,7 +746,7 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
     controller.abort();
   };
 
-  // Surface a captured non-EPIPE stdout write error as a failure with a redacted, actionable message. Shared by the two paths that can observe it: the drain completing
+  // Surface a captured non-EPIPE stdout write error as a failure with a redacted, actionable message. Shared by every path that can observe it - the drain completing
   // normally, and the drain unwinding into the catch when the abort interrupts it - so the failure message lives in exactly one place.
   const failWithStdoutError = (writeError: NodeJS.ErrnoException): number => {
 

@@ -677,6 +677,39 @@ describe("Mp4SegmentAssembler - kind-tagged stream", () => {
     await assertDone(iter, "pre-init abort");
   });
 
+  test("a stream() call that starts after the lifetime has ended hands over the init segment and the media assembled before it", async () => {
+
+    const source = new PassThrough();
+
+    await using assembler = new Mp4SegmentAssembler(source);
+
+    source.write(makeBox("ftyp"));
+    source.write(makeBox("moov"));
+    source.write(makeBox("moof"));
+    source.write(makeBox("mdat", Buffer.from([0xAA])));
+
+    await delay(10);
+
+    assert.equal(assembler.bufferedSegments, 1, "the segment must be assembled and queued before the lifetime ends");
+
+    // The lifetime ends with the init segment resolved and a segment queued, nobody reading. A stream() call that starts only now reads the way a segments() call
+    // does: the init wait delivers a promise that has already settled even under a signal that has already aborted, and the media loop drains what is queued
+    // before it honors the abort.
+    assembler.abort(new HbpuAbortError("shutdown"));
+
+    const iter = assembler.stream();
+    const init = await nextStreamItem(iter, "the init segment that resolved before the lifetime ended");
+
+    assert.equal(init.kind, "init", "the first item must be the init segment");
+
+    const media = await nextStreamItem(iter, "the segment assembled before the lifetime ended");
+
+    assert.equal(media.kind, "media", "the second item must be the media segment");
+    assert.equal(media.bytes.at(-1), 0xAA, "a stream() call that starts after the abort must still hand over the segment assembled before it");
+
+    await assertDone(iter, "the generator must return once the queue is empty and the signal has aborted");
+  });
+
   test("refuses an assignment to a stream item's fields at compile time", async () => {
 
     const source = new PassThrough();

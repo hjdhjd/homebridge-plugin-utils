@@ -311,7 +311,9 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
    *
    * Terminates cleanly on the same conditions as {@link segments}: the source ends, the assembler aborts, or the optional caller signal aborts; queued media drains
    * before the generator returns, so no assembled segment is lost. If the assembler is aborted before the initialization segment arrives, the generator returns without
-   * yielding anything.
+   * yielding anything. A call that starts after the lifetime has ended, with the initialization segment already resolved, hands over that segment and every media
+   * segment assembled and not yet read, then returns - the same reading {@link segments} gives a late call, because the init wait delivers a promise that has already
+   * settled even under a signal that has already aborted.
    *
    * **Single-consumer only.** `stream()` drives {@link segments} internally, so it shares the one queue. Use `stream()` OR the {@link initSegment} /
    * {@link segments} pair on a single assembler, never both concurrently - mixing them competes for the same drain and hangs one consumer.
@@ -323,7 +325,8 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
   public async *stream(init: { signal?: AbortSignal } = {}): AsyncGenerator<Mp4Segment> {
 
     // Wait for the initialization segment first, racing the caller signal exactly as segments() does, so a caller abort during the init wait ends this stream at once
-    // rather than hanging until the assembler's own signal settles init. A rejection here (aborted before the first moof) ends the stream with nothing yielded.
+    // rather than hanging until the assembler's own signal settles init. A rejection here (aborted before the first moof) ends the stream with nothing yielded, while
+    // an init segment that resolved before the lifetime ended is delivered under the aborted signal, so a late call reads what segments() would.
     const composed = composeSignals(this.signal, init.signal);
 
     let initBytes: Buffer;

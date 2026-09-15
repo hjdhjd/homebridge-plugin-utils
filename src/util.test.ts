@@ -477,15 +477,32 @@ describe("waitWithSignal", () => {
     await assert.rejects(waitWithSignal(Promise.reject(reason), controller.signal), (error: unknown) => error === reason);
   });
 
-  test("rejects synchronously with signal.reason when the signal is already aborted", async () => {
+  test("rejects with signal.reason when the signal is already aborted and the promise is still pending", async () => {
 
     const controller = new AbortController();
     const reason = new HbpuAbortError("shutdown");
 
     controller.abort(reason);
 
-    // The promise argument should never be observed on the pre-aborted path; pass one that would hang forever to prove it.
+    // A wait that is still waiting is what a signal that has already aborted ends: a promise that never settles, and one that settles only after the call was
+    // made - a microtask later is enough - are both answered with the signal's reason, because the abort was the earlier of the two.
     await assert.rejects(waitWithSignal(new Promise<string>(() => { /* pending forever */ }), controller.signal), (error: unknown) => error === reason);
+    await assert.rejects(waitWithSignal(Promise.resolve().then(() => "late"), controller.signal), (error: unknown) => error === reason);
+  });
+
+  test("delivers a promise that has already settled even when the signal is already aborted", async () => {
+
+    // An abort ends only a wait that is still waiting: a promise that settled before the call is delivered as it settled, fulfilled or rejected, and the signal's
+    // reason never displaces an answer that already exists.
+    const controller = new AbortController();
+    const boom = new Error("boom");
+
+    controller.abort(new HbpuAbortError("shutdown"));
+
+    const delivered = await waitWithSignal(Promise.resolve("ok"), controller.signal);
+
+    assert.equal(delivered, "ok", "a fulfilled promise must be delivered under a signal that has already aborted");
+    await assert.rejects(waitWithSignal(Promise.reject(boom), controller.signal), (error: unknown) => error === boom);
   });
 
   test("rejects with signal.reason when the signal aborts during the wait", async () => {
@@ -542,8 +559,8 @@ describe("waitWithSignal", () => {
 
   test("marks a rejecting promise as handled even when the signal was pre-aborted", async () => {
 
-    // The unified control flow covers the pre-aborted fast path too: `waitWithSignal` still attaches a rejection reaction to `promise` before rejecting on the
-    // signal's reason, so a later rejection of `promise` is observed.
+    // The pre-aborted path attaches the rejection reaction to `promise` before the deferred rejection on the signal's reason lands, so a later rejection of
+    // `promise` is observed.
     await assertNoUnhandledRejections(async () => {
 
       const controller = new AbortController();

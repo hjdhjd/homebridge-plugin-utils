@@ -225,7 +225,9 @@ followed by one of kind `"media"` per completed media fragment. This is a third 
 
 Terminates cleanly on the same conditions as [segments](#segments): the source ends, the assembler aborts, or the optional caller signal aborts; queued media drains
 before the generator returns, so no assembled segment is lost. If the assembler is aborted before the initialization segment arrives, the generator returns without
-yielding anything.
+yielding anything. A call that starts after the lifetime has ended, with the initialization segment already resolved, hands over that segment and every media
+segment assembled and not yet read, then returns - the same reading [segments](#segments) gives a late call, because the init wait delivers a promise that has already
+settled even under a signal that has already aborted.
 
 **Single-consumer only.** `stream()` drives [segments](#segments) internally, so it shares the one queue. Use `stream()` OR the [initSegment](#initsegment) /
 [segments](#segments) pair on a single assembler, never both concurrently - mixing them competes for the same drain and hangs one consumer.

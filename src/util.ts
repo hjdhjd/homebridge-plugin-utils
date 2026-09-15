@@ -1016,14 +1016,17 @@ export async function retry<T>(operation: (signal: AbortSignal) => Promise<T>, o
 }
 
 /**
- * Wait for `promise` to settle, bailing out early if `signal` aborts before it does.
+ * Wait for `promise` to settle, bailing out early if `signal` aborts while it is still pending.
  *
  * The canonical primitive for "observe this promise but let a caller cancel the wait." Useful inside async flows that reference an external promise (e.g., a resource
- * class's internal state) and need to honor a per-call abort signal without modifying the underlying promise. Whichever settles first wins: `promise` resolves/rejects
- * normally, or the signal aborts and `waitWithSignal` rejects with `signal.reason` - including when the signal was already aborted at call time.
+ * class's internal state) and need to honor a per-call abort signal without modifying the underlying promise. Whichever settles first wins: `promise` resolves or
+ * rejects normally, or the signal aborts and `waitWithSignal` rejects with `signal.reason`. The rule underneath is the platform's own - an abort cancels pending work
+ * and never un-does completed work - so the signal ends only a wait that is still waiting: a promise that has already settled when the call is made is delivered as
+ * it settled, fulfilled or rejected, even under a signal that has already aborted, and a promise still pending at the call, one that settles a microtask later
+ * included, is ended by a signal that has already aborted.
  *
  * The abort listener is attached with `{ once: true }` and explicitly removed when the helper settles, so there is no listener leak regardless of which side wins the
- * race. `promise` is ALWAYS observed via `.then(resolve, reject)` - including on the pre-aborted-signal path - which means attaching `waitWithSignal` to a promise
+ * race. `promise` is ALWAYS observed via `.then(resolve, reject)` - whether or not the signal has already aborted - which means attaching `waitWithSignal` to a promise
  * marks it as handled for Node's unhandled-rejection tracker. Callers do not need to wrap `promise` in {@link markHandled} separately.
  *
  * @typeParam T   - The resolved value type of `promise`.
@@ -1032,7 +1035,7 @@ export async function retry<T>(operation: (signal: AbortSignal) => Promise<T>, o
  *
  * @returns The promise's resolved value.
  *
- * @throws `signal.reason` if the signal aborts before `promise` settles, or the original rejection if `promise` rejects first.
+ * @throws `signal.reason` if the signal aborts while `promise` is still pending, or the original rejection if `promise` rejects first.
  *
  * @example
  *
@@ -1055,16 +1058,22 @@ export async function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal
 
   const { promise: result, resolve, reject }: PromiseWithResolvers<T> = Promise.withResolvers();
 
-  // `onAbort` is the single source of truth for "register an abort-driven action, handle the pre-aborted-signal pitfall, and release the listener when done." The
-  // pre-aborted path runs our handler inline (rejecting `result` immediately); the live path attaches the listener with `{ once: true }` and returns a disposer that
-  // we hand off to `using` so the listener is deterministically removed when this function's scope exits. That matters for long-lived signals (e.g., a plugin's
-  // lifetime controller) that see many short waits - without explicit removal, each call would leak a listener until the signal finally aborts.
-  using _abortRegistration = onAbort(signal, () => reject(signal.reason));
-
-  // `promise` is ALWAYS observed via `.then(resolve, reject)` - including on the pre-aborted path - so `waitWithSignal` marks it handled for Node's unhandled-rejection
-  // tracker regardless of which side wins the race. The derived `.then` microtask becomes a no-op if it loses the race (reject was already called via the abort path,
-  // or resolve is already settled). The derived promise itself always fulfills (our handlers return void), so discarding it with `void` is safe.
+  /* `promise` is observed first, and ALWAYS, via `.then(resolve, reject)`: a promise that has already settled has its reaction queued here, ahead of anything the
+   * abort path queues below, and every promise is marked handled for Node's unhandled-rejection tracker whichever side wins. The derived `.then` microtask is a
+   * no-op when it loses the race (`result` already rejected by the abort path), and the derived promise always fulfills (our handlers return void), so discarding
+   * it with `void` is safe.
+   */
   void promise.then(resolve, reject);
+
+  /* `onAbort` is the single source of truth for "register an abort-driven action, handle the pre-aborted-signal pitfall, and release the listener when done." The
+   * handler queues the rejection as a microtask rather than rejecting inline, and that ordering is the rule this function keeps: an abort ends only a wait that is
+   * still waiting. On a signal that has already aborted the handler runs inline, so its rejection lands one microtask after a settled promise's reaction and loses
+   * to it, while a promise still pending at the call is ended by the signal, even one that settles a microtask later, because its reaction cannot be queued before
+   * the rejection already is. On the live path the listener is attached with `{ once: true }` and the disposer is handed to `using`, so the listener is removed
+   * when this function's scope exits - a long-lived signal (a plugin's lifetime controller) sees many short waits, and each would otherwise leak a listener until
+   * the signal finally aborts.
+   */
+  using _abortRegistration = onAbort(signal, () => queueMicrotask(() => reject(signal.reason)));
 
   return await result;
 }

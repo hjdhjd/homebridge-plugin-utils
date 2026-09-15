@@ -1696,14 +1696,17 @@ Returns: `false`.
 function waitWithSignal<T>(promise, signal): Promise<T>;
 ```
 
-Wait for `promise` to settle, bailing out early if `signal` aborts before it does.
+Wait for `promise` to settle, bailing out early if `signal` aborts while it is still pending.
 
 The canonical primitive for "observe this promise but let a caller cancel the wait." Useful inside async flows that reference an external promise (e.g., a resource
-class's internal state) and need to honor a per-call abort signal without modifying the underlying promise. Whichever settles first wins: `promise` resolves/rejects
-normally, or the signal aborts and `waitWithSignal` rejects with `signal.reason` - including when the signal was already aborted at call time.
+class's internal state) and need to honor a per-call abort signal without modifying the underlying promise. Whichever settles first wins: `promise` resolves or
+rejects normally, or the signal aborts and `waitWithSignal` rejects with `signal.reason`. The rule underneath is the platform's own - an abort cancels pending work
+and never un-does completed work - so the signal ends only a wait that is still waiting: a promise that has already settled when the call is made is delivered as
+it settled, fulfilled or rejected, even under a signal that has already aborted, and a promise still pending at the call, one that settles a microtask later
+included, is ended by a signal that has already aborted.
 
 The abort listener is attached with `{ once: true }` and explicitly removed when the helper settles, so there is no listener leak regardless of which side wins the
-race. `promise` is ALWAYS observed via `.then(resolve, reject)` - including on the pre-aborted-signal path - which means attaching `waitWithSignal` to a promise
+race. `promise` is ALWAYS observed via `.then(resolve, reject)` - whether or not the signal has already aborted - which means attaching `waitWithSignal` to a promise
 marks it as handled for Node's unhandled-rejection tracker. Callers do not need to wrap `promise` in [markHandled](mark-handled.md#markhandled) separately.
 
 #### Type Parameters
@@ -1727,7 +1730,7 @@ The promise's resolved value.
 
 #### Throws
 
-`signal.reason` if the signal aborts before `promise` settles, or the original rejection if `promise` rejects first.
+`signal.reason` if the signal aborts while `promise` is still pending, or the original rejection if `promise` rejects first.
 
 #### Example
 

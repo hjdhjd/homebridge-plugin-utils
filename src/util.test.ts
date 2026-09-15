@@ -3,10 +3,10 @@
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, hasErrorCode, onAbort,
  * waitWithSignal, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
  * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, consoleLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
- * formatPercent, formatErrorMessage, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
+ * formatPercent, formatErrorMessage, formatUrlHost, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
 import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes, formatErrorMessage,
-  formatMs, formatPercent, formatSeconds, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter,
+  formatMs, formatPercent, formatSeconds, formatUrlHost, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter,
   membershipDelta, onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream, takeLast, toStartCase, validateName,
   waitWithSignal } from "./util.ts";
 import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, settle } from "./testing/index.ts";
@@ -2527,6 +2527,61 @@ describe("formatErrorMessage", () => {
     // Some upstream error messages legitimately end with an ellipsis or a deliberate "..". The formatter's contract is "strip a single trailing period" - it is
     // not an ellipsis-canonicalizer. We assert this so a future refactor does not silently broaden the strip pattern.
     assert.equal(formatErrorMessage(new Error("ellipsis...")), "ellipsis..");
+  });
+});
+
+describe("formatUrlHost", () => {
+
+  test("passes a hostname through unchanged", () => {
+
+    assert.equal(formatUrlHost("homebridge.local"), "homebridge.local");
+  });
+
+  test("passes a hostname carrying a colon-port tail through unchanged", () => {
+
+    // This is the case the `isIP` reading exists for: a colon check would read the port separator as an IPv6 group and bracket the whole string, composing an
+    // authority the URL parser then rejects.
+    assert.equal(formatUrlHost("nas.local:8080"), "nas.local:8080");
+  });
+
+  test("passes an IPv4 literal through unchanged", () => {
+
+    assert.equal(formatUrlHost("192.0.2.10"), "192.0.2.10");
+  });
+
+  test("passes an already-bracketed literal through unchanged", () => {
+
+    // The caller composed the brackets, so what they hold is the caller's; bracketing again would compose "[[::1]]".
+    assert.equal(formatUrlHost("[::1]"), "[::1]");
+  });
+
+  test("brackets a bare IPv6 literal", () => {
+
+    assert.equal(formatUrlHost("::1"), "[::1]");
+    assert.equal(formatUrlHost("2001:db8::1"), "[2001:db8::1]");
+  });
+
+  test("refuses a zoned literal with a TypeError naming the address", () => {
+
+    /* `isIP` reads a zoned literal as IPv6 as readily as a bare one, so the zone is tested first. The refusal names the address because the platform's own
+     * refusal, raised later inside the URL constructor, says only "Invalid URL".
+     */
+    assert.throws(() => formatUrlHost("fe80::1%en0"), { message: /fe80::1%en0/, name: "TypeError" });
+  });
+
+  test("passes a bracketed zoned literal through as the caller's own composition", () => {
+
+    assert.equal(formatUrlHost("[fe80::1%25en0]"), "[fe80::1%25en0]");
+  });
+
+  test("composes an authority the platform URL parser reads back", () => {
+
+    // The bracketed form is what the grammar wants, and reading the hostname back off a parsed URL is what proves it: the platform answers the literal with its
+    // brackets intact and the port separated from it.
+    const url = new URL("http://" + formatUrlHost("2001:db8::1") + ":8581/");
+
+    assert.equal(url.hostname, "[2001:db8::1]");
+    assert.equal(url.port, "8581");
   });
 });
 

@@ -37,6 +37,47 @@ describe("loopbackAddress", () => {
     assert.equal(loopbackAddress("ipv6"), "::1", "ipv6 must map to the IPv6 loopback address exactly");
   });
 
+  test("D1: two sockets that ask for address reuse share one port", async (t) => {
+
+    const holder = createDgramSocket("ipv4", { reuseAddr: true });
+    const sharer = createDgramSocket("ipv4", { reuseAddr: true });
+
+    t.after(() => {
+
+      holder.close();
+      sharer.close();
+    });
+
+    await bindLoopback(holder, "127.0.0.1");
+
+    const shared = holder.address().port;
+
+    sharer.bind(shared, "127.0.0.1");
+    await once(sharer, "listening");
+
+    // This is what lets a multicast listener sit beside the operating system's own responder on a well-known port, each receiving every datagram delivered.
+    assert.equal(sharer.address().port, shared, "the second socket must be bound to the port the first one holds");
+  });
+
+  test("D2: a socket that did not ask for address reuse is refused the port a reuse-bound socket holds", async (t) => {
+
+    const holder = createDgramSocket("ipv4", { reuseAddr: true });
+    const intruder = createDgramSocket("ipv4");
+
+    t.after(() => {
+
+      holder.close();
+      intruder.close();
+    });
+
+    await bindLoopback(holder, "127.0.0.1");
+    intruder.bind(holder.address().port, "127.0.0.1");
+
+    const [error] = await once(intruder, "error") as [Error];
+
+    assert.equal(hasErrorCode(error, "EADDRINUSE"), true, "a bind without the option must be refused the held port");
+  });
+
   test("rejects values outside the IpFamily union at the type level", () => {
 
     // Type-level rejection only - no runtime invocation, since calling loopbackAddress with an unknown family would return undefined off the lookup table and that

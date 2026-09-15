@@ -8,8 +8,10 @@
  *
  * Every call site that needs the ipFamily -> node:dgram translation routes through the table lookups exported here, rather than hand-rolling
  * `ipFamily === "ipv6" ? "udp6" : "udp4"` or `isIPv6 ? "::1" : "127.0.0.1"` inline. Keeping the mapping centralized means a future addition (dual-stack socket
- * types, SO_REUSEADDR flags, alternative loopback addresses in constrained test environments) has exactly one file to update, and consumers - production or
- * test - share the same vocabulary. The FFmpeg subsystem's `rtp.ts` and `stream.ts` and the test fixtures beside them are examples of that traffic.
+ * types, alternative loopback addresses in constrained test environments) has exactly one file to update, and consumers - production or test - share the same
+ * vocabulary. A socket option a caller needs travels the same way: {@link createDgramSocket} carries the address-reuse flag as an option of its own, so a
+ * multicast listener that has to share a well-known port asks for it by name here rather than reaching past the factory to `createSocket`. The FFmpeg
+ * subsystem's `rtp.ts` and `stream.ts` and the test fixtures beside them are examples of that traffic.
  *
  * {@link localAddressFor} lives here for the same reason: it is a datagram helper, answering which local address the operating system would route toward a host by
  * connecting a socket and reading what the kernel bound, and the translation tables above are what it opens that socket through.
@@ -63,15 +65,19 @@ export function loopbackAddress(ipFamily: IpFamily): (typeof LOOPBACK_ADDRESS)[I
  * Create a `node:dgram` socket for the supplied IP family. Equivalent to `createSocket("udp4")` / `createSocket("udp6")` but routes the family -> socket-type lookup
  * through the single table above, so every call site shares one mapping.
  *
- * @param ipFamily - The IP family for the new socket.
+ * @param ipFamily             - The IP family for the new socket.
+ * @param options              - Optional socket options.
+ * @param options.reuseAddr    - Whether the socket shares its port with every other reuse-bound socket on the host. That is what lets a multicast listener sit
+ *                               beside the operating system's own responder on a well-known port, each receiving every datagram the group delivers. Defaults to
+ *                               `false`.
  *
  * @returns A fresh unbound {@link Socket}.
  *
  * @category Utilities
  */
-export function createDgramSocket(ipFamily: IpFamily): Socket {
+export function createDgramSocket(ipFamily: IpFamily, { reuseAddr = false }: { readonly reuseAddr?: boolean } = {}): Socket {
 
-  return createSocket(DGRAM_SOCKET_TYPE[ipFamily]);
+  return createSocket({ reuseAddr, type: DGRAM_SOCKET_TYPE[ipFamily] });
 }
 
 /**

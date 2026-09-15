@@ -794,6 +794,46 @@ try {
 
 ***
 
+### formatUrlHost()
+
+```ts
+function formatUrlHost(host): string;
+```
+
+Format a host for a URL authority, wrapping an IPv6 literal in square brackets as the URL grammar requires.
+
+A literal IPv6 address carries colons, which collide with the authority's own host-port separator, so it has to be bracketed: `[::1]:8581`. A hostname, an
+IPv4 address, and a literal the caller has already bracketed pass through untouched. A literal carrying a zone - `fe80::1%en0`, the form the mDNS browser
+stamps on a link-local address so a consumer knows which link it is reachable through - is refused, because a URL authority has no place for a zone and the
+platform's own refusal says only "Invalid URL", naming neither the address nor what is wrong with it.
+
+Detection reads `isIP` rather than looking for a colon, so a hostname carrying a port-like tail is never mistaken for a literal. The zone is tested before the
+bare form because `isIP` reads a zoned literal as IPv6 too, and bracketing one would compose an authority the URL parser rejects further downstream.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `host` | `string` | The hostname or address to place in a URL authority. |
+
+#### Returns
+
+`string`
+
+The host as the authority carries it.
+
+#### Throws
+
+If `host` is an IPv6 literal carrying a zone, naming the address.
+
+#### Example
+
+```ts
+const origin = new URL("http://" + formatUrlHost(address) + ":80/");
+```
+
+***
+
 ### guardedDispatch()
 
 #### Call Signature

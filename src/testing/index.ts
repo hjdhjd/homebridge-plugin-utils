@@ -38,6 +38,8 @@ export * from "../ffmpeg/fmp4-builders.ts";
 export * from "../ffmpeg/recording-process-double.ts";
 export * from "../http-listener-double.ts";
 export * from "../logclient/socket-double.ts";
+export * from "../mdns/browser-double.ts";
+export * from "../mdns/message-builders.ts";
 export * from "../mqtt-client-double.ts";
 export * from "./runtime-floor.ts";
 

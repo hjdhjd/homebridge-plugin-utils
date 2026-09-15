@@ -30,3 +30,4 @@ export * from "./webui-loader.ts";
 export * from "./webui-status.ts";
 export * from "./ffmpeg/index.ts";
 export * from "./logclient/index.ts";
+export * from "./mdns/index.ts";

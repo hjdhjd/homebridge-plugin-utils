@@ -10,6 +10,7 @@
  */
 import type { Clock } from "./clock.ts";
 import type { Logging } from "homebridge";
+import { isIP } from "node:net";
 import { markHandled } from "./mark-handled.ts";
 import { systemClock } from "./clock.ts";
 
@@ -788,6 +789,47 @@ export { markHandled } from "./mark-handled.ts";
 export function formatErrorMessage(error: unknown): string {
 
   return ((error instanceof Error) ? error.message : String(error)).replace(/\.$/, "");
+}
+
+/**
+ * Format a host for a URL authority, wrapping an IPv6 literal in square brackets as the URL grammar requires.
+ *
+ * A literal IPv6 address carries colons, which collide with the authority's own host-port separator, so it has to be bracketed: `[::1]:8581`. A hostname, an
+ * IPv4 address, and a literal the caller has already bracketed pass through untouched. A literal carrying a zone - `fe80::1%en0`, the form the mDNS browser
+ * stamps on a link-local address so a consumer knows which link it is reachable through - is refused, because a URL authority has no place for a zone and the
+ * platform's own refusal says only "Invalid URL", naming neither the address nor what is wrong with it.
+ *
+ * Detection reads `isIP` rather than looking for a colon, so a hostname carrying a port-like tail is never mistaken for a literal. The zone is tested before the
+ * bare form because `isIP` reads a zoned literal as IPv6 too, and bracketing one would compose an authority the URL parser rejects further downstream.
+ *
+ * @param host - The hostname or address to place in a URL authority.
+ *
+ * @returns The host as the authority carries it.
+ *
+ * @throws {TypeError} If `host` is an IPv6 literal carrying a zone, naming the address.
+ *
+ * @example
+ *
+ * ```ts
+ * const origin = new URL("http://" + formatUrlHost(address) + ":80/");
+ * ```
+ *
+ * @category Utilities
+ */
+export function formatUrlHost(host: string): string {
+
+  // A bracketed literal was composed by the caller, and what it holds is the caller's business.
+  if(host.startsWith("[")) {
+
+    return host;
+  }
+
+  if(host.includes("%") && (isIP(host) === 6)) {
+
+    throw new TypeError("formatUrlHost: the address \"" + host + "\" carries a zone, which a URL authority has no place for.");
+  }
+
+  return (isIP(host) === 6) ? "[" + host + "]" : host;
 }
 
 /**

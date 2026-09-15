@@ -490,6 +490,18 @@ Re-exports [HDLR_TYPE_VIDE](ffmpeg/fmp4-builders.md#hdlr_type_vide)
 
 ***
 
+### makeAaaaRecord
+
+Re-exports [makeAaaaRecord](mdns/message-builders.md#makeaaaarecord)
+
+***
+
+### makeARecord
+
+Re-exports [makeARecord](mdns/message-builders.md#makearecord)
+
+***
+
 ### makeBox
 
 Re-exports [makeBox](ffmpeg/fmp4-builders.md#makebox)
@@ -508,9 +520,57 @@ Re-exports [makeHdlrBox](ffmpeg/fmp4-builders.md#makehdlrbox)
 
 ***
 
+### makeOtherRecord
+
+Re-exports [makeOtherRecord](mdns/message-builders.md#makeotherrecord)
+
+***
+
+### makePtrRecord
+
+Re-exports [makePtrRecord](mdns/message-builders.md#makeptrrecord)
+
+***
+
+### makeResponse
+
+Re-exports [makeResponse](mdns/message-builders.md#makeresponse)
+
+***
+
+### makeService
+
+Re-exports [makeService](mdns/browser-double.md#makeservice)
+
+***
+
+### makeServiceRecords
+
+Re-exports [makeServiceRecords](mdns/message-builders.md#makeservicerecords)
+
+***
+
+### makeSrvRecord
+
+Re-exports [makeSrvRecord](mdns/message-builders.md#makesrvrecord)
+
+***
+
 ### makeTrunBox
 
 Re-exports [makeTrunBox](ffmpeg/fmp4-builders.md#maketrunbox)
+
+***
+
+### makeTxtRecord
+
+Re-exports [makeTxtRecord](mdns/message-builders.md#maketxtrecord)
+
+***
+
+### MdnsServiceFixture
+
+Re-exports [MdnsServiceFixture](mdns/message-builders.md#mdnsservicefixture)
 
 ***
 
@@ -613,6 +673,18 @@ Re-exports [TestLogSocketFactory](logclient/socket-double.md#testlogsocketfactor
 ### TestLogSocketInit
 
 Re-exports [TestLogSocketInit](logclient/socket-double.md#testlogsocketinit)
+
+***
+
+### TestMdnsBrowser
+
+Re-exports [TestMdnsBrowser](mdns/browser-double.md#testmdnsbrowser)
+
+***
+
+### TestMdnsBrowserFactory
+
+Re-exports [TestMdnsBrowserFactory](mdns/browser-double.md#testmdnsbrowserfactory)
 
 ***
 

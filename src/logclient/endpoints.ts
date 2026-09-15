@@ -13,27 +13,15 @@
  * @module
  */
 import { SOCKET_PATH } from "./settings.ts";
+import { formatUrlHost } from "../util.ts";
 
-// Format a host for inclusion in a URL authority, bracketing a bare IPv6 literal as the URL syntax requires. A literal IPv6 address contains colons, which collide with
-// the host:port separator, so the URL grammar requires it to be wrapped in square brackets (`[::1]:8581`). A hostname or IPv4 address passes through unchanged. We
-// detect an IPv6 literal by the presence of a colon and the absence of existing brackets, which is sufficient because no hostname or IPv4 address contains a colon.
-function formatHost(host: string): string {
-
-  if(host.includes(":") && !host.startsWith("[")) {
-
-    return "[" + host + "]";
-  }
-
-  return host;
-}
-
-// Build the scheme + authority origin for a target under a given scheme. We assemble the authority string by hand (bracketing IPv6) and construct a `URL` from the
-// complete string so the platform validates and normalizes it in one pass - rather than mutating an empty `URL`'s `hostname`, whose setter silently rejects a bare IPv6
-// literal. The `URL.origin` is the scheme + authority with no trailing slash; `httpBaseUrl` exposes that origin string for downstream path concatenation, while
-// `socketUrl` keeps the `URL` object and configures it further via `pathname`/`searchParams`.
+// Build the scheme + authority origin for a target under a given scheme. We assemble the authority string by hand and construct a `URL` from the complete string so
+// the platform validates and normalizes it in one pass - rather than mutating an empty `URL`'s `hostname`, whose setter silently rejects a bare IPv6 literal. The
+// `URL.origin` is the scheme + authority with no trailing slash; `httpBaseUrl` exposes that origin string for downstream path concatenation, while `socketUrl` keeps
+// the `URL` object and configures it further via `pathname`/`searchParams`.
 function originFor(scheme: string, target: EndpointTarget): URL {
 
-  return new URL(scheme + "://" + formatHost(target.host) + ":" + target.port.toString());
+  return new URL(scheme + "://" + formatUrlHost(target.host) + ":" + target.port.toString());
 }
 
 /**

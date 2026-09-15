@@ -1237,7 +1237,7 @@ constructor(init: { signal?: AbortSignal }) {
 // Scope-bound transient registration: capture the handle with `using` so the listener auto-removes when the scope exits, even if the signal never aborts.
 async function abortableWait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
-  using _registration = onAbort(signal, () => {
+  using registration = onAbort(signal, () => {
     // Abort-driven action goes here.
   });
 

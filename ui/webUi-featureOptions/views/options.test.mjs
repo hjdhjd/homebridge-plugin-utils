@@ -71,7 +71,7 @@ describe("mountOptionsView - initial render", () => {
 
   test("builds category shells for every active category", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable } = setup();
     const categories = [...configTable.querySelectorAll("details[data-category]")];
@@ -83,7 +83,7 @@ describe("mountOptionsView - initial render", () => {
 
   test("category shells start with an empty rows container (lazy materialization)", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable } = setup();
 
@@ -98,7 +98,7 @@ describe("mountOptionsView - lazy row materialization", () => {
 
   test("expanding a category for the first time materializes its rows", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable } = setup();
     const motion = configTable.querySelector("details[data-category='Motion']");
@@ -114,7 +114,7 @@ describe("mountOptionsView - lazy row materialization", () => {
 
   test("collapsing a category preserves its materialized rows", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable } = setup();
     const motion = configTable.querySelector("details[data-category='Motion']");
@@ -148,7 +148,7 @@ describe("mountOptionsView - open-category row materialization", () => {
 
   test("an open category with no rows takes them at the next projection pass, carrying that pass's row state", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup({ configuredOptions: ["Disable.Motion.Detect"] });
     const motion = poisonCategory(configTable, "Motion");
@@ -170,7 +170,7 @@ describe("mountOptionsView - open-category row materialization", () => {
 
   test("a closed category with no rows keeps them unbuilt through every pass that walks the projection", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -186,7 +186,7 @@ describe("mountOptionsView - open-category row materialization", () => {
 
   test("an open category the walk fills during an in-flight fetch arrives inert", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -214,7 +214,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("clicking a checkbox dispatches the tri-state transition's action", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
     const motion = configTable.querySelector("details[data-category='Motion']");
@@ -235,7 +235,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("a value commit on an enabled row replaces the value", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -259,7 +259,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("a value commit on an unset row enables the option with that value", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -282,7 +282,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("ticking a value option at a device scope with an empty input arms the row: checked, live input, focused, nothing persisted", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -307,7 +307,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("committing a value on an armed row enables the option and disarms it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -333,7 +333,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("unchecking an armed row stands it down and relocks the input, writing nothing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -356,7 +356,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("focus leaving an armed row with an empty input abandons the arming", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -415,7 +415,7 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
   test("a window-focus departure leaves an armed row armed and its input live", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -462,7 +462,7 @@ describe("mountOptionsView - secret options", () => {
 
   test("clicking the reveal toggle unmasks the field, and clicking it again re-masks it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { row } = openPasswordRow({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
     const input = row.querySelector("input.fo-option-value");
@@ -482,7 +482,7 @@ describe("mountOptionsView - secret options", () => {
 
   test("a reveal click writes nothing to the configuration and leaves the option itself alone", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { row, store } = openPasswordRow({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
     const checkbox = row.querySelector("input[type='checkbox']");
@@ -497,7 +497,7 @@ describe("mountOptionsView - secret options", () => {
 
   test("a secret option's value commits through exactly the path a plain option's does", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { row, store } = openPasswordRow();
     const input = row.querySelector("input.fo-option-value");
@@ -512,7 +512,7 @@ describe("mountOptionsView - secret options", () => {
 
   test("a revealed field's commit persists the same way, and the field stays revealed after it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { row, store } = openPasswordRow({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
     const input = row.querySelector("input.fo-option-value");
@@ -547,7 +547,7 @@ describe("mountOptionsView - secret options", () => {
 
   test("focus leaving an armed secret row with an empty field abandons the arming", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The abandonment path finds the field by its class as well, so a masked row stands down on the same gesture a plain one does.
     const { row, store } = openPasswordRow({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
@@ -570,7 +570,7 @@ describe("mountOptionsView - modified-option highlight", () => {
 
   test("toggling an option off its default re-colors the label text-info in place; reverting restores text-body", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable } = setup();
     const motion = configTable.querySelector("details[data-category='Motion']");
@@ -662,7 +662,7 @@ describe("mountOptionsView - a controller's own options page", () => {
 
   test("the category header names the controller scope the page edits at", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { details } = mountPage({ scope: CONTROLLER_PAGE });
 
@@ -671,7 +671,7 @@ describe("mountOptionsView - a controller's own options page", () => {
 
   test("a row set on this page reads as set here, while a globally-inherited row keeps the inherit treatment", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { details } = mountPage({ configuredOptions: [ "Enable.Page.Zone.ctrl-a", "Enable.Page.Anywhere" ], scope: CONTROLLER_PAGE });
     const zone = details.querySelector("[id='row-Page.Zone']");
@@ -693,7 +693,7 @@ describe("mountOptionsView - a controller's own options page", () => {
 
   test("a real device page under the same controller is unchanged: device-specific header, controller entries inherited", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { details } = mountPage({ configuredOptions: ["Enable.Page.Zone.ctrl-a"], scope: DEVICE_PAGE });
     const zoneCheckbox = details.querySelector("[id='row-Page.Zone'] input[type='checkbox']");
@@ -706,7 +706,7 @@ describe("mountOptionsView - a controller's own options page", () => {
 
   test("a toggle on the controller page still writes at the controller's serial", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The presented scope governs how the page reads and nothing about where it writes. The write path targets the selected device, which on this page IS the
     // controller, so the entry lands at the controller's serial...this row is what keeps the presented scope from ever reaching that decision.
@@ -788,7 +788,7 @@ describe("mountOptionsView - a controller whose scoping identity differs from it
 
   test("the controller's own page names controller scope and reads its entry as set here", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { details } = mountPage({ configuredOptions: ["Enable.Camera.Hksv." + NVR_MAC], scope: CONTROLLER_PAGE });
     const checkbox = details.querySelector("[id='row-Camera.Hksv'] input[type='checkbox']");
@@ -802,7 +802,7 @@ describe("mountOptionsView - a controller whose scoping identity differs from it
 
   test("a child device's page shows the controller's entry as inherited", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { details } = mountPage({ configuredOptions: ["Enable.Camera.Hksv." + NVR_MAC], scope: CHILD_PAGE });
     const checkbox = details.querySelector("[id='row-Camera.Hksv'] input[type='checkbox']");
@@ -816,7 +816,7 @@ describe("mountOptionsView - a controller whose scoping identity differs from it
 
   test("unchecking an inherited row on a child device writes the explicit device-scope disable", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The upstream probe has to find the controller's entry to know that a clear would leave the option enabled by inheritance. Finding it takes the same derived
     // identity the row's own inherit treatment came from, so this is the gesture that proves the transitions are asking about the right serial.
@@ -836,7 +836,7 @@ describe("mountOptionsView - a controller whose scoping identity differs from it
 
   test("a toggle on the controller's own page writes at the controller's scoping identity", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { details, store } = mountPage({ scope: CONTROLLER_PAGE });
     const dispatch = t.mock.method(store, "dispatch");
@@ -854,7 +854,7 @@ describe("mountOptionsView - filter visibility", () => {
 
   test("filter:changed with mode=modified hides unmodified rows", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup({ configuredOptions: ["Disable.Motion.Detect"] });
     const motion = configTable.querySelector("details[data-category='Motion']");
@@ -876,7 +876,7 @@ describe("mountOptionsView - per-device cache", () => {
 
   test("navigating away and back to the same scope restores the prior view's DOM from cache", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const dev = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
     const { configTable, store } = setup();
@@ -905,7 +905,7 @@ describe("mountOptionsView - per-device cache", () => {
 
   test("a mutation that lands while another device's view is cached invalidates that cache so the rebuilt view reflects the mutation", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devs = [
 
@@ -1007,7 +1007,7 @@ describe("mountOptionsView - controller-scope cache invalidation", () => {
 
   test("a controller-scope mutation sweeps that controller's cached device views and leaves every unrelated entry standing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
     const configTable = document.createElement("div");
@@ -1093,7 +1093,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("a first visit to a controller renders the table inert while its device list is in flight", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
     const motion = expandCategory(configTable, "Motion");
@@ -1113,7 +1113,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("a category expanded during the window materializes its rows inert", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
 
@@ -1135,7 +1135,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("revisiting a loaded controller is inert again while the refetch is in flight, and lifts when it lands", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1174,7 +1174,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("a re-derivation during the window leaves every row inert", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
     const motion = expandCategory(configTable, "Motion");
@@ -1194,7 +1194,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("a focusout arriving from the disabling instant is absorbed with no dispatch at all", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
     const audio = expandCategory(configTable, "Audio");
@@ -1217,7 +1217,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("the device list landing lifts the window on the same dispatch", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
     const motion = expandCategory(configTable, "Motion");
@@ -1240,7 +1240,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("a controller that answers with no devices lifts the window too", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
 
@@ -1255,7 +1255,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("a view detached mid-window comes back inert while its fetch is still outstanding", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
 
@@ -1275,7 +1275,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
   test("a view that was busy comes back live once its fetch has landed", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = openWindow();
 
@@ -1310,7 +1310,7 @@ describe("mountOptionsView - legacy category-state key migration", () => {
 
   test("a global view restores category state from the legacy \"Global Options\" key and migrates it under the new \"global\" key", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ "Global Options": { Audio: false, Motion: true } }));
 
@@ -1335,7 +1335,7 @@ describe("mountOptionsView - legacy category-state key migration", () => {
 
   test("a device view restores category state from the legacy bare-device-serial key and migrates it under the new \"device:/<serial>\" key", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ "DEV-A": { Audio: true, Motion: false } }));
 
@@ -1361,7 +1361,7 @@ describe("mountOptionsView - legacy category-state key migration", () => {
 
   test("a view with no legacy entry produces no spurious lookup or migration; new-shape data round-trips unchanged", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ global: { Audio: false, Motion: true } }));
 
@@ -1380,7 +1380,7 @@ describe("mountOptionsView - legacy category-state key migration", () => {
 
     // After the first visit migrates, the legacy entry is gone. Subsequent visits must find data under the new key alone - this proves the migration was
     // structural, not just a one-time copy, and that the new key is now the canonical storage location.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ "Global Options": { Motion: true } }));
 
@@ -1420,7 +1420,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
 
   test("a controller click that fails leaves the config table empty rather than rendering the failed controller's options", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1433,7 +1433,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
 
   test("a clean outcome after the failure restores the table", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1446,7 +1446,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
 
   test("the view left behind is cached and comes back through the recovery, rather than being rebuilt from scratch", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1475,7 +1475,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
 
   test("the busy and projection passes are safe against the childless table the error presentation leaves", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1510,7 +1510,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
   test("renders the plugin's message in place of the option table", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1523,7 +1523,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
   test("renders the message as text, never as markup", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1535,7 +1535,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
   test("an empty outcome with no message keeps today's behavior - the full table at controller scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1547,7 +1547,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
   test("the notice never enters the DOM cache, so leaving and returning rebuilds it rather than restoring it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1567,7 +1567,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
   test("a cached table under the notice's own key survives the notice and returns when devices come back", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1595,7 +1595,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
   test("leaving a notice view caches nothing for its key, so a table built there later is the one that caches", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1610,7 +1610,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
   test("the busy and projection passes are safe against the notice-only table", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = setup();
 
@@ -1694,7 +1694,7 @@ describe("mountOptionsView - picker delegation", () => {
 
   test("a member checkbox commits the list and never touches the option's enabled state", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = pickerSetup();
     const group = pickerControl(configTable, "Types");
@@ -1715,7 +1715,7 @@ describe("mountOptionsView - picker delegation", () => {
 
   test("a radio member click commits the picked value and never touches the option's enabled state", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = pickerSetup();
     const rowCheckbox = configTable.querySelector("[id='row-Pick.Quality'] .fo-option-checkbox");
@@ -1732,7 +1732,7 @@ describe("mountOptionsView - picker delegation", () => {
 
   test("a default-matching radio pick clears the option, and the re-derived group rests on the default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = pickerSetup({ configuredOptions: ["Enable.Pick.Quality=high"] });
 
@@ -1747,7 +1747,7 @@ describe("mountOptionsView - picker delegation", () => {
 
   test("a dropdown change commits the picked value", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = pickerSetup();
     const select = pickerControl(configTable, "Tier");
@@ -1760,7 +1760,7 @@ describe("mountOptionsView - picker delegation", () => {
 
   test("clicking a dropdown never reaches the row checkbox, and clicking a member label answers as that member", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = pickerSetup();
     const configuredBefore = store.state.configuredOptions;
@@ -1780,7 +1780,7 @@ describe("mountOptionsView - picker delegation", () => {
 
   test("the busy lock reaches a dropdown and a group's boxes, and leaves the secret reveal alone", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A controller scope whose device list has not landed is the window the lock exists for.
     const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], mode: "controller-based",
@@ -1798,7 +1798,7 @@ describe("mountOptionsView - picker delegation", () => {
 
   test("a locked row previews its default selection, as a text row previews its default text", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Nothing configured at any scope, and the option disabled, so the row is locked and shows what resolution would yield if it were not.
     const { configTable } = pickerSetup({ configuredOptions: [ "Disable.Pick.Tier", "Disable.Pick.Types" ] });
@@ -1817,7 +1817,7 @@ describe("mountOptionsView - picker arming and abandonment", () => {
 
   test("arming a group row hands focus to its first member box", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = scopedPickerSetup();
     const rowCheckbox = configTable.querySelector("[id='row-Pick.TypesUnset'] .fo-option-checkbox");
@@ -1832,7 +1832,7 @@ describe("mountOptionsView - picker arming and abandonment", () => {
 
   test("arming a dropdown row hands focus to the dropdown", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = scopedPickerSetup();
     const rowCheckbox = configTable.querySelector("[id='row-Pick.TierUnset'] .fo-option-checkbox");
@@ -1846,7 +1846,7 @@ describe("mountOptionsView - picker arming and abandonment", () => {
 
   test("abandoning an armed picker row stands it down, for both control kinds", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     for(const optionName of [ "TierUnset", "TypesUnset" ]) {
 
@@ -1871,7 +1871,7 @@ describe("mountOptionsView - picker arming and abandonment", () => {
 
   test("abandoning an armed radio row stands it down", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = scopedPickerSetup();
     const rowCheckbox = configTable.querySelector("[id='row-Pick.QualityUnset'] .fo-option-checkbox");
@@ -1892,7 +1892,7 @@ describe("mountOptionsView - picker arming and abandonment", () => {
 
   test("an armed picker row that HAS a selection survives the focus departure", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = scopedPickerSetup();
     const rowCheckbox = configTable.querySelector("[id='row-Pick.TypesUnset'] .fo-option-checkbox");
@@ -1914,7 +1914,7 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
 
   test("a controllers-only refresh re-renders the row in place, with focus and node identity intact", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const byController = ({ controller }) => [{ label: "Named", value: controller?.name ?? "none" }];
     const { configTable, store } = pickerSetup({ controllers: [{ name: "old", serialNumber: "ctrl-a" }], mode: "controller-based",
@@ -1947,7 +1947,7 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
 
   test("switching devices rebuilds a resolved list rather than serving the prior device's from the DOM cache", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Two devices whose source answers differently. The per-device DOM cache is what makes this worth asserting: device A's row DOM is what device B would be
     // shown if the cache were served without a re-derive.
@@ -1995,7 +1995,7 @@ describe("mountOptionsView - the list editor", () => {
 
   test("each gesture commits through the same path a text field's commit takes", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = pickerSetup();
     const control = editorControl(configTable);
@@ -2018,7 +2018,7 @@ describe("mountOptionsView - the list editor", () => {
 
   test("pressing a remove control removes its entry and leaves the option's own checkbox untouched", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* What this proves is the OUTCOME, not the route. The row-level click forward is not what spares the checkbox here: the editor answers the press on its own
      * element, deeper in the tree, and detaching the item takes the pressed button out of the document with it - so the row lookup in the delegation already reads
@@ -2038,7 +2038,7 @@ describe("mountOptionsView - the list editor", () => {
 
   test("the busy lock reaches the editor's field and its remove controls", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], mode: "controller-based",
       scope: { controllerId: "ctrl-a", kind: "controller" } });
@@ -2054,7 +2054,7 @@ describe("mountOptionsView - the list editor", () => {
 
   test("abandoning an armed editor row stands it down", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The option that declares no default is the one that can arm at all: a row previewing a default already has something to persist, so checking it writes.
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
@@ -2078,7 +2078,7 @@ describe("mountOptionsView - the list editor", () => {
 
   test("a change on the editor commits its entries together with whatever is still pending in the field", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The control-level half of the pending-text rule: whatever raises a change on the editor, the value that reaches the store carries the field's unfinished
      * text along with the entries. The other half - that the pre-Save window blur is what raises it while the field still holds focus and has never blurred -

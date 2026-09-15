@@ -25,7 +25,7 @@ describe("createElement - tag and children", () => {
 
   test("creates an element with the supplied tag name", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("div");
 
@@ -34,7 +34,7 @@ describe("createElement - tag and children", () => {
 
   test("appends string children as text nodes", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("span", {}, [ "hello ", "world" ]);
 
@@ -45,7 +45,7 @@ describe("createElement - tag and children", () => {
 
   test("appends Node children as-is", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const child = document.createElement("strong");
 
@@ -63,7 +63,7 @@ describe("createElement - classList handling", () => {
 
   test("accepts a space-separated string and applies each class", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("div", { classList: "nav-link text-decoration-none fw-bold" });
 
@@ -74,7 +74,7 @@ describe("createElement - classList handling", () => {
 
   test("accepts an array of class names", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("div", { classList: [ "alpha", "beta", "gamma" ] });
 
@@ -88,7 +88,7 @@ describe("createElement - classList handling", () => {
     // Regression guard for the special-prop handling. classList is rest-destructured out of props into its own binding, so it is excluded from the `attrs` record that
     // the `for(const [key, value] of Object.entries(attrs))` property-assignment loop iterates - never deleted from or mutated on the caller's props object. Were it
     // not excluded, that loop would hit `element.classList = "..."` and trash the DOMTokenList.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("div", { classList: "a b" });
 
@@ -102,7 +102,7 @@ describe("createElement - style handling", () => {
 
   test("applies an object of inline styles to the element", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("div", { style: { color: "red", display: "flex" } });
 
@@ -117,7 +117,7 @@ describe("createElement - attribute vs. property routing", () => {
 
     // The helper inspects the key for "-"; hyphenated keys become attributes because the corresponding DOM property name is different (e.g., data-navigation has no
     // direct JS property equivalent). This is the mechanism every sidebar link uses to carry its tag.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("a", { "aria-expanded": "true", "data-navigation": "controller" });
 
@@ -132,7 +132,7 @@ describe("createElement - attribute vs. property routing", () => {
     // property) directly without having to know which path the helper uses internally. `innerHTML` is a special case that writes through to the DOM-parsed
     // representation. `name` carries no data-* prefix and is not the `for` reserved-word special case, so it also takes the property-assignment path; it is
     // read back here via the DOM property rather than `getAttribute` to confirm that path actually ran.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const el = createElement("a", { href: "#", innerHTML: "<strong>Test</strong>", name: "Global Options", role: "button" });
 
@@ -147,7 +147,7 @@ describe("buildRecoveryButton - the shared family recovery button", () => {
 
   test("builds a type-button element wearing exactly the family recovery classes", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const button = buildRecoveryButton("Retry");
 
@@ -158,7 +158,7 @@ describe("buildRecoveryButton - the shared family recovery button", () => {
 
   test("prepends the refresh glyph to the supplied label so consumers pass a glyph-free label", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The glyph is U+21BB CLOCKWISE OPEN CIRCLE ARROW, prepended by the builder so a consumer's label - and its own text constant - carries no glyph of its own.
     assert.equal(buildRecoveryButton("Refresh Homebridge UI").textContent, "↻ Refresh Homebridge UI");
@@ -182,7 +182,7 @@ describe("setCategoryExpanded", () => {
 
   test("expanded=true sets details.open to true", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const details = makeCategoryDetails();
 
@@ -194,7 +194,7 @@ describe("setCategoryExpanded", () => {
 
   test("expanded=false sets details.open to false", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const details = makeCategoryDetails();
 
@@ -221,7 +221,7 @@ describe("swapMenuClasses", () => {
 
   test("removes the outgoing class and adds the incoming one", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const button = makeMenuButton("menuSettings", "btn-primary");
 
@@ -233,7 +233,7 @@ describe("swapMenuClasses", () => {
 
   test("is a silent no-op when the page does not carry the button", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A plugin's markup declares which menu surfaces it offers, so a paint aimed at a button the markup omits has nothing to do. The helper must return rather than
     // throw, which is what lets a plugin that leaves a menu surface out run the same paint code as one that carries it.
@@ -263,7 +263,7 @@ describe("paintMenuTabs", () => {
 
   test("paints every tab with the framework's own classes and marks exactly one active", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const buttons = makeMenu();
 
@@ -284,7 +284,7 @@ describe("paintMenuTabs", () => {
 
   test("a repaint moves the active mark rather than accumulating one", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const buttons = makeMenu();
 
@@ -297,7 +297,7 @@ describe("paintMenuTabs", () => {
 
   test("a menu surface the page omits is a silent no-op, and the tabs it does carry still paint", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A plugin expressed entirely in feature options carries no schema-form button, so the paint must reach the buttons that exist and pass over the one that does
     // not, rather than failing partway and leaving the menu half-painted.
@@ -310,7 +310,7 @@ describe("paintMenuTabs", () => {
 
   test("an id no button carries leaves every tab inactive rather than throwing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const buttons = makeMenu();
 
@@ -328,7 +328,7 @@ describe("showToast", () => {
 
   test("inserts a toast alert after the feature-status-bar mount point with the given message", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const statusBar = document.createElement("div");
 
@@ -348,7 +348,7 @@ describe("showToast", () => {
 
   test("custom variant class is honored via the second argument", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const statusBar = document.createElement("div");
 
@@ -366,7 +366,7 @@ describe("showToast", () => {
 
     // Defensive: call sites that fire toasts from lifecycle handlers may execute during transitions when the status bar is not mounted. The helper must short-circuit
     // rather than throw.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     assert.doesNotThrow(() => showToast("Nothing to show"));
   });
@@ -463,7 +463,7 @@ describe("captureCategoryStates / applyCategoryStates - DOM-shape SSOT", () => {
 
   test("captureCategoryStates returns a map of category name to collapsed boolean", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const configTable = makeConfigTable([ { collapsed: true, name: "Audio" }, { collapsed: false, name: "Motion" } ]);
 
@@ -472,7 +472,7 @@ describe("captureCategoryStates / applyCategoryStates - DOM-shape SSOT", () => {
 
   test("captureCategoryStates returns an empty map when no category details are present", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const empty = document.createElement("div");
 
@@ -481,7 +481,7 @@ describe("captureCategoryStates / applyCategoryStates - DOM-shape SSOT", () => {
 
   test("applyCategoryStates drives details.open to match the supplied map", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Start with everything expanded so applyCategoryStates has work to do.
     const configTable = makeConfigTable([ { collapsed: false, name: "Audio" }, { collapsed: false, name: "Motion" } ]);
@@ -497,7 +497,7 @@ describe("captureCategoryStates / applyCategoryStates - DOM-shape SSOT", () => {
 
   test("applyCategoryStates leaves categories absent from the map at their current state", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const configTable = makeConfigTable([ { collapsed: false, name: "Audio" }, { collapsed: true, name: "Motion" } ]);
 

@@ -279,7 +279,7 @@ describe("webUiFeatureOptions event delegation - keydown handler", () => {
 
     // The Escape shortcut hands the search field back to its empty state in one keystroke. We assert against both the cleared value AND the re-dispatched input
     // event by spying on the search component's handler indirectly: setting a query, pressing Escape, and verifying the visibility of search-filtered rows resets.
-    using _harness = await makeStartedOrchestrator();
+    using harness = await makeStartedOrchestrator();
 
     const searchInput = document.getElementById("searchInput");
 
@@ -351,7 +351,7 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
 
   test("clicking a controller nav-link dispatches scope:changed for that controller", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
 
@@ -359,7 +359,7 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -399,7 +399,7 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
 
   test("clicking a device nav-link dispatches scope:changed for that device", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const skeleton = createSkeletonFeatureOptionsDom();
 
     // Two devices in the device list. The first is the controller (per the orchestrator's convention); the second is a non-controller device whose row we click.
@@ -414,7 +414,7 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 

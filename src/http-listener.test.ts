@@ -220,7 +220,7 @@ test("a body past the limit is refused and never reaches the handler, and a body
   const port = listener.boundPort;
   let reached = 0;
 
-  using _route = listener.route("/big", () => {
+  using route = listener.route("/big", () => {
 
     reached++;
 
@@ -246,7 +246,7 @@ test("the body reaches the handler exactly as it arrived", async () => {
   const raw = "{\n  \"event\":\"door.unlock\",   \"data\":{ \"z\":1, \"a\":2 }\n}";
   let seen: Buffer | undefined;
 
-  using _route = listener.route("/raw", (delivery) => {
+  using route = listener.route("/raw", (delivery) => {
 
     seen = delivery.body;
 
@@ -272,7 +272,7 @@ test("headers reach the handler as Node parsed them", async () => {
   const port = listener.boundPort;
   const seen: IncomingHttpHeaders[] = [];
 
-  using _route = listener.route("/header", (delivery) => {
+  using route = listener.route("/header", (delivery) => {
 
     seen.push(delivery.headers);
 
@@ -305,8 +305,8 @@ test("disposal completes under an in-flight request and releases the port at onc
 
     const port = listener.boundPort;
 
-    using _ping = listener.route("/ping", () => ({ status: 200 }));
-    using _upload = listener.route("/upload", () => ({ status: 200 }));
+    using ping = listener.route("/ping", () => ({ status: 200 }));
+    using upload = listener.route("/upload", () => ({ status: 200 }));
 
     const stalled = await openStalledUpload({ path: "/upload", pingPath: "/ping", port });
 
@@ -331,8 +331,8 @@ test("a teardown under an in-flight upload says nothing beyond the listening lin
 
   const port = listener.boundPort;
 
-  using _ping = listener.route("/ping", () => ({ status: 200 }));
-  using _upload = listener.route("/upload", () => ({ status: 200 }));
+  using ping = listener.route("/ping", () => ({ status: 200 }));
+  using upload = listener.route("/upload", () => ({ status: 200 }));
 
   const stalled = await openStalledUpload({ path: "/upload", pingPath: "/ping", port });
 
@@ -547,7 +547,7 @@ test("the method filter answers before the body is read", async () => {
 
   let reached = 0;
 
-  using _route = listener.route("/post-only", () => {
+  using route = listener.route("/post-only", () => {
 
     reached++;
 
@@ -573,7 +573,7 @@ test("the handler's status, headers, and body are what the client reads", async 
 
   const playlist = "#EXTM3U\n#EXTINF:-1,Front Door\n";
 
-  using _route = listener.route("/playlist", () => ({ body: playlist, headers: { "Content-Type": "application/x-mpegURL" }, status: 200 }));
+  using route = listener.route("/playlist", () => ({ body: playlist, headers: { "Content-Type": "application/x-mpegURL" }, status: 200 }));
 
   const answer = await request({ method: "GET", path: "/playlist", port: listener.boundPort });
 
@@ -612,8 +612,8 @@ test("a client that resets mid-body produces no response and no log line", async
 
   const port = listener.boundPort;
 
-  using _ping = listener.route("/ping", () => ({ status: 200 }));
-  using _upload = listener.route("/upload", () => ({ status: 200 }));
+  using ping = listener.route("/ping", () => ({ status: 200 }));
+  using upload = listener.route("/upload", () => ({ status: 200 }));
 
   const stalled = await openStalledUpload({ path: "/upload", pingPath: "/ping", port });
 
@@ -639,7 +639,7 @@ test("a route handle disposed after its path was claimed again removes nothing",
 
   stale[Symbol.dispose]();
 
-  using _live = listener.route("/shared", () => ({ status: 200 }));
+  using live = listener.route("/shared", () => ({ status: 200 }));
 
   // The stale handle names a path that is routed again, but not to the registration it made. Disposing by key rather than by identity would remove somebody else's
   // live route here, which is a fault the holder of the stale handle can neither see nor intend.
@@ -663,7 +663,7 @@ test("a catch-all route answers every path no exact route claims", async () => {
   assert.equal((await request({ body: "{}", path: "/anything", port })).body, "catch-all");
   assert.equal((await request({ method: "GET", path: "/", port })).body, "catch-all");
 
-  using _exact = listener.route("/a", () => ({ body: "exact", status: 200 }));
+  using exact = listener.route("/a", () => ({ body: "exact", status: 200 }));
 
   assert.equal((await request({ body: "{}", path: "/a", port })).body, "exact", "an exact route takes precedence over one claiming everything");
 

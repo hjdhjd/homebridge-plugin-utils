@@ -217,7 +217,7 @@ function assertPositive(value: number, option: string): void {
  * await using listener = new HttpListener({ label: "document server", log: this.log, port: 10110, signal: this.signal });
  *
  * // One route answering every path, which is what a server with a single document to hand out wants.
- * using _route = listener.route(HTTP_LISTENER_ANY_PATH, () => ({ body: this.document(), headers: { "Content-Type": "text/plain" }, status: 200 }));
+ * using route = listener.route(HTTP_LISTENER_ANY_PATH, () => ({ body: this.document(), headers: { "Content-Type": "text/plain" }, status: 200 }));
  *
  * await listener.ready;
  * ```

@@ -15,7 +15,7 @@ describe("FeatureOptionsCategoryState - get / set round-trip", () => {
 
   test("set persists the supplied state under the context key and get returns it back unchanged", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const store = new FeatureOptionsCategoryState("TestPlugin");
@@ -28,7 +28,7 @@ describe("FeatureOptionsCategoryState - get / set round-trip", () => {
 
   test("set writes through to localStorage immediately under the canonical storage key", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const store = new FeatureOptionsCategoryState("TestPlugin");
@@ -45,7 +45,7 @@ describe("FeatureOptionsCategoryState - get / set round-trip", () => {
 
     // Verifies the localStorage projection is genuinely the cross-session SSOT: a new instance loads the same map the prior instance persisted, without sharing
     // any in-memory state.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const writer = new FeatureOptionsCategoryState("TestPlugin");
@@ -59,7 +59,7 @@ describe("FeatureOptionsCategoryState - get / set round-trip", () => {
 
   test("get returns undefined for an unknown context key", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const store = new FeatureOptionsCategoryState("TestPlugin");
@@ -72,7 +72,7 @@ describe("FeatureOptionsCategoryState - delete", () => {
 
   test("delete removes the entry under the given context key from both memory and the disk projection", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const store = new FeatureOptionsCategoryState("TestPlugin");
@@ -92,7 +92,7 @@ describe("FeatureOptionsCategoryState - delete", () => {
 
     // Verifies the no-op path takes no persistence cost - we assert that setItem was never called for the absent-key removal. Otherwise a sweep over many absent
     // keys would write the same unchanged map to localStorage N times.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const store = new FeatureOptionsCategoryState("TestPlugin");
@@ -115,7 +115,7 @@ describe("FeatureOptionsCategoryState - delete", () => {
 
   test("a delete after a set/get cycle survives reconstruction (the removal lands on disk)", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const writer = new FeatureOptionsCategoryState("TestPlugin");
@@ -135,7 +135,7 @@ describe("FeatureOptionsCategoryState - resilience to broken storage", () => {
 
     // The cache is a UI ergonomic - corruption must not wedge the orchestrator. We seed the storage key with garbage and assert the instance is still usable for
     // subsequent set() calls.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem("homebridge-TestPlugin-category-states", "{ this is not json");
 
@@ -153,7 +153,7 @@ describe("FeatureOptionsCategoryState - resilience to broken storage", () => {
 
     // `JSON.parse("null")` succeeds and yields `null`, which would otherwise wedge the in-memory map on a non-indexable value - subsequent get/set against
     // `this.#map[contextKey]` would crash with "cannot read/set properties of null". The shape guard in #load resets to {} so the cache stays usable.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem("homebridge-TestPlugin-category-states", "null");
 
@@ -168,7 +168,7 @@ describe("FeatureOptionsCategoryState - resilience to broken storage", () => {
 
     // `JSON.parse("[]")` succeeds and yields an array. While arrays ARE indexable (so a crash is less obvious), they would round-trip incorrectly through
     // subsequent JSON.stringify and lose the array semantics on the next reconstruction. The shape guard rejects arrays so the cache stays a plain object.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem("homebridge-TestPlugin-category-states", "[\"unexpected\", \"array\"]");
 
@@ -188,7 +188,7 @@ describe("FeatureOptionsCategoryState - resilience to broken storage", () => {
 
     // The full primitive surface (`"42"`, `"\"string\""`, `"true"`) also passes JSON.parse but is not a plain object. The shape guard treats all primitives the
     // same: reset to {}, let the UI continue.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
     window.localStorage.setItem("homebridge-TestPlugin-category-states", "42");
 
@@ -202,7 +202,7 @@ describe("FeatureOptionsCategoryState - resilience to broken storage", () => {
 
     // Persistence is best-effort; the canonical config is unaffected. We stub setItem to throw a QuotaExceededError-shaped error and assert set() does not propagate
     // it. The in-memory map still updates so subsequent get() against the same instance returns the value - it's only the disk projection that lost the write.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const store = new FeatureOptionsCategoryState("TestPlugin");
@@ -227,7 +227,7 @@ describe("FeatureOptionsCategoryState - storage key shape", () => {
 
   test("namespaces by platform identifier so plugins in a multi-plugin install do not collide", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const a = new FeatureOptionsCategoryState("PluginA");
@@ -243,7 +243,7 @@ describe("FeatureOptionsCategoryState - storage key shape", () => {
   test("falls back to a generic suffix when no platform is supplied", () => {
 
     // Defensive fallback so plugin configs that pre-date platform-keyed storage still get a working (if non-isolated) cache.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     window.localStorage.clear();
 
     const store = new FeatureOptionsCategoryState(undefined);

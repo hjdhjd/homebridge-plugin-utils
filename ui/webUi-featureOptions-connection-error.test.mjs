@@ -40,7 +40,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
   test("renders the error block with the remote error message and a disabled retry button", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
 
@@ -48,7 +48,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
@@ -89,7 +89,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
   test("retry button becomes enabled after controllerRetryEnableDelayMs and the progress bar is removed", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
 
@@ -97,7 +97,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
@@ -154,7 +154,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
     // The retry flow calls show() alone; show()'s internal await this.hide() flushes and tears down the prior cycle before re-rendering, so no explicit cleanup()
     // is needed. We verify the loop by counting getControllers calls: show() invokes the callback during its initial render pass, the click triggers a fresh show()
     // which invokes it again. A second-pass invocation proves the click landed.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     let getControllersCalls = 0;
@@ -164,7 +164,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
@@ -234,7 +234,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
     // the only shape that exercises the catch. And the closure resolves `this.show` at call time rather than capturing it at mount, so an instance-level replacement is
     // what the closure actually invokes: that late resolution is itself part of the contract under test, since it is what lets one long-lived retry closure observe
     // whichever re-show is current.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -245,7 +245,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
@@ -297,7 +297,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
     // The device-list contract guard is a genuine rejection of the boot's device await, so it lands where every other page-await failure lands: the retry view,
     // naming the site that failed and carrying the guard's own message. The alternative - letting it propagate out of show() to a toast - leaves the user looking at
     // an unrendered page with nothing to click, which is exactly the stranding the bounded awaits exist to close.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -306,7 +306,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
@@ -334,7 +334,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     // The hook saw the failure, so it is the one that can describe it precisely; its headline and guidance replace the framework's shared controller wording
     // wherever it supplied them. A reported device failure already reads this way, and the two contracts answer to the same reader.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -343,7 +343,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
@@ -369,7 +369,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     // The plugin's configured guidance speaks for every controller failure it can have, so it is what a failure with nothing of its own to say reads. This is the
     // page exactly as it was before a result could carry copy, which is what makes the copy an addition rather than a change of behavior.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -378,7 +378,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 
@@ -403,7 +403,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     // Each copy slot is appended to the error block as a text child, so a value that is not text would render as something no one can act on. The guard refuses it
     // at the boundary, and show() has no plugin code on its call stack to hand the TypeError to, so it lands where every other boot failure lands.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -412,7 +412,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim(RETRY_BUTTON_CSS);
 

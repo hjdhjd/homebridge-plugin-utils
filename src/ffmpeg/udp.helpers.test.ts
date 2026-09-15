@@ -73,7 +73,7 @@ describe("probePortAvailable", () => {
     // can distinguish "port held" from "port free."
     const port = await reserveEphemeralPort();
 
-    await using _holder = await holdPort(port);
+    await using holder = await holdPort(port);
 
     await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" }, "probe must reject with EADDRINUSE when the port is held by another socket");
 
@@ -90,7 +90,7 @@ describe("holdPort", () => {
 
     {
 
-      await using _holder = await holdPort(port);
+      await using holder = await holdPort(port);
 
       // While held, probing must fail with EADDRINUSE.
       await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" }, "while holdPort is in scope, the port must be unavailable");
@@ -117,7 +117,7 @@ describe("holdPort", () => {
 
     const port = await reserveEphemeralPort("ipv6");
 
-    await using _holder = await holdPort(port, "ipv6");
+    await using holder = await holdPort(port, "ipv6");
 
     await assert.rejects(probePortAvailable(port, "ipv6"), { code: "EADDRINUSE" }, "IPv6 hold must produce EADDRINUSE on a same-family probe");
   });

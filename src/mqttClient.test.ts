@@ -939,7 +939,7 @@ describe("MqttClient - subscription lifecycle (real broker)", () => {
     await using broker = await startTestBroker();
     const log = capturingLog();
 
-    await using _client = makeClient({ brokerUrl: broker.url, log });
+    await using client = makeClient({ brokerUrl: broker.url, log });
 
     await awaitConnect(broker);
 
@@ -1545,7 +1545,7 @@ describe("MqttClient - transport error handler (real network)", () => {
     // it through {@link routeMqttBrokerError} to the "Connection refused" log line. Real network behavior - no synthesized error injection.
     const log = capturingLog();
 
-    await using _client = makeClient({ brokerUrl: UNREACHABLE_BROKER, log, reconnectInterval: 1 });
+    await using client = makeClient({ brokerUrl: UNREACHABLE_BROKER, log, reconnectInterval: 1 });
 
     await waitForLog(log, logContains("Connection refused"));
   });
@@ -1556,7 +1556,7 @@ describe("MqttClient - transport error handler (real network)", () => {
     await using resetServer = await startResetServer();
     const log = capturingLog();
 
-    await using _client = makeClient({ brokerUrl: resetServer.url, log, reconnectInterval: 1 });
+    await using client = makeClient({ brokerUrl: resetServer.url, log, reconnectInterval: 1 });
 
     await waitForLog(log, logContains("Connection reset"));
   });
@@ -1569,7 +1569,7 @@ describe("MqttClient - transport error handler (real network)", () => {
     const log = capturingLog();
     const isHostnameLine = logContains("Hostname or IP address not found");
 
-    await using _client = makeClient({ brokerUrl: "mqtt://does-not-exist.invalid:1883", log, reconnectInterval: 1 });
+    await using client = makeClient({ brokerUrl: "mqtt://does-not-exist.invalid:1883", log, reconnectInterval: 1 });
 
     await waitForLog(log, isHostnameLine);
 
@@ -1759,7 +1759,7 @@ describe("MqttClient - connect / close edge flag", () => {
     // also run - and we can then assert the silence we expect from the close path itself.
     const log = capturingLog();
 
-    await using _client = makeClient({ brokerUrl: UNREACHABLE_BROKER, log, reconnectInterval: 0 });
+    await using client = makeClient({ brokerUrl: UNREACHABLE_BROKER, log, reconnectInterval: 0 });
 
     await waitForLog(log, logContains("Connection refused"));
 
@@ -1774,7 +1774,7 @@ describe("MqttClient - connect / close edge flag", () => {
     const broker = await startTestBroker();
     const log = capturingLog();
 
-    await using _client = makeClient({ brokerUrl: broker.url, log, reconnectInterval: 0 });
+    await using client = makeClient({ brokerUrl: broker.url, log, reconnectInterval: 0 });
 
     await awaitConnect(broker);
 
@@ -1796,7 +1796,7 @@ describe("MqttClient - connect / close edge flag", () => {
     const credentialedUrl = broker.url.replace("mqtt://", "mqtt://user:secretpass@");
     const log = capturingLog();
 
-    await using _client = makeClient({ brokerUrl: credentialedUrl, log });
+    await using client = makeClient({ brokerUrl: credentialedUrl, log });
 
     await awaitConnect(broker);
 

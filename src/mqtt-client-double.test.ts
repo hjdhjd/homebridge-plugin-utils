@@ -892,7 +892,7 @@ describe("TestMqttClient - teardown", () => {
     // Scope-bound ownership is how a consumer holds the double, so the disposal worth proving is the one the scope exit fires rather than a direct call.
     const owned = async (): Promise<void> => {
 
-      await using _scoped = mqtt;
+      await using scopedClient = mqtt;
 
       assert.equal(mqtt.aborted, false, "the double is live inside the owning scope");
     };

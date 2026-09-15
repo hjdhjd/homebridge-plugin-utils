@@ -406,7 +406,7 @@ export class TestLogSocket implements LogSocketLike {
 
     const { promise, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
 
-    using _registration = onAbort(this.#controller.signal, () => resolve());
+    using abortRegistration = onAbort(this.#controller.signal, () => resolve());
 
     await promise;
   }

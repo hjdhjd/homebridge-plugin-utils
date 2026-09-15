@@ -282,7 +282,7 @@ export function isTimeoutReason(reason: unknown): boolean {
  * // Scope-bound transient registration: capture the handle with `using` so the listener auto-removes when the scope exits, even if the signal never aborts.
  * async function abortableWait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
  *
- *   using _registration = onAbort(signal, () => {
+ *   using registration = onAbort(signal, () => {
  *     // Abort-driven action goes here.
  *   });
  *
@@ -1115,7 +1115,7 @@ export async function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal
    * when this function's scope exits - a long-lived signal (a plugin's lifetime controller) sees many short waits, and each would otherwise leak a listener until
    * the signal finally aborts.
    */
-  using _abortRegistration = onAbort(signal, () => queueMicrotask(() => reject(signal.reason)));
+  using abortRegistration = onAbort(signal, () => queueMicrotask(() => reject(signal.reason)));
 
   return await result;
 }

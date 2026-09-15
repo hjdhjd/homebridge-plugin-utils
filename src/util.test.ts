@@ -447,7 +447,7 @@ describe("onAbort", () => {
 
     {
 
-      using _registration = onAbort(controller.signal, () => {
+      using abortRegistration = onAbort(controller.signal, () => {
 
         fired = true;
       });

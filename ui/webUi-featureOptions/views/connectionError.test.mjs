@@ -62,7 +62,7 @@ describe("mountConnectionErrorView - inactive state", () => {
 
   test("does not render anything before a connection:error dispatch", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup();
 
@@ -74,7 +74,7 @@ describe("mountConnectionErrorView - error rendering", () => {
 
   test("renders the error block with the message from state.status.message", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
 
@@ -90,7 +90,7 @@ describe("mountConnectionErrorView - error rendering", () => {
 
   test("the retry button enables after the configured delay", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup({ retryDelayMs: 30 });
 
@@ -105,7 +105,7 @@ describe("mountConnectionErrorView - error rendering", () => {
 
   test("clicking the armed retry button invokes the onRetry callback", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     let retryFired = false;
     const onRetry = async () => { retryFired = true; };
@@ -132,7 +132,7 @@ describe("mountConnectionErrorView - plugin slot", () => {
 
   test("an error render with no hook configured builds no slot at all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
 
@@ -144,7 +144,7 @@ describe("mountConnectionErrorView - plugin slot", () => {
 
   test("the hook receives an attached, empty panel docked after the error block, carrying the mount's own signal", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const bags = [];
 
@@ -178,7 +178,7 @@ describe("mountConnectionErrorView - plugin slot", () => {
 
   test("the bag carries the selected controller entry when a controller fetch fails", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const bags = [];
     const { store } = setup({ connectionErrorPanel: (bag) => bags.push(bag), controllers: CONTROLLERS });
@@ -195,7 +195,7 @@ describe("mountConnectionErrorView - plugin slot", () => {
 
   test("a second error render in one mount reuses the same panel and signal, keeping the plugin's content", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const bags = [];
     const { root, store } = setup({ connectionErrorPanel: recordingPanelHook(bags) });
@@ -215,7 +215,7 @@ describe("mountConnectionErrorView - plugin slot", () => {
 
   test("an error render after a yield re-docks the same panel with its content intact", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const bags = [];
     const { root, store } = setup({ connectionErrorPanel: recordingPanelHook(bags) });
@@ -247,7 +247,7 @@ describe("mountConnectionErrorView - lifecycle", () => {
 
   test("aborting the page signal mid-arm cancels the retry window", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { abort, root, store } = setup({ retryDelayMs: 500 });
 

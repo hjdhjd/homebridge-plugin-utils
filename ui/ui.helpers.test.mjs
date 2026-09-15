@@ -36,9 +36,8 @@ describe("createTestDom", () => {
 
     {
 
-      using _dom = createTestDom();
+      using dom = createTestDom();
 
-      void _dom;
       assert.ok(globalThis.document !== before.document, "during the dom scope, document must be the Happy-DOM document (not the previous value)");
     }
 
@@ -53,9 +52,8 @@ describe("createTestDom", () => {
 
     {
 
-      using _inner = createTestDom();
+      using innerDom = createTestDom();
 
-      void _inner;
       assert.ok(globalThis.window !== outerWindow, "inner scope must install a different window than the outer one");
     }
 
@@ -69,9 +67,7 @@ describe("createSkeletonFeatureOptionsDom", () => {
 
   test("returns a record of named element references for every skeleton mount point", () => {
 
-    using _dom = createTestDom();
-
-    void _dom;
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
@@ -92,9 +88,7 @@ describe("createSkeletonFeatureOptionsDom", () => {
 
   test("lays the content regions out as the real shell does, so no revealed region sits under a permanently-hidden ancestor", () => {
 
-    using _dom = createTestDom();
-
-    void _dom;
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
@@ -111,9 +105,7 @@ describe("createSkeletonFeatureOptionsDom", () => {
 
   test("misnestDeviceStats reproduces the misconfigured shell the reveal diagnostic exists for", () => {
 
-    using _dom = createTestDom();
-
-    void _dom;
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom({ misnestDeviceStats: true });
 
@@ -123,9 +115,8 @@ describe("createSkeletonFeatureOptionsDom", () => {
 
   test("seeds the document with the orchestrator's expected element tree (queryable by id)", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
-    void _dom;
     createSkeletonFeatureOptionsDom();
 
     // Spot-check: the configTable is a DIV (it holds category `<details>` elements as children - `<table>` would be invalid HTML for housing `<details>`),
@@ -284,18 +275,15 @@ describe("installHomebridge", () => {
 
   test("installs the bridge as globalThis.homebridge and the disposer restores the previous value", () => {
 
-    using _dom = createTestDom();
-
-    void _dom;
+    using dom = createTestDom();
 
     const before = globalThis.homebridge;
     const fake = createFakeHomebridge();
 
     {
 
-      using _guard = installHomebridge(fake);
+      using guard = installHomebridge(fake);
 
-      void _guard;
       assert.equal(globalThis.homebridge, fake, "during the guard's scope, homebridge must be the fake bridge");
     }
 
@@ -304,9 +292,7 @@ describe("installHomebridge", () => {
 
   test("disposing when no previous value existed deletes the property entirely", () => {
 
-    using _dom = createTestDom();
-
-    void _dom;
+    using dom = createTestDom();
 
     // Ensure no prior homebridge is installed (createTestDom does not install one).
     delete globalThis.homebridge;
@@ -316,9 +302,8 @@ describe("installHomebridge", () => {
 
     {
 
-      using _guard = installHomebridge(fake);
+      using guard = installHomebridge(fake);
 
-      void _guard;
       assert.equal(globalThis.homebridge, fake);
     }
 
@@ -327,9 +312,7 @@ describe("installHomebridge", () => {
 
   test("nested installs unwind to the outer install's bridge, then to the original (LIFO)", () => {
 
-    using _dom = createTestDom();
-
-    void _dom;
+    using dom = createTestDom();
 
     delete globalThis.homebridge;
 
@@ -338,16 +321,14 @@ describe("installHomebridge", () => {
 
     {
 
-      using _outer = installHomebridge(outerFake);
+      using outerInstall = installHomebridge(outerFake);
 
-      void _outer;
       assert.equal(globalThis.homebridge, outerFake);
 
       {
 
-        using _inner = installHomebridge(innerFake);
+        using innerInstall = installHomebridge(innerFake);
 
-        void _inner;
         assert.equal(globalThis.homebridge, innerFake, "during inner scope, the inner fake must shadow the outer");
       }
 

@@ -203,7 +203,7 @@ export class AsyncQueue<T> {
 
       this.#waiter = waiter;
 
-      using _abortRegistration = onAbort(signal, () => waiter.resolve());
+      using abortRegistration = onAbort(signal, () => waiter.resolve());
 
       try {
 

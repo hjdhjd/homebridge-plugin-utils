@@ -76,7 +76,7 @@ describe("mountNavView - controllers container", () => {
 
   test("renders Global Options link + controllers section in controller-based mode", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup();
     const links = [...rootControllers.querySelectorAll(".nav-link[data-navigation]")];
@@ -89,7 +89,7 @@ describe("mountNavView - controllers container", () => {
 
   test("renders only Global Options in device-only mode", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup({ mode: "device-only" });
     const links = [...rootControllers.querySelectorAll(".nav-link[data-navigation]")];
@@ -100,7 +100,7 @@ describe("mountNavView - controllers container", () => {
 
   test("highlights the Global Options link at initial render", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup();
     const globalLink = rootControllers.querySelector(".nav-link[data-navigation='global']");
@@ -114,7 +114,7 @@ describe("mountNavView - controllers container", () => {
      * on Global. `devices:loaded` is the only transition that records that controller, and a fetch resolving no devices moves nothing else - the selection does not
      * move and the devices container rebuilds to nothing - so this is the case where the repaint has to come from the highlighting effect's own subscription.
      */
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers, store } = setup();
 
@@ -135,7 +135,7 @@ describe("mountNavView - devices container", () => {
 
   test("renders devices in order", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootDevices } = setup({ devices: DEVICES });
     const links = [...rootDevices.querySelectorAll(".nav-link[data-navigation]")];
@@ -147,7 +147,7 @@ describe("mountNavView - devices container", () => {
 
   test("renders a device link's content through the deviceContent hook, falling through to the name on null", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The hook adorns one device and declines the other, which is the contract's whole shape in one build: a returned node replaces the name as the link's
     // content, a null return leaves the default name rendering, and the link element itself - identity attributes and navigation - is untouched either way.
@@ -177,7 +177,7 @@ describe("mountNavView - devices container", () => {
 
   test("renders the device-label header when at least one device is ungrouped", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The fixture devices carry no sidebarGroup, so they form the ungrouped top-level section that the device label heads.
     const { rootDevices } = setup({ devices: DEVICES });
@@ -188,7 +188,7 @@ describe("mountNavView - devices container", () => {
 
   test("a fully-grouped device set emits no orphan top-level device header - only the group headers show", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Every device carries a sidebarGroup, so the ungrouped section is empty; the device-label header must be suppressed since a label is only ever emitted when it
     // heads a non-empty section.
@@ -207,7 +207,7 @@ describe("mountNavView - devices container", () => {
 
   test("groups devices by sidebarGroup; ungrouped first, then groups alphabetical", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const grouped = [
 
@@ -226,7 +226,7 @@ describe("mountNavView - devices container", () => {
 
   test("excludes devices in the reserved 'hidden' group from grouped sections", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [ ...DEVICES, { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Hidden", serialNumber: "hidden-1", sidebarGroup: "hidden" } ];
     const { rootDevices } = setup({ devices });
@@ -236,7 +236,7 @@ describe("mountNavView - devices container", () => {
 
   test("orders the grouped sections by the plugin's groupOrder comparator", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The group names are chosen so the comparator and the plain sort disagree: "attic" is lowercase, which code-unit order places after both capitalized names,
     // and "Scenes" is forced last against an alphabetical reading that would place it in the middle. A sidebar ignoring the comparator renders
@@ -273,7 +273,7 @@ describe("mountNavView - devices container", () => {
 
   test("leaves the grouped sections in plain string order when no comparator is supplied", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A lowercase name among capitalized ones is what tells the candidate defaults apart: code-unit order places "cameras" last, and a locale sort would place
     // it between "Bridges" and "Doors". The absent comparator must reach Array#sort as undefined and leave the code-unit reading intact.
@@ -292,7 +292,7 @@ describe("mountNavView - devices container", () => {
 
   test("hands the comparator only the group names that render as sections", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A comparator sitting above the derivation filter would receive the reserved "hidden" group and the group the controller device carries alongside the real
     // ones. Only the real groups may arrive, which is what keeps the sort downstream of the filter.
@@ -322,7 +322,7 @@ describe("mountNavView - devices container", () => {
 
   test("keeps the ungrouped section ahead of every group when a comparator is supplied", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [
 
@@ -344,7 +344,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("clicking the Global Options link dispatches scope:changed with kind: global", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers, store } = setup();
     const globalLink = rootControllers.querySelector(".nav-link[data-navigation='global']");
@@ -359,7 +359,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("clicking a device link dispatches scope:changed with kind: device", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootDevices, store } = setup({ devices: DEVICES });
     const link = rootDevices.querySelector(".nav-link[data-device-serial='dev-b']");
@@ -371,7 +371,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("clicking a controller link dispatches scope:changed and then fires getDevices", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const fetchedDevices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Ctrl-A Device 1", serialNumber: "ctrl-a-d1" }];
     let fetched;
@@ -398,7 +398,7 @@ describe("mountNavView - click dispatch", () => {
   test("clicking a controller whose getDevices carries an error dispatches devices:loaded with that error, and the reducer moves the status to " +
     "connection-error", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The failure message travels back on the DeviceListResult, so the connection-error message is the carried error verbatim - no separate request is made.
     const getDevices = async () => ({ devices: [], error: "Controller unreachable." });
@@ -414,7 +414,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a reported failure's own headline and guidance travel through to the status", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The view carries the result's copy across untouched: which failure this was is the plugin's knowledge, and the result is what holds it.
     const getDevices = async () => ({
@@ -436,7 +436,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a reported failure naming no copy falls back to the configured guidance and the framework's headline", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const getDevices = async () => ({ devices: [], error: "Controller unreachable." });
     const { rootControllers, store } = setup({ failureGuidance: "Open the controller editor on this page.", getDevices });
@@ -451,7 +451,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a rejected fetch carries no result copy, so its outcome keeps the configured guidance", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A rejection has no result to decorate, which is why the catch dispatch has no copy to thread - it falls back exactly as an undecorated reported failure does.
     const getDevices = async () => { throw new Error("Controller unreachable."); };
@@ -467,7 +467,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("clicking a controller whose getDevices throws a non-Error routes the stringified value to the connection-error message", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A rejection that is not an Error instance (a thrown string) exercises the shared errorMessage fallback: with no `.message` on the thrown value, the user-facing
     // message is the string coercion of the value itself.
@@ -484,7 +484,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a superseded controller click's late resolve is discarded - the newest click owns the store", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Two controller clicks whose fetches settle out of order. Each getDevices call hands back a controllable deferred keyed by the controller serial, so the test can
     // resolve the second (newest) click first and the first (superseded) click afterward.
@@ -517,7 +517,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a superseded controller click's late reject does not overwrite the newest click's rendered state", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const gates = new Map();
     const getDevices = (controller) => {
@@ -547,7 +547,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a same-controller re-click resolves last-request-wins - the newest click's outcome owns the store even for the same controller", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Two clicks on the SAME controller, each handed a controllable deferred. The reducer's fetch sequence owns this race: the second click supersedes the first
     // even though both target ctrl-a, which a controllerId-keyed guard could not tell apart.
@@ -578,7 +578,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a failed controller click renders the error view AND clears the stale device list", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The reject path routes through devices:loaded with an empty list, so the reducer clears the stale devices as it moves to connection-error, rather than leaving
     // them lingering under the error view. Seed a device list first so the clear is observable.
@@ -599,7 +599,7 @@ describe("mountNavView - click dispatch", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The plugin's device hook goes through the same bridge every other host call does, so a click against a dead relay would otherwise leave the sidebar
     // highlighted on a controller whose devices never arrive. The bound turns that silence into the same outcome the reject path already produces.
@@ -625,7 +625,7 @@ describe("mountNavView - click dispatch", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const getDevices = () => new Promise(() => {});
     const { abort, rootControllers, store } = setup({ deadlineSeconds: 30, devices: DEVICES, getDevices });
@@ -646,7 +646,7 @@ describe("mountNavView - click dispatch", () => {
 
   test("a devices:loaded dispatched against a store with no pending request drops (the reducer's null-check guard)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The setup's fetch pairing already cleared the pending slot (devicesRequest is null). A stray seq-1 outcome must drop rather than overwrite the rendered
     // list - the reducer's explicit null check, not an optional-chained comparison, is what makes a seq-less-against-null outcome vanish here.
@@ -666,7 +666,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("docks on the controllers heading in controller-based mode, carrying the label as its accessible name", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers, rootDevices } = setup({ devices: DEVICES, refresh: { label: "Refresh controllers", onRefresh: () => {} } });
     const button = actionIn(rootControllers);
@@ -682,7 +682,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("the glyph is drawn at text scale in the current color and hidden from the accessibility tree", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup({ refresh: { onRefresh: () => {} } });
     const svg = actionIn(rootControllers).querySelector("svg");
@@ -695,7 +695,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("defaults its label when the plugin supplies only a handler", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup({ refresh: { onRefresh: () => {} } });
 
@@ -704,7 +704,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("docks on the devices heading in device-only mode", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers, rootDevices } = setup({ devices: DEVICES, mode: "device-only", refresh: { onRefresh: () => {} } });
 
@@ -714,7 +714,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("a fully-grouped device-only list has no heading to dock on, so no action renders", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Every device carries a group, so appendSection suppresses the top-level heading - and the action goes with it rather than finding another home.
     const grouped = DEVICES.map((device) => ({ ...device, sidebarGroup: "Cameras" }));
@@ -726,7 +726,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("a docked heading is a flex row, so the action's placement is the layout's business rather than the label's length", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup({ devices: DEVICES, refresh: { onRefresh: () => {} } });
     const heading = rootControllers.querySelector("h6.nav-header");
@@ -739,7 +739,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("an unconfigured sidebar leaves the heading exactly as it was", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup({ devices: DEVICES });
     const heading = rootControllers.querySelector("h6.nav-header");
@@ -750,7 +750,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("a click invalidates through the plugin, then re-enters through the framework, in that order", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const gate = Promise.withResolvers();
     const order = [];
@@ -786,7 +786,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("a view standing alone with no re-entry composed returns its control rather than stranding it disabled", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup({ refresh: { onRefresh: () => {} } });
     const button = actionIn(rootControllers);
@@ -799,7 +799,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("a rejected refresh surfaces through the error toast and re-enables the control", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const toasts = [];
 
@@ -833,7 +833,7 @@ describe("mountNavView - the heading refresh action", () => {
 
   test("a click on the action moves no scope - it is inert to the navigation delegation", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers, store } = setup({ refresh: { onRefresh: () => {} } });
     const before = store.state.scope;
@@ -850,7 +850,7 @@ describe("mountNavView - the Global Options row", () => {
 
   test("renders as a navigable row rather than a heading, wearing no header costume", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup();
     const row = globalIn(rootControllers);
@@ -868,7 +868,7 @@ describe("mountNavView - the Global Options row", () => {
 
   test("carries the framework's globe at text scale, drawn in the row's own color", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers } = setup();
     const svg = globalIn(rootControllers).querySelector("svg");
@@ -882,7 +882,7 @@ describe("mountNavView - the Global Options row", () => {
 
   test("a configured globalGlyph replaces the globe and is invoked once per sidebar build", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     let calls = 0;
     const globalGlyph = () => {
@@ -908,7 +908,7 @@ describe("mountNavView - the Global Options row", () => {
 
   test("the selected state still lands on the row at global scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { rootControllers, store } = setup();
 

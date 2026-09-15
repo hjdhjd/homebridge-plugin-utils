@@ -233,11 +233,11 @@ describe("statusPanel - selection and the view request", () => {
 
   test("P1: a new selection renders the skeleton - identity cells, Status Connecting..., placeholder rows with sizers, values as the dash", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -257,11 +257,11 @@ describe("statusPanel - selection and the view request", () => {
 
   test("every cell is the grid's own child, and the identity cells' count reaches the theme as the track count", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -290,11 +290,11 @@ describe("statusPanel - selection and the view request", () => {
 
   test("a run of state cells anchors its ends to the outermost tracks and spreads the rest between them", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     // The panel renders five tracks here - the default identity quartet plus Status - so each run length below is placed against five. The two-cell run is the case
     // that separates anchoring the ends from a naive proportional split, which would land the second cell on track 3 rather than on the last track.
@@ -321,11 +321,11 @@ describe("statusPanel - selection and the view request", () => {
 
   test("P2: the view request fires exactly once per genuinely-new selection; a same-device re-fire sends nothing and rebuilds from the device's own state", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -351,11 +351,11 @@ describe("statusPanel - selection and the view request", () => {
 
   test("P13: select A, switch to global, reselect A - the second selection is genuinely new (a second view request fired) and renders A's remembered state", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -378,11 +378,11 @@ describe("statusPanel - selection and the view request", () => {
 
   test("P11: global and controller scope both clear the panel and send nothing; a device-scope selection under controller mode renders normally", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     // Controller-based mode with the controller surfaced as a device entry, so a device-scope selection under it renders like any device.
     const controller = { name: "Hub", serialNumber: "CTRL" };
@@ -410,11 +410,11 @@ describe("statusPanel - push handling by kind", () => {
 
   test("P14: a pushed connecting event for the viewed device sets the Status text through the handler", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -429,11 +429,11 @@ describe("statusPanel - push handling by kind", () => {
 
   test("P3: a snapshot installs the authoritative row set, sets Connected (lock when encrypted), and clears a rendered message", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -455,11 +455,11 @@ describe("statusPanel - push handling by kind", () => {
 
   test("P4: a row push updates exactly its own value span in place, preserving node identity", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -477,11 +477,11 @@ describe("statusPanel - push handling by kind", () => {
 
   test("P5: availability flips the Status cell, tracking each event's own encrypted flag rather than a remembered one", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -503,11 +503,11 @@ describe("statusPanel - push handling by kind", () => {
 
   test("P8: a rebuild renders the device's own row values, never a phantom sizer or a placeholder", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -526,11 +526,11 @@ describe("statusPanel - push handling by kind", () => {
 
   test("a push carrying no data and a push of an unrecognized kind are both ignored without mutating the panel", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -551,11 +551,11 @@ describe("statusPanel - per-device state memory", () => {
 
   test("a snapshot for an unviewed device drives no DOM, and selecting that device renders its connected label and row values at once", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -582,11 +582,11 @@ describe("statusPanel - per-device state memory", () => {
 
   test("an error pushed for an unviewed device renders its label and message the moment that device is selected", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -603,11 +603,11 @@ describe("statusPanel - per-device state memory", () => {
 
   test("an offline availability pushed for an unviewed device renders Disconnected the moment that device is selected", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -624,11 +624,11 @@ describe("statusPanel - per-device state memory", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -650,11 +650,11 @@ describe("statusPanel - per-device state memory", () => {
 
   test("a trailing-session push for an unviewed device writes nothing to its state", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -671,11 +671,11 @@ describe("statusPanel - per-device state memory", () => {
 
   test("a push of an unrecognized kind creates no state for its device - it advances the floor and nothing else", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -698,11 +698,11 @@ describe("statusPanel - error copy", () => {
 
   test("P6: default copy per reason, the unknown-reason fallback, and per-field overrides that keep the untouched field's default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -735,11 +735,11 @@ describe("statusPanel - error copy", () => {
 
   test("every classified reason renders its own default label and message", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -773,11 +773,11 @@ describe("statusPanel - error copy", () => {
 
   test("a per-field override applies to any reason in the vocabulary, keeping the field it does not name", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -796,11 +796,11 @@ describe("statusPanel - the stale-push guard", () => {
 
   test("P7: per-serialNumber guards drop trailing sessions, apply equal-or-higher, and stay independent across devices", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -835,11 +835,11 @@ describe("statusPanel - the stale-push guard", () => {
 
   test("resetStaleGuards clears the per-serialNumber floor so a fresh server's lower tokens are accepted again", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -862,11 +862,11 @@ describe("statusPanel - phantom reservations", () => {
 
   test("P10: phantom spans render per sizer candidate, hidden from paint and the accessibility tree, in the value's own class; Status reserves every candidate", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -904,11 +904,11 @@ describe("statusPanel - the choices row", () => {
 
   test("a snapshot's choices row renders its label and one checkbox glyph per choice, checked exactly where selected says", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -938,11 +938,11 @@ describe("statusPanel - the choices row", () => {
 
   test("a row event replaces a choices row's list in place - the container keeps its node identity and a flipped flag moves only its glyph", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -971,11 +971,11 @@ describe("statusPanel - the choices row", () => {
 
   test("a choices row splits the placement runs, so the cells before and after it each spread across the tracks on their own", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1000,11 +1000,11 @@ describe("statusPanel - the choices row", () => {
 
   test("a row of a form the panel does not know renders its label over the dash, and every neighbor still renders and updates", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1034,11 +1034,11 @@ describe("statusPanel - the choices row", () => {
 
   test("a row addressed with the other form's payload degrades to the dash rather than throwing or changing form", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1063,11 +1063,11 @@ describe("statusPanel - the choices row", () => {
 
   test("an empty choices list renders the placeholder dash, exactly as an empty text value does", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1085,11 +1085,11 @@ describe("statusPanel - the choices row", () => {
 
   test("a choices placeholder renders its label over the dash before any snapshot, and its own template governs the device's first push", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: [ { id: "door", label: "Door", sizer: "Stopped (100%)" }, MODES_TEMPLATE ] }, store);
@@ -1110,11 +1110,11 @@ describe("statusPanel - the choices row", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: [ ...PLACEHOLDER_ROWS, MODES_TEMPLATE ] }, store);
@@ -1136,11 +1136,11 @@ describe("statusPanel - lifecycle", () => {
 
   test("P12/r8: a post-abort push produces no render; a pre-aborted mount arms no detector interval and renders nothing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { controller, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1176,11 +1176,11 @@ describe("statusPanel - lifecycle", () => {
 
   test("the loading guard skips the immediate-run pass, so mounting before model:loaded renders nothing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     // A fresh store sits in the loading state until model:loaded fires.
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
@@ -1205,11 +1205,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1234,11 +1234,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1257,11 +1257,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const rows = [
@@ -1289,11 +1289,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const rows = [{ id: "obstruction", label: "Obstruction", latch: { seconds: 5, value: "Obstructed" }, sizer: [ "Obstructed", "Clear" ] }];
@@ -1312,11 +1312,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1342,11 +1342,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1374,11 +1374,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1400,11 +1400,11 @@ describe("statusPanel - the latch lifecycle", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { controller, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1428,11 +1428,11 @@ describe("statusPanel - the configuration surface", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -1459,11 +1459,11 @@ describe("statusPanel - the configuration surface", () => {
 
   test("P15: the placeholderRows default renders the identity and Status cells only", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({}, store);
@@ -1478,11 +1478,11 @@ describe("statusPanel - the server-hello recovery", () => {
 
   test("H1: a fresh-generation hello clears every per-device floor panel-wide and invokes onServerHello once", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     let helloCount = 0;
 
@@ -1514,11 +1514,11 @@ describe("statusPanel - the server-hello recovery", () => {
 
   test("H2: a duplicate-generation hello is a no-op in both effects - no second callback and no floor clearing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     let helloCount = 0;
 
@@ -1545,11 +1545,11 @@ describe("statusPanel - the server-hello recovery", () => {
 
   test("H2: hellos with a non-finite generation (undefined, null, a string, NaN) are ignored entirely - no callback and no clearing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     let helloCount = 0;
 
@@ -1574,11 +1574,11 @@ describe("statusPanel - the server-hello recovery", () => {
 
   test("first-contact: a pristine mount's first valid hello invokes the callback (the null unseen sentinel differs from any finite generation)", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     let helloCount = 0;
 
@@ -1595,11 +1595,11 @@ describe("statusPanel - the server-hello recovery", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ onServerHello: () => {}, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1624,11 +1624,11 @@ describe("statusPanel - the server-hello recovery", () => {
 
   test("the onServerHello callback is optional: a hello with none configured neither throws nor renders, yet still clears the floor", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1654,11 +1654,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { deferreds, fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1681,11 +1681,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ linkLostMessage: { label: "No link" }, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1701,11 +1701,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { deferreds, fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1730,11 +1730,11 @@ describe("statusPanel - the link-lost watchdog", () => {
     // requestView logs a rejected view request through console.error; suppress it so the deliberate rejection here does not pollute the suite output.
     t.mock.method(console, "error", () => {});
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { deferreds, fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1756,11 +1756,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1785,11 +1785,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 4, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1814,11 +1814,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1853,11 +1853,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1881,11 +1881,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1914,11 +1914,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -1950,11 +1950,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2002,11 +2002,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2034,11 +2034,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { deferreds, fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { controller, handle, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2065,11 +2065,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2089,11 +2089,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2129,11 +2129,11 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     // A zero timeout falls back to the default: it must NOT trip instantly, and must trip on the default clock.
     const zeroStore = readyStore([DEVICE_A]);
@@ -2162,11 +2162,11 @@ describe("statusPanel - the page-resume detector", () => {
 
     enableResumeTimers(t);
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -2196,11 +2196,11 @@ describe("statusPanel - the page-resume detector", () => {
 
     enableResumeTimers(t);
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -2223,11 +2223,11 @@ describe("statusPanel - the page-resume detector", () => {
 
     enableResumeTimers(t);
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -2262,11 +2262,11 @@ describe("statusPanel - the page-resume detector", () => {
 
     enableResumeTimers(t);
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { controller } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2287,11 +2287,11 @@ describe("statusPanel - the page-resume detector", () => {
 
     enableResumeTimers(t);
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { deferreds, fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2316,11 +2316,11 @@ describe("statusPanel - the page-resume detector", () => {
 
     enableResumeTimers(t);
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -2337,11 +2337,11 @@ describe("statusPanel - the page-resume detector", () => {
 
     enableResumeTimers(t);
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ linkLostTimeoutSeconds: 30, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2372,11 +2372,11 @@ describe("statusPanel - the shared liveness delegation", () => {
 
   test("the resume probe is registered through the injected detector by reference, gated on a viewed device and scoped to the mount signal", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     // A stand-in for the page's detector that records exactly what the panel registered. This is the delegation's own boundary: the panel holds no cadence, no clock,
     // and no interval of its own, so whatever arrives here IS the whole of its resume mechanism.
@@ -2410,11 +2410,11 @@ describe("statusPanel - the shared liveness delegation", () => {
 
     t.mock.timers.enable({ apis: [ "Date", "setInterval", "setTimeout" ] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store, { resumeDetector: null });
@@ -2436,11 +2436,11 @@ describe("statusPanel - the shared liveness delegation", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 10, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2469,11 +2469,11 @@ describe("statusPanel - the shared liveness delegation", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { deferreds, fake } = fakeWithDeferredView();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { controller, root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2493,11 +2493,11 @@ describe("statusPanel - the shared liveness delegation", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2544,14 +2544,14 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Record the Status text as the callback sees it: the local restore must be complete before the plugin is notified, so a callback that immediately re-elicits
     // pushes races nothing.
     const seenByCallback = [];
     const { fake, hb, root } = tripped(t, { onServerHello: () => seenByCallback.push(valueFor(root, "Status")) });
 
-    using _hb = hb;
+    using homebridgeInstall = hb;
 
     assert.equal(valueFor(root, "Status"), LINK_LOST_LABEL, "precondition: the Status cell carries the link-lost label");
     assert.equal(messageText(root), LINK_LOST_MESSAGE, "precondition: the link-lost message is rendered");
@@ -2572,11 +2572,11 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2607,12 +2607,12 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     let callbacks = 0;
     const { fake, handle, hb, root } = tripped(t, { onServerHello: () => callbacks++ });
 
-    using _hb = hb;
+    using homebridgeInstall = hb;
 
     // Adopt generation 7, which retires the first trip, then trip again and re-send the SAME generation. A duplicate hello is not evidence of anything new, so it
     // must not touch the presentation the second trip rendered.
@@ -2637,11 +2637,11 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { handle, root } = mountPanel({ linkLostTimeoutSeconds: 2, placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2665,11 +2665,11 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2720,11 +2720,11 @@ describe("statusPanel - the plugin content dock", () => {
 
   test("D1: with no content hook configured the rendered DOM is the grid alone on a selection and an empty root off device scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
@@ -2740,11 +2740,11 @@ describe("statusPanel - the plugin content dock", () => {
 
   test("D2: a configured hook is handed a dock sitting after the grid, with the selection, the dock element, and the mount signal in its bag", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { calls, contentPanel } = capturingDock();
@@ -2767,11 +2767,11 @@ describe("statusPanel - the plugin content dock", () => {
 
   test("D3: the dock is one element for the mount's life - a second selection re-invokes the hook with the same panel while the grid is built fresh", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([ DEVICE_A, DEVICE_B ]);
     const { calls, contentPanel } = capturingDock();
@@ -2794,11 +2794,11 @@ describe("statusPanel - the plugin content dock", () => {
 
   test("D4: the no-device render invokes the hook with device strictly undefined and leaves the same dock as the root's only child", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { calls, contentPanel } = capturingDock();
@@ -2819,11 +2819,11 @@ describe("statusPanel - the plugin content dock", () => {
 
   test("D5: a push-driven rebuild swaps the grid beneath an untouched dock - the hook is not re-invoked and the plugin's own content stands", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { calls, contentPanel } = capturingDock();
@@ -2854,7 +2854,7 @@ describe("statusPanel - the plugin content dock", () => {
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const { calls, contentPanel } = capturingDock();
@@ -2900,11 +2900,11 @@ describe("statusPanel - the plugin content dock", () => {
 
   test("D7: the hook runs as the render's closing act - at invocation time the grid is mounted, the dock is last, and the view request is already away", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, viewRequests } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
 
@@ -2931,11 +2931,11 @@ describe("statusPanel - the plugin content dock", () => {
 
   test("D8: a fresh mount into the same root sweeps the prior mount's dock and docks one of its own", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake } = fakeWithViewCapture();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     const store = readyStore([DEVICE_A]);
     const first = capturingDock();

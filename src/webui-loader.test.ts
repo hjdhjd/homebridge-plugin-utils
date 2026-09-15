@@ -286,10 +286,10 @@ describe("boot monitor behavior", () => {
 
   test("an uncaught window error reveals the panel with the generic message and drops the host spinner", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { calls, fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -305,10 +305,10 @@ describe("boot monitor behavior", () => {
 
   test("fail(\"browser\", ...) selects the browser bucket", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().fail("browser", new Error("no import.meta.resolve"));
@@ -319,10 +319,10 @@ describe("boot monitor behavior", () => {
 
   test("fail(\"manifest\", ...) and fail(\"import\", ...) both select the delivery bucket", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().fail("manifest", new Error("fetch failed"));
@@ -332,10 +332,10 @@ describe("boot monitor behavior", () => {
 
   test("the import stage also selects the delivery bucket", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().fail("import", new Error("module 404"));
@@ -345,10 +345,10 @@ describe("boot monitor behavior", () => {
 
   test("the first failure wins: a second fail() with a different stage is ignored", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().fail("browser", new Error("first"));
@@ -360,10 +360,10 @@ describe("boot monitor behavior", () => {
 
   test("an unhandled rejection with an undefined reason reveals the generic message with a defensively-derived error line", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -381,10 +381,10 @@ describe("boot monitor behavior", () => {
 
   test("neither handler calls preventDefault, so the browser console keeps every error", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -403,10 +403,10 @@ describe("boot monitor behavior", () => {
 
   test("the watchdog reveals the slow notice and drops the spinner, and a later ready() retracts it", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { calls, fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -424,10 +424,10 @@ describe("boot monitor behavior", () => {
 
   test("a visible watchdog notice is replaced by the error panel when a failure lands afterward", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     t.mock.timers.tick(10000);
@@ -443,10 +443,10 @@ describe("boot monitor behavior", () => {
 
   test("ready() tears the monitor down: the watchdog is cleared, listeners are removed, and both surfaces stay hidden", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().ready();
@@ -466,10 +466,10 @@ describe("boot monitor behavior", () => {
 
   test("ready() after a failure retracts the shown panel", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().fail("browser", new Error("boom"));
@@ -483,10 +483,10 @@ describe("boot monitor behavior", () => {
 
   test("fail() after ready() is a no-op", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().ready();
@@ -497,10 +497,10 @@ describe("boot monitor behavior", () => {
 
   test("a second execution in the same window is a no-op: one registration, one watchdog", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { calls, fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -518,10 +518,10 @@ describe("boot monitor behavior", () => {
 
   test("the details lines carry the stage, the error text, and the user agent, assigned as plain text", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
     bootMonitor().fail("manifest", new Error("<img src=x>"));
@@ -543,10 +543,10 @@ describe("boot monitor - bundle stamp across boots", () => {
 
   test("the first boot locks its stamp in and proceeds, showing nothing", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { calls, fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -557,10 +557,10 @@ describe("boot monitor - bundle stamp across boots", () => {
 
   test("a later boot on the same stamp proceeds: an ordinary re-open with no regeneration between", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -573,10 +573,10 @@ describe("boot monitor - bundle stamp across boots", () => {
 
   test("a later boot on a different stamp is terminal: the needs-reload message names the remedy", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { calls, fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -597,10 +597,10 @@ describe("boot monitor - bundle stamp across boots", () => {
 
     // The ordering that matters most in the field. The first boot rendered and stood the monitor down, so `settled` is true by the time a later boot finds the
     // stamp moved. Honoring settled here would suppress the one message the user needs, leaving them on silently stale code.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -614,10 +614,10 @@ describe("boot monitor - bundle stamp across boots", () => {
 
   test("the details carry both stamps, so a screenshot says which bundle the page is locked to", (t) => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 
@@ -634,10 +634,10 @@ describe("boot monitor - bundle stamp across boots", () => {
 
     // The monitor guards against a second execution in the same window, which is what makes the first run's closure the single home for that stamp. A design that kept
     // the stamp anywhere a re-execution could reset would silently answer true forever.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const { fake } = spinnerSpyHomebridge();
 
-    using _hb = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     startMonitor(t);
 

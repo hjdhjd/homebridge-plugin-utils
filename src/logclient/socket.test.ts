@@ -50,7 +50,7 @@ describe("LogSocket - handshake sequence", () => {
 
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using socket = new LogSocket(makeInit(factory));
 
     await settle();
 
@@ -72,7 +72,7 @@ describe("LogSocket - handshake sequence", () => {
     const tokens: string[] = [];
     let counter = 0;
 
-    await using _socket = new LogSocket(makeInit(factory, { tokenProvider: async () => {
+    await using socket = new LogSocket(makeInit(factory, { tokenProvider: async () => {
 
       counter++;
 
@@ -105,7 +105,7 @@ describe("LogSocket - ping/pong liveness", () => {
 
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using socket = new LogSocket(makeInit(factory));
 
     await settle();
 
@@ -213,7 +213,7 @@ describe("LogSocket - reconnect", () => {
 
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using socket = new LogSocket(makeInit(factory));
 
     await settle();
 
@@ -274,7 +274,7 @@ describe("LogSocket - reconnect", () => {
 
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using socket = new LogSocket(makeInit(factory));
 
     await settle();
 
@@ -347,7 +347,7 @@ describe("LogSocket - watchdog liveness", () => {
     const clock = new TestClock();
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory, { clock }));
+    await using socket = new LogSocket(makeInit(factory, { clock }));
 
     await settle();
 
@@ -375,7 +375,7 @@ describe("LogSocket - watchdog liveness", () => {
     const clock = new TestClock();
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory, { clock }));
+    await using socket = new LogSocket(makeInit(factory, { clock }));
 
     await settle();
 
@@ -431,7 +431,7 @@ describe("LogSocket - CONNECT_ERROR", () => {
     const factory = new TestWebSocketFactory();
 
     // Refreshable credentials (password/noauth) re-authenticate on each connect, so a handshake rejection is transient: the loop must retry with a fresh WebSocket.
-    await using _socket = new LogSocket(makeInit(factory, { refreshable: true }));
+    await using socket = new LogSocket(makeInit(factory, { refreshable: true }));
 
     await settle();
 
@@ -496,7 +496,7 @@ describe("LogSocket - streaming-phase faults", () => {
 
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using socket = new LogSocket(makeInit(factory));
 
     await settle();
 
@@ -519,7 +519,7 @@ describe("LogSocket - streaming-phase faults", () => {
 
     const factory = new TestWebSocketFactory();
 
-    await using _socket = new LogSocket(makeInit(factory));
+    await using socket = new LogSocket(makeInit(factory));
 
     await settle();
 
@@ -820,7 +820,7 @@ describe("LogSocket - bounded stdout queue", () => {
     const factory = new TestWebSocketFactory();
     const log = capturingLog();
 
-    await using _socket = new LogSocket(makeInit(factory, { log }));
+    await using socket = new LogSocket(makeInit(factory, { log }));
 
     await settle();
 

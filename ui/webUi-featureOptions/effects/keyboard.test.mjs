@@ -36,7 +36,7 @@ describe("registerKeyboardEffect - Cmd/Ctrl + F focuses the search input", () =>
 
   test("focuses and selects the search input when the panel is visible", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { input } = setupDom();
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
@@ -56,7 +56,7 @@ describe("registerKeyboardEffect - Cmd/Ctrl + F focuses the search input", () =>
 
   test("does not act when the search panel is hidden", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     setupDom({ searchPanelVisible: false });
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
@@ -78,7 +78,7 @@ describe("registerKeyboardEffect - Escape on the search input dispatches filter:
 
   test("clears the input value and dispatches filter:changed with an empty query", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { input } = setupDom();
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
@@ -102,7 +102,7 @@ describe("registerKeyboardEffect - Escape on the search input dispatches filter:
 
   test("does not act when Escape is pressed outside the search input", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     setupDom();
 
@@ -132,7 +132,7 @@ describe("registerKeyboardEffect - lifecycle", () => {
 
   test("aborting the signal removes the keyboard listener", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { input } = setupDom();
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });

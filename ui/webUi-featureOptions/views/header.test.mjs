@@ -36,7 +36,7 @@ describe("mountHeaderView", () => {
 
   test("renders the precedence chain with the controller hop in controller-based mode", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup({ mode: "controller-based" });
 
@@ -47,7 +47,7 @@ describe("mountHeaderView", () => {
 
   test("omits the controller hop in device-only mode", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup({ mode: "device-only" });
 
@@ -58,7 +58,7 @@ describe("mountHeaderView", () => {
 
   test("yields the header when a connection:error transitions the status", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup({ mode: "controller-based" });
 
@@ -74,7 +74,7 @@ describe("mountHeaderView", () => {
 
   test("does not reveal its own region - it builds content but leaves the reveal to the orchestrator", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
     const root = document.createElement("div");

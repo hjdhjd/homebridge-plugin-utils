@@ -71,7 +71,7 @@ describe("webUi.constructor", () => {
 
   test("constructs an inner webUiFeatureOptions instance and exposes it as a public field", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     createSkeletonFeatureOptionsDom();
 
     const ui = new webUi({ name: "Plugin" });
@@ -82,7 +82,7 @@ describe("webUi.constructor", () => {
 
   test("accepts the empty-options invocation - all defaults apply", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     createSkeletonFeatureOptionsDom();
 
     // The constructor must tolerate `new webUi()` without any options at all - the JSDoc declares every field optional, and Homebridge plugin authors using the
@@ -94,7 +94,7 @@ describe("webUi.constructor", () => {
 
   test("forwards featureOptions options through to the inner webUiFeatureOptions constructor", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     createSkeletonFeatureOptionsDom();
 
     // The contract: any options bag passed under `featureOptions` is forwarded verbatim as the inner constructor's argument. We verify by constructing with a
@@ -107,11 +107,11 @@ describe("webUi.constructor", () => {
 
   test("the first construction in a window claims the epoch, and a foreign value squatting on it degrades to replacement", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _epoch = installPageEpoch();
+    using epoch = installPageEpoch();
 
     // No predecessor to retire: the retirement is a no-op and the construction claims the window for itself.
     const first = new webUi({ name: "First" });
@@ -132,7 +132,7 @@ describe("webUi.constructor", () => {
 
   test("the page-epoch fixture hands over a clean window and restores what it found", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -801,7 +801,7 @@ describe("webUi.show - boot monitor handshake", () => {
 
     const { calls, stub } = bootStub();
 
-    using _boot = installWebUiBoot(stub);
+    using boot = installWebUiBoot(stub);
 
     await harness.ui.show();
 
@@ -823,7 +823,7 @@ describe("webUi.show - boot monitor handshake", () => {
 
     const { calls, stub } = bootStub();
 
-    using _boot = installWebUiBoot(stub);
+    using boot = installWebUiBoot(stub);
 
     await harness.ui.show();
 
@@ -1043,7 +1043,7 @@ describe("webUi - the launch-time session open is deadline-bounded", () => {
 
     let readyCalls = 0;
 
-    using _boot = installWebUiBoot({ fail: () => {}, ready: () => { readyCalls++; } });
+    using boot = installWebUiBoot({ fail: () => {}, ready: () => { readyCalls++; } });
 
     // Drain queued async work until the predicate answers, so each step waits on the state it needs rather than on a fixed number of cycles.
     const drainUntil = async (predicate) => {
@@ -1282,11 +1282,11 @@ describe("webUi.epochSignal - the page-copy lifetime surface", () => {
 
   test("the getter is live at construction and hands out the epoch's own signal, unwritable and off the enumerable surface", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _epoch = installPageEpoch();
+    using epoch = installPageEpoch();
 
     const ui = new webUi({ name: "Plugin" });
 
@@ -1306,11 +1306,11 @@ describe("webUi.epochSignal - the page-copy lifetime surface", () => {
 
   test("a successor's construction aborts the predecessor's signal and leaves its own live", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _epoch = installPageEpoch();
+    using epoch = installPageEpoch();
 
     const first = new webUi({ name: "First" });
     const firstSignal = first.epochSignal;
@@ -1330,11 +1330,11 @@ describe("webUi.epochSignal - the page-copy lifetime surface", () => {
 
   test("a consumer's abort listener, registered as the surface documents, runs when a successor claims the window", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _epoch = installPageEpoch();
+    using epoch = installPageEpoch();
 
     const ui = new webUi({ name: "Plugin" });
     const teardowns = [];

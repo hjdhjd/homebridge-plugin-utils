@@ -67,7 +67,7 @@ describe("createSparkline - geometry", () => {
 
   test("an all-positive window closes the area at the strip-bottom zero line and shows no hairline", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { area, hairline, line } = marksOf(createSparkline({ points: [ 1, 2, 3 ] }).element);
 
@@ -78,7 +78,7 @@ describe("createSparkline - geometry", () => {
 
   test("a window that crosses zero puts the hairline at the interpolated zero and the line dips below it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Spanning -2 to 2, zero sits at the middle of the 57-unit plot: y(0) = 64 - ((2 / 4) * 57) = 35.50.
     const { hairline, line } = marksOf(createSparkline({ points: [ -2, 0, 2 ] }).element);
@@ -95,7 +95,7 @@ describe("createSparkline - geometry", () => {
 
   test("a flat all-negative window with no anchor puts zero at the domain's top edge and the data on the baseline", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Spanning -2 to 0, so the data lands on the baseline at 64 and zero lands one top pad down from the top: y(0) = 64 - ((2 / 2) * 57) = 7.00.
     const { area, hairline, line } = marksOf(createSparkline({ points: [ -2, -2, -2 ] }).element);
@@ -113,7 +113,7 @@ describe("createSparkline - geometry", () => {
 
   test("a non-flat all-negative window with no anchor renders zero at the top edge with all data below it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Spanning -5 to 0: y(-1) = 64 - ((4 / 5) * 57) = 18.40, y(-5) = 64.00, y(-3) = 64 - ((2 / 5) * 57) = 41.20, and zero is at 7.00.
     const { hairline, line } = marksOf(createSparkline({ points: [ -1, -5, -3 ] }).element);
@@ -129,7 +129,7 @@ describe("createSparkline - geometry", () => {
 
   test("domainAnchor floors the domain top so low data renders low", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The anchor raises the top from 1 to 14, so the flat series draws near the floor: y(1) = 64 - ((1 / 14) * 57) = 59.93.
     const { line } = marksOf(createSparkline({ domainAnchor: 14, points: [ 1, 1, 1 ] }).element);
@@ -139,7 +139,7 @@ describe("createSparkline - geometry", () => {
 
   test("domainAnchor never clips data above it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The data maximum of 20 exceeds the anchor of 14, so the domain follows the data: y(20) = 7.00 and y(1) = 64 - ((1 / 20) * 57) = 61.15.
     const { line } = marksOf(createSparkline({ domainAnchor: 14, points: [ 1, 20 ] }).element);
@@ -149,7 +149,7 @@ describe("createSparkline - geometry", () => {
 
   test("the end dot takes the last point's coordinates", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { dot } = marksOf(createSparkline({ points: [ 1, 2, 3 ] }).element);
 
@@ -160,7 +160,7 @@ describe("createSparkline - geometry", () => {
 
   test("an empty window clears both paths and hides the dot", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { area, dot, hairline, line } = marksOf(createSparkline({ points: [] }).element);
 
@@ -172,7 +172,7 @@ describe("createSparkline - geometry", () => {
 
   test("a one-point window renders the lone dot at the plot's right edge with empty paths", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A single sample spans 0 to 5, so it lands at the domain's top: y(5) = 64 - 57 = 7.00.
     const { area, dot, line } = marksOf(createSparkline({ points: [5] }).element);
@@ -186,7 +186,7 @@ describe("createSparkline - geometry", () => {
 
   test("a flat all-zero window lands every point on the baseline", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The only window whose domain collapses. The guarded span of 1 puts every value at y = 64 - ((0 / 1) * 57) = 64.00.
     const { area, dot, hairline, line } = marksOf(createSparkline({ points: [ 0, 0, 0 ] }).element);
@@ -199,7 +199,7 @@ describe("createSparkline - geometry", () => {
 
   test("non-finite points are filtered before any geometry is computed", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const filtered = marksOf(createSparkline({ points: [ 1, NaN, 2, Infinity, 3, "4" ] }).element);
     const clean = marksOf(createSparkline({ points: [ 1, 2, 3 ] }).element);
@@ -211,7 +211,7 @@ describe("createSparkline - geometry", () => {
 
   test("a non-finite domainAnchor is ignored", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const anchored = marksOf(createSparkline({ domainAnchor: NaN, points: [ 1, 2, 3 ] }).element);
 
@@ -223,7 +223,7 @@ describe("createSparkline - color discipline", () => {
 
   test("every mark draws in currentColor at the fixed opacities, with the dot ringed in the surface token", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { area, dot, hairline, line } = marksOf(createSparkline({ points: [ -1, 2 ] }).element);
 
@@ -248,7 +248,7 @@ describe("createSparkline - updating in place", () => {
 
   test("update repaints the very same element and marks", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 1, 2, 3 ] });
     const before = marksOf(sparkline.element);
@@ -266,7 +266,7 @@ describe("createSparkline - updating in place", () => {
 
   test("a plain update genuinely recomputes the geometry", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 1, 2, 3 ] });
     const { dot, line } = marksOf(sparkline.element);
@@ -290,7 +290,7 @@ describe("createSparkline - updating in place", () => {
 
   test("an update from an empty window brings the dot back", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [] });
     const { dot } = marksOf(sparkline.element);
@@ -306,7 +306,7 @@ describe("createSparkline - updating in place", () => {
 
   test("the strip is an image with a live accessible label", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ ariaLabel: "Prices are steady.", points: [ 1, 2, 3 ] });
     const { element } = sparkline;
@@ -329,7 +329,7 @@ describe("createSparkline - updating in place", () => {
 
   test("a null points update renders the empty state rather than throwing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 1, 2, 3 ] });
     const { dot, line } = marksOf(sparkline.element);
@@ -342,7 +342,7 @@ describe("createSparkline - updating in place", () => {
 
   test("the construction entry point normalizes its window the same way update does", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const empty = marksOf(createSparkline({ points: null }).element);
 
@@ -372,7 +372,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("a one-step shift animates the union window by exactly one step", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { dot, group, line } = marksOf(sparkline.element);
@@ -405,7 +405,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("a transitionend on the group settles the slide", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -420,7 +420,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("the fallback timer settles the slide when no transitionend arrives", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -447,7 +447,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("a transitionend from a child or for another property does not settle the slide", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -469,7 +469,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("settling on transitionend cancels the fallback timer outright", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -502,7 +502,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("settling on the fallback timer removes the transitionend listener outright", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -533,7 +533,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("chained slides each animate and settle", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -562,7 +562,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("an update arriving mid-slide cancels the pending settle and wins", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -591,7 +591,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("an update arriving mid-slide applies instantly even when it asks to slide", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -606,7 +606,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("a detached element settles harmlessly", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -621,7 +621,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("a window that is not a one-step shift repaints instantly", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Every mismatch shape: shifted by two, shorter, longer, and - the case that actually convicts an endpoint-only comparison - a window whose first element
     // matches the previous window's second while its interior differs. The shifted-by-two fixture already mismatches at the first overlap, so only the
@@ -650,7 +650,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("reduced motion is read at each update, not cached at construction", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group, line } = marksOf(sparkline.element);
@@ -665,7 +665,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("a host without matchMedia reads as no preference and slides", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group } = marksOf(sparkline.element);
@@ -687,7 +687,7 @@ describe("createSparkline - the conveyor slide", () => {
 
   test("a host reporting no reduced-motion preference slides", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sparkline = createSparkline({ points: [ 10, 1, 2 ] });
     const { group } = marksOf(sparkline.element);

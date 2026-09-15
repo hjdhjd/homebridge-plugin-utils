@@ -27,7 +27,7 @@ describe("registerOptionsSkinEffect", () => {
 
   test("adopts a constructable stylesheet onto document.adoptedStyleSheets", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -39,7 +39,7 @@ describe("registerOptionsSkinEffect", () => {
 
   test("aborting the signal releases the stylesheet from the document", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -53,7 +53,7 @@ describe("registerOptionsSkinEffect", () => {
 
   test("a pre-aborted signal does not adopt the stylesheet at all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -66,7 +66,7 @@ describe("registerOptionsSkinEffect", () => {
 
   test("the view rules the skin owns stay out of the page base sheet - the nav pills above all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The `.nav-link` set is why the skin is a separate sheet with a separate lifetime: it restyles a Bootstrap class any custom page may legitimately use for
     // something else, so it must live and die with this view rather than with the page.
@@ -81,7 +81,7 @@ describe("buildOptionsSkinCss - layout rules", () => {
 
   test("the sidebar takes all three of its widths from the sidebar-width token", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The token is the single place the sidebar's width is stated, so a plugin widening it overrides one custom property rather than three declarations. All three
     // properties must reference it: leaving min-width or max-width on a literal would hold the sidebar fixed at 200px no matter what the token says.
@@ -95,7 +95,7 @@ describe("buildOptionsSkinCss - layout rules", () => {
 
   test("the busy-table rule dims its rows through the shared disabled token and drops the pointer", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The busy table's rows are disabled at the element level; this rule is what says so on screen. It reads the same not-actionable token the locked secret
     // toggle wears, so the two dimmed states cannot drift apart, and a literal here would be exactly that drift.
@@ -108,7 +108,7 @@ describe("buildOptionsSkinCss - layout rules", () => {
 
   test("the busy-table treatment drops the pointer on the option label without dimming it a second time", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The label carries the cursor-pointer utility, so the row-level cursor cannot reach it and the label needs a rule of its own. The dim must stay off that rule:
     // the label already inherits the row's opacity, and a second declaration would stack one dim on top of another.
@@ -120,7 +120,7 @@ describe("buildOptionsSkinCss - layout rules", () => {
 
   test("the checkbox seat re-centers the control on the label's first line", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = [...skinSheet().cssRules].find((candidate) => candidate.selectorText === ".fo-option-checkbox");
 
@@ -137,7 +137,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the status-grid variant is one column grid whose track count comes from the panel's own custom property", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -151,7 +151,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the status-grid variant lets every cell shrink inside its track", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -163,7 +163,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the variant cell rule follows the base grid rules so it wins on source order", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
     const base = text.indexOf(".device-stats-grid .stat-item:first-child");
@@ -175,7 +175,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the phantom rule charges nothing: hidden from paint, zero height, no margin", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -193,7 +193,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("a stat cell prices its label-to-value spacing on the label, so a phantom charges no height", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -209,7 +209,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the identity cells wear no wrapper rule of their own - they are cells on the shared tracks like every other", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A rule for an identity wrapper would mean a second geometry beside the shared tracks, which is the arrangement the one grid exists to replace, so its
     // absence is what the panel's alignment rests on rather than an omission.
@@ -218,7 +218,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the status message spans every track and wraps", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -228,7 +228,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the link-lost message centers and renders semibold in the attention token, and the reload action is its own full-width centered line", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -243,7 +243,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the connection-error failure text takes the shared attention token", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The failure-text class colors the connection-error view's `code` element from the attention token rather than Bootstrap's text-danger, so failure emphasis has
     // one source.
@@ -252,7 +252,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("each responsive hide rule exempts the status grid on the grid token", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -263,7 +263,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the dark corrections for this view's own controls read their tokens", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -277,7 +277,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("a value option's field wears the dark form-control treatment, every value read from its token", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -297,7 +297,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("a dropdown takes its width from its own widest member rather than from the container", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Bootstrap's `.form-control` stretches a control to the full width of what holds it, which on a dropdown offering two short labels reads as a mistake.
     // Handing the width back to the browser's intrinsic sizing is what makes the control as wide as its widest member, and the cap beside it is what keeps a
@@ -310,7 +310,7 @@ describe("buildOptionsSkinCss - status panel variant rules", () => {
 
   test("the value-field THEME treatment is dark-only - light mode is left to Bootstrap", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The scope is a ruling rather than an oversight, so it is asserted rather than left to the comment beside the rules: every rule that DRESSES a value field is
      * dark-qualified, which is also what keeps the search field's light accent styling from spreading here by a later well-meant edit.
@@ -337,7 +337,7 @@ describe("buildOptionsSkinCss - the status panel's choices row", () => {
 
   test("the row takes a full-span line as a plain column, and its inner list flows the choices left, wrapping only when the width runs out", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -363,7 +363,7 @@ describe("buildOptionsSkinCss - the status panel's choices row", () => {
 
   test("a choice reads as muted secondary text in a fixed glyph box, and offers no affordance of a control", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -393,7 +393,7 @@ describe("buildOptionsSkinCss - the heading action's glyph", () => {
 
   test("seats the glyph on the button's line box rather than on a font metric", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The guard and the rule are asserted as one nested match because the guard is what makes the declarations land together or not at all: the glyph's box grows
      * to the line box and then sits flush at its top, and a browser resolving only the alignment would seat the glyph worse than a browser resolving neither.
@@ -409,7 +409,7 @@ describe("buildOptionsSkinCss - the heading action's glyph", () => {
 
   test("reaches the glyph from inside the guard only, so the seat cannot land half-applied", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // An unguarded copy of the rule is precisely the failure the guard exists to prevent, and the nested match above would still pass with one present - so the
     // count is what locks it in. One occurrence, placed inside the guard by the assertion above, is the whole contract.
@@ -427,7 +427,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
 
   test("wears the heading family's case, scale, and weight, so a control-shaped row reads as one", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = globalRule();
 
@@ -438,7 +438,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
 
   test("centers its glyph structurally rather than nudging it off the baseline", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = globalRule();
 
@@ -451,7 +451,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
 
   test("owns the space between glyph and label, and the space beneath the row", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = globalRule();
 
@@ -461,7 +461,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
 
   test("wears the interactive family's outline at rest, which the selected fill then subsumes", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
     const activeRule = text.match(/^.*\[data-navigation="global"\]\.active.*$/m)?.[0] ?? "";
@@ -474,7 +474,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
 
   test("declares no background of its own, which is what leaves the shared hover tint and selected fill reachable", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The row's selector carries an id, so any background it declared would outrank `.nav-link:hover` and `.nav-link.active` - both plain class selectors - and take
      * the tint and the fill with it. A resting nav row is painted by nothing, so the outline needs no background beside it to read as transparent. This absence is
@@ -487,7 +487,7 @@ describe("buildOptionsSkinCss - the Global Options row", () => {
 
   test("paints no state colors of its own - the shared row rules reach it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The row's affordances are what separate it from a title, and their colors come from `.nav-link:hover` and `.nav-link.active`. A colored state rule of its own
      * would be a second definition of the same thing, so its absence is the assertion. The one state rule the row does carry hides its own border under the selected fill
@@ -505,7 +505,7 @@ describe("buildOptionsSkinCss - the choice group", () => {
 
   test("lays the group's members out as a wrapping row on the shared spacing tokens", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -521,7 +521,7 @@ describe("buildOptionsSkinCss - the choice group", () => {
 
   test("reads a member the device no longer offers in the attention color, in both lighting modes", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -537,7 +537,7 @@ describe("buildOptionsSkinCss - the choice group", () => {
 
   test("the group declares no surface of its own, since what a member looks like is the member's own business", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A fieldset is what makes the members one control rather than a field in its own right: the members are native inputs that follow `color-scheme` in both
     // modes, and the group sits on the row's surface. A fill declared here would paint a rectangle behind them and be a second place to keep in step besides.
@@ -552,7 +552,7 @@ describe("buildOptionsSkinCss - the list editor", () => {
 
   test("lays the entries out as wrapping inline boxes on the accent tokens", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = skinCss();
 
@@ -569,7 +569,7 @@ describe("buildOptionsSkinCss - the list editor", () => {
 
   test("the editor's own rules touch no surface the field treatment owns, so the two do not fight", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The entry field wears the skin's field marker and takes its whole dark treatment from that one trio, which is dark-only. What the editor declares for
     // itself is how the entries lay out, in both modes and with no surface among it, so nothing here can disagree with the trio about what a field looks like.

@@ -97,11 +97,11 @@ describe("webUiFeatureOptions.constructor", () => {
 
   test("caches the skeleton DOM mount points for later show() invocations", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     const skeleton = createSkeletonFeatureOptionsDom();
 
     // Install a minimal homebridge fake for the constructor to reference (it does not call anything on it, but downstream code might).
-    using _homebridge = installHomebridge(createFakeHomebridge());
+    using homebridgeInstall = installHomebridge(createFakeHomebridge());
 
     const orchestrator = new webUiFeatureOptions();
 
@@ -115,11 +115,11 @@ describe("webUiFeatureOptions.constructor", () => {
 
     // The constructor destructures the options and merges `sidebar` and `ui` over the defaults. We verify the merge behavior by passing a partial config and
     // asserting downstream consumers (the nav section header, the validator set) see the merged values.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge());
+    using homebridgeInstall = installHomebridge(createFakeHomebridge());
 
     const isController = (device) => device.serialNumber?.startsWith("CTRL-") ?? false;
 
@@ -169,7 +169,7 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
 
   test("the groupOrder comparator reaches the view and orders the grouped sections", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The group names make the comparator and the plain sort disagree: "attic" is lowercase, which code-unit order places after both capitalized names, and "Scenes"
     // is held last against an alphabetical reading that would seat it in the middle. A sidebar that never receives the comparator renders
@@ -200,7 +200,7 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
 
     const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ devices, sidebar: { groupOrder } });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const headers = [...skeleton.devicesContainer.querySelectorAll("h6")].map((header) => header.textContent);
 
@@ -211,7 +211,7 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
 
   test("the deviceContent hook reaches the view and composes a device link's content", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The hook adorns one device and declines the other, which puts both halves of the contract in one build: the adorned link proves the hook ran, and the declined
     // link's plain name proves a null return still falls through to the framework's own rendering.
@@ -238,7 +238,7 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
 
     const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ devices, sidebar: { deviceContent } });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const links = [...skeleton.devicesContainer.querySelectorAll(".nav-link[data-navigation='device']")];
 
@@ -250,7 +250,7 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
 
   test("the globalGlyph hook reaches the view and replaces the Global Options glyph", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A fresh node per call is the hook's contract, so a plugin writes it as a factory rather than handing over one stored node.
     const globalGlyph = () => {
@@ -264,7 +264,7 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
 
     const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ sidebar: { globalGlyph } });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const globalRow = skeleton.controllersContainer.querySelector(".nav-link[data-navigation='global']");
 
@@ -277,11 +277,11 @@ describe("webUiFeatureOptions - sidebar hook threading", () => {
 
   test("the refresh action reaches the view and docks on the controllers heading", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, orchestrator, skeleton } = await showWithSidebar({ sidebar: { refresh: { label: "Refresh controllers", onRefresh: () => {} } } });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const action = skeleton.controllersContainer.querySelector("h6.nav-header button.fo-action");
 
@@ -298,7 +298,7 @@ describe("webUiFeatureOptions.editedConfig", () => {
 
   test("a session held whose store has not loaded its model reports the session's SAVED options, not the store's placeholder", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -310,7 +310,7 @@ describe("webUiFeatureOptions.editedConfig", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -341,7 +341,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
 
   test("show() sets up the page, reads the config, and renders every category's options at global scope", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -350,7 +350,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -401,7 +401,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
 
   test("show() reveals every region container as part of the coordinated end-of-load reveal", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -411,7 +411,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -435,7 +435,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
 
     // The orchestrator pulls the categories/options from homebridge.request("/getOptions"). We seed the response and verify the rendered DOM reflects it - the
     // request was consulted, not some other source.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const customFeatures = {
@@ -450,7 +450,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
       requestResponses: new Map([[ "/getOptions", customFeatures ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -481,7 +481,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 
   test("re-reads the host config on every show() so getControllers and the options render reflect an external edit made while hidden", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -493,7 +493,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -534,7 +534,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 
   test("a getPluginConfig failure during the show() re-sync renders the connection-error view rather than a toast over a blank frame", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -543,7 +543,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -575,7 +575,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 
   test("the connection-error retry re-enters show() and recovers once the config read succeeds", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -584,7 +584,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -625,7 +625,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 
   test("a sync failure records zero config writes - the persist effect never fires on the failure path", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -635,7 +635,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -668,7 +668,7 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
   // outcome and show() gating its follow-ups on `devicesAppliedSeq`.
   test("a controller click during the initial fetch wins - show()'s superseded outcome neither reveals over it nor overwrites its scope", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -677,7 +677,7 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -740,7 +740,7 @@ describe("webUiFeatureOptions.show - progressive disclosure (no overlay spinner)
   // perceives the UI filling in progressively rather than "spinner, then everything at once." The spinner-count assertion is the operational proof for this contract.
   test("show() does not raise the global homebridge spinner overlay - each region populates against the visible page-shell", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -750,7 +750,7 @@ describe("webUiFeatureOptions.show - progressive disclosure (no overlay spinner)
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -834,11 +834,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("the affordance holds the frame while the boot waits on plugin I/O, and the success reveal takes it back", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const { gate, orchestrator, showPromise } = await startHeldBoot();
     const affordance = bootAffordanceIn();
@@ -862,11 +862,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("a configured ui.connectingMessage renders verbatim", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const copy = "Connecting to your controller. A first connection can take up to twenty seconds.";
     const { gate, orchestrator, showPromise } = await startHeldBoot({ ui: { connectingMessage: copy } });
@@ -883,11 +883,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("a controllers fetch that reports a failure lands on the connection-error view with the affordance gone", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -906,11 +906,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("an empty controller list lands on the no-controllers helper with the affordance gone", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({ getControllers: async () => ({ controllers: [], error: "" }) });
 
@@ -925,11 +925,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("global-only mode: the affordance holds the frame while the catalog request is held, and the reduced reveal takes it back", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, homebridgeGuard } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // Park the catalog request itself. Global-only mode fetches no devices and takes no controllers hook, so the catalog is the one await that can hold its boot open.
     const catalog = Promise.withResolvers();
@@ -954,11 +954,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("teardown mid-boot retires the affordance through the cycle's signal", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const { gate, orchestrator, showPromise } = await startHeldBoot();
 
@@ -979,11 +979,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("a plugin-declared region hides for the boot window, returns with the page, and is never cleared", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // Attached before show(), the way a plugin's own chrome is: markup the framework never built and must never destroy.
     const { button, region } = attachPluginRegion();
@@ -1008,11 +1008,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("global-only mode reveals a plugin-declared region with its reduced region set", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const { region } = attachPluginRegion();
     const orchestrator = new webUiFeatureOptions({ globalOnly: true });
@@ -1028,11 +1028,11 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   test("a re-entry mid-boot leaves the successor's own affordance standing", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard } = arrangePage();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     /* One instance, two overlapping cycles, which is what a menu re-entry during a slow boot produces. The gate the hook reads is swapped between them so each cycle
      * parks on a gate of its own, while both share the instance's affordance field - the shape that puts a dead cycle's late failure in reach of the live cycle's state.
@@ -1091,11 +1091,11 @@ describe("webUiFeatureOptions.hide", () => {
 
   test("hide() removes the feature-options page from view without destroying the orchestrator state", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1124,7 +1124,7 @@ describe("webUiFeatureOptions.hide", () => {
 
   test("hide() resolves within the teardown cap even when the host write never settles (no-hang guarantee)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
@@ -1138,7 +1138,7 @@ describe("webUiFeatureOptions.hide", () => {
 
     fake.updatePluginConfig = () => new Promise(() => {});
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1175,11 +1175,11 @@ describe("webUiFeatureOptions.cleanup", () => {
   test("cleanup() is safe before show() is called (no prior render to tear down)", () => {
 
     // Defensive: orchestrator teardown may run before any render has happened, for example when the first-run flow aborts. cleanup must not throw.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge());
+    using homebridgeInstall = installHomebridge(createFakeHomebridge());
 
     const orchestrator = new webUiFeatureOptions();
 
@@ -1188,11 +1188,11 @@ describe("webUiFeatureOptions.cleanup", () => {
 
   test("cleanup() is a no-op on repeat - repeated calls are safe", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1214,7 +1214,7 @@ describe("webUiFeatureOptions disposal (Symbol.dispose / Symbol.asyncDispose)", 
 
   test("[Symbol.asyncDispose] flushes a debounced-but-unwritten edit before tearing down", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
@@ -1224,7 +1224,7 @@ describe("webUiFeatureOptions disposal (Symbol.dispose / Symbol.asyncDispose)", 
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1254,7 +1254,7 @@ describe("webUiFeatureOptions disposal (Symbol.dispose / Symbol.asyncDispose)", 
 
   test("[Symbol.dispose] forfeits the flush - a debounced-but-unwritten edit is dropped (forced-teardown trade)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
@@ -1264,7 +1264,7 @@ describe("webUiFeatureOptions disposal (Symbol.dispose / Symbol.asyncDispose)", 
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1301,7 +1301,7 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
 
     // The default device source is `homebridge.getCachedAccessories()`. This test seeds the fake with a representative accessory shape and verifies the orchestrator's
     // default reader normalizes it into the { firmwareRevision, manufacturer, model, name, serialNumber } shape the sidebar consumes.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -1314,7 +1314,7 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
       serialNumber: "SN-001"
     });
 
-    using _homebridge = installHomebridge(createFakeHomebridge({ cachedAccessories: [cachedAccessory] }));
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({ cachedAccessories: [cachedAccessory] }));
 
     const orchestrator = new webUiFeatureOptions();
     const { devices, error } = await orchestrator.getHomebridgeDevices();
@@ -1332,7 +1332,7 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
 
     // The orchestrator applies a case-insensitive localeCompare sort before returning the device list. This provides a consistent sidebar ordering even when the
     // cache returns accessories in insertion or discovery order.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -1343,7 +1343,7 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
       makeCachedAccessory({ displayName: "banana", serialNumber: "SN-B" })
     ];
 
-    using _homebridge = installHomebridge(createFakeHomebridge({ cachedAccessories: accessories }));
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({ cachedAccessories: accessories }));
 
     const orchestrator = new webUiFeatureOptions();
     const { devices } = await orchestrator.getHomebridgeDevices();
@@ -1354,11 +1354,11 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
 
   test("returns an empty array when no accessories are cached", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({ cachedAccessories: [] }));
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({ cachedAccessories: [] }));
 
     const orchestrator = new webUiFeatureOptions();
     const { devices, error } = await orchestrator.getHomebridgeDevices();
@@ -1375,11 +1375,11 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     // Controller-mode plugins cannot display any options without at least one controller - the error path must surface a message, hide the spinner, and NOT try to
     // render a sidebar. We verify the orchestrator routes to that path when getControllers returns []. The sidebar region will contain a message element rather than
     // controller / device links.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1407,7 +1407,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     // The two outcomes share an empty controller list and #headerInfo, and they are the whole reason the hook carries an error alongside its list: an unreachable
     // controller told to "configure a controller in the main settings tab" sends the user to a settings page that is already correct. The reported failure must
     // therefore reach the retry affordance the thrown-hook path already lands on.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -1416,7 +1416,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1444,11 +1444,11 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
   test("a getControllers hook that reports no failure still renders its controllers", async () => {
 
     // The success half of the same contract: an empty error is the ordinary case, and the list travelling beside it reaches the sidebar exactly as before.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1476,11 +1476,11 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     // The end-to-end half of the sidebar's in-scope outline: the nav view paints it off devices:loaded, and this proves that a whole boot arrives at the same place a
     // click on that controller does - the outline on the controller whose list came back empty, and the selection resting on that controller rather than on Global.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1512,11 +1512,11 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
      * Each view therefore has to reach its rendered global content off model:loaded and devices:loaded alone, and the assertions below name that content rather
      * than settling for an absence of errors - a view that quietly stayed on its loading placeholder would pass the weaker check.
      */
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1553,7 +1553,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     // The divergence from show(): an explicit, plugin-initiated refresh reports its failure to the caller that asked for it rather than replacing a working page
     // with the retry frame. The caller authored the hook that produced the failure and can surface it however it likes.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -1562,7 +1562,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1601,11 +1601,11 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     // The case of a plugin still on the bare-array contract. Such an array carries no error and no controllers, so without the guard it would read as "this plugin
     // has no controllers configured" - the one message this whole channel exists to keep off a failure it does not describe. show() has no plugin code on its call
     // stack to hand the TypeError to, so it lands where every other boot failure lands.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1634,11 +1634,11 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     // The divergence from show(): a refresh is plugin-initiated, so the plugin that wrote the broken hook is on the call stack and gets told. Absorbing this into
     // the false return every transport failure gets would hide the bug behind a silent no-op for as long as the plugin ships it.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -1678,7 +1678,7 @@ describe("webUiFeatureOptions - config persistence", () => {
     // End-to-end: user toggles an option, the options view dispatches an option mutation (option:set / option:cleared); the reducer recomputes configuredOptions and
     // the persist effect drains it to homebridge.updatePluginConfig. We seed a clean config, render, simulate a checkbox toggle + change event, and assert the
     // captured update contains the new option.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -1687,7 +1687,7 @@ describe("webUiFeatureOptions - config persistence", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1731,7 +1731,7 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
 
   test("clicking the reset-defaults button wipes every configured option and persists the empty list", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -1741,7 +1741,7 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1779,7 +1779,7 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
 
   test("clicking the reset-revert button restores the at-show() snapshot, discarding in-session edits", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -1788,7 +1788,7 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1833,7 +1833,7 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
 
     // The reveal-and-cancel ergonomic. Clicking the toggle, then clicking it again (collapsing back), should leave the persisted config untouched. We use the
     // observed.updatedConfigs count as the witness.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -1843,7 +1843,7 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1875,7 +1875,7 @@ describe("webUiFeatureOptions - device info panel", () => {
 
     // The default info-panel handler reads firmware/manufacturer/model/serial off the device and renders a stats grid. We exercise it by setting up a controller-mode
     // orchestrator (where device views are first-class), navigating into the controller view, then asserting the panel is populated.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -1884,7 +1884,7 @@ describe("webUiFeatureOptions - device info panel", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1913,7 +1913,7 @@ describe("webUiFeatureOptions - device info panel", () => {
     // After populating the panel with a device, navigating to Global Options must clear it. Clicking the Global link dispatches scope:changed with kind "global" - the
     // typed sentinel for "no device, global scope" - and the device-info view's scope subscription re-renders with selectedDevice undefined (no device matches a
     // global scope), driving the clear-panel branch of the default handler.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -1922,7 +1922,7 @@ describe("webUiFeatureOptions - device info panel", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -1947,7 +1947,7 @@ describe("webUiFeatureOptions - device info panel", () => {
 
   test("a plugin hook receives one bag per render, carrying the live selection and the mount's own signal", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -1956,7 +1956,7 @@ describe("webUiFeatureOptions - device info panel", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2018,7 +2018,7 @@ describe("webUiFeatureOptions - connection-error plugin panel", () => {
 
   test("a configured connectionErrorPanel receives its slot docked after the error block, carrying the mount's signal", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -2027,7 +2027,7 @@ describe("webUiFeatureOptions - connection-error plugin panel", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2076,11 +2076,11 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
    */
   test("a boot whose device fetch reports a failure hands the connection-error panel the selected controller", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -2109,11 +2109,11 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
 
   test("a zero-device boot rests on the controller's own view, where a click on that controller would rest", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -2141,11 +2141,11 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
 
   test("device-only mode has no controller to select, so the whole cycle rests on global", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -2179,7 +2179,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
 
   test("a regular Error rejected by updatePluginConfig surfaces as a user-facing toast labelled with the operation", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -2195,7 +2195,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
       throw failure;
     };
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2229,7 +2229,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
 
   test("an AbortError rejected by updatePluginConfig is absorbed silently (lifecycle teardown is expected)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -2245,7 +2245,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
       throw new DOMException("operation aborted", "AbortError");
     };
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2279,7 +2279,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
 
   test("a failed checkbox-change persist rolls back the model to the pre-mutation snapshot", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -2293,7 +2293,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
       throw new Error("simulated persistence failure");
     };
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2322,7 +2322,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
 
   test("a failed reset-to-defaults persist rolls back the model to the pre-reset snapshot", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -2332,7 +2332,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2363,7 +2363,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
 
   test("a failed revert-to-saved persist rolls back the model to the in-session edited state", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -2372,7 +2372,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2418,7 +2418,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
   // intermediate failure because a superseding iteration is pending. This is the property the per-mutation rollback pattern could NOT provide.
   test("concurrent mutations preserve both intents on disk when the earlier persist fails but the later succeeds", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -2427,7 +2427,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2516,7 +2516,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
     // cleanup() during the in-flight persist marks the page aborted, so the drain returns without dispatching - the orchestrator does not touch a torn-down DOM. This
     // test proves that contract by pausing the persist, cleanup()ing while it's in flight, then releasing it as a rejection. The observable: no re-render happens after
     // cleanup, so configTable stays cleared.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -2536,7 +2536,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
       throw new Error("simulated persistence failure mid-cleanup");
     };
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2571,7 +2571,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
     // The nav-click path optimistically dispatches scope:changed before calling getDevices, then dispatches devices:loaded once the fetch resolves. The async tail
     // (devices:loaded) must NOT fire after cleanup: that would mutate state on a torn-down store and could re-trigger view subscriptions against detached DOM.
     // Pause getDevices via the fake, run cleanup, release the fetch, verify no devices landed.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -2580,7 +2580,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2644,7 +2644,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
   test("cleanup() during a revert whose persist fails suppresses the rollback's re-render", async () => {
 
     // Same shape as the cleanup-during-reset test - revert routes through the same drain + rollback path, so the same signal-aware guard applies.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -2663,7 +2663,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
       throw new Error("simulated persistence failure mid-cleanup");
     };
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2698,7 +2698,7 @@ describe("webUiFeatureOptions - revert snapshot survives a re-show with set-equa
 
   test("re-show with set-equal-but-reordered options keeps the original snapshot for revert", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -2712,7 +2712,7 @@ describe("webUiFeatureOptions - revert snapshot survives a re-show with set-equa
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2763,7 +2763,7 @@ describe("webUiFeatureOptions - boundary coercion of malformed config", () => {
 
     // The Homebridge plugin config store is user-editable JSON. A malformed options field (any non-array value) is treated as "no options configured" at the
     // orchestrator boundary, so every downstream consumer (the snapshot, the model, the revert path) can trust the shape.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -2773,7 +2773,7 @@ describe("webUiFeatureOptions - boundary coercion of malformed config", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -2891,7 +2891,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     // The most basic multi-tier contract: an option set globally must appear as inherited when viewed from any sub-scope, including the controller. This is
     // the canary case for the orchestrator's controller-mode initialization: the controller is set, the devices are loaded, and the renderer is wired with the
     // right controller context before the initial render.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeControllerHarness({ options: ["Disable.Motion.Detect"] });
 
     await harness.orchestrator.show(await openTestSession());
@@ -2912,7 +2912,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     // The override-at-controller path. The user is looking at the controller, sees the inherited global state, and clicks to override at the controller scope.
     // The model must write the controller-scoped Disable AND preserve `Enable.Motion.Detect` (the global) untouched - only the controller scope is being
     // mutated. This proves both the transition logic and the scope-targeted model write.
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeControllerHarness({ options: ["Enable.Motion.Detect"] });
 
     await harness.orchestrator.show(await openTestSession());
@@ -2952,7 +2952,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     // The mid-tier inheritance case end-to-end. A controller-scope entry exists; we navigate from the controller view to a device under that controller; the
     // device row must surface as indeterminate, identifying the controller as the inheritance source. The label coloring further confirms which scope is the
     // delivery point - text-success means "inherited from controller" (vs. text-warning for "inherited from global").
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeControllerHarness({ options: ["Disable.Motion.Detect." + CONTROLLER_SERIAL] });
 
     await harness.orchestrator.show(await openTestSession());
@@ -3001,7 +3001,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     // rather than carrying stale UI state. A regression where the orchestrator caches per-view state without re-reading the model would silently lose
     // overrides on navigation. The round-trip walks Device -> Global -> Controller -> Device (the controller hop is required because navigating to Global
     // intentionally clears the device list - the user must re-enter a controller's scope to see devices again, matching the production UX).
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeControllerHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3097,7 +3097,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
   // scope.
   test("a device-scope mutation preserves other devices' cached DOM (cache stays identity-stable across the mutation)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeControllerHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3148,7 +3148,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
   test("a controller-scope mutation invalidates devices' cached DOM under that controller (their inherited state could have changed)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeControllerHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3242,7 +3242,7 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
 
   test("trips the named TypeError when the resolved value has no devices array (error-only object and the legacy bare array)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeGuardHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3266,7 +3266,7 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
 
   test("trips the named TypeError when the resolved error is missing or not a string", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeGuardHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3290,7 +3290,7 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
 
   test("trips the named TypeError when any optional copy field is present but not a string", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeGuardHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3315,7 +3315,7 @@ describe("webUiFeatureOptions - the getDevices contract guard", () => {
 
   test("admits a resolved value carrying every optional field as a string, and one carrying none of them", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeGuardHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3351,7 +3351,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
 
   test("a boot fetch that reports a failure with copy renders that headline, guidance, and message", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3360,7 +3360,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3384,7 +3384,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
 
   test("a sidebar click that reports a failure with copy renders the same three slots", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3393,7 +3393,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3420,7 +3420,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
 
   test("a failure reporting no copy keeps the framework's headline and the plugin's configured guidance", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3429,7 +3429,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3495,7 +3495,7 @@ describe("webUiFeatureOptions - a click failure and the healthy click that recov
 
   test("a failed controller click renders the error view and takes the option table down with it", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeRecoveryHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3513,7 +3513,7 @@ describe("webUiFeatureOptions - a click failure and the healthy click that recov
 
   test("a healthy click after the failure reclaims the header, restores the table, and brings the search bars back", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
     using harness = makeRecoveryHarness();
 
     await harness.orchestrator.show(await openTestSession());
@@ -3545,7 +3545,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
 
   test("a boot whose controller has nothing to list reveals the page with the notice in place of the table", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3554,7 +3554,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3579,7 +3579,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
 
   test("a sidebar click onto a controller with nothing to list renders the notice, and clicking back restores the table", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3588,7 +3588,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3627,7 +3627,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
 
   test("an empty outcome with no message keeps today's behavior end to end - the full table at controller scope", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3636,7 +3636,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3662,7 +3662,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
 
   test("empty-success on the initial show renders the normal empty UI and never shows connection-error", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3671,7 +3671,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3694,7 +3694,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
 
   test("empty-success on a nav controller-click stands the optimistic controller scope and never shows connection-error", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3703,7 +3703,7 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3751,11 +3751,11 @@ describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", 
 
   test("the framework's neutral default renders when a plugin supplies none, naming no host tab", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -3774,11 +3774,11 @@ describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", 
 
   test("a configured guidance renders verbatim on a boot-path device failure", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -3798,11 +3798,11 @@ describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", 
 
   test("a configured guidance renders verbatim on a sidebar click's device failure", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // Controller A answers so the page renders and its sidebar is clickable; controller B is the unreachable one the click meets.
     const orchestrator = new webUiFeatureOptions({
@@ -3827,11 +3827,11 @@ describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", 
 
   test("a configured guidance renders verbatim on a reported controller-list failure", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -3852,11 +3852,11 @@ describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", 
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -3887,7 +3887,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
   test("onOptionsEdited fires after an option set and an option cleared, exposing the post-transition editedConfig from inside the callback", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3896,7 +3896,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3942,7 +3942,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
   test("onOptionsEdited does not fire before the model loads, nor after the lifecycle signal aborts", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -3951,7 +3951,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -3994,7 +3994,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
   test("a config without onOptionsEdited edits without throwing and still persists", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -4003,7 +4003,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4042,7 +4042,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
   test("re-syncs the config, re-invokes getControllers, and repaints the sidebar with the new list (resolves true)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -4051,7 +4051,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4101,7 +4101,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
   test("a null controllers field is off-contract and rejects rather than passing as an empty result", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -4110,7 +4110,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4137,7 +4137,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
   test("an empty resolved list leaves the sidebar untouched and resolves false", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -4146,7 +4146,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4172,7 +4172,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
   test("a config re-sync failure leaves the view untouched and resolves false with no connection-error dispatch", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -4181,7 +4181,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4223,7 +4223,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
   test("a device-only plugin (no getControllers hook) resolves false as a no-op", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -4233,7 +4233,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4252,11 +4252,11 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
   test("a call before the first show() resolves false without throwing (the pre-store window)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge({
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
 
       config: makePluginConfig(),
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
@@ -4288,11 +4288,11 @@ describe("webUiFeatureOptions - status panel selection", () => {
 
   test("the constructor accepts infoPanel alone, statusPanel alone, or neither, and rejects both together", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge());
+    using homebridgeInstall = installHomebridge(createFakeHomebridge());
 
     assert.ok(new webUiFeatureOptions(), "neither panel configured constructs");
     assert.ok(new webUiFeatureOptions({ infoPanel: () => {} }), "infoPanel alone constructs");
@@ -4302,13 +4302,13 @@ describe("webUiFeatureOptions - status panel selection", () => {
 
   test("the public statusPanel field is null before show() and stays null when no statusPanel is configured", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4326,12 +4326,12 @@ describe("webUiFeatureOptions - status panel selection", () => {
 
   test("a configured statusPanel mounts the live status view on the device-stats region and stores its handle on the public field", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4383,11 +4383,11 @@ describe("webUiFeatureOptions - global-only construction contracts", () => {
 
   test("globalOnly alone constructs, and each device-facing hook alongside it throws a TypeError", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge());
+    using homebridgeInstall = installHomebridge(createFakeHomebridge());
 
     // globalOnly alone constructs - and with NO getDevices supplied. This is the distinguishing negative: it proves the guard tests supplied-ness (getDevices !==
     // undefined), not the device-only default the #config assembly later applies.
@@ -4409,12 +4409,12 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
   test("show() renders the reduced page without any device fetch, nav or header mount, or sidebar and header reveal", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4502,12 +4502,12 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
   test("a failed config sync renders the connection-error view, and a successful retry clears and re-hides #headerInfo", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4554,13 +4554,13 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
   test("an abort delivered after model:loaded but before the reveal leaves every region hidden", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4592,12 +4592,12 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
   test("re-entry re-establishes the full global-only contract on every cycle", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4641,13 +4641,13 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
 
   test("a content region misnested under the sidebar produces a named console warning", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom({ misnestDeviceStats: true });
 
     const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -4720,11 +4720,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const healthyRead = fake.getPluginConfig;
 
@@ -4757,11 +4757,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     fake.request = (path) => (path === "/getOptions") ? hangingCall() : Promise.resolve(null);
 
@@ -4781,11 +4781,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({ getControllers: hangingCall, ui: { controllerRetryEnableDelayMs: 20 } });
 
@@ -4803,11 +4803,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({ getDevices: hangingCall, ui: { controllerRetryEnableDelayMs: 20 } });
 
@@ -4826,11 +4826,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     /* One memoized registration whose lighting-mode read never answers, exactly as the page orchestrator holds it: the same promise on every call. That identity
      * is what makes the second half of this row mean anything - a fresh promise per cycle would hand each cycle its own fresh chance and prove nothing about the
@@ -4886,11 +4886,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -4915,11 +4915,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     fake.request = (path) => (path === "/getOptions") ? Promise.reject(new Error("the options route failed")) : Promise.resolve(null);
 
@@ -4941,11 +4941,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -4969,11 +4969,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -4999,11 +4999,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({
 
@@ -5028,11 +5028,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { fake, homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const healthyRead = fake.getPluginConfig;
 
@@ -5064,11 +5064,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // The first fetch hangs; every later one answers, so cycle two is healthy while cycle one is still parked.
     let firstFetch = true;
@@ -5107,11 +5107,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     let stall = false;
     const orchestrator = new webUiFeatureOptions({
@@ -5142,11 +5142,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // The refresh's own controller read is held open, so the supersession lands while it is still in flight; it eventually answers with a list that must never render.
     const stale = Promise.withResolvers();
@@ -5188,11 +5188,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     let controllers = [{ name: "Hub A", serialNumber: "CTRL-A" }];
     const orchestrator = new webUiFeatureOptions({ getControllers: () => ({ controllers, error: "" }) });
@@ -5214,11 +5214,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     /* One memoized registration whose read never answers, so cycle one parks on exactly that await and nowhere else. The supersession, not an expiry, is what
      * settles that parked await: cycle two's show() begins by tearing cycle one down, which ABORTS cycle one's page signal, and the bounded await rejects on that
@@ -5276,11 +5276,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // The same hung memoized read throughout, so what changes between cycles is only whether the instance has spent its wait.
     const stalledTheming = hangingCall();
@@ -5333,11 +5333,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, session, skeleton } = await arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // The refresh's own controller read is held open so the test controls exactly when it succeeds. Every other call answers with cycle two's list, so a stale entry in
     // the sidebar could only have come from the refresh.
@@ -5389,11 +5389,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
   test("the registerTheming wiring cannot be silently parked in the plugin options bag", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge());
+    using homebridgeInstall = installHomebridge(createFakeHomebridge());
 
     assert.throws(() => new webUiFeatureOptions({ registerTheming: () => Promise.resolve() }), {
 
@@ -5407,11 +5407,11 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
   test("the resumeDetector wiring cannot be silently parked in the plugin options bag", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
-    using _homebridge = installHomebridge(createFakeHomebridge());
+    using homebridgeInstall = installHomebridge(createFakeHomebridge());
 
     assert.throws(() => new webUiFeatureOptions({ resumeDetector: { subscribe: () => {} } }), {
 
@@ -5441,7 +5441,7 @@ describe("webUiFeatureOptions - the declared choice-source check", () => {
 
   test("fails the load with a TypeError naming both the option and the source when no resolver answers to it", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
 
@@ -5451,7 +5451,7 @@ describe("webUiFeatureOptions - the declared choice-source check", () => {
       requestResponses: new Map([[ "/getOptions", PICKER_FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -5475,7 +5475,7 @@ describe("webUiFeatureOptions - the declared choice-source check", () => {
 
   test("loads cleanly when every named source has a resolver, and an inline list needs none", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     // The second category declares no options at all, which a plugin does when it has reserved a category for options it has not written yet. The check walks
@@ -5492,7 +5492,7 @@ describe("webUiFeatureOptions - the declared choice-source check", () => {
       requestResponses: new Map([[ "/getOptions", inlineFeatures ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -5512,7 +5512,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
 
   test("commits a focused dropdown when the window loses focus ahead of the host's Save", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -5521,7 +5521,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
       requestResponses: new Map([[ "/getOptions", PICKER_FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -5556,7 +5556,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
 
   test("commits a list editor's typed-but-unentered text when the window loses focus ahead of the host's Save", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const listFeatures = {
@@ -5571,7 +5571,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
       requestResponses: new Map([[ "/getOptions", listFeatures ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -5609,7 +5609,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
 
   test("a window blur with focus outside any value control commits nothing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
     const fake = createFakeHomebridge({
@@ -5618,7 +5618,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
       requestResponses: new Map([[ "/getOptions", PICKER_FEATURES ]])
     });
 
-    using _homebridge = installHomebridge(fake);
+    using homebridgeInstall = installHomebridge(fake);
 
     seedBootstrapProbeShim();
 
@@ -5672,11 +5672,11 @@ describe("webUiFeatureOptions.catalog", () => {
 
   test("answers the catalog before any show, and the boot that follows reads that same promise", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { calls, homebridgeGuard, skeleton } = arrange(async () => FEATURES);
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions();
 
@@ -5696,11 +5696,11 @@ describe("webUiFeatureOptions.catalog", () => {
 
     // The catalog is fixed for a plugin version, so a navigate-away and back has nothing to re-read. This is the reading that makes the memo the page's lifetime
     // rather than the cycle's.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { calls, homebridgeGuard, skeleton } = arrange(async () => FEATURES);
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions();
     const session = await openTestSession();
@@ -5720,11 +5720,11 @@ describe("webUiFeatureOptions.catalog", () => {
 
     // An options page with nothing on it is a silent failure: the user cannot tell a plugin that published nothing from a read that came back broken. The shape
     // check turns that silence into the connection-error view, carrying the read's own message and the retry affordance beside it.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange(async () => ({ categories: [], options: {} }));
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
 
@@ -5743,7 +5743,7 @@ describe("webUiFeatureOptions.catalog", () => {
   test("a rejected read clears the memo, so the next reader retries rather than inheriting the failure", async () => {
 
     // A transient bridge failure must not poison the page for its whole life. Clearing the memo on rejection is what keeps one bad moment from being permanent.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { calls, homebridgeGuard } = arrange(async (ordinal) => {
 
@@ -5755,7 +5755,7 @@ describe("webUiFeatureOptions.catalog", () => {
       return FEATURES;
     });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions();
 
@@ -5768,11 +5768,11 @@ describe("webUiFeatureOptions.catalog", () => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { calls, homebridgeGuard, skeleton } = arrange(() => new Promise(() => {}));
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const session = await openTestSession();
     const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
@@ -5801,11 +5801,11 @@ describe("webUiFeatureOptions.catalog", () => {
 
   test("two readers arriving before the read settles are handed one promise", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { calls, homebridgeGuard } = arrange(async () => FEATURES);
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const orchestrator = new webUiFeatureOptions();
     const first = orchestrator.catalog();
@@ -5827,11 +5827,11 @@ describe("webUiFeatureOptions.catalog", () => {
      */
     t.mock.timers.enable({ apis: ["setTimeout"] });
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { calls, homebridgeGuard, skeleton } = arrange(() => new Promise(() => {}));
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     // The controllers hook this row settles by hand, and beside it the device hook the boot fires the moment those controllers name a controller to fetch for.
     const controllers = Promise.withResolvers();
@@ -5900,12 +5900,12 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
      * dispatch itself, so a hook invoked before that dispatch would see none of them; and editedConfig answering the saved options is the statement that the page
      * is established rather than still on its placeholder state.
      */
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const saved = [ "Enable.Audio.Volume.50", "Disable.Motion.Detect" ];
     const { homebridgeGuard, skeleton } = arrange({ config: makePluginConfig({ options: saved }) });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     const seen = [];
     const orchestrator = new webUiFeatureOptions({
@@ -5926,14 +5926,14 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
   test("never fires for a cycle whose catalog read failed", async () => {
 
     // The announcement is a statement that the page is established, so a cycle that ended on the connection-error view has nothing to announce.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange({ respond: async () => {
 
       throw new Error("The bridge is not answering.");
     } });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     let fired = 0;
     const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++, ui: { controllerRetryEnableDelayMs: 20 } });
@@ -5950,7 +5950,7 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
   test("fires once on a retry that follows a failed cycle", async () => {
 
     // The menu relaunch and the retry affordance both reboot the page through show(), so the healed cycle announces exactly as a first successful cycle does.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange({ respond: async (ordinal) => {
 
@@ -5962,7 +5962,7 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
       return FEATURES;
     } });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     let fired = 0;
     const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++, ui: { controllerRetryEnableDelayMs: 20 } });
@@ -5986,12 +5986,12 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
 
     // A superseded cycle returns before the dispatch, which is what makes a staleness guard on the call unnecessary rather than merely unused. This row is what
     // proves the return actually happens rather than being assumed.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { promise, resolve } = Promise.withResolvers();
     const { calls, homebridgeGuard } = arrange({ respond: () => promise });
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     let fired = 0;
     const epoch = new AbortController();
@@ -6015,11 +6015,11 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
 
     // Global-only mode skips the sidebar, the header, and the whole device path, and it still crosses the same dispatch - which is why the call sits there and not
     // on any of the device-side arrivals a global-only page never reaches.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     let fired = 0;
     const orchestrator = new webUiFeatureOptions({ globalOnly: true, onLoaded: () => fired++ });
@@ -6037,11 +6037,11 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
 
     // The announcement belongs to the cycle rather than to the page: a navigate-away and back re-establishes the page, and a consumer doing per-cycle work needs
     // to hear about the second arrival as much as the first, even though the catalog behind it was read once.
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { calls, homebridgeGuard } = arrange();
 
-    using _homebridge = homebridgeGuard;
+    using homebridgeInstall = homebridgeGuard;
 
     let fired = 0;
     const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++ });

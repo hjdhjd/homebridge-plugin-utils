@@ -77,7 +77,7 @@ const tsRules = {
   "@typescript-eslint/no-unnecessary-condition": "warn",
   "@typescript-eslint/no-unused-expressions": "warn",
   "@typescript-eslint/no-unused-vars": [ "warn", { "args": "all", "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_",
-    "varsIgnorePattern": "^_" } ],
+    "ignoreUsingDeclarations": true, "varsIgnorePattern": "^_" } ],
   "@typescript-eslint/prefer-nullish-coalescing": "warn",
   "@typescript-eslint/require-await": "off",
   "no-unused-expressions": "off",
@@ -86,10 +86,12 @@ const tsRules = {
 };
 
 /**
- * Rule preset for JavaScript source files. Starts from `typescript-eslint`'s `disableTypeChecked` set (so type-aware rules don't fire on plain JS), then
- * reconfigures `no-unused-vars` - already active at "error" from {@link config}'s `eslintJs.configs.recommended` block - down to warn with the
- * underscore-prefix ignore pattern. Base `require-await` has no JavaScript-recommended equivalent to conflict with, so nothing needs suppressing for
- * `.js` / `.mjs` files the way the TypeScript preset must force its type-aware pair off - see the omission paragraph in the {@link tsRules} JSDoc.
+ * Rule preset for JavaScript source files. Starts from `typescript-eslint`'s `disableTypeChecked` set (so type-aware rules don't fire on plain JS), then reconfigures
+ * `no-unused-vars` - already active at "error" from {@link config}'s `eslintJs.configs.recommended` block - down to warn with the underscore-prefix ignore pattern and
+ * with `ignoreUsingDeclarations` on, the same options the TypeScript preset's rule carries: a `using` or `await using` binding is used by construction, since the runtime
+ * calls its disposal when the block exits, so a binding the code never reads again is not an unused one. Base `require-await` has no JavaScript-recommended equivalent to
+ * conflict with, so nothing needs suppressing for `.js` / `.mjs` files the way the TypeScript preset must force its type-aware pair off - see the omission paragraph in
+ * the {@link tsRules} JSDoc.
  *
  * Spread into the `rules:` slot of a flat config block scoped to `.js` / `.mjs` files.
  */
@@ -99,7 +101,8 @@ const jsRules = {
 
   // Restates the "off" value that `disableTypeChecked` already assigns to this rule.
   "@typescript-eslint/no-floating-promises": "off",
-  "no-unused-vars": [ "warn", { "args": "all", "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_", "varsIgnorePattern": "^_" } ]
+  "no-unused-vars": [ "warn", { "args": "all", "argsIgnorePattern": "^_", "caughtErrors": "all", "caughtErrorsIgnorePattern": "^_", "ignoreUsingDeclarations": true,
+    "varsIgnorePattern": "^_" } ]
 };
 
 /**

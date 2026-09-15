@@ -80,7 +80,7 @@ describe("registerThemeEffect - synchronous setup", () => {
 
   test("adopts a stylesheet onto document.adoptedStyleSheets", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -92,7 +92,7 @@ describe("registerThemeEffect - synchronous setup", () => {
 
   test("applies color-scheme on :root from the host's reported lighting mode", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const controller = new AbortController();
 
@@ -104,7 +104,7 @@ describe("registerThemeEffect - synchronous setup", () => {
 
   test("light mode does not set the fo-dark class", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const controller = new AbortController();
 
@@ -116,7 +116,7 @@ describe("registerThemeEffect - synchronous setup", () => {
 
   test("an unrecognized lighting-mode value is a no-op (no class or property change)", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const controller = new AbortController();
 
@@ -131,7 +131,7 @@ describe("registerThemeEffect - lifecycle", () => {
 
   test("aborting the signal releases the stylesheet", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -145,7 +145,7 @@ describe("registerThemeEffect - lifecycle", () => {
 
   test("aborting clears the color-scheme, fo-dark class, and accent overrides it set on :root", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const controller = new AbortController();
 
@@ -168,7 +168,7 @@ describe("registerThemeEffect - lifecycle", () => {
 
   test("a pre-aborted signal does not adopt anything", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -185,7 +185,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("the host's theme-update message re-keys the dark class and re-probes the accent", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -211,7 +211,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("a mutation of the frame body's theme classes does the same", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -235,7 +235,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("the message route carries the page back out of dark mode as readily as into it", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -262,7 +262,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("the body-class route carries the page back out of dark mode as readily as into it", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -291,7 +291,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("both routes re-read the mode through the bridge rather than trusting the announcement", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -314,7 +314,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("a message that is not a theme announcement is ignored", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -341,7 +341,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("the system color-scheme query is not one of the routes", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -374,7 +374,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("teardown disconnects the class observer, so a later body-class change reaches nothing", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -402,7 +402,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("an abort during the initial mode read tears down cleanly and leaves no observer behind", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -455,7 +455,7 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
   test("a follow already in flight when the teardown lands cannot put the theme back afterwards", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     seedBootstrapProbeShim();
 
@@ -488,7 +488,7 @@ describe("buildBaseCss - page rules", () => {
 
   test("the secret field seats its toggle beside the input, and the toggle wears no button chrome of its own", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = await baseCss();
 
@@ -509,7 +509,7 @@ describe("buildBaseCss - page rules", () => {
 
   test("the dark corrections for Bootstrap's page-wide text utilities read the muted token and outrank Bootstrap's own weight", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = await baseCss();
 
@@ -521,7 +521,7 @@ describe("buildBaseCss - page rules", () => {
 
   test("the menu tabs put the accent fill on the active one and a mode-aware ghost on the rest", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = await baseCss();
 
@@ -551,7 +551,7 @@ describe("buildBaseCss - page rules", () => {
 
   test("the menu tabs hold their colors fixed through hover, focus, and press, leaving the focus ring to the host", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = await baseCss();
 
@@ -579,7 +579,7 @@ describe("buildBaseCss - page rules", () => {
 
   test("the forced canvas owns the background and the inherited text color together", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = await baseCss();
 
@@ -594,7 +594,7 @@ describe("buildBaseCss - the utility rules", () => {
 
   test("the page reset takes the document's own margin and padding to zero", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = ruleFor(await baseSheet(), "html, body");
 
@@ -606,7 +606,7 @@ describe("buildBaseCss - the utility rules", () => {
 
   test("the hidden class outranks whatever display a hidden element declares for itself", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = ruleFor(await baseSheet(), ".fo-hidden");
 
@@ -618,7 +618,7 @@ describe("buildBaseCss - the utility rules", () => {
 
   test("the small button shrinks its type and padding at a weight that reaches Bootstrap's own button rules", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = ruleFor(await baseSheet(), ".btn-xs");
 
@@ -634,7 +634,7 @@ describe("buildBaseCss - the utility rules", () => {
 
   test("the pointer utility declares the hand cursor it is named for", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = ruleFor(await baseSheet(), ".cursor-pointer");
 
@@ -644,7 +644,7 @@ describe("buildBaseCss - the utility rules", () => {
 
   test("the no-select utility refuses selection through the standard property", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const rule = ruleFor(await baseSheet(), ".user-select-none");
 
@@ -655,7 +655,7 @@ describe("buildBaseCss - the utility rules", () => {
 
   test("the reduced-motion block stops every transition and animation the page could run", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const sheet = await baseSheet();
     const media = [...sheet.cssRules].find((rule) => rule.media?.mediaText === "(prefers-reduced-motion: reduce)");
@@ -680,7 +680,7 @@ describe("buildBaseCss - the page kit", () => {
 
   test("the card frame declares the accent border and the shared radius", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = await baseCss();
 
@@ -695,14 +695,14 @@ describe("buildBaseCss - the page kit", () => {
 
   test("the monospace opt-in reads the shared font stack rather than restating one", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     assert.match(await baseCss(), /\.fo-monospace\s*\{[^}]*font-family:\s*var\(--fo-font-monospace\)/);
   });
 
   test("the dark form-control corrections apply only inside a page-kit container, and every value reads its token", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const text = await baseCss();
 
@@ -728,7 +728,7 @@ describe("buildBaseCss - the page kit", () => {
 
   test("light mode is left to Bootstrap - the kit declares no light form-control rules of its own", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The framework treats its own fields this way, and a light-mode override here would be the framework second-guessing Bootstrap on a surface Bootstrap already
     // renders correctly. Only the dark-qualified selectors may mention `.fo-page` form controls.

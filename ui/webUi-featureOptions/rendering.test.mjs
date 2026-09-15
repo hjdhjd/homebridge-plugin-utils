@@ -72,7 +72,7 @@ describe("categoryShell", () => {
 
   test("builds a details/summary/rows-container with the category's data-category attribute", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const details = categoryShell({ category: { description: "Motion Options", name: "Motion" }, scopeKind: "global" });
 
@@ -85,7 +85,7 @@ describe("categoryShell", () => {
 
   test("the summary header carries the catalog description suffixed by the scope label", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const global = categoryShell({ category: { description: "Motion Options", name: "Motion" }, scopeKind: "global" });
     const controller = categoryShell({ category: { description: "Motion Options", name: "Motion" }, scopeKind: "controller" });
@@ -101,7 +101,7 @@ describe("optionRow - basic structure", () => {
 
   test("builds a row with a checkbox and a label for a boolean option", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const entry = findEntry(state, "Motion", "Detect");
@@ -129,7 +129,7 @@ describe("optionRow - basic structure", () => {
 
   test("adds the grouped-option class to grouped options", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const entry = findEntry(state, "Motion", "Sensitivity");
@@ -140,7 +140,7 @@ describe("optionRow - basic structure", () => {
 
   test("a value-centric option stacks its value-input beneath the label inside the content cell", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const entry = findEntry(state, "Audio", "Bandwidth");
@@ -160,7 +160,7 @@ describe("optionRow - basic structure", () => {
 
   test("inputSize sets only the field width - a value option with and without it render the same stacked structure", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
 
@@ -188,7 +188,7 @@ describe("optionRow - basic structure", () => {
 
   test("checkbox carries the data-device-serial attribute for device-scoped views", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({
 
@@ -204,7 +204,7 @@ describe("optionRow - basic structure", () => {
 
   test("checkbox carries no value attribute - the scope it belongs to is read from state, never from the element", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({
 
@@ -223,7 +223,7 @@ describe("optionRow - initial tri-state", () => {
 
   test("checked = true when the option is enabled by default and not modified", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const entry = findEntry(state, "Motion", "Detect");
@@ -237,7 +237,7 @@ describe("optionRow - initial tri-state", () => {
 
   test("indeterminate + readOnly when the resolved scope is strictly higher than the view scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Disable globally; view as a device. The entry resolves at "global"; the device view sees it as inherited.
     const state = loadedState({
@@ -256,7 +256,7 @@ describe("optionRow - initial tri-state", () => {
 
   test("checked = entry.enabled at the global view when no upstream is possible", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Disable.Motion.Detect"] });
     const entry = findEntry(state, "Motion", "Detect");
@@ -272,7 +272,7 @@ describe("optionRow - value input initialization", () => {
 
   test("uses the projection entry's resolved value when the option is enabled at the current scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Enable.Audio.Volume.75"] });
     const entry = findEntry(state, "Audio", "Volume");
@@ -286,7 +286,7 @@ describe("optionRow - value input initialization", () => {
 
   test("falls back to the catalog default value when no entry is configured, and locks until the option is enabled", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const entry = findEntry(state, "Audio", "Volume");
@@ -300,7 +300,7 @@ describe("optionRow - value input initialization", () => {
 
   test("renders checked with a live input while armed, though nothing is configured", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({
 
@@ -319,7 +319,7 @@ describe("optionRow - value input initialization", () => {
 
   test("is disabled when inheriting from a higher scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({
 
@@ -341,7 +341,7 @@ describe("optionRow - secret options", () => {
 
   test("a secret option renders a masked field with its reveal toggle beside it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const row = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Password"), scopeKind: "global" });
@@ -369,7 +369,7 @@ describe("optionRow - secret options", () => {
 
   test("an option that declares no secret renders an unmasked field with no toggle and no wrapper", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const row = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Volume"), scopeKind: "global" });
@@ -387,7 +387,7 @@ describe("optionRow - secret options", () => {
 
   test("the reveal flips the field and the toggle's labelling together, and flips both back", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Enable.Audio.Password=hunter2"] });
     const row = optionRow({ deviceId: null, entry: findEntry(state, "Audio", "Password"), scopeKind: "global" });
@@ -411,7 +411,7 @@ describe("optionRow - secret options", () => {
 
   test("a revealed field stays revealed when the row is re-derived", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Whether a secret is on screen right now is a property of how the page is being read, not of the configuration, so an unrelated mutation's re-derivation walk
     // must not snap the field shut under the user who is reading it.
@@ -429,7 +429,7 @@ describe("optionRow - secret options", () => {
 
   test("the reveal toggle locks and unlocks with the field it belongs to", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Unset and disabled: the row locks its field, and a row that cannot be typed into must not be readable either.
     const state = loadedState();
@@ -449,7 +449,7 @@ describe("optionRow - secret options", () => {
 
   test("a revealed row that locks is masked again, with its toggle disabled", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A value revealed while the row was live would otherwise sit on screen in clear text once the row locks, with the only control that could put it back behind
     // the mask disabled. Locking re-masks so the disabled toggle guards nothing the user can still see.
@@ -475,7 +475,7 @@ describe("optionRow - secret options", () => {
 
   test("a row held back by an unmet dependency dims through the same token the disabled toggle reads", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Motion.Sensitivity is grouped under Motion.Detect. With the parent disabled the child is normally hidden outright; a search that matches it keeps it on
     // screen instead, which is the case the badge exists for - visible, but not actionable.
@@ -496,7 +496,7 @@ describe("optionRow - secret options", () => {
 
   test("a toggle whose row carries no value field does nothing at all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The view reaches the flip by matching a class on whatever was clicked, so the element arriving here comes from markup rather than from a checkable call
     // site. A toggle standing on its own does nothing, rather than throwing inside a delegated handler.
@@ -514,7 +514,7 @@ describe("optionRow - label color", () => {
 
   test("text-info for a modified option that deviates from default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Default-on motion turned off globally - deviates.
     const state = loadedState({ configuredOptions: ["Disable.Motion.Detect"] });
@@ -527,7 +527,7 @@ describe("optionRow - label color", () => {
 
   test("text-body for an unmodified default-state option", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const entry = findEntry(state, "Motion", "Detect");
@@ -539,7 +539,7 @@ describe("optionRow - label color", () => {
 
   test("a value-only deviation (enabled-state still matches the default) does NOT highlight - the cue is boolean-deviation-only", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A value-centric option that defaults to ENABLED. Configuring only its value (the enabled-state still matches the default-on) is a value-only deviation: the option
     // is modified, but on the value axis, not the boolean axis. The modification cue is boolean-deviation-only by design, so the label must stay text-body. The shared
@@ -565,7 +565,7 @@ describe("triStateTransition - was indeterminate (readOnly)", () => {
 
   test("transitions to unchecked with a clear or set action based on the write rule", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({
 
@@ -599,7 +599,7 @@ describe("triStateTransition - was checked, just unchecked", () => {
 
   test("with no upstream entry, stays unchecked with a clear-or-set action", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Enable.Audio.Volume"] });
     const catalog = state.catalog;
@@ -620,7 +620,7 @@ describe("triStateTransition - was checked, just unchecked", () => {
 
   test("with an upstream entry, transitions to indeterminate and dispatches clearOption", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Globally enabled. Device view picks up upstream.
     const state = loadedState({
@@ -648,7 +648,7 @@ describe("triStateTransition - was checked, just unchecked", () => {
 
   test("a default-off value option with a committed value clears rather than writing a disable", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Enable.Audio.Volume.75"] });
     const catalog = state.catalog;
@@ -677,7 +677,7 @@ describe("triStateTransition - was checked, just unchecked", () => {
 
   test("a default-off value option with a committed value clears at device scope rather than writing a disable", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The option is configured at one device and nowhere else, so unchecking it there returns the whole hierarchy to the catalog default.
     const state = loadedState({
@@ -710,7 +710,7 @@ describe("triStateTransition - was checked, just unchecked", () => {
 
   test("unchecking a default-on value option writes the explicit disable, which carries no value", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Enable.Audio.Layout.mono"] });
     const catalog = state.catalog;
@@ -741,7 +741,7 @@ describe("triStateTransition - was unchecked, just checked", () => {
 
   test("transitions to checked; writes setOption when post-state deviates from default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Audio.Volume default is false. Click enables it.
     const state = loadedState();
@@ -768,7 +768,7 @@ describe("triStateTransition - was unchecked, just checked", () => {
 
   test("when post-state matches default with no upstream and no value deviation, dispatches clearOption", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Motion.Detect default is true; we previously disabled it; now we re-enable it (back to default).
     const state = loadedState({ configuredOptions: ["Disable.Motion.Detect"] });
@@ -803,7 +803,7 @@ describe("triStateTransition - the armed-row transitions", () => {
 
   test("checking a scoped value row with an empty input arms it rather than writing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { catalog, configIndex, entry } = scopedFixture();
     const checkbox = document.createElement("input");
@@ -825,7 +825,7 @@ describe("triStateTransition - the armed-row transitions", () => {
 
   test("unchecking an armed row stands it down without writing", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { catalog, configIndex, entry } = scopedFixture();
     const checkbox = document.createElement("input");
@@ -846,7 +846,7 @@ describe("triStateTransition - the armed-row transitions", () => {
 
   test("checking a GLOBAL value row with an empty input still writes the bare enable", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const catalog = state.catalog;
@@ -885,7 +885,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("a commit carrying content sets the value at this scope, from an unset row", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // No prior entries and no checkbox interaction: committing a value is itself the enabling gesture for a value option.
     const state = loadedState();
@@ -901,7 +901,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("a commit carrying content sets the value from an explicitly disabled row", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Disable.Audio.Volume"] });
     const catalog = state.catalog;
@@ -916,7 +916,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("a commit without content unsets a row explicitly enabled at this scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Enable.Audio.Volume=75"] });
     const catalog = state.catalog;
@@ -933,7 +933,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("emptying a default-on value option's field clears the entry and hands resolution back to the catalog default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The case the clear exists for. Audio.Layout is default-on with a declared default value, so an enable carrying no value would answer the option with
     // nothing at all, and the user who emptied a pre-filled field to get the default back would lose the value entirely.
@@ -962,7 +962,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("a commit without content on a device-view row with a local value clears at that scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({
 
@@ -981,7 +981,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("a commit without content on an unset row yields no action", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState();
     const catalog = state.catalog;
@@ -994,7 +994,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("a commit without content on an explicitly disabled row yields no action", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The guard that keeps the gesture honest: an enable-shaped dispatch here would drop the user's explicit disable, state the emptied input never addressed.
     const state = loadedState({ configuredOptions: ["Disable.Audio.Volume"] });
@@ -1008,7 +1008,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("a commit without content on a row enabled only by inheritance yields no action", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The other polarity of the same guard: the row reads enabled, but the entry answering it lives upstream. A clear here would reach past the scope the user
     // is editing and take the global entry with it.
@@ -1032,7 +1032,7 @@ describe("valueCommitTransition - the input-side gesture", () => {
 
   test("an all-delimiter commit reads as no content", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The content predicate is shared with the entry writer, so a value the engine would refuse to persist never dispatches in the first place.
     const state = loadedState();
@@ -1100,7 +1100,7 @@ describe("triStateTransition - the upstream probe honors declared scopes", () =>
 
   test("a declared option treats a disallowed higher-scope entry as no inheritance and writes the disable at this scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = probeState("Declared");
     const entry = findEntry(state, "Probe", "Declared");
@@ -1121,7 +1121,7 @@ describe("triStateTransition - the upstream probe honors declared scopes", () =>
 
   test("an undeclared option treats the same entry as inheritance and clears, falling back to the higher scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = probeState("Undeclared");
     const entry = findEntry(state, "Probe", "Undeclared");
@@ -1140,7 +1140,7 @@ describe("applyRowState - re-derivation on the update path", () => {
 
   test("a row whose option becomes modified re-colors its label to text-info in place, and reverting restores text-body", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Start from the default (unmodified) state: Motion.Detect is default-on and unconfigured, so the label is text-body.
     const defaultState = loadedState();
@@ -1171,7 +1171,7 @@ describe("applyRowState - re-derivation on the update path", () => {
 
   test("repeated re-derivation never accumulates more than one color class", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = loadedState({ configuredOptions: ["Disable.Motion.Detect"] });
     const entry = findEntry(state, "Motion", "Detect");
@@ -1188,7 +1188,7 @@ describe("applyRowState - re-derivation on the update path", () => {
 
   test("does not clobber the value a user is actively editing, but re-derives once focus leaves", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The row must be ATTACHED to the document for document.activeElement to track its input - the focus guard is meaningless on a detached node, so this test must
     // append the row to exercise the guard's protective branch (the one reason the guard exists).
@@ -1221,7 +1221,7 @@ describe("applyRowState - re-derivation on the update path", () => {
 
   test("re-derives a row from explicit to inheriting (indeterminate + readOnly) when the projection resolves upstream", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
 
@@ -1345,7 +1345,7 @@ describe("the choice controls - construction", () => {
 
   test("a single-choice option builds a select carrying the shared value class, declaring no width of its own, in the body font", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The fixture declares an inputSize, which a select does not read: sizing belongs to the skin, where `width: auto` takes the control's width from its own
     // widest member. An inline width here would outrank that rule and lock every dropdown to the same arbitrary ch count whatever it holds.
@@ -1362,7 +1362,7 @@ describe("the choice controls - construction", () => {
 
   test("a select's first option is a placeholder the user can never choose, which is how the row expresses no value at all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const row = pickerRow(pickerState(), "TierUnset");
     const control = row.querySelector(".fo-option-value");
@@ -1384,7 +1384,7 @@ describe("the choice controls - construction", () => {
 
   test("a multiple-choice option builds a checkbox group carrying the shared value class, in the body font", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = pickerRow(pickerState(), "Types").querySelector(".fo-option-value");
 
@@ -1396,7 +1396,7 @@ describe("the choice controls - construction", () => {
 
   test("the skin's field marker sits on the typed fields alone, never on a group or a wrapper", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The two classes answer different questions. `fo-option-value` is how the view finds whatever control a row is edited through, and `fo-field` is how the
      * skin finds a field to dress. A picker's fieldset and a list editor's wrapper are controls without being fields - each is a box around native inputs of its
@@ -1425,7 +1425,7 @@ describe("the choice presentation - what a declaration renders as", () => {
 
   test("an inline list of six offers a radio group, and one of seven a dropdown", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState();
     const six = pickerRow(state, "Six").querySelector(".fo-option-value");
@@ -1440,7 +1440,7 @@ describe("the choice presentation - what a declaration renders as", () => {
 
   test("a declared style overrides the automatic answer in both directions", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A short inline list would read as a radio group on its own, and a source-backed list would never read as one. Each fixture declares the opposite of what it
     // would otherwise get, so a rule that quietly ignored the declaration would fail on one side or the other whichever way it leaned.
@@ -1453,7 +1453,7 @@ describe("the choice presentation - what a declaration renders as", () => {
 
   test("a source-backed single choice is a dropdown however short the device's own list turns out to be", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The source resolves three members here, comfortably inside the length an inline list would be measured by. Reading the RESOLVED list rather than the
     // declaration would make this row a radio group on this device and a dropdown on the next, moving the control family under the user between pages.
@@ -1472,7 +1472,7 @@ describe("the radio group - construction and rest state", () => {
 
   test("builds the projection's members as radios sharing the row's name, resting on the declared default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = pickerRow(pickerState(), "Quality").querySelector(".fo-option-value");
     const inputs = [...control.querySelectorAll(".fo-choice-checkbox")];
@@ -1487,7 +1487,7 @@ describe("the radio group - construction and rest state", () => {
 
   test("a multiple choice beside it still builds unnamed checkboxes", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The negative control for the flavor threading: one builder serves both, so a change that named every member or made every member a radio would show up
     // here rather than only in production.
@@ -1499,7 +1499,7 @@ describe("the radio group - construction and rest state", () => {
 
   test("shows the stored selection over the default, and marks a value the list no longer offers", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: ["Enable.Pick.Quality=gone"] });
     const control = pickerRow(state, "Quality").querySelector(".fo-option-value");
@@ -1515,7 +1515,7 @@ describe("the radio group - construction and rest state", () => {
 
   test("an armed radio group picks nothing at all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ devices: PICKER_DEVICES, scope: DEVICE_SCOPE });
     const control = pickerRow(state, "Quality", { armed: true, deviceId: "dev-a", scopeKind: "device" }).querySelector(".fo-option-value");
@@ -1526,7 +1526,7 @@ describe("the radio group - construction and rest state", () => {
 
   test("a locked row disables every member of a radio group", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = pickerRow(pickerState({ configuredOptions: ["Disable.Pick.Quality"] }), "Quality").querySelector(".fo-option-value");
 
@@ -1537,7 +1537,7 @@ describe("the radio group - construction and rest state", () => {
 
   test("a row enabled here with no value of its own still previews its default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A bare enable carries no value, so resolution answers with an explicit scope and no value rather than with "none" - a different input reaching the same
     // substitution the unset row reaches. What the user sees is the same either way: the option's declared default, shown by the control they would change.
@@ -1557,7 +1557,7 @@ describe("the radio group - clicking a member", () => {
 
   test("picking a member releases the one picked before it, announcing each pick to the row", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState();
     const row = pickerRow(state, "Quality");
@@ -1588,7 +1588,7 @@ describe("the radio group - clicking a member", () => {
 
   test("two radio rows on one page pick independently, since each row's members carry its own name", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState();
     const table = document.createElement("div");
@@ -1615,7 +1615,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a select shows the projection's members and picks the resolved one", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: ["Enable.Pick.Tier=low"] });
     const control = pickerRow(state, "Tier").querySelector(".fo-option-value");
@@ -1627,7 +1627,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a group checks exactly the members the stored value selects", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=c,a"] });
     const control = pickerRow(state, "TypesUnset").querySelector(".fo-option-value");
@@ -1639,7 +1639,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("an all-choices default renders every box checked", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = pickerRow(pickerState(), "Types").querySelector(".fo-option-value");
 
@@ -1649,7 +1649,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a stored value the list no longer offers is preserved, marked, and still selected", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a,zzz"] });
     const control = pickerRow(state, "TypesUnset").querySelector(".fo-option-value");
@@ -1665,7 +1665,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a select marks an unknown stored value the same way", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: ["Enable.Pick.Tier=gone"] });
     const control = pickerRow(state, "Tier").querySelector(".fo-option-value");
@@ -1678,7 +1678,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a re-derive against a fresh-but-equal list leaves the option and label NODES in place", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The source allocates a new array every call, so identity comparison would rebuild here and drop the nodes out from under an open dropdown or a focused box.
     const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"] });
@@ -1703,7 +1703,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a re-derive against a CHANGED list replaces the nodes, for a group and for a select alike", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: ["Enable.Pick.TypesUnset=a"] });
     const row = pickerRow(state, "TypesUnset");
@@ -1735,7 +1735,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a locked row disables the select, and an unlocked one does not", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const locked = pickerState({ configuredOptions: ["Disable.Pick.Tier"] });
     const lockedControl = pickerRow(locked, "Tier").querySelector(".fo-option-value");
@@ -1751,7 +1751,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a locked row disables every box of a group and marks the fieldset, and an unlocked one releases both", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const locked = pickerState({ configuredOptions: ["Disable.Pick.Types"] });
     const lockedControl = pickerRow(locked, "Types").querySelector(".fo-option-value");
@@ -1767,7 +1767,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("an armed row presents an empty selection whatever the projection resolved", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
     const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
@@ -1781,7 +1781,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a select is re-derived even while it holds focus, since a pick commits the moment it happens", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const row = pickerRow(pickerState(), "TierUnset");
     const control = row.querySelector(".fo-option-value");
@@ -1798,7 +1798,7 @@ describe("the choice controls - applyRowState", () => {
 
   test("a focused text field is still left alone, which is the guard the pickers do not need", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const row = pickerRow(pickerState(), "Plain");
     const control = row.querySelector(".fo-option-value");
@@ -1817,7 +1817,7 @@ describe("focusControl", () => {
 
   test("hands focus to the control itself, to a group's first box, and does nothing at all for a boolean row", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState();
     const selectRow = pickerRow(state, "Tier");
@@ -1844,7 +1844,7 @@ describe("focusControl", () => {
 
   test("a group whose source offered nothing has no box to focus, and asks for none", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A device that reports none of what the option is about resolves to an empty list. The group is still the row's control - it is what the lock and the theme
     // address - but there is nothing inside it to hand focus to.
@@ -1862,7 +1862,7 @@ describe("controlValueText", () => {
 
   test("reads each control kind in the grammar a commit would store", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: [ "Enable.Pick.Tier=low", "Enable.Pick.TypesUnset=c,a" ] });
 
@@ -1881,7 +1881,7 @@ describe("the picker transitions", () => {
 
   test("a scoped picker with no selection arms rather than writing, for both control kinds", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
     const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
@@ -1899,7 +1899,7 @@ describe("the picker transitions", () => {
 
   test("a scoped picker that already previews a selection writes rather than arming", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
     const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
@@ -1920,7 +1920,7 @@ describe("the picker transitions", () => {
 
   test("a scoped picker whose shown selection deviates writes that selection at this scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
     const state = pickerState({ configuredOptions: [ "Enable.Pick.Tier=low", "Enable.Pick.Types=a" ], devices,
@@ -1940,7 +1940,7 @@ describe("the picker transitions", () => {
 
   test("unchecking one member of an all-choices group commits the explicit list", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState();
     const entry = pickerEntry(state, "Types");
@@ -1958,7 +1958,7 @@ describe("the picker transitions", () => {
 
   test("re-checking every member of an all-choices group clears the entry, so the option tracks the domain again", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState({ configuredOptions: ["Enable.Pick.Types=a,c"] });
     const entry = pickerEntry(state, "Types");
@@ -1975,7 +1975,7 @@ describe("the picker transitions", () => {
 
   test("a free-form list judges deviation on the normalized list, not on how it was entered", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState();
     const entry = pickerEntry(state, "Plates");
@@ -2004,7 +2004,7 @@ describe("the picker transitions", () => {
 
   test("a free-form list commit is normalized through the grammar before it is stored", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const state = pickerState();
     const entry = pickerEntry(state, "Plates");
@@ -2030,7 +2030,7 @@ describe("the picker transitions", () => {
 
   test("emptying a group whose default is not empty stores the empty selection instead of clearing back to that default", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The state the entry grammar spells and this gesture asks for: on, with nothing selected. Clearing here would hand the row back to the all-choices default,
     // which is the opposite of what unchecking every box says.
@@ -2059,7 +2059,7 @@ describe("the picker transitions", () => {
 
   test("emptying a scoped group stores the empty selection at that scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
     const state = pickerState({ configuredOptions: ["Enable.Pick.Types.dev-a=a"], devices,
@@ -2086,7 +2086,7 @@ describe("the picker transitions", () => {
 
   test("emptying a free-form list stores the empty selection the same way a checkbox group does", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // A list without choices edits through the list editor rather than a checkbox group, and the two controls answer to one rule: removing the last entry says
     // the same thing unchecking the last box says. The commit settles through the grammar on its way out, so what an emptied editor stores is the empty
@@ -2115,7 +2115,7 @@ describe("the picker transitions", () => {
 
   test("emptying a group whose default is also empty clears, keeping the configuration minimal", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The boundary the selection compare draws. Storing an empty selection over a default that is already empty would say nothing the entry-less resolution does
     // not already say, so the entry goes instead.
@@ -2140,7 +2140,7 @@ describe("the picker transitions", () => {
 
   test("emptying a scoped group over an upstream entry writes the local empty selection that masks it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // Neither axis deviates from the catalog here - the default is empty and so is the commit - so the write happens for the upstream reason alone, and what it
     // has to carry is the explicit none. A clear would hand the row straight back to the entry it was meant to override.
@@ -2170,7 +2170,7 @@ describe("the picker transitions", () => {
 
   test("emptying an ordinary value field still clears, on the same row family the pickers live in", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The policy boundary from the other side: the empty selection belongs to lists alone, and every other control keeps the clear that makes emptying a field
     // restore the default.
@@ -2192,7 +2192,7 @@ describe("the picker transitions", () => {
 
   test("checking a GLOBAL list row with an untouched picker still writes the bare valueless enable", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     // The checkbox gesture is not a claim about the selection: it says the option applies, and the picker was never operated. The write has to compose the bare
     // enable, exactly as it does for any other value option checked at the global scope, which is why the writer takes the empty selection from the caller's
@@ -2217,7 +2217,7 @@ describe("the picker transitions", () => {
 
   test("a scoped radio row walks the same tri-state gestures every other value row walks", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The answers the machine gives a scoped row, asked of a radio group: an empty picker arms rather than writing, the armed row stands back down when it
      * is unchecked, a row with an entry above it clears back to inheritance, and a row with nothing above it records the explicit disable. None of these answers
@@ -2244,7 +2244,7 @@ describe("the picker transitions", () => {
 
   test("committing the declared default through a picker clears the entry, in both styles", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     /* The gesture no picker row has driven before: a row carrying a value that deviates, brought back through its own control to what the catalog already says.
      * The write rule normalizes that to a clear, since the entry-less resolution yields exactly what the user just asked for - the same answer the checkbox
@@ -2310,7 +2310,7 @@ describe("the list editor - construction", () => {
 
   test("builds the option's entries, each with its own remove control, followed by the field the next one is typed into", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
 
@@ -2329,7 +2329,7 @@ describe("the list editor - gestures", () => {
 
   test("Enter turns the pending text into an entry, and adds nothing when there is no text to turn", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
 
@@ -2346,7 +2346,7 @@ describe("the list editor - gestures", () => {
 
   test("a typed comma finishes an entry the way Enter does, and never reaches the field as a character", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
 
@@ -2362,7 +2362,7 @@ describe("the list editor - gestures", () => {
 
   test("Backspace on an empty field removes the last entry, and removes nothing while there is text to erase", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
     const field = control.querySelector(".fo-list-entry");
@@ -2386,7 +2386,7 @@ describe("the list editor - gestures", () => {
 
   test("the remove control removes its own entry, and a click anywhere else in the editor removes none", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
 
@@ -2404,7 +2404,7 @@ describe("the list editor - gestures", () => {
 
   test("blurring the field with text in it keeps that text as an entry rather than discarding it", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
     const field = control.querySelector(".fo-list-entry");
@@ -2417,7 +2417,7 @@ describe("the list editor - gestures", () => {
 
   test("every gesture that moves the list announces one change event on the editor itself", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
     let changes = 0;
@@ -2448,7 +2448,7 @@ describe("the list editor - reading and writing its value", () => {
 
   test("reads as its entries followed by whatever is still pending in the field", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const control = editorRowFor(pickerState()).querySelector(".fo-option-value");
 
@@ -2465,7 +2465,7 @@ describe("the list editor - reading and writing its value", () => {
 
   test("a re-derive rebuilds the entries from the projection and clears the field", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const row = editorRowFor(pickerState());
     const control = row.querySelector(".fo-option-value");
@@ -2480,7 +2480,7 @@ describe("the list editor - reading and writing its value", () => {
 
   test("a re-derive against an unchanged list leaves the entry NODES in place", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const row = editorRowFor(pickerState());
     const control = row.querySelector(".fo-option-value");
@@ -2493,7 +2493,7 @@ describe("the list editor - reading and writing its value", () => {
 
   test("a re-derive yields to an edit in progress inside the editor", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const row = editorRowFor(pickerState());
     const control = row.querySelector(".fo-option-value");
@@ -2510,7 +2510,7 @@ describe("the list editor - reading and writing its value", () => {
 
   test("an armed row opens the editor empty rather than previewing a default list", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const devices = [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
     const state = pickerState({ devices, scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
@@ -2521,7 +2521,7 @@ describe("the list editor - reading and writing its value", () => {
 
   test("a locked row disables the field and every remove control, and marks the editor", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const locked = pickerState({ configuredOptions: ["Disable.Pick.Plates"] });
     const control = editorRowFor(locked).querySelector(".fo-option-value");

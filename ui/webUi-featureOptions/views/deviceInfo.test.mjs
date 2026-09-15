@@ -26,7 +26,7 @@ describe("defaultInfoPanel", () => {
 
   test("renders a four-column grid with firmware/serial/model/manufacturer for a populated device", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const root = document.createElement("div");
 
@@ -45,7 +45,7 @@ describe("defaultInfoPanel", () => {
 
   test("clears the container when no device is in scope", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const root = document.createElement("div");
 
@@ -57,7 +57,7 @@ describe("defaultInfoPanel", () => {
 
   test("renders N/A placeholders for missing fields", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const root = document.createElement("div");
 
@@ -73,7 +73,7 @@ describe("mountDeviceInfoView", () => {
 
   test("re-renders on scope:changed by calling the supplied infoPanel callback", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const root = document.createElement("div");
 
@@ -106,7 +106,7 @@ describe("mountDeviceInfoView", () => {
 
   test("falls back to defaultInfoPanel when no callback is supplied", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const root = document.createElement("div");
 
@@ -129,7 +129,7 @@ describe("mountDeviceInfoView", () => {
 
   test("does not reveal its own region - rendering the panel leaves the reveal to the orchestrator", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const root = document.createElement("div");
 
@@ -155,7 +155,7 @@ describe("mountDeviceInfoView", () => {
 
   test("hands every render of one mount the identical signal object while the per-render device tracks the selection", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const root = document.createElement("div");
 

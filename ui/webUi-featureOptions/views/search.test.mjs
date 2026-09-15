@@ -43,7 +43,7 @@ describe("mountSearchView - panel build", () => {
 
   test("renders the search input, filter pills, toggle-all, status bar, and reset button group", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup();
 
@@ -59,7 +59,7 @@ describe("mountSearchView - panel build", () => {
 
   test("status bar carries role=status for screen readers", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup();
 
@@ -68,7 +68,7 @@ describe("mountSearchView - panel build", () => {
 
   test("initial counts read 1 total / 0 modified / 0 grouped / 1 visible for the seed catalog", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup();
     const counts = [...root.querySelectorAll("strong")].map((s) => s.textContent);
@@ -78,7 +78,7 @@ describe("mountSearchView - panel build", () => {
 
   test("does not reveal its own region - building the panel leaves the reveal to the orchestrator", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
     const root = document.createElement("div");
@@ -106,7 +106,7 @@ describe("mountSearchView - filter pill click", () => {
 
   test("clicking 'Modified' dispatches filter:changed with mode=modified", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
 
@@ -117,7 +117,7 @@ describe("mountSearchView - filter pill click", () => {
 
   test("clicking 'All' restores filter:changed with mode=all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
 
@@ -129,7 +129,7 @@ describe("mountSearchView - filter pill click", () => {
 
   test("filter pills' active-state classes update to reflect the current mode", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup();
     const allPill = root.querySelector("#filter-all");
@@ -146,7 +146,7 @@ describe("mountSearchView - reset button group", () => {
 
   test("clicking Reset... reveals the destructive action buttons", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup();
     const toggleBtn = root.querySelector("[data-action='reset-toggle']");
@@ -161,7 +161,7 @@ describe("mountSearchView - reset button group", () => {
 
   test("clicking Reset to Defaults dispatches options:reset and collapses the action group", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup({ configuredOptions: ["Disable.Motion.Detect"] });
 
@@ -174,7 +174,7 @@ describe("mountSearchView - reset button group", () => {
 
   test("clicking Revert to Saved dispatches model:reverted and collapses the action group", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup({ configuredOptions: ["Enable.Motion.Detect"] });
 
@@ -192,7 +192,7 @@ describe("mountSearchView - search input debounce", () => {
 
   test("typing in the search input dispatches filter:changed after 300ms debounce", async () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
     const input = root.querySelector("#searchInput");
@@ -223,7 +223,7 @@ describe("mountSearchView - following the table's presentation", () => {
 
   test("both panel bars are shown on a healthy page", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root } = setup();
 
@@ -233,7 +233,7 @@ describe("mountSearchView - following the table's presentation", () => {
 
   test("both panel bars hide while a connection error stands", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
 
@@ -244,7 +244,7 @@ describe("mountSearchView - following the table's presentation", () => {
 
   test("both panel bars return when a clean outcome recovers the page", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
     const before = [...root.children];
@@ -261,7 +261,7 @@ describe("mountSearchView - following the table's presentation", () => {
 
   test("both panel bars hide over a nothing-to-list notice, and return when the controller reports devices", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
 
@@ -286,7 +286,7 @@ describe("mountSearchView - following the table's presentation", () => {
 
   test("an empty outcome with no message leaves the panel alone - the table is still what the surface shows", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const { root, store } = setup();
 

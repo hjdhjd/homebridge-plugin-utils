@@ -13,7 +13,7 @@ describe("registerTokensEffect", () => {
 
   test("adopts a constructable stylesheet onto document.adoptedStyleSheets", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -25,7 +25,7 @@ describe("registerTokensEffect", () => {
 
   test("the adopted stylesheet declares core --fo-* tokens", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const controller = new AbortController();
 
@@ -44,7 +44,7 @@ describe("registerTokensEffect", () => {
 
   test("aborting the signal releases the stylesheet from the document", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -58,7 +58,7 @@ describe("registerTokensEffect", () => {
 
   test("a pre-aborted signal does not adopt the stylesheet at all", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
     const controller = new AbortController();
@@ -71,7 +71,7 @@ describe("registerTokensEffect", () => {
 
   test("dark-mode token block redeclares colors under :root.fo-dark", () => {
 
-    using _dom = createTestDom();
+    using dom = createTestDom();
 
     const controller = new AbortController();
 

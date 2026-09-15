@@ -634,7 +634,7 @@ class ScriptedSocket implements LogSocketLike {
 
       this.#waiter = waiter;
 
-      using _registration = onAbort(this.#controller.signal, () => waiter.resolve());
+      using abortRegistration = onAbort(this.#controller.signal, () => waiter.resolve());
 
       // eslint-disable-next-line no-await-in-loop
       await waiter.promise;

@@ -528,7 +528,7 @@ export class LogSocket implements LogSocketLike {
 
     // Tear down this attempt's WebSocket when the composed signal aborts (attempt abort or our own controller abort), and reject the connect promise so a pending
     // handshake unwinds. The `using` disposer removes the listener when this method's scope exits.
-    using _abortRegistration = onAbort(composed, () => {
+    using abortRegistration = onAbort(composed, () => {
 
       reject(composed.reason);
       this.#closeWebSocket(ws);
@@ -649,8 +649,8 @@ export class LogSocket implements LogSocketLike {
     // and close handlers drive the session controller, which aborts the composed signal, which fires this.
     const { promise: ended, resolve: endSession }: PromiseWithResolvers<void> = Promise.withResolvers();
 
-    using _watchdog = watchdog;
-    using _abortRegistration = onAbort(composed, () => endSession());
+    using ownedWatchdog = watchdog;
+    using abortRegistration = onAbort(composed, () => endSession());
 
     // Arm the watchdog immediately so a session that never receives a single ping (a silently-wedged connection) still trips the liveness timer; each inbound ping
     // re-arms it from here.

@@ -82,8 +82,8 @@ test("a delivery meets the matching the real serve path applies", () => {
 
   const listener = new TestHttpListener();
 
-  using _accept = listener.route("/accept", () => ({ body: "taken", status: 200 }), { methods: ["POST"] });
-  using _boom = listener.route("/boom", () => { throw new Error("handler fell over"); });
+  using accept = listener.route("/accept", () => ({ body: "taken", status: 200 }), { methods: ["POST"] });
+  using boom = listener.route("/boom", () => { throw new Error("handler fell over"); });
 
   // A path nothing claims, with no catch-all to fall back to.
   assert.equal(listener.deliver("/nothing", REQUEST).status, 404);
@@ -106,8 +106,8 @@ test("an exact route takes precedence over a catch-all, which answers everything
 
   const listener = new TestHttpListener();
 
-  using _anywhere = listener.route(HTTP_LISTENER_ANY_PATH, () => ({ body: "catch-all", status: 200 }));
-  using _exact = listener.route("/a", () => ({ body: "exact", status: 200 }));
+  using anywhere = listener.route(HTTP_LISTENER_ANY_PATH, () => ({ body: "catch-all", status: 200 }));
+  using exact = listener.route("/a", () => ({ body: "exact", status: 200 }));
 
   assert.equal(listener.deliver("/a", REQUEST).body, "exact");
   assert.equal(listener.deliver("/anything", REQUEST).body, "catch-all");

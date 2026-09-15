@@ -87,5 +87,6 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [timer-registry](timer-registry.md) | A lifetime-bounded registry of callback timers. |
 | [transport-error](transport-error.md) | One kind-tagged reading of whatever a transport threw. |
 | [util](util.md) | TypeScript Utilities. |
+| [wakeable-wait](wakeable-wait.md) | A wait a second party can end early under a stated reason, while the lifetime signal stays terminal. |
 | [webui-loader](webui-loader.md) | The webUI boot-region stamp. A plugin's `index.html` carries a marker-fenced region that homebridge-plugin-utils generates and every build re-stamps. The region reports its own boot failures on the page, injects an importmap mapping the bare package specifier to the hashed-versioned subdir the `prepare-ui` CLI mirrors into place, and dynamically imports the plugin's entry module. It is identical across the family, so this module renders it from one template: the plugin declares its entry and cache-bust list in a config comment, and `prepare-ui` stamps the rendered region into the marker-fenced block on every build. |
 | [webui-status](webui-status.md) | The live device-status protocol shared by both sides of the Config UI X bridge. |

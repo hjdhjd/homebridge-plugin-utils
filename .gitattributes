@@ -1,0 +1,5 @@
+# Generated artifacts. GitHub collapses them in diffs, and documentation tooling that reads this attribute leaves them out of its coverage.
+docs/** linguist-generated
+docs/Overview.md -linguist-generated
+docs/Changelog.md -linguist-generated
+package-lock.json linguist-generated

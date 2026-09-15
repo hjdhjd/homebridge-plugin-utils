@@ -248,6 +248,9 @@ repeat seeded from a raw zero would otherwise fire once per pass rather than onc
 a non-positive `ms` comes due at or before the current time and the very next `advance` (including `advance(0)`) flushes it. The call's `ms` is recorded in
 [TestClock.requested](#requested) as asked, before either coercion.
 
+A virtual timeline has no ceiling: a window past the platform timer's is registered as asked and comes due when `advance` reaches it, which is what the production
+clock's chained arms deliver past the same boundary, so a consumer scheduling against a distant boundary runs one code path under either clock.
+
 `init.unref` is accepted and ignored. A virtual timeline has no process to hold open, and the platform's unref decides only whether a pending timer keeps the
 process alive rather than anything about when the timer fires, so a timer armed with the flag comes due on `advance` exactly as one armed without it. Accepting
 it is what lets a consumer that sets the policy in production run its rows against this double without a second code path.

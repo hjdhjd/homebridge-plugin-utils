@@ -10,15 +10,20 @@ An injectable wall-clock interface.
 
 Time-dependent code reads the platform time primitives it needs: the current epoch time (`Date.now()`), a delay that can be cancelled (`node:timers/promises`
 `setTimeout`), a callback timer (the global `setTimeout` / `setInterval`), and a deadline signal handed to an abortable call (`AbortSignal.timeout`). Calling those
-directly bakes real wall-clock time into the code, so a test cannot exercise a pacing or timeout path without multi-second real waits, and `node:test`'s mock timers
-do not patch the `node:timers/promises` primitives. Holding a [Clock](#clock) instead - the abstraction over those primitives - inverts the dependency: production
-wires [systemClock](#systemclock), whose `now()` IS `Date.now()`, whose `delay()` IS `node:timers/promises` `setTimeout`, whose `schedule()` IS the global callback timers,
-and whose `timeout()` IS `AbortSignal.timeout`, so routing through Clock is behavior-neutral; a test wires a `TestClock` (see `clock-double.ts`) that advances
-virtual time explicitly, so the consumer's time-dependent path runs deterministically and instantly.
+directly bakes real wall-clock time into the code, so a test cannot exercise a pacing or timeout path without multi-second real waits. Holding a [Clock](#clock)
+instead - the abstraction over those primitives - inverts the dependency: production wires [systemClock](#systemclock), whose `now()` IS `Date.now()`, whose `delay()` IS
+`node:timers/promises` `setTimeout`, whose `schedule()` IS the global callback timers, and whose `timeout()` IS `AbortSignal.timeout`, so routing through Clock is
+behavior-neutral; a test wires a `TestClock` (see `clock-double.ts`) that advances virtual time explicitly, so the consumer's time-dependent path runs
+deterministically and instantly.
 
 One contract covers every shape of time rather than one contract per shape, so a consumer that awaits a wait, a consumer that arms a callback deadline, and a
 consumer that hands a deadline signal to an abortable call all share a single lever: a scenario spanning a backoff, a heartbeat, and a bounded request is driven
 by one clock instead of by separate mechanisms stepped in concert.
+
+The one place the production clock is more than the primitive it wraps is the platform timer's ceiling. Node arms every timer on a 32-bit signed millisecond count,
+and its timers documentation sets a delay past 2147483647 ms (a little under 25 days) to one millisecond, with a warning, rather than refusing it - so a token
+refresh or an expiry armed against a distant boundary would fire at once. The production clock carries such a delay itself, arming at most the ceiling and re-arming
+for the remainder until the requested moment, and the contract states it, so a consumer states the delay it means and never clamps for the platform.
 
 This module imports `node:timers/promises` and is therefore Node-only (not browser-safe), like `util.ts`. A browser-targeted consumer cannot resolve that import.
 
@@ -33,7 +38,8 @@ deterministically while production behavior stays unchanged through [systemClock
 `delay`, `schedule`, and `timeout` deliberately sit on different platform entry points: `delay` keeps the promise primitive from `node:timers/promises` and that
 primitive's `AbortError` semantics, `schedule` reaches the global callback timers, and `timeout` reaches `AbortSignal.timeout` and the `TimeoutError` reason it
 aborts with. A consumer's choice of shape - an awaited wait, an armed deadline, or a deadline handed to an abortable call - is what decides which primitive it
-lands on, and the double drives them all from one virtual timeline.
+lands on, and the double drives them all from one virtual timeline. Each of the three carries a delay past the platform timer's ceiling in full, as the module's
+opening note states, so a consumer never clamps a delay for the platform.
 
 #### See
 
@@ -48,7 +54,8 @@ delay(ms, init?): Promise<void>;
 ```
 
 Resolve after `ms` milliseconds, or reject if `init.signal` aborts first. The production [systemClock](#systemclock) implements this as `node:timers/promises` `setTimeout`,
-so an abort rejects with that primitive's `AbortError` (`name` `"AbortError"`, `code` `"ABORT_ERR"`) rather than the signal's reason.
+so an abort rejects with that primitive's `AbortError` (`name` `"AbortError"`, `code` `"ABORT_ERR"`) rather than the signal's reason. A delay past the platform
+timer's ceiling is carried in full: the production clock awaits the primitive once per hop of at most the ceiling, each hop under the caller's signal.
 
 ###### Parameters
 
@@ -89,7 +96,9 @@ schedule(
 ```
 
 Arm a callback timer: run `callback` once after `ms` milliseconds, or every `ms` milliseconds when `init.repeat` is `true`. The production [systemClock](#systemclock)
-implements this as the global `setTimeout` / `setInterval` read at call time, so any harness that replaces those globals observes the timer.
+implements this as the global `setTimeout` / `setInterval` read at call time, so any harness that replaces those globals observes the timer. A window past the
+platform timer's ceiling is carried in full: the production clock arms at most the ceiling and re-arms for the remainder, for a one-shot and for each period of a
+repeat alike, so the callback runs when asked.
 
 With `init.unref` set the timer never holds the process open, so a process whose only pending work is timers armed this way exits without waiting for them...the
 shape for a consumer living inside a process that must exit on its own. Omitted, the platform's default holds: a referenced timer keeps the process alive until
@@ -119,8 +128,9 @@ timeout(ms): AbortSignal;
 
 Return a signal that aborts after `ms` milliseconds with the platform's deadline reason: a `DOMException` whose `name` is `"TimeoutError"`, the reason the
 library's own `isTimeoutReason` predicate already accepts. The production [systemClock](#systemclock) implements this as `AbortSignal.timeout`, whose timer is
-unreferenced and therefore never holds the process open. Composing this deadline with a caller's own signal stays the job of `composeSignals` rather than of
-the clock, so a consumer assembles the lifetime it wants from the primitive it already reaches for everywhere else.
+unreferenced and therefore never holds the process open. A deadline past the platform timer's ceiling is carried in full, on a chain of the clock's own
+unreferenced timers, and aborts with the same reason. Composing this deadline with a caller's own signal stays the job of `composeSignals` rather than of the
+clock, so a consumer assembles the lifetime it wants from the primitive it already reaches for everywhere else.
 
 ###### Parameters
 
@@ -144,7 +154,8 @@ const systemClock: Clock;
 
 The behavior-neutral production [Clock](#clock): `now()` IS `Date.now()`, `delay()` IS `node:timers/promises` `setTimeout`, `schedule()` IS the global callback
 timers, and `timeout()` IS `AbortSignal.timeout`. A consumer that routes its time reads through this clock instead of calling those primitives directly cannot
-observe any behavior change - it is the same platform calls, one indirection removed at test time.
+observe any behavior change - it is the same platform calls, one indirection removed - except past the platform timer's ceiling, where the platform would fire at
+once and this clock fires when asked.
 
 #### See
 

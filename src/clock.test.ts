@@ -2,11 +2,12 @@
  *
  * clock.test.ts: Unit tests for the injectable Clock contract - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
  * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time and
- * forwards an unref to the platform handle's own unref(), and its timeout() IS AbortSignal.timeout), plus the shipped controllable TestClock double (advanceable
+ * forwards an unref to the platform handle's own unref(), its timeout() IS AbortSignal.timeout, and past the platform timer's ceiling each of the three carries the
+ * delay as a chain of arms that fires at the requested moment without the platform's overflow warning), plus the shipped controllable TestClock double (advanceable
  * virtual time, deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on
  * both resolution paths, the requested history across every settlement path, the earliest-pending-deadline read, the step that lands on that deadline, the callback
- * timers that share that one timeline with the delays, the deadline signals whose reason a consumer cannot tell apart from the platform's, and the unref it accepts
- * and ignores because a virtual timeline has no process to hold open).
+ * timers that share that one timeline with the delays, the deadline signals whose reason a consumer cannot tell apart from the platform's, the unref it accepts
+ * and ignores because a virtual timeline has no process to hold open, and the window past the ceiling that is an ordinary entry on a timeline with none).
  */
 import { describe, test } from "node:test";
 import { getEventListeners, once } from "node:events";
@@ -17,6 +18,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { isTimeoutReason } from "./util.ts";
 import { join } from "node:path";
+import { settle } from "./testing/index.ts";
 import { spawn } from "node:child_process";
 import { systemClock } from "./clock.ts";
 import { tmpdir } from "node:os";
@@ -253,6 +255,203 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     await once(signal, "abort");
 
     assertTimeoutReason(signal.reason, "systemClock deadline signal");
+  });
+
+  test("a one-shot past the platform ceiling is carried as a chain of arms and fires at the requested moment", (t) => {
+
+    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
+
+    // One past the platform timer's 32-bit signed millisecond ceiling: the smallest delay the platform would set to one millisecond. The ceiling is the platform's
+    // number, fixed outside this library, so the rows state it rather than reading it from the clock they are proving.
+    const fired: number[] = [];
+    const handle = systemClock.schedule((): number => fired.push(1), 2147483648);
+
+    t.mock.timers.tick(2147483647);
+
+    assert.deepEqual(fired, [], "a ceiling's worth of time elapsing fires nothing, because the first hop re-arms for the remainder instead of running the callback");
+
+    t.mock.timers.tick(1);
+
+    assert.deepEqual(fired, [1], "the remainder elapsing runs the callback, at exactly the moment asked for");
+
+    t.mock.timers.tick(2147483648);
+
+    assert.deepEqual(fired, [1], "and a chained one-shot fires once");
+
+    handle[Symbol.dispose]();
+  });
+
+  test("disposing a chained one-shot mid-chain cancels the hop that is live, so nothing fires later", (t) => {
+
+    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
+
+    // Two ceilings and a little more, so the chain has three hops; the disposal lands while the second is armed. A disposer that still held the first hop's handle
+    // would clear a timer that has already fired and leave the live one to run the chain to its end.
+    const fired: number[] = [];
+    const handle = systemClock.schedule((): number => fired.push(1), 4294967299);
+
+    t.mock.timers.tick(2147483649);
+    handle[Symbol.dispose]();
+
+    // The mock times a hop armed inside a callback from the end of the tick that ran the callback, so the chain's last hop needs a tick of its own to be reachable
+    // at all; a disposer that still held the first hop's handle would let the chain run on and fire here.
+    t.mock.timers.tick(4294967299);
+    t.mock.timers.tick(10);
+
+    assert.deepEqual(fired, [], "the chain is cancelled at whichever hop is live, and no later hop fires");
+  });
+
+  test("a repeat past the ceiling fires once per period, re-armed before its callback so a callback disposing its own handle cancels the next fire", (t) => {
+
+    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
+
+    // The callback closes over `handle`, declared on the next statement. That is safe by construction: the callback runs inside a later tick, long after this
+    // statement has completed, so it can never observe the binding before it is initialized. Each period is two ticks, a ceiling's worth and then the remainder,
+    // because the mock times a hop armed inside a callback from the end of the tick that ran the callback, where the platform arms it at the moment of the fire.
+    const fired: number[] = [];
+    const handle = systemClock.schedule((): void => {
+
+      fired.push(fired.length + 1);
+
+      if(fired.length === 2) {
+
+        handle[Symbol.dispose]();
+      }
+    }, 2147483648, { repeat: true });
+
+    t.mock.timers.tick(2147483647);
+
+    assert.deepEqual(fired, [], "a ceiling's worth of time fires nothing: the first hop re-arms for the remainder");
+
+    t.mock.timers.tick(1);
+
+    assert.deepEqual(fired, [1], "the first period's remainder elapsing fires once");
+
+    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(1);
+
+    assert.deepEqual(fired, [ 1, 2 ], "the second period fires once more, and that callback disposes its own handle");
+
+    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(1);
+
+    assert.deepEqual(fired, [ 1, 2 ], "the disposal cancelled the period the re-arm had already started, so nothing fires afterwards");
+  });
+
+  test("a deadline past the ceiling is a chained one-shot aborting with the platform's own TimeoutError", async (t) => {
+
+    // The live platform reason is captured first, on the real timers, so the comparison below is against what the platform produces rather than a restatement.
+    const platformSignal = AbortSignal.timeout(1);
+
+    await once(platformSignal, "abort");
+
+    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
+
+    const signal = systemClock.timeout(2147483648);
+
+    t.mock.timers.tick(2147483647);
+
+    assert.equal(signal.aborted, false, "a ceiling's worth of time elapsing leaves the chained deadline armed");
+
+    t.mock.timers.tick(1);
+
+    assert.equal(signal.aborted, true, "the remainder elapsing aborts it, at exactly the moment asked for");
+    assertTimeoutReason(signal.reason, "the chained deadline");
+
+    const platformReason: unknown = platformSignal.reason;
+    const chainedReason: unknown = signal.reason;
+
+    assert.ok(platformReason instanceof DOMException, "the platform's reason must be a DOMException");
+    assert.ok(chainedReason instanceof DOMException, "the chained deadline's reason must be a DOMException");
+    assert.equal(chainedReason.name, platformReason.name, "the two reasons must carry the same name");
+    assert.equal(chainedReason.message, platformReason.message, "the two reasons must carry the same message");
+    assert.equal(chainedReason.constructor, platformReason.constructor, "the two reasons must come from the same constructor");
+  });
+
+  test("each shape past the ceiling arms without the platform's overflow warning, and an abort mid-chain rejects the delay with the primitive's AbortError", async () => {
+
+    // The platform announces a delay it has set to one millisecond through a process warning, emitted on a later tick, so the read below yields a macrotask first.
+    const warnings: string[] = [];
+    const observe = (warning: Error): number => warnings.push(warning.name);
+
+    process.on("warning", observe);
+
+    try {
+
+      using oneShot = systemClock.schedule((): void => undefined, 2147483648, { unref: true });
+      using repeat = systemClock.schedule((): void => undefined, 2147483648, { repeat: true, unref: true });
+
+      const deadline = systemClock.timeout(2147483648);
+      const controller = new AbortController();
+      const waited = systemClock.delay(2147483648, { signal: controller.signal });
+
+      await settle();
+
+      assert.deepEqual(warnings, [], "no shape armed past the ceiling draws the platform's overflow warning, because each armed at most the ceiling");
+      assert.equal(deadline.aborted, false, "the chained deadline stands armed");
+      assert.notEqual(oneShot, repeat, "each arm answers its own handle");
+
+      controller.abort();
+
+      await assert.rejects(() => waited, (error: unknown) => {
+
+        assertAbortError(error, "a chained delay aborted mid-wait");
+
+        return true;
+      });
+    } finally {
+
+      process.off("warning", observe);
+    }
+  });
+
+  test("an infinite delay is the platform's own call rather than a chain that never ends", async () => {
+
+    const warnings: string[] = [];
+    const observe = (warning: Error): number => warnings.push(warning.name);
+
+    process.on("warning", observe);
+
+    try {
+
+      const { promise, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
+      const handle = systemClock.schedule((): void => resolve(), Infinity, { unref: true });
+
+      // A chain that never ends would leave this race to the real one-second wait; the platform's rule fires the timer at once.
+      const outcome = await Promise.race([ promise.then((): string => "fired"), systemClock.delay(1000).then((): string => "silent") ]);
+
+      assert.equal(outcome, "fired", "the platform sets an infinite delay to one millisecond, so it fires at once");
+      assert.deepEqual(warnings, ["TimeoutOverflowWarning"], "and says so with its own warning, which is the platform's rule rather than this clock's");
+
+      handle[Symbol.dispose]();
+    } finally {
+
+      process.off("warning", observe);
+    }
+  });
+
+  test("a delay past the ceiling awaits the promise primitive once per hop and resolves at the requested moment", async (t) => {
+
+    // The promise primitive is read off the module object at call time, which is what lets the mock reach it here; a wait bound by a named import would run on the
+    // real timers regardless of the mock.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    let resolved = false;
+
+    const waited = systemClock.delay(2147483648).then((): void => {
+
+      resolved = true;
+    });
+
+    t.mock.timers.tick(2147483647);
+    await settle();
+
+    assert.equal(resolved, false, "a ceiling's worth of time resolves nothing: the first hop's continuation awaits the remainder");
+
+    t.mock.timers.tick(1);
+    await waited;
+
+    assert.equal(resolved, true, "the remainder elapsing resolves the wait, at exactly the moment asked for");
   });
 });
 
@@ -812,6 +1011,33 @@ describe("TestClock - callback timers", () => {
     assert.equal(clock.pending, 1, "the one-shot has left the timeline and the repeat stands, as they would without the flag");
 
     repeat[Symbol.dispose]();
+  });
+
+  test("a window past the platform ceiling is an ordinary entry on the virtual timeline, coming due at exactly the moment asked for", async () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+
+    // All three shapes at one past the platform's ceiling, so the double is proven to need no chain of its own: a virtual timeline has no ceiling, and each entry
+    // comes due when the clock reaches it, which is the moment the production clock's chain delivers.
+    clock.schedule((): number => fired.push("one-shot"), 2147483648);
+
+    const signal = clock.timeout(2147483648);
+    const waited = clock.delay(2147483648);
+
+    assert.equal(clock.nextDeadline, 2147483648, "the entries come due at the window asked for");
+
+    clock.advance(2147483647);
+
+    assert.deepEqual(fired, [], "a ceiling's worth of virtual time fires nothing");
+    assert.equal(signal.aborted, false, "and aborts nothing");
+
+    clock.advance(1);
+    await waited;
+
+    assert.deepEqual(fired, ["one-shot"], "the remainder fires the timer");
+    assert.equal(signal.aborted, true, "aborts the deadline");
+    assert.deepEqual(clock.requested, [ 2147483648, 2147483648, 2147483648 ], "and the ledger records each window as asked");
   });
 });
 

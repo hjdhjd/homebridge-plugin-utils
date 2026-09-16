@@ -1167,9 +1167,9 @@ describe("FeatureOptions - groups", () => {
 
     const fo = new FeatureOptions(CATEGORIES, OPTIONS);
 
-    assert.equal(fo.groupParents["Motion.Sensitivity"], "Motion.Detect");
-    assert.equal(fo.groupParents["Audio.Mute"], "Audio");
-    assert.equal(fo.groupParents["Motion.Detect"], undefined, "an option without a group declaration must not appear in the reverse index");
+    assert.equal(fo.groupParents["motion.sensitivity"], "Motion.Detect");
+    assert.equal(fo.groupParents["audio.mute"], "Audio");
+    assert.equal(fo.groupParents["motion.detect"], undefined, "an option without a group declaration must not appear in the reverse index");
   });
 });
 
@@ -1200,6 +1200,20 @@ describe("FeatureOptions.isDependencyMet (SSOT predicate for dependency-hidden s
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect"]);
 
     assert.equal(fo.isDependencyMet("Motion.Sensitivity"), false, "parent Motion.Detect explicitly disabled - the child's dependency fails");
+  });
+
+  test("answers the same for any casing of the option name", () => {
+
+    /* The reverse index is keyed on the lowercased canonical name, so the predicate folds the caller's spelling before reading it - the case-insensitive contract
+     * the parameter documents and every other lookup on the model honors. Both directions are asserted, because a predicate that answered a fixed value for an
+     * unrecognized spelling would satisfy either one alone.
+     */
+    const disabled = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect"]);
+    const enabled = new FeatureOptions(CATEGORIES, OPTIONS);
+
+    assert.equal(disabled.isDependencyMet("motion.sensitivity"), false, "a lowercased name reaches the same disabled parent the catalog-cased spelling does");
+    assert.equal(disabled.isDependencyMet("MOTION.SENSITIVITY"), false, "and so does an uppercased one, since the read folds the caller's spelling first");
+    assert.equal(enabled.isDependencyMet("motion.sensitivity"), true, "and the same lowercased name reads true when that parent is enabled");
   });
 
   test("threads device + controller through `test()` for scope-aware dependency resolution", () => {
@@ -2174,7 +2188,7 @@ describe("FeatureOptions - pure functional core", () => {
       assert.equal(catalog.defaults["audio.volume"], false, "value-centric default from catalog");
       assert.equal(catalog.valueOptions["audio.volume"], 50, "value-centric default value indexed");
       assert.equal(catalog.valueOptions["network.mtu"], "1500", "string-typed default value indexed");
-      assert.deepEqual({ ...catalog.groupParents }, { "Audio.Mute": "Audio", "Motion.Sensitivity": "Motion.Detect" }, "child-to-parent reverse index");
+      assert.deepEqual({ ...catalog.groupParents }, { "audio.mute": "Audio", "motion.sensitivity": "Motion.Detect" }, "child-to-parent reverse index");
       assert.deepEqual(catalog.groups["Motion.Detect"], ["Motion.Sensitivity"], "parent-to-children forward index");
       assert.deepEqual(catalog.sortedValueOptionNames, [...catalog.sortedValueOptionNames].sort((a, b) => b.length - a.length), "sorted longest-first");
     });
@@ -2225,7 +2239,7 @@ describe("FeatureOptions - pure functional core", () => {
       }
 
       assert.equal("motion.detect" in catalog.defaults, true, "and a name the catalog registered is a member");
-      assert.equal("Motion.Sensitivity" in catalog.groupParents, true, "including in the registries keyed as the entry is spelled");
+      assert.equal("motion.sensitivity" in catalog.groupParents, true, "including in the reverse index, keyed on the lowercased name every registry here shares");
     });
 
     test("refuses a second entry that expands onto a name an earlier entry already registered, whatever category or casing it arrives from", () => {

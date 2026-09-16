@@ -327,7 +327,8 @@ export interface ConfiguredOptionEntry {
  *
  * @property categories             - The raw category list, preserved for callers that need to iterate it (rendering, validation, log enumeration).
  * @property defaults               - Lowercased-key map from canonical option name (the form {@link expandOption} produces) to its catalog-declared default.
- * @property groupParents           - Reverse index from a child option's expanded name to its parent group's expanded name. Catalog case preserved on the keys.
+ * @property groupParents           - Lowercased-key reverse index from a child option's canonical name to its parent group's expanded name. The value keeps the
+ *                                    catalog's own casing, which is the spelling scope resolution and the webUI read it back as.
  * @property groups                 - Forward index from a parent group's expanded name to its child options' expanded names.
  * @property options                - The raw options map, preserved alongside categories for the same reason.
  * @property optionsByName          - Lowercased-key map from canonical option name to the raw catalog entry, the general per-option lookup for any consumer that
@@ -1312,10 +1313,12 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
 
         const expandedGroup = category.name + (option.group.length ? ("." + option.group) : "");
 
-        // Build both directions of the parent/child relation so callers can walk it either way in O(1) - forward for a parent's children, reverse for an option's
-        // parent group.
+        /* Build both directions of the parent/child relation so callers can walk it either way in O(1) - forward for a parent's children, reverse for an option's
+         * parent group. The reverse direction is keyed on the lowercased name every registry here is keyed on, so a lookup answers for whatever spelling the
+         * caller holds, while the values on both sides stay expanded names in the catalog's own casing - the spelling scope resolution and the webUI read back.
+         */
         (groups[expandedGroup] ??= []).push(entry);
-        groupParents[entry] = expandedGroup;
+        groupParents[key] = expandedGroup;
       }
     }
   }
@@ -1823,7 +1826,7 @@ export function isDependencyMet({ catalog, configIndex, controller, defaultRetur
   option: string;
 }): boolean {
 
-  const parent = catalog.groupParents[option];
+  const parent = catalog.groupParents[option.toLowerCase()];
 
   if(!parent) {
 
@@ -2575,9 +2578,10 @@ export class FeatureOptions {
 
   /**
    * Return a reverse index mapping each child option to its parent group. This provides O(1) child-to-parent lookups, complementing the forward `groups` map that maps
-   * parents to their children.
+   * parents to their children. It is keyed on the lowercased canonical option name, as every registry the catalog index carries is, so a lookup answers for
+   * whatever spelling the caller holds.
    *
-   * @returns Returns a record mapping child option names to their parent group names.
+   * @returns Returns a record keyed by each child option's lowercased canonical name, whose values are the parent group names in the catalog's own casing.
    */
   public get groupParents(): Record<string, string> {
 

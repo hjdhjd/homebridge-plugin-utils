@@ -1158,15 +1158,17 @@ function validateChoiceDeclaration(option: FeatureOptionEntry, entry: string): v
     throw catalogError("a non-string default on a choice or list", entry);
   }
 
+  // Masking and spelling values out on screen are contradictory affordances, whether the editor offering them is a picker or a list editor. Both lay the value
+  // on the page, which is the one thing a secret declaration asks an editor not to do, so the refusal sits ahead of the return below and a free-form list - a
+  // multiple option that declares no choices at all - is refused alongside the picker.
+  if(option.secret) {
+
+    throw catalogError("a secret choice or list", entry);
+  }
+
   if(choices === undefined) {
 
     return;
-  }
-
-  // Masking and picking are contradictory affordances: a list the editor spells out on screen cannot also be a value kept off it.
-  if(option.secret) {
-
-    throw catalogError("a secret choice", entry);
   }
 
   // One test covers both spellings of "nothing declared" - an empty array and an empty source name - because a picker with nothing to offer is the same mistake

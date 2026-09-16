@@ -2291,11 +2291,14 @@ describe("FeatureOptions - pure functional core", () => {
           /a choice or list without a default value declared on option "Motion\.Plates"/);
       });
 
-      test("rejects a secret choice", () => {
+      test("rejects a secret choice or list", () => {
 
         assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
           { choices: CHOICE_LIST, default: false, defaultValue: "high", description: "Masked picker.", name: "Tier", secret: true })),
-        /a secret choice declared on option "Motion\.Tier"/);
+        /a secret choice or list declared on option "Motion\.Tier"/);
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOption(
+          { default: false, defaultValue: "a,b", description: "Masked list.", multiple: true, name: "Plates", secret: true })),
+        /a secret choice or list declared on option "Motion\.Plates"/);
       });
 
       test("rejects an empty choices declaration in either spelling", () => {
@@ -2382,6 +2385,7 @@ describe("FeatureOptions - pure functional core", () => {
             { choices: CHOICE_LIST, default: false, defaultValue: "high,low", description: "An explicit list default.", multiple: true, name: "TierList" },
             { choices: "smartDetectTypes", default: false, defaultValue: "person", description: "A source-backed picker.", multiple: true, name: "Detected" },
             { default: false, defaultValue: "", description: "A free-form list.", multiple: true, name: "Plates" },
+            { default: false, defaultValue: "", description: "A masked value option, which offers nothing on screen to mask.", name: "ApiKey", secret: true },
             { default: false, defaultValue: 50, description: "An ordinary value option, untouched by any of this.", name: "Volume" },
             { default: true, description: "An ordinary boolean, untouched by any of this.", name: "Detect" }
           ]
@@ -2392,6 +2396,7 @@ describe("FeatureOptions - pure functional core", () => {
         assert.equal(catalog.optionsByName["motion.detected"]?.choices, "smartDetectTypes", "a source name passes through as declared");
         assert.equal(catalog.optionsByName["motion.tierradio"]?.style, "radio", "a declared style passes through as the editor vocabulary it is");
         assert.equal(catalog.valueOptions["motion.tiers"], ALL_CHOICES, "an all-choices default is registered like any other value default");
+        assert.equal(catalog.optionsByName["motion.apikey"]?.secret, true, "a secret value option with no editor to spell it out is registered as declared");
       });
     });
   });

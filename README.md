@@ -57,6 +57,10 @@ Mode:
   -n, --lines <N>        Retrieve the most recent N lines.
   --all                  Retrieve the entire log (cannot be combined with -n).
 
+Time range:
+  --since <when>         Only show lines at or after <when> (e.g. 1d, 7am, 2026-06-29, "2026-06-29 6am").
+  --until <when>         Only show lines at or before <when>; bounds a closed past window (cannot combine with --follow).
+
 Filters:
   -p, --plugin <name>    Only show lines from this plugin (repeatable).
   -g, --grep <regex>     Only show lines whose message matches this regular expression.

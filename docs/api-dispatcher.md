@@ -23,8 +23,9 @@ being reachable yet.
 
 Teardown has an upper bound rather than an instant. Abort your in-flight signals first, then destroy the dispatcher. A retry backoff pending at that moment is a
 plain timer the retry interceptor owns, so a request waiting on one settles against the destroyed pool - as an error whose code is `UND_ERR_DESTROYED` - no later
-than when that backoff elapses, and sooner when the destroy interrupts the exchange before a backoff is even scheduled. The linger is therefore bounded by the
-configured `maxTimeout`, which is the number to size a shutdown budget against.
+than when that backoff elapses, and sooner when the destroy interrupts the exchange before a backoff is even scheduled. A request still waiting on a connection
+settles no later than the configured `connectTimeout`, which is where the transport abandons the attempt. A shutdown budget is therefore sized against
+`maxTimeout` and `connectTimeout` together.
 
 ## Utilities
 
@@ -39,6 +40,7 @@ Construction options for [createApiDispatcher](#createapidispatcher), and for th
 | <a id="allowh2"></a> `allowH2?` | `boolean` | Whether to offer HTTP/2 during connection negotiation. Defaults to `true`; a server that does not speak it simply stays on HTTP/1.1. |
 | <a id="clientttl"></a> `clientTtl?` | `number` \| `null` | How long, in milliseconds, a pooled connection may live before it is recycled. Defaults to `60000`, which bounds how long a keepalive socket to a host that has since rebooted can linger. Pass `null` to disable recycling entirely, which is what a plugin holding long-lived connections to a local gateway wants. |
 | <a id="connections"></a> `connections?` | `number` | How many connections the pool may open to the origin. Defaults to `1`, which is what an API client issuing one request at a time needs. |
+| <a id="connecttimeout"></a> `connectTimeout?` | `number` | How long, in milliseconds, a connection attempt may take before it fails. Defaults to `5000`. The bound sits here rather than on the request because the transport attaches a request's abort signal only once a connection exists...without it, an attempt to a host that never answers runs to the transport's own ten-second default and no signal can end it. `5000` is the default because a local API answers a connect in milliseconds, and the value matches the retry ladder's `maxTimeout`, so the bounds a shutdown budget includes sit in the same size class. |
 | <a id="origin"></a> `origin` | `string` \| `URL` | The origin every request through this dispatcher is sent to. |
 | <a id="rejectunauthorized"></a> `rejectUnauthorized?` | `boolean` | Whether to require a valid TLS certificate chain. Defaults to `true`. Relaxing it is occasionally the only way to reach a device shipping a certificate it generated for itself, and a plugin that does relax it owns that decision. |
 | <a id="retry"></a> `retry?` | `false` \| `RetryOptions` | The retry policy. Defaults to `{ maxRetries: 3, maxTimeout: 5000, minTimeout: 1000, statusCodes: API_RETRY_STATUS_CODES, timeoutFactor: 2 }`. An object supplied here merges OVER those defaults field by field, so overriding `maxRetries` alone keeps the vetted status list. Pass `false` to compose no retry interceptor at all, which is what a protocol that answers with a retryable-looking status to MEAN something - a 503 that says "not ready yet" rather than "try again" - needs, since a retry would swallow the answer. **Remarks** These fields are the whole of what this module sets. Every other member of the transport's retry vocabulary keeps the transport's own default, including the list of methods eligible for retry and the connection-fault `errorCodes` axis, which means resets, refusals, and unresolvable names are retried underneath this policy whether or not any status is. |
@@ -87,7 +89,7 @@ the vetted base rather than from nothing.
 
 `Options`
 
-The pool options, carrying a `connect` entry only when the TLS check is being relaxed.
+The pool options, whose `connect` entry always carries the connect timeout and adds the relaxed TLS check only when one was asked for.
 
 ***
 

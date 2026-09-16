@@ -665,13 +665,14 @@ get groupParents(): Record<string, string>;
 ```
 
 Return a reverse index mapping each child option to its parent group. This provides O(1) child-to-parent lookups, complementing the forward `groups` map that maps
-parents to their children.
+parents to their children. It is keyed on the lowercased canonical option name, as every registry the catalog index carries is, so a lookup answers for
+whatever spelling the caller holds.
 
 ###### Returns
 
 `Record`\<`string`, `string`\>
 
-Returns a record mapping child option names to their parent group names.
+Returns a record keyed by each child option's lowercased canonical name, whose values are the parent group names in the catalog's own casing.
 
 ##### groups
 
@@ -1310,7 +1311,7 @@ directly hold it as state and reuse it across every dispatch that does not touch
 | ------ | ------ | ------ | ------ |
 | <a id="categories-1"></a> `categories` | `readonly` | readonly [`FeatureCategoryEntry`](#featurecategoryentry)\<`unknown`\>[] | The raw category list, preserved for callers that need to iterate it (rendering, validation, log enumeration). |
 | <a id="defaults"></a> `defaults` | `readonly` | `Readonly`\<`Record`\<`string`, `boolean`\>\> | Lowercased-key map from canonical option name (the form [expandOption](#expandoption-1) produces) to its catalog-declared default. |
-| <a id="groupparents-1"></a> `groupParents` | `readonly` | `Readonly`\<`Record`\<`string`, `string`\>\> | Reverse index from a child option's expanded name to its parent group's expanded name. Catalog case preserved on the keys. |
+| <a id="groupparents-1"></a> `groupParents` | `readonly` | `Readonly`\<`Record`\<`string`, `string`\>\> | Lowercased-key reverse index from a child option's canonical name to its parent group's expanded name. The value keeps the catalog's own casing, which is the spelling scope resolution and the webUI read it back as. |
 | <a id="groups-1"></a> `groups` | `readonly` | `Readonly`\<`Record`\<`string`, readonly `string`[]\>\> | Forward index from a parent group's expanded name to its child options' expanded names. |
 | <a id="options-1"></a> `options` | `readonly` | `Readonly`\<`Record`\<`string`, readonly [`FeatureOptionEntry`](#featureoptionentry)[]\>\> | The raw options map, preserved alongside categories for the same reason. |
 | <a id="optionsbyname"></a> `optionsByName` | `readonly` | `Readonly`\<`Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)\>\> | Lowercased-key map from canonical option name to the raw catalog entry, the general per-option lookup for any consumer that needs the entry itself rather than one of the derivations beside it. Keyed exactly as `valueOptions` is, so one key discipline serves every registry on the index. It is named for what it holds because `entries` already means a category's projected rows in the webUI's vocabulary. |

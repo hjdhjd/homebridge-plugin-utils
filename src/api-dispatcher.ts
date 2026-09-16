@@ -21,8 +21,9 @@
  *
  * Teardown has an upper bound rather than an instant. Abort your in-flight signals first, then destroy the dispatcher. A retry backoff pending at that moment is a
  * plain timer the retry interceptor owns, so a request waiting on one settles against the destroyed pool - as an error whose code is `UND_ERR_DESTROYED` - no later
- * than when that backoff elapses, and sooner when the destroy interrupts the exchange before a backoff is even scheduled. The linger is therefore bounded by the
- * configured `maxTimeout`, which is the number to size a shutdown budget against.
+ * than when that backoff elapses, and sooner when the destroy interrupts the exchange before a backoff is even scheduled. A request still waiting on a connection
+ * settles no later than the configured `connectTimeout`, which is where the transport abandons the attempt. A shutdown budget is therefore sized against
+ * `maxTimeout` and `connectTimeout` together.
  *
  * @module
  */
@@ -33,6 +34,9 @@ import { Pool, interceptors } from "undici";
  * copied rather than shared on each derivation, which a constant sitting in this object would quietly stop happening.
  */
 const API_RETRY_DEFAULTS = Object.freeze({ maxRetries: 3, maxTimeout: 5000, minTimeout: 1000, timeoutFactor: 2 } satisfies RetryHandler.RetryOptions);
+
+// How long a connection attempt is given before it fails, in milliseconds. Held here so the derivation and the documented default cannot drift apart.
+const DEFAULT_CONNECT_TIMEOUT = 5000;
 
 /* One entry of the tuple form of a dispatch's header set: a name beside its value. Written out here because the transport keeps that union's element type internal to
  * its own declarations, while a rewritten list has to be assignable back to it.
@@ -151,6 +155,15 @@ export interface ApiDispatcherOptions {
   clientTtl?: number | null;
 
   /**
+   * How long, in milliseconds, a connection attempt may take before it fails. Defaults to `5000`.
+   *
+   * The bound sits here rather than on the request because the transport attaches a request's abort signal only once a connection exists...without it, an attempt to
+   * a host that never answers runs to the transport's own ten-second default and no signal can end it. `5000` is the default because a local API answers a connect in
+   * milliseconds, and the value matches the retry ladder's `maxTimeout`, so the bounds a shutdown budget includes sit in the same size class.
+   */
+  connectTimeout?: number;
+
+  /**
    * How many connections the pool may open to the origin. Defaults to `1`, which is what an API client issuing one request at a time needs.
    */
   connections?: number;
@@ -192,7 +205,7 @@ export interface ApiDispatcherOptions {
  *
  * @param options - See {@link ApiDispatcherOptions}.
  *
- * @returns The pool options, carrying a `connect` entry only when the TLS check is being relaxed.
+ * @returns The pool options, whose `connect` entry always carries the connect timeout and adds the relaxed TLS check only when one was asked for.
  *
  * @category Utilities
  */
@@ -207,8 +220,8 @@ export function apiPoolOptions(options: ApiDispatcherOptions): Pool.Options {
      */
     clientTtl: (options.clientTtl === undefined) ? 60000 : options.clientTtl,
 
-    // The transport validates certificates by default, so only the relaxed case has anything to say and `true` adds no key at all.
-    ...((options.rejectUnauthorized === false) ? { connect: { rejectUnauthorized: false } } : {}),
+    // The connect entry always carries the timeout. The transport validates certificates by default, so the relaxed check joins it only when a caller asks for it.
+    connect: { ...((options.rejectUnauthorized === false) ? { rejectUnauthorized: false } : {}), timeout: options.connectTimeout ?? DEFAULT_CONNECT_TIMEOUT },
     connections: options.connections ?? 1
   };
 }

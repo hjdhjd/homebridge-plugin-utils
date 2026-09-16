@@ -72,29 +72,38 @@ async function startServer(script: readonly number[]): Promise<TestServer> {
 
 describe("the API pool derivation", () => {
 
-  test("applies every default and adds no connect entry", () => {
+  test("applies every default, the connect timeout among them", () => {
 
-    assert.deepEqual(apiPoolOptions(BASE_OPTIONS), { allowH2: true, clientTtl: 60000, connections: 1 });
+    assert.deepEqual(apiPoolOptions(BASE_OPTIONS), { allowH2: true, clientTtl: 60000, connect: { timeout: 5000 }, connections: 1 });
   });
 
   test("relaxes the certificate check only when asked, and only then", () => {
 
     assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, rejectUnauthorized: false }),
-      { allowH2: true, clientTtl: 60000, connect: { rejectUnauthorized: false }, connections: 1 });
+      { allowH2: true, clientTtl: 60000, connect: { rejectUnauthorized: false, timeout: 5000 }, connections: 1 });
 
-    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, rejectUnauthorized: true }), { allowH2: true, clientTtl: 60000, connections: 1 });
+    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, rejectUnauthorized: true }),
+      { allowH2: true, clientTtl: 60000, connect: { timeout: 5000 }, connections: 1 });
   });
 
   test("carries each construction option through verbatim", () => {
 
-    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, allowH2: false }), { allowH2: false, clientTtl: 60000, connections: 1 });
-    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, clientTtl: 120000 }), { allowH2: true, clientTtl: 120000, connections: 1 });
-    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, connections: 2 }), { allowH2: true, clientTtl: 60000, connections: 2 });
+    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, allowH2: false }), { allowH2: false, clientTtl: 60000, connect: { timeout: 5000 }, connections: 1 });
+    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, clientTtl: 120000 }), { allowH2: true, clientTtl: 120000, connect: { timeout: 5000 }, connections: 1 });
+    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, connections: 2 }), { allowH2: true, clientTtl: 60000, connect: { timeout: 5000 }, connections: 2 });
+  });
+
+  test("carries a supplied connect timeout through, alone and beside the relaxed certificate check", () => {
+
+    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, connectTimeout: 3500 }), { allowH2: true, clientTtl: 60000, connect: { timeout: 3500 }, connections: 1 });
+
+    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, connectTimeout: 3500, rejectUnauthorized: false }),
+      { allowH2: true, clientTtl: 60000, connect: { rejectUnauthorized: false, timeout: 3500 }, connections: 1 });
   });
 
   test("keeps a null clientTtl, which asks for no recycling at all", () => {
 
-    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, clientTtl: null }), { allowH2: true, clientTtl: null, connections: 1 });
+    assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, clientTtl: null }), { allowH2: true, clientTtl: null, connect: { timeout: 5000 }, connections: 1 });
   });
 });
 

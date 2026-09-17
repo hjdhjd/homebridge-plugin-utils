@@ -7,9 +7,9 @@
  * first-write-wins rule for duplicate entries in configuredOptions, the scope hierarchy's "device overrides controller overrides global overrides default" contract,
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
-import { ALL_CHOICES, FeatureOptions, applyClearOption, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId, enumerateConfiguredEntries, expandOption,
-  formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice, isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists,
-  parseValueList, resolveScope, scopeSafeId, selectValues } from "./featureOptions.ts";
+import { ALL_CHOICES, FeatureOptions, applyClearOption, applyClearScope, applyMoveScope, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId,
+  enumerateConfiguredEntries, enumerateScopeEntries, expandOption, formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice,
+  isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList, resolveScope, scopeSafeId, selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -2660,6 +2660,179 @@ describe("FeatureOptions - pure functional core", () => {
     });
   });
 
+  describe("applyClearScope", () => {
+
+    test("forgets every entry reading at the identity, across options and forms, and leaves the rest verbatim", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before: readonly string[] = [ "Enable.Motion.Detect", "Disable.Motion.Detect.ABC123", "Enable.Audio.Volume.abc123=75", "Enable.Audio.Mute.Other",
+        "Enable.Network.Mtu.ABC123.9000", "ABC123 is not an entry" ];
+      const after = applyClearScope({ args: { id: "abc123" }, catalog, configuredOptions: before });
+
+      assert.notEqual(after, before, "fresh array reference");
+      assert.deepEqual(after, [ "Enable.Motion.Detect", "Enable.Audio.Mute.Other", "ABC123 is not an entry" ],
+        "the global entry and the other identity's entry survive, every form at the identity is gone, and text the parser cannot account for is left alone");
+      assert.deepEqual(before, [ "Enable.Motion.Detect", "Disable.Motion.Detect.ABC123", "Enable.Audio.Volume.abc123=75", "Enable.Audio.Mute.Other",
+        "Enable.Network.Mtu.ABC123.9000", "ABC123 is not an entry" ], "input array contents preserved verbatim");
+    });
+
+    test("returns the SAME input reference when nothing is at the identity and no survivor needs rewriting", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = [ "Enable.Motion.Detect", "Enable.Audio.Volume.Kitchen=50" ];
+
+      assert.equal(applyClearScope({ args: { id: "Nobody" }, catalog, configuredOptions: before }), before,
+        "reference-stable on no-op so change-detection consumers can compare by ===");
+      assert.equal(applyClearScope({ args: { id: "" }, catalog, configuredOptions: before }), before, "and an empty identifier addresses nothing at all");
+    });
+
+    test("a survivor still in the legacy form modernizes even when nothing was at the identity", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+
+      assert.deepEqual(applyClearScope({ args: { id: "Nobody" }, catalog, configuredOptions: [ "Enable.Motion.Detect", "Enable.Audio.Volume.Kitchen.50" ] }),
+        [ "Enable.Motion.Detect", "Enable.Audio.Volume.Kitchen=50" ], "the same upgrade-on-save a per-option clear performs");
+    });
+
+    test("the ambiguous legacy entry survives here where the per-option clear drops it, which is the divergence by design", () => {
+
+      /* Each verb is bound to the question it answers. This one forgets what the user wrote at an identity, so it reads a scope exactly as the enumeration does
+       * and `Enable.Audio.Volume.ABC` is that option's global value rather than anything at ABC. The per-option clear corrects the one control the user is
+       * looking at, so it removes whatever the lookup index resolves there - and the index does register that entry at ABC. Aligning either verb to the other
+       * would break the job it exists for.
+       */
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = ["Enable.Audio.Volume.ABC"];
+
+      assert.equal(applyClearScope({ args: { id: "ABC" }, catalog, configuredOptions: before }), before, "the scope clear leaves a global value in place");
+      assert.deepEqual(applyClearOption({ args: { id: "ABC", option: "Audio.Volume" }, catalog, configuredOptions: before }), [],
+        "where the per-option clear, faithful to the index it writes, drops it");
+    });
+
+    test("an entry answering at two identities is dropped whole when either reading names the one being forgotten", () => {
+
+      // The raw entry is the unit here exactly as it is for the per-option clear. Only a hand-authored legacy tail can produce an entry with two live readings,
+      // and rewriting one to carry just the other would settle, on the user's behalf, an ambiguity only the user can settle.
+      const mtuCategories: FeatureCategoryEntry[] = [{ description: "Network Options", name: "Network" }];
+      const mtuOptions: Record<string, FeatureOptionEntry[]> = {
+
+        Network: [ { default: false, defaultValue: "1500", description: "Override MTU size.", name: "Mtu" },
+          { default: false, description: "A boolean option whose name extends the value option's.", name: "Mtu.Override.Abc" } ]
+      };
+
+      assert.deepEqual(applyClearScope({ args: { id: "Def" }, catalog: buildCatalogIndex(mtuCategories, mtuOptions),
+        configuredOptions: ["Enable.Network.Mtu.Override.Abc.Def"] }), [],
+      "the reading at Def names the identity, so the entry goes even though its other reading names a different one");
+    });
+  });
+
+  describe("applyMoveScope", () => {
+
+    test("the destination outranks the source: an option it already carries keeps the entry it has", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before: readonly string[] = [ "Disable.Motion.Detect.A", "Enable.Motion.Detect.B", "Enable.Audio.Volume.A=75" ];
+
+      assert.deepEqual(applyMoveScope({ args: { from: "A", to: "B" }, catalog, configuredOptions: before }),
+        [ "Enable.Motion.Detect.B", "Enable.Audio.Volume.B=75" ],
+        "the settings built against the identity in use win, and the source's entry for that option is forgotten rather than moved");
+      assert.deepEqual(before, [ "Disable.Motion.Detect.A", "Enable.Motion.Detect.B", "Enable.Audio.Volume.A=75" ], "input array contents preserved verbatim");
+    });
+
+    test("every form moves in the destination's canonical spelling, and everything else is left where it is", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = [ "Disable.Motion.Detect.A", "Enable.Motion.Sensitivity.A", "Enable.Audio.Volume.A.75", "Enable.Network.Mtu.A=9000", "Enable.Motion.Detect",
+        "Enable.Motion.Detect.C" ];
+
+      assert.deepEqual(applyMoveScope({ args: { from: "A", to: "B" }, catalog, configuredOptions: before }), [ "Enable.Motion.Detect", "Enable.Motion.Detect.C",
+        "Disable.Motion.Detect.B", "Enable.Motion.Sensitivity.B", "Enable.Audio.Volume.B=75", "Enable.Network.Mtu.B=9000" ],
+      "a disable moves as a disable and a value with its value, the legacy spelling arriving canonical, while the global entry and the third identity stay put");
+    });
+
+    test("a list's empty selection moves as the empty selection", () => {
+
+      const listCategories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+      const listOptions: Record<string, FeatureOptionEntry[]> = {
+
+        Motion: [{ default: false, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+      };
+
+      assert.deepEqual(applyMoveScope({ args: { from: "ABC", to: "B" }, catalog: buildCatalogIndex(listCategories, listOptions),
+        configuredOptions: ["Enable.Motion.SmartDetect.ABC="] }), ["Enable.Motion.SmartDetect.B="],
+      "\"on, with nothing selected\" survives the move as the state it is, rather than collapsing to the bare enable");
+    });
+
+    test("a move onto the same identity, in any casing, is a no-op rather than a deletion", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = [ "Enable.Motion.Detect.abc", "Enable.Audio.Volume.abc=75" ];
+
+      assert.equal(applyMoveScope({ args: { from: "abc", to: "ABC" }, catalog, configuredOptions: before }), before,
+        "the case a save whose identity did not change hits every time - reading it as a sweep would delete the user's settings");
+    });
+
+    test("a source carrying nothing answers the input reference, with no normalization pass", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = [ "Enable.Motion.Detect", "Enable.Audio.Volume.Kitchen.50" ];
+
+      assert.equal(applyMoveScope({ args: { from: "Nobody", to: "B" }, catalog, configuredOptions: before }), before,
+        "\"nothing moved\" is exactly \"the array is the same reference\", so a legacy survivor is not rewritten either");
+    });
+
+    test("where the source carries two entries for one option, the one the lookup index resolves is the one that moves", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+
+      assert.deepEqual(applyMoveScope({ args: { from: "A", to: "B" }, catalog, configuredOptions: [ "Enable.Audio.Volume.A=1", "Enable.Audio.Volume.A=2" ] }),
+        ["Enable.Audio.Volume.B=1"], "the array's own first-write-wins rule carries over, and the later duplicate is forgotten with the source");
+    });
+
+    test("the ambiguous legacy entry stays where it is, because the source carries nothing to move", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = ["Enable.Audio.Volume.ABC"];
+
+      assert.equal(applyMoveScope({ args: { from: "ABC", to: "B" }, catalog, configuredOptions: before }), before,
+        "a global value is not an identity's configuration, so moving that identity moves nothing at all");
+    });
+
+    test("a destination that cannot address a scope is refused before anything is read", () => {
+
+      const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+      const before = ["Enable.Motion.Detect.A"];
+
+      assert.throws(() => applyMoveScope({ args: { from: "A", to: "" }, catalog, configuredOptions: before }), /cannot address a scope/,
+        "an empty destination has no spelling in the address grammar");
+      assert.throws(() => applyMoveScope({ args: { from: "A", to: "10.0.0.1" }, catalog, configuredOptions: before }), /cannot address a scope/,
+        "and neither does one carrying a period");
+      assert.throws(() => applyMoveScope({ args: { from: "Nobody", to: "10.0.0.1" }, catalog, configuredOptions: before }), /cannot address a scope/,
+        "raised up front, so a bad destination is refused whether or not the source carries anything");
+    });
+
+    test("a destination the catalog claims as an option in its own right is refused by the write the move composes", () => {
+
+      /* The refusal applySetOption already raises, propagating unchanged: writing Video.Stream at an identity named High composes the Video.Stream.High option's
+       * own global address. The inline choices matter to the fixture - without them the segment A reads as a global value, the source carries nothing, and no
+       * write is ever composed to refuse.
+       */
+      const collideCategories: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
+      const collideOptions: Record<string, FeatureOptionEntry[]> = {
+
+        Video: [ { choices: [ { label: "High", value: "High" }, { label: "Low", value: "Low" } ], default: false, defaultValue: "Low",
+          description: "Stream quality selection.", name: "Stream" },
+        { default: false, description: "The boolean option whose name a declared member also spells.", name: "Stream.High" } ]
+      };
+      const collideCatalog = buildCatalogIndex(collideCategories, collideOptions);
+      const before = ["Enable.Video.Stream.A"];
+
+      assert.throws(() => applyMoveScope({ args: { from: "A", to: "High" }, catalog: collideCatalog, configuredOptions: before }),
+        /"Video.Stream.High" is a feature option in its own right/, "the move composes a write, so the write's own refusal is the one raised");
+      assert.deepEqual(before, ["Enable.Video.Stream.A"], "and the transform is pure, so a refusal leaves nothing half-applied");
+    });
+  });
+
   describe("resolveScope", () => {
 
     test("walks the device -> controller -> global precedence and reports the resolved scope", () => {
@@ -3145,6 +3318,190 @@ describe("FeatureOptions - enumerateConfiguredEntries", () => {
       { enabled: false, id: "" },
       { enabled: true, id: "" }
     ], "both entries the user wrote are reported; the first-write-wins rule belongs to the lookup index");
+  });
+});
+
+/* The scope walk is the enumeration's other axis: the per-option walk asks what one option says everywhere, this one asks what one identity has configured across
+ * the whole catalog. What the rows below prove is that the two read the SAME grammar - the same case folding, the same casing handed back, the same arbitration
+ * over which option a key belongs to, and above all the same rule about which of an entry's readings count - because the sweep a consumer runs through this walk
+ * and the scope transforms beside it have to agree with that sweep entry for entry.
+ */
+describe("FeatureOptions - enumerateScopeEntries", () => {
+
+  const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+  const STREAM_CHOICES = [ { label: "High", value: "High" }, { label: "Medium", value: "Medium" }, { label: "Low", value: "Low" } ];
+
+  test("yields every option configured at the identity, in the array's own order, folding case on the match alone", () => {
+
+    const configuredOptions = [ "Enable.Motion.Detect", "Disable.Motion.Detect.ABC123", "Enable.Audio.Volume.abc123=75", "Enable.Audio.Mute.Other" ];
+
+    assert.deepEqual([...enumerateScopeEntries({ catalog, configuredOptions, id: "abc123" })], [
+
+      { enabled: false, id: "ABC123", option: "Motion.Detect" },
+      { enabled: true, id: "abc123", option: "Audio.Volume", value: "75" }
+    ], "both entries at the identity, each in the casing it was written in, with the global entry and the other identity's entry skipped");
+  });
+
+  test("the legacy id-and-value form reads exactly as its canonical spelling does", () => {
+
+    const legacy = [...enumerateScopeEntries({ catalog, configuredOptions: ["Enable.Audio.Volume.Kitchen.50"], id: "kitchen" })];
+
+    assert.deepEqual(legacy, [{ enabled: true, id: "Kitchen", option: "Audio.Volume", value: "50" }], "the legacy tail decodes to the identity and the value behind it");
+    assert.deepEqual(legacy, [...enumerateScopeEntries({ catalog, configuredOptions: ["Enable.Audio.Volume.Kitchen=50"], id: "kitchen" })],
+      "and the canonical spelling of the same configuration yields the identical record");
+  });
+
+  test("an entry whose trailing segment stayed ambiguous is a global value, so no identity walk reports it", () => {
+
+    // The one place this walk and applyClearOption part company, and the reason is the question each answers: `Enable.Audio.Volume.ABC` reads as that option's
+    // global value here, exactly as the per-option enumeration reads it, so a walk of the identity ABC has nothing to report.
+    assert.deepEqual([...enumerateScopeEntries({ catalog, configuredOptions: ["Enable.Audio.Volume.ABC"], id: "ABC" })], [],
+      "the segment is the option's value rather than an identity the user configured");
+  });
+
+  test("a segment the option's own choices claim as a value addresses no identity at all", () => {
+
+    const choiceCategories: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
+    const choiceOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Video: [{ choices: STREAM_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality selection.", name: "Stream" }]
+    };
+    const choiceCatalog = buildCatalogIndex(choiceCategories, choiceOptions);
+    const configuredOptions = ["Enable.Video.Stream.High"];
+
+    assert.deepEqual([...enumerateScopeEntries({ catalog: choiceCatalog, configuredOptions, id: "High" })], [],
+      "the declaration settles the segment as the value, so the narrowed entry has no identity reading to report");
+    assert.deepEqual([...enumerateScopeEntries({ catalog: choiceCatalog, configuredOptions, id: "Medium" })], [],
+      "and it reports nothing at any other identity either");
+  });
+
+  test("a key the catalog claims as an option in its own right is that option's entry rather than an identity of a shorter name", () => {
+
+    const collideCategories: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
+    const collideOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Video: [ { choices: STREAM_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality selection.", name: "Stream" },
+        { default: false, description: "The boolean option whose name a declared member also spells.", name: "Stream.High" } ]
+    };
+
+    assert.deepEqual([...enumerateScopeEntries({ catalog: buildCatalogIndex(collideCategories, collideOptions), configuredOptions: ["Enable.Video.Stream.High"],
+      id: "High" })], [], "the arbitration assigns the key to Video.Stream.High outright, so nothing is configured at an identity named High");
+    assert.deepEqual([...enumerateScopeEntries({ catalog, configuredOptions: ["Enable.Nothing.Declared.ABC123"], id: "ABC123" })], [],
+      "and an entry of an option the catalog does not declare claims no key at all");
+  });
+
+  test("an empty identifier and a dotted one each address nothing", () => {
+
+    const configuredOptions = [ "Enable.Motion.Detect", "Enable.Audio.Volume=50", "Enable.Audio.Mute" ];
+
+    assert.deepEqual([...enumerateScopeEntries({ catalog, configuredOptions, id: "" })], [],
+      "the global level is addressed one option at a time, never as the empty identity - a consumer's unset variable must not walk the whole configuration");
+    assert.deepEqual([...enumerateScopeEntries({ catalog, configuredOptions: ["Enable.Motion.Detect.a.b"], id: "a.b" })], [],
+      "and an identifier the address grammar has no spelling for matches nothing rather than throwing");
+  });
+
+  test("a string the entry grammar does not claim, and a tail of a single segment, each address nothing", () => {
+
+    // What reaches the walk with no address to decode: a string the parser accounts for not at all, and a one-segment tail, which is an option's own global
+    // address where the catalog declares it and nothing whatsoever where it does not.
+    assert.deepEqual([...enumerateScopeEntries({ catalog, configuredOptions: [ "NotAnEntry", "Maybe.Motion.Detect.ABC123", "Enable.Something" ],
+      id: "ABC123" })], [], "a malformed string and an unknown action are not entries at all, and a bare tail names no identity");
+  });
+
+  test("a list option's scoped empty selection yields the empty value it stores", () => {
+
+    const listCategories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const listOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [{ default: false, defaultValue: "face,person", description: "Smart detection types.", multiple: true, name: "SmartDetect" }]
+    };
+
+    assert.deepEqual([...enumerateScopeEntries({ catalog: buildCatalogIndex(listCategories, listOptions),
+      configuredOptions: ["Enable.Motion.SmartDetect.ABC="], id: "abc" })], [{ enabled: true, id: "ABC", option: "Motion.SmartDetect", value: "" }],
+    "\"on, with nothing selected\" is a state the list can be in, and it reads back at the identity as one");
+  });
+
+  test("one entry answers at two identities where its tail spells an id-and-value pair for one option and an identity of another", () => {
+
+    /* The shape a catalog produces when one option's expanded name extends a value option's: the greedy prefix match reads the tail as Network.Mtu at the
+     * identity "Override" carrying "Abc.Def", while the raw tail is the longer boolean option at the identity "Def". Both readings are live on the lookup
+     * index, and the walk has to report each at the identity it names, which is why the reader consults the primary key after the value key rather than
+     * stopping at the first reading that decodes.
+     */
+    const mtuCategories: FeatureCategoryEntry[] = [{ description: "Network Options", name: "Network" }];
+    const mtuOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Network: [ { default: false, defaultValue: "1500", description: "Override MTU size.", name: "Mtu" },
+        { default: false, description: "A boolean option whose name extends the value option's.", name: "Mtu.Override.Abc" } ]
+    };
+    const mtuCatalog = buildCatalogIndex(mtuCategories, mtuOptions);
+    const configuredOptions = ["Enable.Network.Mtu.Override.Abc.Def"];
+
+    assert.deepEqual([...enumerateScopeEntries({ catalog: mtuCatalog, configuredOptions, id: "def" })],
+      [{ enabled: true, id: "Def", option: "Network.Mtu.Override.Abc" }], "the raw tail is the longer option at the identity its last segment names");
+    assert.deepEqual([...enumerateScopeEntries({ catalog: mtuCatalog, configuredOptions, id: "override" })],
+      [{ enabled: true, id: "Override", option: "Network.Mtu", value: "Abc.Def" }], "and the value reading is the shorter option at the identity ahead of its value");
+
+    // Moving one of the identities this entry answers at carries the reading that names it, in the destination's canonical spelling, and the source entry goes
+    // with it because the reading that moved was the only thing it had to say at Override.
+    assert.deepEqual(applyMoveScope({ args: { from: "Override", to: "B" }, catalog: mtuCatalog, configuredOptions }), ["Enable.Network.Mtu.B=Abc.Def"],
+      "the move carries the value reading to the destination, the source entry going with it");
+  });
+});
+
+// The class twins hold the state the pure transforms only compute over, so what these rows add is the part the functions cannot show: the lookup index is
+// rebuilt behind a change, the configured-options reference is preserved through a no-op, and the boolean a move answers is the one a caller writes out on.
+describe("FeatureOptions - scope operations (clearScope, moveScope)", () => {
+
+  test("clearScope forgets the identity's whole configuration and rebuilds the lookup index", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, structuredClone(OPTIONS), [ "Disable.Motion.Detect.ABC123", "Enable.Audio.Volume.ABC123=75" ]);
+
+    fo.clearScope({ id: "abc123" });
+
+    assert.equal(fo.test("Motion.Detect", "ABC123"), true, "the option resolves to its catalog default once the identity's entry is gone");
+    assert.equal(fo.exists("Motion.Detect", "ABC123"), false, "and the rebuilt index no longer carries an entry for it");
+    assert.deepEqual(fo.configuredOptions, [], "with nothing of that identity left in the array");
+  });
+
+  test("a clearScope that finds nothing leaves the configured-options reference untouched", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, structuredClone(OPTIONS), ["Enable.Motion.Detect"]);
+    const before = fo.configuredOptions;
+
+    fo.clearScope({ id: "nobody" });
+
+    assert.equal(fo.configuredOptions, before, "callers holding a snapshot see a stable identity for unchanged state");
+  });
+
+  test("moveScope reports the change, and the index resolves every form at the destination", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, structuredClone(OPTIONS), [ "Enable.Audio.Volume.A=75", "Disable.Motion.Detect.A" ]);
+
+    assert.equal(fo.moveScope({ from: "A", to: "B" }), true, "the configuration changed, which is what a caller writes out on");
+    assert.equal(fo.scope("Audio.Volume", "B"), "device", "the destination resolves the moved entry");
+    assert.equal(fo.value("Audio.Volume", "B"), "75", "carrying the value it moved with");
+    assert.equal(fo.test("Motion.Detect", "B"), false, "and the disable moved as a disable");
+    assert.equal(fo.scope("Audio.Volume", "A"), "none", "while the source resolves to the catalog default again");
+  });
+
+  test("moveScope answers false, and changes nothing, for a same-identity move and for a source carrying nothing", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, structuredClone(OPTIONS), ["Enable.Audio.Volume.A=75"]);
+    const before = fo.configuredOptions;
+
+    assert.equal(fo.moveScope({ from: "a", to: "A" }), false, "a save whose identity did not change has nothing to write out");
+    assert.equal(fo.configuredOptions, before, "and the array is left exactly as it was");
+    assert.equal(fo.moveScope({ from: "Nobody", to: "B" }), false, "an identity with nothing configured has nothing to move");
+    assert.equal(fo.configuredOptions, before, "and the array is left exactly as it was there too");
+  });
+
+  test("a source whose every option the destination outranks still reports the change, because its entries are gone", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, structuredClone(OPTIONS), [ "Disable.Motion.Detect.A", "Enable.Motion.Detect.B" ]);
+
+    assert.equal(fo.moveScope({ from: "A", to: "B" }), true, "a source entry the destination outranked is forgotten, and that is a change the caller writes out");
+    assert.deepEqual(fo.configuredOptions, ["Enable.Motion.Detect.B"], "the destination keeps the entry it had, and the source's is gone");
   });
 });
 

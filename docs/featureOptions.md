@@ -76,13 +76,41 @@ One configured entry's reading of a single feature option: where it sits, what i
 Distinct from [ResolvedOptionEntry](#resolvedoptionentry), which answers "what applies here" after walking the hierarchy. This answers "what did the user write", entry by
 entry, with no precedence applied and no catalog default substituted.
 
+#### Extended by
+
+- [`ConfiguredScopeEntry`](#configuredscopeentry)
+
 #### Properties
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="enabled"></a> `enabled` | `boolean` | True for an `Enable` entry, false for a `Disable` entry. |
-| <a id="id-1"></a> `id` | `string` | The device or controller identifier the entry addresses, in the casing the entry carried. The empty string for a global entry. |
+| <a id="id-2"></a> `id` | `string` | The device or controller identifier the entry addresses, in the casing the entry carried. The empty string for a global entry. |
 | <a id="value-1"></a> `value?` | `string` | The raw value the entry carries, in the casing the entry carried. Absent when the entry carries none - a boolean option, a `Disable`, or a bare enable of a value option. Present and empty for a canonical entry whose payload is empty, which is the same reading the lookup index registers for it. |
+
+***
+
+### ConfiguredScopeEntry
+
+One configured entry's reading at a scope: the option it addresses, beside everything [ConfiguredOptionEntry](#configuredoptionentry) carries. Yielded by
+[enumerateScopeEntries](#enumeratescopeentries), one record per reading an entry has at the identifier being asked about.
+
+A scope walk asks a different question than a per-option walk - "what did the user configure for this identity", across the whole catalog - so the option each
+record names is the part [ConfiguredOptionEntry](#configuredoptionentry) has no room for. One raw entry can answer twice under two different options, where a hand-authored
+legacy tail spells an id-and-value pair for one option and a scope of another at the same time.
+
+#### Extends
+
+- [`ConfiguredOptionEntry`](#configuredoptionentry)
+
+#### Properties
+
+| Property | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ |
+| <a id="enabled-1"></a> `enabled` | `boolean` | True for an `Enable` entry, false for a `Disable` entry. | [`ConfiguredOptionEntry`](#configuredoptionentry).[`enabled`](#enabled) |
+| <a id="id-3"></a> `id` | `string` | The device or controller identifier the entry addresses, in the casing the entry carried. The empty string for a global entry. | [`ConfiguredOptionEntry`](#configuredoptionentry).[`id`](#id-2) |
+| <a id="option-1"></a> `option` | `string` | The catalog option the reading addresses, in the casing the entry carried. Every engine call that takes an option name folds case, so this hands straight back to [FeatureOptions.setOption](#setoption) or [FeatureOptions.scope](#scope). | - |
+| <a id="value-2"></a> `value?` | `string` | The raw value the entry carries, in the casing the entry carried. Absent when the entry carries none - a boolean option, a `Disable`, or a bare enable of a value option. Present and empty for a canonical entry whose payload is empty, which is the same reading the lookup index registers for it. | [`ConfiguredOptionEntry`](#configuredoptionentry).[`value`](#value-1) |
 
 ***
 
@@ -98,7 +126,7 @@ property the caller still offers as that option's transition fallback.
 | <a id="controller"></a> `controller?` | `string` | Optional controller scope identifier. |
 | <a id="device"></a> `device?` | `string` | Optional device scope identifier. |
 | <a id="fallback"></a> `fallback?` | `string` | Optional. The configuration property the plugin still carries for this option, read exactly as it is supplied. An empty string answers as itself, because what counts as an empty property is the caller's rule rather than the engine's. |
-| <a id="option-1"></a> `option` | `string` | Feature option to read (case-insensitive). |
+| <a id="option-2"></a> `option` | `string` | Feature option to read (case-insensitive). |
 
 ***
 
@@ -115,7 +143,7 @@ catalog-build time, and the webUI's projection applies it to whatever a source r
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="label"></a> `label` | `string` | The text the editor shows for this choice. |
-| <a id="value-2"></a> `value` | `string` | The text the configuration stores when this choice is picked. |
+| <a id="value-3"></a> `value` | `string` | The text the configuration stores when this choice is picked. |
 
 ***
 
@@ -129,7 +157,7 @@ Arguments for [selectValues](#selectvalues). Carries the reading intent: the dom
 | ------ | ------ | ------ |
 | <a id="domain"></a> `domain` | readonly `string`[] | The values available in this context. |
 | <a id="multiple-1"></a> `multiple` | `boolean` | Whether the option stores a list rather than a single value. |
-| <a id="value-3"></a> `value` | `string` \| `undefined` | The stored text, or undefined when nothing is stored. |
+| <a id="value-4"></a> `value` | `string` \| `undefined` | The stored text, or undefined when nothing is stored. |
 
 ***
 
@@ -266,6 +294,56 @@ A generator over the configured entries addressing the option.
 for(const entry of enumerateConfiguredEntries({ catalog, configuredOptions, option: "Audio.Volume" })) {
 
   log.info("Volume is configured.", { enabled: entry.enabled, scope: entry.id.length ? entry.id : "global", value: entry.value });
+}
+```
+
+***
+
+### enumerateScopeEntries()
+
+```ts
+function enumerateScopeEntries(args): Generator<ConfiguredScopeEntry, void, undefined>;
+```
+
+Enumerate every configured entry that says something at one scope identifier, whichever option it addresses, decoding each through the engine's own grammar.
+This is the scope-level complement of [enumerateConfiguredEntries](#enumerateconfiguredentries): that one asks what a single option says everywhere, this one asks what a single
+identity has configured across the whole catalog, which is the question a consumer sweeping a controller it no longer manages is actually asking.
+
+Yields one [ConfiguredScopeEntry](#configuredscopeentry) per reading, in the order the entries appear in the array, and nothing at all for an identity nobody configured. A
+single entry answers twice where a hand-authored legacy tail spells an id-and-value pair for one option and a scope of another; the value reading comes first,
+exactly as the per-option enumerator weighs the two.
+
+The reading rule is [enumerateConfiguredEntries](#enumerateconfiguredentries)' own, which is what lets a consumer's sweep and the scope transforms beside this agree entry for entry.
+One consequence is worth stating: an entry whose trailing segment stayed ambiguous, `Enable.Audio.Volume.ABC`, is that option's global value here, so a walk of
+the scope `ABC` does not report it and [applyClearScope](#applyclearscope) leaves it in place - where [applyClearOption](#applyclearoption) at that same identifier, faithful to the
+lookup index it writes, drops it. Each verb is bound to the question it answers: this one reports what the user wrote at an identity, and the per-option clear
+corrects the one control the user is looking at.
+
+An empty identifier addresses nothing and yields nothing. The global level belongs to [enumerateConfiguredEntries](#enumerateconfiguredentries) one option at a time, because an empty
+string matching every global entry would let a consumer's unset variable walk the whole configuration.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | \{ `catalog`: [`CatalogIndex`](#catalogindex); `configuredOptions`: readonly `string`[]; `id`: `string`; \} | - |
+| `args.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index, which defines what counts as a value-centric option and which names are options in their own right. |
+| `args.configuredOptions` | readonly `string`[] | The raw configured-options array. |
+| `args.id` | `string` | The scope identifier to walk. Matching folds case, because the storage format does. |
+
+#### Returns
+
+`Generator`\<[`ConfiguredScopeEntry`](#configuredscopeentry), `void`, `undefined`\>
+
+A generator over the configured entries reading at that scope.
+
+#### Example
+
+```ts
+// Everything this controller has configured, option by option, before its settings are swept.
+for(const entry of enumerateScopeEntries({ catalog, configuredOptions, id: controller.mac })) {
+
+  log.info("The controller carries a configured option.", { enabled: entry.enabled, option: entry.option, value: entry.value });
 }
 ```
 
@@ -763,6 +841,38 @@ global clear has no id to check, and a legal scoped clear is unaffected.
 featureOpts.clearOption({ option: "Audio.Volume", id: "ABC123" });
 ```
 
+##### clearScope()
+
+```ts
+clearScope(args): void;
+```
+
+Remove every configured-options entry that reads at the given scope, whichever option it addresses.
+
+This is the scope-level companion to [clearOption](#clearoption): a plugin sweeping an identity it no longer manages - a controller the user removed, a device that
+left - forgets that identity's whole configuration in one call rather than walking the catalog option by option. What counts as "at the scope" is
+[enumerateScopeEntries](#enumeratescopeentries)' reading, so a plugin that enumerated first to show the user what would go removes exactly what it showed.
+
+An empty identifier addresses nothing and the call is a no-op, because the global level is addressed one option at a time through [clearOption](#clearoption) rather
+than as a scope. Nothing here throws and a repeated call changes nothing, so callers can treat this as a reset.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | [`ClearScopeArgs`](#clearscopeargs) | The addressing intent: the scope identifier to forget. See [ClearScopeArgs](#clearscopeargs). |
+
+###### Returns
+
+`void`
+
+###### Example
+
+```ts
+// Forget everything the user configured for a controller that is no longer managed.
+featureOpts.clearScope({ id: controller.mac });
+```
+
 ##### consolidatedValue()
 
 ```ts
@@ -1096,6 +1206,51 @@ featureOptions.logFeature("Stream.Bandwidth", "Bandwidth", log, device.mac);
 featureOptions.logFeature("HKSV.Record", "HKSV recording", log, device.mac, controller.id);
 ```
 
+##### moveScope()
+
+```ts
+moveScope(args): boolean;
+```
+
+Move every configured-options entry at one scope onto another, and report whether the configuration changed.
+
+This is the mutation a plugin runs when an identity it addresses feature options by changes - an address the settings were keyed to until credentials named
+a serial, or an address the user edited - so the configuration built for that thing follows it rather than being stranded under a name nothing resolves any
+more. Every form moves in the destination's canonical spelling: a disable as a disable, a value with its value, a list's empty selection as the empty
+selection.
+
+The destination outranks the source: an option the destination already carries an entry for keeps the entry it has, and the source's entry for that option is
+forgotten rather than moved. A move onto the same scope, in any casing, changes nothing, which is the case a save whose identity did not change hits every
+time.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | [`MoveScopeArgs`](#movescopeargs) | The two identities the move runs between. See [MoveScopeArgs](#movescopeargs). |
+
+###### Returns
+
+`boolean`
+
+Whether the configuration changed, which is what a caller persists on. A source entry the destination outranked is forgotten rather than moved, and
+         that is a change the caller has to write out, so this answers true whenever the source carried anything at all.
+
+###### Throws
+
+`Error` naming the destination when it cannot address a scope, and the refusal a write raises when the destination composed with a moved option is
+        itself a catalog option.
+
+###### Example
+
+```ts
+// The controller identifies itself by serial once credentials arrive, so the settings keyed to its address follow it.
+if(featureOpts.moveScope({ from: controller.address, to: controller.serial })) {
+
+  await this.saveFeatureOptions(featureOpts.configuredOptions);
+}
+```
+
 ##### scope()
 
 ```ts
@@ -1336,6 +1491,19 @@ enabled state or value because the operation forgets every entry addressing the 
 
 ***
 
+### ClearScopeArgs
+
+Arguments for [applyClearScope](#applyclearscope) and [FeatureOptions.clearScope](#clearscope). Carries the addressing intent alone - the scope identifier whose entries are
+forgotten - because the operation forgets every entry reading there regardless of which option it addresses or what it encoded.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="id-1"></a> `id` | `string` | The device or controller scope identifier to forget. Matching folds case. An empty identifier addresses nothing and the operation is a no-op: the global level is addressed one option at a time through [ClearOptionArgs](#clearoptionargs), never as a scope. |
+
+***
+
 ### FeatureCategoryEntry
 
 Entry describing a feature option category.
@@ -1401,6 +1569,20 @@ const options: Record<string, FeatureOptionEntry[]> = {
 
 ***
 
+### MoveScopeArgs
+
+Arguments for [applyMoveScope](#applymovescope) and [FeatureOptions.moveScope](#movescope). Carries the two identities the move runs between: the scope whose entries are read,
+and the scope they are written onto.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="from"></a> `from` | `string` | The scope identifier whose entries move. Matching folds case. An identifier nothing is configured at leaves the configuration untouched. |
+| <a id="to"></a> `to` | `string` | The scope identifier the entries move onto. It must satisfy [isValidScopeId](#isvalidscopeid) or the move is refused, and an option the destination already carries an entry for keeps the entry it has. |
+
+***
+
 ### ResolvedOptionEntry
 
 Resolved view of a feature option through the scope hierarchy. Captures the scope where the option was found, whether it's enabled, and the raw string value for
@@ -1411,7 +1593,7 @@ value-centric options. This single traversal result serves both boolean queries 
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="enabled-1"></a> `enabled` | `boolean` | The resolved enabled state at the highest-precedence scope where the option was found. |
+| <a id="enabled-2"></a> `enabled` | `boolean` | The resolved enabled state at the highest-precedence scope where the option was found. |
 | <a id="optionvalue"></a> `optionValue?` | `string` | The raw string value when a value-centric option was set with an explicit value at the resolved scope. Absent otherwise. |
 | <a id="scope-1"></a> `scope` | [`OptionScope`](#optionscope) | The scope where the option resolved, or "none" when no explicit entry was found at any scope. |
 
@@ -1426,10 +1608,10 @@ and optional value for value-centric options.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="enabled-2"></a> `enabled` | `boolean` | True to enable, false to disable. |
-| <a id="id-2"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one whose composed address names another catalog option, is refused rather than written - see [composeScopeId](#composescopeid), which composes a controller-qualified identifier under the same rule. |
-| <a id="option-2"></a> `option` | `string` | Feature option to set (case-insensitive). |
-| <a id="value-4"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry storing a single value always carries one. Supplying the empty string for a [FeatureOptionEntry.multiple](#multiple) option is the one value without content that persists: it is the explicit empty selection, and it composes at either scope. Omitting `value` entirely says nothing about the selection and keeps the plain enable, for every option alike. |
+| <a id="enabled-3"></a> `enabled` | `boolean` | True to enable, false to disable. |
+| <a id="id-4"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one whose composed address names another catalog option, is refused rather than written - see [composeScopeId](#composescopeid), which composes a controller-qualified identifier under the same rule. |
+| <a id="option-3"></a> `option` | `string` | Feature option to set (case-insensitive). |
+| <a id="value-5"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry storing a single value always carries one. Supplying the empty string for a [FeatureOptionEntry.multiple](#multiple) option is the one value without content that persists: it is the explicit empty selection, and it composes at either scope. Omitting `value` entirely says nothing about the selection and keeps the plain enable, for every option alike. |
 
 ***
 
@@ -1446,7 +1628,7 @@ stored value read against.
 | <a id="defaultwhenunset"></a> `defaultWhenUnset?` | `boolean` | Optional. Read an option that is enabled at an explicit scope with nothing stored as its registered default rather than as the empty list. It reaches that one state and no other: a disabled option, an option the catalog does not carry, and one that is not value-centric all still read empty, and a `multiple` option whose selection the user emptied stays empty, since emptying it was a choice the user made rather than a value they omitted. |
 | <a id="device-1"></a> `device?` | `string` | Optional device scope identifier. |
 | <a id="domain-1"></a> `domain?` | readonly `string`[] | Optional. The values the option offers in this context, which a plugin derives from whatever the device reported. Supplying it is what lets the read drop a stored value the device no longer offers and expand an [ALL\_CHOICES](#all_choices) default. Omit it for an option whose catalog entry declares its choices inline, since the entry already holds them, and for a raw read of what the user stored. |
-| <a id="option-3"></a> `option` | `string` | Feature option to read (case-insensitive). |
+| <a id="option-4"></a> `option` | `string` | Feature option to read (case-insensitive). |
 
 ***
 
@@ -1528,6 +1710,93 @@ The new configured-options array, or the input array reference itself when nothi
 #### Throws
 
 `Error` naming the id and the option when a present id cannot address a scope of that option.
+
+***
+
+### applyClearScope()
+
+```ts
+function applyClearScope(options): readonly string[];
+```
+
+Compute the new configured-options array after forgetting every entry that reads at one scope identifier, whichever option it addresses. This is the
+scope-level complement of [applyClearOption](#applyclearoption): a consumer sweeping an identity it no longer manages forgets that identity's whole configuration in one
+call rather than walking the catalog option by option.
+
+What counts as "at the scope" is [enumerateScopeEntries](#enumeratescopeentries)' reading, so this and the sweep a consumer runs through that enumerator agree entry for entry.
+The raw entry is the unit: an entry that answers twice - a hand-authored legacy tail spelling an id-and-value pair for one option and a scope of another - is
+dropped whole when either reading names the scope, exactly as [applyClearOption](#applyclearoption) drops such an entry whole. That is the graceful degradation a shape only
+a hand-authored configuration can produce is owed, and the alternative of rewriting the entry to carry just one of its two readings would settle, on the user's
+behalf, an ambiguity only the user can settle.
+
+An empty identifier addresses nothing and answers the input reference untouched. Nothing here throws: an identifier the address grammar has no spelling for
+simply matches nothing, and an entry whose key the catalog claims as an option in its own right is at no scope at all by the arbitration.
+
+Pure: does not mutate the input array. Surviving entries are normalized on the way through, so a sweep carries the same upgrade-on-save behavior a set does,
+and the input array reference comes back when nothing matched and nothing needed rewriting.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `args`: [`ClearScopeArgs`](#clearscopeargs); `catalog`: [`CatalogIndex`](#catalogindex); `configuredOptions`: readonly `string`[]; \} | - |
+| `options.args` | [`ClearScopeArgs`](#clearscopeargs) | The addressing intent: the scope identifier to forget. See [ClearScopeArgs](#clearscopeargs). |
+| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index the entries decode against. |
+| `options.configuredOptions` | readonly `string`[] | The current configured-options array. |
+
+#### Returns
+
+readonly `string`[]
+
+The new configured-options array, or the input array reference itself when nothing was at the scope and nothing needed rewriting.
+
+***
+
+### applyMoveScope()
+
+```ts
+function applyMoveScope(options): readonly string[];
+```
+
+Compute the new configured-options array after moving every entry at one scope identifier onto another. This is the transform a plugin runs when an identity it
+addresses feature options by changes - an address the settings were keyed to until credentials named a serial, or an address the user edited - so the
+configuration the user built for that thing follows it rather than being stranded under a name nothing resolves any more.
+
+What moves is what [enumerateScopeEntries](#enumeratescopeentries) reads at `from`, written at `to` through [applySetOption](#applysetoption), so every form arrives in the destination's
+canonical spelling: a disable moves as a disable, a value moves with its value, and a list's empty selection moves as the empty selection. A reading the
+grammar has no scoped spelling for - a bare enable of an option storing a single value - reduces through that writer's own rule to nothing written, and the
+source entry is forgotten with the rest.
+
+The destination outranks the source. An option the destination already carries an entry for keeps the entry it has, and the source's entry for that option is
+forgotten rather than moved, because the settings built against the identity in use are the ones the user is looking at. The array's own first-write-wins rule
+carries over the same way: where the source carries two entries for one option, the one the lookup index resolves is the one that moves.
+
+A move onto the same scope, in any casing, answers the input reference untouched - it is the case a consumer hits on every save whose identity did not change,
+and it must never read as a deletion. A source carrying nothing answers the input reference too, with no normalization pass, so "nothing moved" is exactly "the
+array is the same reference".
+
+Pure: does not mutate the input array. The whole transform composes [applySetOption](#applysetoption) and [applyClearScope](#applyclearscope), which is what states the entry grammar
+once, and a refusal either of them raises leaves nothing half-applied.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `args`: [`MoveScopeArgs`](#movescopeargs); `catalog`: [`CatalogIndex`](#catalogindex); `configuredOptions`: readonly `string`[]; \} | - |
+| `options.args` | [`MoveScopeArgs`](#movescopeargs) | The two identities the move runs between. See [MoveScopeArgs](#movescopeargs). |
+| `options.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index the entries decode against. |
+| `options.configuredOptions` | readonly `string`[] | The current configured-options array. |
+
+#### Returns
+
+readonly `string`[]
+
+The new configured-options array, or the input array reference itself when the move was onto the same scope or the source carried nothing.
+
+#### Throws
+
+`Error` naming the destination when it cannot address a scope at all, raised before anything is read so a bad destination is refused whether or not the
+        source carries entries, and the refusal [applySetOption](#applysetoption) raises when the destination composed with a moved option is itself a catalog option.
 
 ***
 

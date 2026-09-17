@@ -12,6 +12,7 @@ import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptions
 import { describe, mock, test } from "node:test";
 import { DeadlineExpiredError } from "./webUi-liveness.mjs";
 import assert from "node:assert/strict";
+import { controllerNoticeCopy } from "./webUi-featureOptions/state.mjs";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 
@@ -3520,7 +3521,7 @@ describe("webUiFeatureOptions - a click failure and the healthy click that recov
       getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
       getDevices: (controller) => (controller?.serialNumber === "CTRL-A") ?
         { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub A", serialNumber: "CTRL-A" }], error: "" } : state.bResult,
-      ui: { controllerRetryEnableDelayMs: 20 }
+      ui: { controllerRetryEnableDelayMs: 20, isController: (device) => device.serialNumber?.startsWith("CTRL-") ?? false }
     });
 
     return {
@@ -3643,7 +3644,8 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
       getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
       getDevices: (controller) => (controller?.serialNumber === "CTRL-A") ?
         { devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub A", serialNumber: "CTRL-A" }], error: "" } :
-        { devices: [], emptyMessage: NOTICE, error: "" }
+        { devices: [], emptyMessage: NOTICE, error: "" },
+      ui: { isController: (device) => device.serialNumber === "CTRL-A" }
     });
 
     await orchestrator.show(await openTestSession());
@@ -3670,7 +3672,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
     orchestrator.cleanup();
   });
 
-  test("an empty outcome with no message keeps today's behavior end to end - the full table at controller scope", async () => {
+  test("an empty outcome with no message presents the framework's notice end to end", async () => {
 
     using dom = createTestDom();
 
@@ -3685,7 +3687,7 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
 
     seedBootstrapProbeShim();
 
-    // The parity row for the whole feature: a plugin that says nothing about its empty list gets exactly the page it got before the notice existed.
+    // A plugin that says nothing about its empty list gets the framework's own sentence, which is the same surface the row above reaches through the plugin's copy.
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
@@ -3695,9 +3697,10 @@ describe("webUiFeatureOptions - the nothing-to-list outcome", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.ok(skeleton.configTable.querySelector(".fo-devices-notice") === null, "no notice");
-    assert.notEqual(skeleton.configTable.querySelectorAll("details[data-category]").length, 0, "the full table renders at controller scope");
-    assert.equal(barsHidden(skeleton.search), false, "and the search panel stands");
+    assert.equal(skeleton.configTable.querySelector(".fo-devices-notice")?.textContent, controllerNoticeCopy({ devicesListed: false }),
+      "the framework's no-devices sentence holds the config-table surface");
+    assert.ok(skeleton.configTable.querySelector("details[data-category]") === null, "no option row is offered beside it");
+    assert.equal(barsHidden(skeleton.search), true, "and the search panel's bars hide with it - there is nothing to search");
 
     orchestrator.cleanup();
   });
@@ -5023,7 +5026,9 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => new Promise((resolve) => setTimeout(() => resolve({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }), 10000))
+      getControllers: () => new Promise((resolve) => setTimeout(() => resolve({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }), 10000)),
+      getDevices: () => ({ devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      ui: { isController: (device) => device.serialNumber === "CTRL-1" }
     });
 
     const showPromise = orchestrator.show(session);

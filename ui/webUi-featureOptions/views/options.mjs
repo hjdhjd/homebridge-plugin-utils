@@ -138,15 +138,23 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
 
         case "empty": {
 
-          /* The controller is reachable and has nothing to list, so its notice takes the place of the option table. The notice is built fresh on every entry rather
-           * than cached, because the outcome that justifies it is exactly what a refetch can change: a controller that gains a device stops being empty, and a
-           * rebuilt-per-entry notice cannot outlive that. Table DOM cached under this key stays where it is for the same reason, waiting for the day a refetch
-           * returns devices.
+          /* The controller is reachable and has nothing to offer at its own level, so a notice takes the place of the option table. That covers a list which came
+           * back with nothing in it, and a list whose rows include none that the plugin's `isController` names, which leaves the page without a serial its
+           * controller-scope entries could be keyed by. The notice is built fresh on every entry rather than cached, because the outcome that justifies it is
+           * exactly what a refetch can change: a controller that gains its own row, or its first device, stops resting here, and a rebuilt-per-entry notice cannot
+           * outlive that. Table DOM cached under this key stays where it is for the same reason, waiting for the day a refetch answers differently.
            *
-           * The message is appended as a string child, which the element helper turns into a text node - plugin copy is text the page displays, never markup it
-           * executes.
+           * The message is appended as a string child, which the element helper turns into a text node - copy a plugin supplied is text the page displays, never
+           * markup it executes.
            */
           configTable.appendChild(createElement("div", { classList: [ DEVICES_NOTICE_CLASS, "text-center", "text-muted", "my-4" ] }, [presentation.message]));
+
+          /* The busy state is derived here as in every other branch rather than cleared outright, because a notice view is not always a settled one: a revisit
+           * refetches while its notice still stands, and that view IS busy. One derivation answers both cases - a settled notice reads false and the marker goes,
+           * a notice over an outstanding fetch reads true and it stays. Deriving rather than recording also leaves the table DOM cached under this key untouched,
+           * so whatever comes back through the options branch takes the window's state as it is then rather than as it was when the notice displaced it.
+           */
+          applyBusyState({ configTable, state: store.state });
 
           return;
         }

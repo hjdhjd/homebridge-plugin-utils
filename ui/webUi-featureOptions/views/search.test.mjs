@@ -19,7 +19,9 @@ const CATALOG = {
 
   ...buildCatalogIndex(CATEGORIES, OPTIONS),
 
-  validators: { isController: () => false, validOption: () => true, validOptionCategory: () => true }
+  // The validator names the device these rows land as the controller's own row, which is what gives a controller view a scoping identity and therefore a table
+  // for the panel to follow. A list without that row has nothing to edit at controller level, so the surface there is a notice and the panel has nothing to filter.
+  validators: { isController: (device) => device?.serialNumber === "dev-a", validOption: () => true, validOptionCategory: () => true }
 };
 
 const setup = ({ configuredOptions = [] } = {}) => {
@@ -284,7 +286,7 @@ describe("mountSearchView - following the table's presentation", () => {
     assert.equal(barsHidden(root), false, "and returns with the table");
   });
 
-  test("an empty outcome with no message leaves the panel alone - the table is still what the surface shows", () => {
+  test("an empty outcome with no message withdraws the panel too, since the framework's own notice holds the surface", () => {
 
     using dom = createTestDom();
 
@@ -292,6 +294,6 @@ describe("mountSearchView - following the table's presentation", () => {
 
     clickController(store);
 
-    assert.equal(barsHidden(root), false, "the legacy empty-list reading keeps its full table and its panel");
+    assert.equal(barsHidden(root), true, "the panel follows the presentation, and a notice is a notice whoever supplied its words");
   });
 });

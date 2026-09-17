@@ -4,8 +4,8 @@
  */
 "use strict";
 
+import { controllerNoticeCopy, initialState, reducer } from "../state.mjs";
 import { describe, test } from "node:test";
-import { initialState, reducer } from "../state.mjs";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
@@ -40,7 +40,20 @@ const CATALOG = {
   validators: { isController: () => false, validOption: () => true, validOptionCategory: () => true }
 };
 
-const setup = ({ configuredOptions = [], scope } = {}) => {
+/* The same catalog with a validator that names the device these suites land as the controller's own row.
+ *
+ * A controller view's scoping identity is that row, so a list carrying it is what gives the page a serial to write at and therefore a live option table. A list
+ * without one has nothing to edit at controller level, and the surface there is a notice - which is why a row that means to assert something about a controller's
+ * table, rather than about the notice, lands its list through this catalog.
+ */
+const CONTROLLER_ROW_CATALOG = {
+
+  ...CATALOG,
+
+  validators: { ...CATALOG.validators, isController: (device) => device?.serialNumber === "dev-a" }
+};
+
+const setup = ({ catalog = CATALOG, configuredOptions = [], scope } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const configTable = document.createElement("div");
@@ -49,7 +62,7 @@ const setup = ({ configuredOptions = [], scope } = {}) => {
   configTable.id = "configTable";
   document.body.appendChild(configTable);
 
-  store.dispatch({ catalog: CATALOG, configuredOptions, controllers: [], mode: "device-only", type: "model:loaded" });
+  store.dispatch({ catalog, configuredOptions, controllers: [], mode: "device-only", type: "model:loaded" });
 
   if(scope) {
 
@@ -1067,9 +1080,9 @@ describe("mountOptionsView - in-flight device fetch", () => {
   // Move the store into the window a sidebar controller click opens: the scope already names the controller, its device list has not arrived, and every write the
   // table could take would key from a selected device the controller scope does not have. The dispatch order mirrors the nav view's exactly - the optimistic scope
   // first, the fetch record second - because that order is what makes the window observable at all.
-  const openWindow = ({ configuredOptions } = {}) => {
+  const openWindow = ({ catalog, configuredOptions } = {}) => {
 
-    const harness = setup({ configuredOptions });
+    const harness = setup({ catalog, configuredOptions });
 
     harness.store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
     harness.store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
@@ -1137,7 +1150,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     using dom = createTestDom();
 
-    const { configTable, store } = setup();
+    const { configTable, store } = setup({ catalog: CONTROLLER_ROW_CATALOG });
 
     // Settle controller A's list, then sit in its view: the loaded list names this controller and no fetch is outstanding, so the table is live.
     store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
@@ -1219,7 +1232,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     using dom = createTestDom();
 
-    const { configTable, store } = openWindow();
+    const { configTable, store } = openWindow({ catalog: CONTROLLER_ROW_CATALOG });
     const motion = expandCategory(configTable, "Motion");
 
     assert.equal(motion.querySelector("#Motion\\.Detect").disabled, true, "precondition: the window is open");
@@ -1230,12 +1243,6 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     assert.equal(configTable.classList.contains("fo-options-busy"), false, "the marker is gone");
     assert.equal(detect.disabled, false, "the row takes gestures again");
-
-    detect.click();
-
-    // A settled controller view carries no device in its scope, so its entry keys to global. That is the view's own semantic and no concern of this row, which
-    // asserts only that the table takes a gesture at all once the fetch has been answered.
-    assert.deepEqual(store.state.configuredOptions, ["Disable.Motion.Detect"], "the toggle writes once the list has landed");
   });
 
   test("a controller that answers with no devices lifts the window too", () => {
@@ -1248,9 +1255,9 @@ describe("mountOptionsView - in-flight device fetch", () => {
     store.dispatch({ controllerId: CONTROLLER_A, devices: [], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
 
     // An answered fetch settles the view whatever it carried: the list on screen belongs to this controller and nothing is outstanding, which is the whole of what
-    // the window was waiting on.
+    // the window was waiting on. What settles onto the surface is the notice, since an empty list holds no row the controller's edits could be keyed by.
     assert.equal(configTable.classList.contains("fo-options-busy"), false, "an empty list is still an answer");
-    assert.equal(configTable.querySelector("#Motion\\.Detect").disabled, false, "the rows take gestures again");
+    assert.ok(configTable.querySelector(".fo-devices-notice"), "and the notice is what the settled view presents");
   });
 
   test("a view detached mid-window comes back inert while its fetch is still outstanding", () => {
@@ -1277,7 +1284,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     using dom = createTestDom();
 
-    const { configTable, store } = openWindow();
+    const { configTable, store } = openWindow({ catalog: CONTROLLER_ROW_CATALOG });
 
     expandCategory(configTable, "Motion");
     store.dispatch({ controllerId: CONTROLLER_A, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
@@ -1435,7 +1442,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
 
     using dom = createTestDom();
 
-    const { configTable, store } = setup();
+    const { configTable, store } = setup({ catalog: CONTROLLER_ROW_CATALOG });
 
     clickController(store, { controllerId: CONTROLLER_A, error: "Controller unreachable." });
     clickController(store, { controllerId: CONTROLLER_B, devices: [DEVICE_A] });
@@ -1497,8 +1504,8 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
   const DEVICE_A = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
   const NOTICE = "This controller has no cameras adopted.";
 
-  // A sidebar controller click's full dispatch order: the optimistic scope, the fetch record, then the outcome. An `emptyMessage` on a clean device-less outcome is
-  // what turns the resting controller view into a notice.
+  // A sidebar controller click's full dispatch order: the optimistic scope, the fetch record, then the outcome. A resting controller view is a notice whenever the
+  // landed list carries no row the validator names, and an `emptyMessage` on a clean outcome only supplies that notice's words.
   const clickController = (store, { controllerId, devices = [], emptyMessage, error = "" }) => {
 
     store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
@@ -1533,7 +1540,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
     assert.equal(notice(configTable).textContent, "<b>bold</b> & <script>x</script>", "and reads back verbatim");
   });
 
-  test("an empty outcome with no message keeps today's behavior - the full table at controller scope", () => {
+  test("an empty outcome with no message presents the framework's notice in place of the table", () => {
 
     using dom = createTestDom();
 
@@ -1541,8 +1548,23 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
     clickController(store, { controllerId: CONTROLLER_A });
 
-    assert.equal(notice(configTable), null, "no notice");
-    assert.notEqual(configTable.querySelectorAll("details[data-category]").length, 0, "the table renders as it always did");
+    assert.equal(notice(configTable).textContent, controllerNoticeCopy({ devicesListed: false }),
+      "the framework's no-devices sentence holds the surface where the plugin named none of its own");
+    assert.ok(configTable.querySelector("details[data-category]") === null, "and no option row is offered beside it");
+  });
+
+  test("a landed list with rows but none the validator names presents the framework's select-a-device notice", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    // The controller answered with a device and none of what it listed is its own row, so the page has no serial its controller-scope entries could be keyed by.
+    clickController(store, { controllerId: CONTROLLER_A, devices: [DEVICE_A] });
+
+    assert.equal(notice(configTable).textContent, controllerNoticeCopy({ devicesListed: true }),
+      "the sentence for a list with rows in it, not the one for an empty list");
+    assert.ok(configTable.querySelector("details[data-category]") === null, "and no option row is offered, so no gesture can record an edit at global scope");
   });
 
   test("the notice never enters the DOM cache, so leaving and returning rebuilds it rather than restoring it", () => {
@@ -1569,7 +1591,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
     using dom = createTestDom();
 
-    const { configTable, store } = setup();
+    const { configTable, store } = setup({ catalog: CONTROLLER_ROW_CATALOG });
 
     // Visit the controller with devices so its table is built and expanded, then leave, so its DOM is cached under the controller key.
     clickController(store, { controllerId: CONTROLLER_A, devices: [DEVICE_A] });
@@ -1597,7 +1619,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
     using dom = createTestDom();
 
-    const { configTable, store } = setup();
+    const { configTable, store } = setup({ catalog: CONTROLLER_ROW_CATALOG });
 
     // Enter a notice view whose key has never held a table, then leave it and come back with devices. What renders must be a freshly-built table, not notice DOM.
     clickController(store, { controllerId: CONTROLLER_B, emptyMessage: NOTICE });
@@ -1689,6 +1711,10 @@ const pickerSetup = ({ configuredOptions = [], controllers = [], devices = [], m
 };
 
 const pickerControl = (configTable, optionName) => configTable.querySelector("[id='row-Pick." + optionName + "'] .fo-option-value");
+
+// The controller's own row, which the picker catalog's validator names. A controller view needs it in the landed list to have a scoping identity, and therefore an
+// option table rather than a notice, which is what every row below that rests at a controller scope is asserting against.
+const PICKER_CONTROLLER_ROW = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Hub", serialNumber: "ctrl-a" };
 
 describe("mountOptionsView - picker delegation", () => {
 
@@ -1783,8 +1809,8 @@ describe("mountOptionsView - picker delegation", () => {
     using dom = createTestDom();
 
     // A controller scope whose device list has not landed is the window the lock exists for.
-    const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], mode: "controller-based",
-      scope: { controllerId: "ctrl-a", kind: "controller" } });
+    const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], devices: [PICKER_CONTROLLER_ROW],
+      mode: "controller-based", scope: { controllerId: "ctrl-a", kind: "controller" } });
 
     store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
 
@@ -1917,8 +1943,8 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
     using dom = createTestDom();
 
     const byController = ({ controller }) => [{ label: "Named", value: controller?.name ?? "none" }];
-    const { configTable, store } = pickerSetup({ controllers: [{ name: "old", serialNumber: "ctrl-a" }], mode: "controller-based",
-      scope: { controllerId: "ctrl-a", kind: "controller" }, types: byController });
+    const { configTable, store } = pickerSetup({ controllers: [{ name: "old", serialNumber: "ctrl-a" }], devices: [PICKER_CONTROLLER_ROW],
+      mode: "controller-based", scope: { controllerId: "ctrl-a", kind: "controller" }, types: byController });
 
     const group = pickerControl(configTable, "TypesUnset");
     const select = pickerControl(configTable, "Named");
@@ -2040,8 +2066,8 @@ describe("mountOptionsView - the list editor", () => {
 
     using dom = createTestDom();
 
-    const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], mode: "controller-based",
-      scope: { controllerId: "ctrl-a", kind: "controller" } });
+    const { configTable, store } = pickerSetup({ controllers: [{ name: "Hub", serialNumber: "ctrl-a" }], devices: [PICKER_CONTROLLER_ROW],
+      mode: "controller-based", scope: { controllerId: "ctrl-a", kind: "controller" } });
 
     store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
 

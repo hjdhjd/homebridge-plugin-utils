@@ -304,6 +304,22 @@ export const connectionFailureCopy = ({ controllerFailureGuidance = undefined, e
 };
 
 /**
+ * Resolve the notice a settled controller view shows when the controller has no scoping identity and the plugin supplied no `emptyMessage` of its own. The
+ * identity is the row the plugin's `ui.isController` names, so a controller without one has nothing that controller-scope entries could be keyed by, and the
+ * surface says so rather than offering a table whose edits would land somewhere else.
+ *
+ * The two sentences are the two situations that reach here, and they are different situations for the user: a controller that listed nothing has nothing to
+ * configure at all, while a controller that listed devices has plenty to configure and simply needs one of them picked. One sentence covering both would tell a
+ * user whose devices are sitting in the sidebar that there is nothing here to configure.
+ *
+ * @param {Object} args
+ * @param {boolean} args.devicesListed - True when the controller's landed list carries devices, false when it came back empty.
+ * @returns {string} The notice copy for that situation.
+ */
+export const controllerNoticeCopy = ({ devicesListed }) => devicesListed ?
+  "Select a device to configure its options." : "This controller has no devices to configure.";
+
+/**
  * Build the initial state. Status is `loading`; every populated-at-runtime field is set to an empty array or default value. The first {@link model:loaded}
  * dispatch transitions every field to its loaded value in one atomic update.
  *

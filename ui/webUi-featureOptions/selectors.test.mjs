@@ -7,8 +7,8 @@
 import { ALL_CHOICES, buildCatalogIndex } from "../featureOptions.js";
 import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId,
   tablePresentation } from "./selectors.mjs";
+import { controllerNoticeCopy, initialState, reducer } from "./state.mjs";
 import { describe, test } from "node:test";
-import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
 
 // Catalog fixture: a small set of categories with a mix of boolean, grouped, value-centric, and ungrouped options. Drives visibility, modification,
@@ -828,24 +828,30 @@ describe("tablePresentation - the nothing-to-list variant", () => {
 
   const NOTICE = "This controller has no cameras adopted.";
 
-  // Land an empty device outcome for a controller and rest at that controller's own view, which is the state a boot or a sidebar click leaves behind when a
-  // reachable controller has nothing to list. The message is always passed explicitly, including the absent case a parameter default would otherwise fill in.
-  const emptyAt = ({ controllerId = "ctrl-a", emptyMessage, scopeControllerId = "ctrl-a" }) => {
+  // The controller's own row is the one the catalog's validator names, and its serial is what a controller-scope entry would be keyed by. The managed row is a
+  // device beneath it, which answers to nothing and so leaves the controller without an identity on its own page.
+  const CONTROLLER_ROW = { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Controller A", serialNumber: "ctrl-a" };
+  const MANAGED_ROW = { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
+
+  // Land a device outcome for a controller and rest at that controller's own view, which is the state a boot or a sidebar click leaves behind. The list defaults to
+  // empty because that is the case most of these rows are about, and the message is always passed explicitly, including the absent case a parameter default would
+  // otherwise fill in.
+  const landedAt = ({ controllerId = "ctrl-a", devices = [], emptyMessage, scopeControllerId = "ctrl-a" }) => {
 
     const base = reducer(loadedState({ mode: "controller-based" }), { scope: { controllerId: scopeControllerId, kind: "controller" }, type: "scope:changed" });
     const requested = reducer(base, { controllerId, type: "devices:requested" });
 
-    return reducer(requested, { controllerId, devices: [], emptyMessage, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+    return reducer(requested, { controllerId, devices, emptyMessage, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
   };
 
   test("presents the empty variant carrying the plugin's message", () => {
 
-    assert.deepEqual(tablePresentation(emptyAt({ emptyMessage: NOTICE })), { kind: "empty", message: NOTICE });
+    assert.deepEqual(tablePresentation(landedAt({ emptyMessage: NOTICE })), { kind: "empty", message: NOTICE });
   });
 
   test("a standing connection error outranks it", () => {
 
-    const empty = emptyAt({ emptyMessage: NOTICE });
+    const empty = landedAt({ emptyMessage: NOTICE });
     const requested = reducer(empty, { controllerId: "ctrl-a", type: "devices:requested" });
     const failed = reducer(requested,
       { controllerId: "ctrl-a", devices: [], error: "Controller unreachable.", seq: requested.devicesRequest.seq, type: "devices:loaded" });
@@ -857,10 +863,10 @@ describe("tablePresentation - the nothing-to-list variant", () => {
 
     // The busy window a click away from a notice view opens: the optimistic scope has moved and the incoming list has not landed, so the recorded message no longer
     // describes the selected controller and is inert until the outcome that answers arrives.
-    assert.deepEqual(tablePresentation(emptyAt({ controllerId: "ctrl-a", emptyMessage: NOTICE, scopeControllerId: "ctrl-a" })),
+    assert.deepEqual(tablePresentation(landedAt({ controllerId: "ctrl-a", emptyMessage: NOTICE, scopeControllerId: "ctrl-a" })),
       { kind: "empty", message: NOTICE }, "precondition");
 
-    const empty = emptyAt({ emptyMessage: NOTICE });
+    const empty = landedAt({ emptyMessage: NOTICE });
     const movedAway = reducer(empty, { scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
 
     assert.deepEqual(tablePresentation(movedAway), { kind: "options" }, "the message is inert against a controller it does not describe");
@@ -868,7 +874,7 @@ describe("tablePresentation - the nothing-to-list variant", () => {
 
   test("the scope-kind gate confines it to a controller's own view", () => {
 
-    const empty = emptyAt({ emptyMessage: NOTICE });
+    const empty = landedAt({ emptyMessage: NOTICE });
 
     assert.deepEqual(tablePresentation(reducer(empty, { scope: { kind: "global" }, type: "scope:changed" })), { kind: "options" },
       "the global view is always editable, so it never wears a controller's notice");
@@ -886,9 +892,43 @@ describe("tablePresentation - the nothing-to-list variant", () => {
     assert.deepEqual(tablePresentation(landed), { kind: "options" }, "but the global scope never presents it");
   });
 
-  test("an empty outcome that named no message keeps today's behavior - the full table at controller scope", () => {
+  test("an empty outcome that named no message presents the framework's own notice", () => {
 
-    assert.deepEqual(tablePresentation(emptyAt({ emptyMessage: undefined })), { kind: "options" });
+    assert.deepEqual(tablePresentation(landedAt({ emptyMessage: undefined })),
+      { kind: "empty", message: controllerNoticeCopy({ devicesListed: false }) });
+  });
+
+  test("a landed list with rows but none the validator names presents the framework's other sentence", () => {
+
+    // The controller answered with devices and none of them is its own row, so the page has no serial its controller-scope entries could be keyed by. There is
+    // something to configure here, just not at this level, which is the situation the second sentence describes.
+    assert.deepEqual(tablePresentation(landedAt({ devices: [MANAGED_ROW], emptyMessage: undefined })),
+      { kind: "empty", message: controllerNoticeCopy({ devicesListed: true }) });
+  });
+
+  test("a landed list carrying the row the validator names presents the table", () => {
+
+    // The same landing with the controller's own row in it. The identity answers, so the page has a serial to write at and the table is what belongs there.
+    assert.deepEqual(tablePresentation(landedAt({ devices: [CONTROLLER_ROW], emptyMessage: undefined })), { kind: "options" });
+  });
+
+  test("a refetch that brings the controller's own row in changes the answer under a scope that never moved", () => {
+
+    /* The device list is the only thing this transition moves, which is what makes the row worth having: the scope, the list's owner, the message, the catalog,
+     * and the status all keep the values the memo compares, so a cached answer would come back and the page would stand on its notice over a list that has
+     * devices in it. The assertion below reads as a presentation check and doubles as the proof that the device list is one of the slices.
+     */
+    const empty = landedAt({ emptyMessage: undefined });
+
+    assert.deepEqual(tablePresentation(empty), { kind: "empty", message: controllerNoticeCopy({ devicesListed: false }) }, "precondition: the notice stands");
+
+    const requested = reducer(empty, { controllerId: "ctrl-a", type: "devices:requested" });
+    const refetched = reducer(requested,
+      { controllerId: "ctrl-a", devices: [CONTROLLER_ROW], error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.equal(refetched.scope, empty.scope, "precondition: the scope is the very object it was");
+    assert.equal(refetched.devicesControllerId, empty.devicesControllerId, "precondition: and the list still belongs to the same controller");
+    assert.deepEqual(tablePresentation(refetched), { kind: "options" });
   });
 });
 

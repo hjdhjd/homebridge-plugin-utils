@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { connectionFailureCopy, initialState, reducer } from "./state.mjs";
+import { connectionFailureCopy, controllerNoticeCopy, initialState, reducer } from "./state.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../featureOptions.js";
@@ -486,6 +486,21 @@ describe("connectionFailureCopy", () => {
 
     assert.equal(overridden.headline, connectionFailureCopy({ expired: false, site: "devices" }).headline,
       "what failed is the framework's to say, whoever wrote the remedy");
+  });
+});
+
+describe("controllerNoticeCopy", () => {
+
+  /* The one place the two sentences are written out. Every other suite reads them through this function so a reworded sentence cannot leave a stale copy of itself
+   * behind in an assertion...which means this row is the only thing standing between a swapped pair and a page that tells a user with devices in the sidebar that
+   * the controller has none. The words are what the user reads, so the contract is the words and which situation each one answers.
+   */
+  test("each situation gets the sentence that describes it", () => {
+
+    assert.equal(controllerNoticeCopy({ devicesListed: false }), "This controller has no devices to configure.",
+      "a controller that listed nothing has nothing to configure at any level");
+    assert.equal(controllerNoticeCopy({ devicesListed: true }), "Select a device to configure its options.",
+      "a controller that listed devices needs one of them picked, and saying it has none would be false");
   });
 });
 

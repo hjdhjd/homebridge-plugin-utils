@@ -4,8 +4,8 @@
  */
 "use strict";
 
+import { EMPTY_CATALOG, controllerNoticeCopy } from "./state.mjs";
 import { buildConfigIndex, expandOption, isDependencyMet, isValidChoice, isValueOption, resolveScope, selectValues } from "../featureOptions.js";
-import { EMPTY_CATALOG } from "./state.mjs";
 import { memoize } from "./store.mjs";
 
 /**
@@ -246,8 +246,8 @@ export const scopingControllerId = memoize({
 
 /**
  * TablePresentation - What the config-table surface shows. Tagged by `kind` because the variants are mutually exclusive answers to one question and each
- * carries exactly what rendering it needs: the empty variant carries the plugin's notice text, and the other two carry nothing because the DOM they imply is the
- * framework's own.
+ * carries exactly what rendering it needs: the empty variant carries the notice text, whichever of the plugin and the framework supplied it, and the other two
+ * carry nothing because the DOM they imply is the framework's own.
  *
  * @typedef {{kind: "empty", message: string} | {kind: "error"} | {kind: "options"}} TablePresentation
  */
@@ -261,15 +261,20 @@ export const scopingControllerId = memoize({
  * would be the page contradicting itself, and no amount of care at two call sites prevents that as reliably as having one answer.
  *
  * Precedence is the whole of the rule, evaluated top to bottom. A standing `connection-error` wins over everything: that view has taken the frame and owns the message,
- * and the table beneath it would be offering the options of a controller that never confirmed it could be reached. Next comes the nothing-to-list notice, which is a
+ * and the table beneath it would be offering the options of a controller that never confirmed it could be reached. Next comes the notice, which is a
  * per-controller-view presentation rather than a page state, which is why it is derived from the device facts here rather than carried as a status variant an unrelated
  * persist would destroy. Everything else is the ordinary table.
  *
- * The empty variant's gates each rule out a way the message could be shown where it does not belong. The controller-scope gate is what confines it to the
+ * The notice is what a settled controller view presents when the controller has no scoping identity. The row `ui.isController` names IS the controller's identity
+ * on this page, so a controller whose landed list holds no such row has nothing that controller-scope entries could be keyed by...offering the table there would
+ * let a user edit a page the sidebar presents as the controller's while every write lands at global scope. The copy is the plugin's `emptyMessage` where it named
+ * the situation for itself, and {@link controllerNoticeCopy} where it did not, which tells the user which of the two situations this is.
+ *
+ * Each of the gates rules out a way the notice could be shown where it does not belong. The controller-scope gate is what confines it to the
  * view it describes, and it is also why the variant is unreachable in device-only and global-only modes, whose scope is never a controller kind. The
  * `devicesControllerId` match is what keeps it honest across a navigation: a click away from a notice view moves the optimistic scope first, so for the busy window
- * before the new list lands the match fails and the presentation is the ordinary table, exactly as it is today for a click away from any other view. The message's
- * own non-null-ness is the plugin's declaration that this outcome was the empty one at all.
+ * before the new list lands the match fails and the presentation is the ordinary table, exactly as it is today for a click away from any other view. The identity
+ * is the gate that decides: a list carrying the named row gives the page a serial its edits key to, so its table stands.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {TablePresentation} What the config-table surface presents.
@@ -283,14 +288,14 @@ export const tablePresentation = memoize({
       return { kind: "error" };
     }
 
-    if((state.scope.kind === "controller") && (state.devicesEmptyMessage !== null) && (state.devicesControllerId === state.scope.controllerId)) {
+    if((state.scope.kind === "controller") && (state.devicesControllerId === state.scope.controllerId) && (scopingControllerId(state) === null)) {
 
-      return { kind: "empty", message: state.devicesEmptyMessage };
+      return { kind: "empty", message: state.devicesEmptyMessage ?? controllerNoticeCopy({ devicesListed: state.devices.length > 0 }) };
     }
 
     return { kind: "options" };
   },
-  slices: [ (s) => s.devicesControllerId, (s) => s.devicesEmptyMessage, (s) => s.scope, (s) => s.status ]
+  slices: [ (s) => s.catalog, (s) => s.devices, (s) => s.devicesControllerId, (s) => s.devicesEmptyMessage, (s) => s.scope, (s) => s.status ]
 });
 
 /**

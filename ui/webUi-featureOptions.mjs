@@ -113,9 +113,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * @typedef {Object} DeviceListResult
  * @property {Object[]} devices - The devices for the requested controller; empty when the probe failed or when the controller legitimately has none.
- * @property {string} [emptyMessage] - The user-facing notice for a controller that is reachable and healthy and simply has nothing to list, read only when both
- *   `devices` and `error` are empty. Supplying it IS the statement that this is that outcome, and the page presents the notice in place of the option table;
- *   omitting it preserves the older reading of an empty list, where the page rests at controller scope with the full table rendered. Meaningful in
+ * @property {string} [emptyMessage] - The notice copy for a controller that is reachable and healthy and simply has nothing to list, read only when both
+ *   `devices` and `error` are empty. It replaces the framework's own sentence on that view, where a controller with nothing to list presents a notice in place of
+ *   the option table either way, so supplying it is how a plugin says the thing in its own words rather than how it asks for the notice at all. Meaningful in
  *   controller-based mode only - a device-only or global-only page presents the global view, which is always editable and has no controller to have nothing
  *   beneath it.
  * @property {string} error - The user-facing connection-failure message: empty when the fetch succeeded, the failure text when the fetch failed and `devices` is empty.
@@ -145,7 +145,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {(controller: (Controller|null), args: { config: Object }) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's
  *   {@link DeviceListResult}. Called with the selected controller and an options bag carrying the live platform config. The result is where a plugin says which
  *   of the three outcomes this fetch was: a device list, a failure it may name with its own `headline` and `guidance`, or a reachable controller with nothing to
- *   list, which an `emptyMessage` both declares and supplies the notice copy for.
+ *   list, which an `emptyMessage` supplies the notice's copy for.
  * @property {boolean} [globalOnly=false] - Run the page as a single global-scope surface: no sidebar, no precedence header, and no device machinery. Scope is locked to
  *   global for the page's life (the reducer refuses any other scope in this mode), and the {@link FeatureOptionsConfig.infoPanel} callback always receives an undefined
  *   device. Mutually exclusive with `getControllers`, an explicitly supplied `getDevices`, and `statusPanel` - each throws a TypeError at construction. The `sidebar`
@@ -1043,9 +1043,9 @@ export class webUiFeatureOptions {
      * `isController` names continues to that row - read through the derivation a sidebar click reads, which is what lands both paths on one row.
      *
      * Every other case already rests where a click would leave it: device-only and global-only on global, where the initial state points, and a controller whose
-     * list came back empty or carries no such row on the controller's own view - which is where a notice, if the outcome supplied one, renders in place of that
-     * view's table. Nothing about the reveal below changes for those: the notice lives inside the config table's region, so it appears with the page rather than
-     * ahead of it, and the search panel's bars settled during the dispatch above.
+     * list came back empty or carries no such row on the controller's own view - which is where a notice renders in place of that view's table. Nothing about the
+     * reveal below changes for those: the notice lives inside the config table's region, so it appears with the page rather than ahead of it, and the search
+     * panel's bars settled during the dispatch above.
      */
     const deviceId = (initialController !== null) ? scopingControllerId(this.#store.state) : null;
 

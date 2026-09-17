@@ -596,6 +596,53 @@ logger: callers that need a CONCRETE logger but want no output default to it (e.
 
 ***
 
+### causeChain()
+
+```ts
+function causeChain(error): Generator<unknown, void, undefined>;
+```
+
+Yield a thrown value and then each link beneath it down its `cause` chain, ending at a link that carries no further cause or at a fixed depth.
+
+A wrapped failure presents what a caller needs below what it caught: a client wraps a transport error, a transport wraps a socket error, and the code or the
+sentence that explains the failure sits one or more links down. Every reader asking such a question descends the same chain, so the descent lives here once and
+the readers differ only in what they take from each link - the transport classifier gathers codes and cancellation markers, [formatErrorMessage](#formaterrormessage) gathers
+sentences.
+
+The depth bound is what makes the descent terminate at all: a chain that refers back to itself exhausts the bound, so no cycle bookkeeping has to exist.
+
+Every link is yielded verbatim, including a final one that is not an object, and what a link means is left to the reader: a plain object below an error is
+structured context whose meaning belongs to the code that attached it.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `error` | `unknown` | Whatever was thrown or rejected. Any value at all can be handed to it, including values that are not errors. |
+
+#### Returns
+
+`Generator`\<`unknown`, `void`, `undefined`\>
+
+A generator yielding the value handed in, then each `cause` beneath it.
+
+#### Example
+
+```ts
+import { causeChain } from "homebridge-plugin-utils";
+
+// The nearest errno the chain carries, wherever in it the transport left one.
+for(const link of causeChain(error)) {
+
+  if((typeof link === "object") && (link !== null) && ("code" in link) && (typeof link.code === "string")) {
+
+    return link.code;
+  }
+}
+```
+
+***
+
 ### composeSignals()
 
 ```ts
@@ -768,6 +815,17 @@ function formatErrorMessage(error): string;
 Render an arbitrary thrown value as a clean log-suffix string. Real `Error` instances surface their `.message`; everything else is coerced through `String(...)`.
 A trailing period is stripped in either case so the embedding log line (which itself ends in a period) does not produce ".." at the end of the rendered output.
 
+A wrapped failure carries its diagnosis below the sentence that was caught, so the rendering follows the [causeChain](#causechain) down and appends each further
+message after a colon. These rules decide what it appends:
+
+- Only an `Error` link contributes text. A cause that is a plain object is structured context for code to read - a code, a status, a response body - so
+  rendering it would print `[object Object]` at best and a secret at worst. Such a link contributes nothing and the descent continues below it, which is what
+  lets an error sitting under one still be rendered.
+- A link whose words the sentence already carries contributes nothing. A wrapper that builds its own message around its cause therefore names that cause once
+  rather than twice, and a rendering nested inside another stays stable.
+- The descent is bounded, which is what ends a chain that refers back to itself: such a chain repeats messages the sentence already holds, so the rule above
+  appends nothing and the bound stops the walk.
+
 #### Parameters
 
 | Parameter | Type | Description |
@@ -778,9 +836,9 @@ A trailing period is stripped in either case so the embedding log line (which it
 
 `string`
 
-The cleaned message ready to interpolate into a log format string.
+The cleaned message, carrying each further diagnosis the cause chain held, ready to interpolate into a log format string.
 
-#### Example
+#### Examples
 
 ```ts
 try {
@@ -790,6 +848,13 @@ try {
 
   log.error("Operation failed: %s.", formatErrorMessage(error));
 }
+```
+
+```ts
+// A bootstrap refusal wrapping the controller's own rejection renders both sentences: "Unable to fetch the bootstrap: the controller refused the request".
+const error = new Error("Unable to fetch the bootstrap", { cause: new Error("the controller refused the request.") });
+
+log.error("%s.", formatErrorMessage(error));
 ```
 
 ***

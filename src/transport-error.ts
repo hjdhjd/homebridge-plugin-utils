@@ -30,13 +30,7 @@
  *
  * @module
  */
-import { isTimeoutReason } from "./util.ts";
-
-/* How far down a `cause` chain a classification looks. Real chains are short - a client wraps a transport error, a transport wraps a socket error - and the depth is
- * what makes the walk terminate at all: a chain that refers back to itself simply exhausts the cap, so no separate cycle bookkeeping has to exist. Counted in
- * descents, so the thrown value itself is depth zero and this many links below it are still read.
- */
-const TRANSPORT_CAUSE_DEPTH = 8;
+import { causeChain, isTimeoutReason } from "./util.ts";
 
 // Everything one descent of a `cause` chain collects, and the whole of what the classification reads afterwards.
 interface CauseWalk {
@@ -51,7 +45,7 @@ interface CauseWalk {
   timedOut: boolean;
 }
 
-/* Descend the `cause` chain once, gathering every fact the classification needs on the way down.
+/* Read every fact the classification needs off one bounded descent of the `cause` chain, the same descent the library's error formatter reads for its sentences.
  *
  * One walk rather than one per question is what makes a wrapped failure classify as its bare equivalent does. A caller's own error type carrying a platform rejection
  * as its `cause` presents the timeout or cancellation marker one level down, so reading the names only at the top would classify the wrapper by what it is not, while
@@ -64,9 +58,7 @@ function walkCauses(error: unknown): CauseWalk {
 
   const walk: CauseWalk = { abortNamed: false, code: undefined, timedOut: false };
 
-  let link: unknown = error;
-
-  for(let depth = 0; depth <= TRANSPORT_CAUSE_DEPTH; depth++) {
+  for(const link of causeChain(error)) {
 
     if(isTimeoutReason(link)) {
 
@@ -78,24 +70,12 @@ function walkCauses(error: unknown): CauseWalk {
       walk.abortNamed = true;
     }
 
-    // Nothing below an object can carry either a code or a further link, so a non-object link ends the descent after its name checks above.
-    if((typeof link !== "object") || (link === null)) {
-
-      break;
-    }
-
-    // The nearest code wins, so once one is held the deeper ones are passed over.
-    if((walk.code === undefined) && ("code" in link) && (typeof link.code === "string")) {
+    // The nearest code wins, so once one is held the deeper ones are passed over. Only an object carries a code at all, and the descent ends on a link that is not
+    // one, so that link answers the name checks above and nothing further.
+    if((walk.code === undefined) && (typeof link === "object") && (link !== null) && ("code" in link) && (typeof link.code === "string")) {
 
       walk.code = link.code;
     }
-
-    if(!("cause" in link)) {
-
-      break;
-    }
-
-    link = link.cause;
   }
 
   return walk;

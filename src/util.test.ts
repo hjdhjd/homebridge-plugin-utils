@@ -1,14 +1,14 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, hasErrorCode, onAbort,
- * waitWithSignal, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
+ * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, hasErrorCode, causeChain,
+ * onAbort, waitWithSignal, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
  * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, consoleLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
  * formatPercent, formatErrorMessage, formatUrlHost, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
  */
-import { HbpuAbortError, Watchdog, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes, formatErrorMessage,
-  formatMs, formatPercent, formatSeconds, formatUrlHost, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter,
-  membershipDelta, onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream, takeLast, toStartCase, validateName,
-  waitWithSignal } from "./util.ts";
+import { HbpuAbortError, Watchdog, causeChain, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes,
+  formatErrorMessage, formatMs, formatPercent, formatSeconds, formatUrlHost, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason,
+  isTimeoutReason, loopFaultReporter, membershipDelta, onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
+  takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { RetryBackoff } from "./util.ts";
@@ -2527,6 +2527,165 @@ describe("formatErrorMessage", () => {
     // Some upstream error messages legitimately end with an ellipsis or a deliberate "..". The formatter's contract is "strip a single trailing period" - it is
     // not an ellipsis-canonicalizer. We assert this so a future refactor does not silently broaden the strip pattern.
     assert.equal(formatErrorMessage(new Error("ellipsis...")), "ellipsis..");
+  });
+
+  test("appends the message of an error carried as the cause, so a wrapper's diagnosis survives into the log line", () => {
+
+    // A client that wraps a transport rejection puts the sentence a reader needs one link below the sentence it caught. Rendering only the wrapper would log
+    // "Unable to fetch the bootstrap" and drop the reason the controller gave, which is the whole of what the operator is looking for.
+    const error = new Error("Unable to fetch the bootstrap", { cause: new Error("The controller refused the request: bad token.") });
+
+    assert.equal(formatErrorMessage(error), "Unable to fetch the bootstrap: The controller refused the request: bad token");
+  });
+
+  test("appends every link of a deeper chain in order, each with its own trailing period stripped", () => {
+
+    // Each link is rendered by the same rule the head is, so a chain reads as one sentence rather than as a head joined to raw messages.
+    const error = new Error("a", { cause: new Error("b.", { cause: new Error("c.") }) });
+
+    assert.equal(formatErrorMessage(error), "a: b: c", "every link contributes once, in chain order, with no doubled punctuation between them");
+  });
+
+  test("appends nothing for a cause whose words the rendered sentence already carries", () => {
+
+    // The log client builds its authentication failures by embedding formatErrorMessage(cause) in the message and setting that same value as the cause. Appending
+    // the cause unconditionally would log it twice, so a wrapper that quotes its own cause must render exactly as it would with no chain walk at all.
+    const error = new Error("Login could not reach the server: connect ECONNREFUSED.", { cause: new Error("connect ECONNREFUSED") });
+
+    assert.equal(formatErrorMessage(error), "Login could not reach the server: connect ECONNREFUSED");
+  });
+
+  test("appends nothing for a structured cause that is not an Error", () => {
+
+    // Causes in this library are routinely plain objects carrying diagnostic context for code to read - a close code, a status, a response body. String() would
+    // render one as "[object Object]", and anything richer would put whatever the object holds, credentials included, into a log line.
+    const error = new HbpuAbortError("closed", { cause: { code: 1006 } });
+
+    assert.equal(formatErrorMessage(error), "closed", "a structured cause contributes no text at all");
+  });
+
+  test("appends a link the sentence only partly carries, rather than treating the chain as already rendered", () => {
+
+    // Containment is decided per link, not once for the chain: the middle link here is already in the head's own message, while the innermost one is the new
+    // diagnosis and has to arrive. Skipping the rest of the chain after one contained link would lose it.
+    const error = new Error("outer: mid", { cause: new Error("mid", { cause: new Error("inner") }) });
+
+    assert.equal(formatErrorMessage(error), "outer: mid: inner");
+  });
+
+  test("renders a chain that refers back to itself once through, rather than repeating it", () => {
+
+    // A cycle is what the depth bound exists for. Every link after the first pass repeats a message the sentence already carries, so containment appends nothing
+    // and the bound ends the descent...no visited-set bookkeeping is needed for the rendering to terminate and stay readable.
+    const first = new Error("a");
+    const second = new Error("b", { cause: first });
+
+    first.cause = second;
+
+    assert.equal(formatErrorMessage(first), "a: b");
+  });
+
+  test("renders exactly the links the bounded descent yields and nothing below them", () => {
+
+    // The bound belongs to the descent, so this reads it from behavior rather than restating a number the test would have to be edited to follow: the rendering
+    // must carry precisely the messages causeChain yields for this input, and must stop short of a chain built far deeper than any plausible bound.
+    const messages: string[] = [];
+
+    for(let index = 0; index < 40; index++) {
+
+      messages.push("link " + String(index));
+    }
+
+    // Built from the deepest link upward, because an error's cause is fixed at construction.
+    let chained = new Error("deepest");
+
+    for(const message of messages.toReversed()) {
+
+      chained = new Error(message, { cause: chained });
+    }
+
+    const yielded = [...causeChain(chained)].filter((link) => link instanceof Error);
+    const rendered = formatErrorMessage(chained);
+
+    assert.equal(rendered, yielded.map((link) => link.message).join(": "), "the rendering carries one message per link the descent yielded, in order");
+    assert.ok([ ...messages, "deepest" ].join(": ").startsWith(rendered + ": "),
+      "the rendering is a strict prefix of the whole chain's join, ending at a link boundary, so the bound truncated it rather than the join being reordered");
+  });
+
+  test("appends nothing for a cause whose message is empty", () => {
+
+    // An empty string is contained in every sentence, so the containment rule already covers an error constructed with no message. We assert it so nobody adds a
+    // branch for a case the rule handles.
+    assert.equal(formatErrorMessage(new Error("a", { cause: new Error("") })), "a");
+  });
+
+  test("descends past a structured link to render an error below it", () => {
+
+    // A link that contributes no text still carries a chain beneath it. Ending the descent at the first non-Error link would hide the diagnosis a transport
+    // stashed under a context object.
+    const error = new Error("a", { cause: { cause: new Error("b") } });
+
+    assert.equal(formatErrorMessage(error), "a: b");
+  });
+});
+
+describe("causeChain", () => {
+
+  test("yields the value handed in, then each link beneath it, ending at a link that carries no cause", () => {
+
+    // The descent yields every link verbatim, including a final one that is not an object: a transport that rejects with a bare string below an error is a shape
+    // readers have to see for themselves, because only the reader knows whether a string link means anything to it.
+    const innermost = new Error("socket hang up", { cause: "ECONNRESET" });
+    const middle = new Error("the request failed", { cause: innermost });
+    const outer = new Error("unable to fetch", { cause: middle });
+
+    assert.deepEqual([...causeChain(outer)], [ outer, middle, innermost, "ECONNRESET" ]);
+  });
+
+  test("yields a value that carries no cause at all exactly once", () => {
+
+    const bare = new Error("nothing below this");
+
+    assert.deepEqual([...causeChain(bare)], [bare], "a bare error is a chain of one, so every reader sees the same single link");
+  });
+
+  test("yields a non-error value exactly once", () => {
+
+    assert.deepEqual([...causeChain("string-shaped failure")], ["string-shaped failure"]);
+    assert.deepEqual([...causeChain(null)], [null], "null is not descended into, and yielding it keeps a reader's per-link checks uniform");
+  });
+
+  test("stops at the bound on a chain deeper than it, yielding an unbroken run from the head down", () => {
+
+    // Built far deeper than any plausible bound, so the assertions read the bound from behavior. What has to hold is that the descent yields a contiguous prefix
+    // of the chain and stops: a reader gets the nearest links, never a gap in the middle.
+    const links: Error[] = [new Error("deepest")];
+
+    for(let index = 0; index < 40; index++) {
+
+      links.unshift(new Error("link " + String(index), { cause: links[0] }));
+    }
+
+    const yielded = [...causeChain(links[0])];
+
+    assert.ok(yielded.length < links.length, "a chain deeper than the bound must be cut short, which is what keeps the descent finite");
+    assert.deepEqual(yielded, links.slice(0, yielded.length), "the yielded links are the head and its nearest descendants, in order, with none skipped");
+  });
+
+  test("ends on a chain that refers back to itself, yielding its links in alternating order", () => {
+
+    // The bound is the whole of the cycle defense: with no visited-set and no cycle check, a self-referential chain simply exhausts the depth. This test hangs
+    // rather than fails if the bound is ever removed, which is itself the signal.
+    const first = new Error("a");
+    const second = new Error("b", { cause: first });
+
+    first.cause = second;
+
+    const yielded = [...causeChain(first)];
+
+    assert.ok(yielded.length > 2, "the descent follows the cycle rather than stopping at the first repeat, because it holds no visited set");
+    assert.deepEqual(yielded, Array.from({ length: yielded.length }, (_unused, index) => ((index % 2) === 0) ? first : second),
+      "the cycle is yielded in chain order until the bound ends it");
   });
 });
 

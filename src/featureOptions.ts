@@ -322,8 +322,8 @@ export interface ConfiguredOptionEntry {
  * {@link enumerateScopeEntries}, one record per reading an entry has at the identifier being asked about.
  *
  * A scope walk asks a different question than a per-option walk - "what did the user configure for this identity", across the whole catalog - so the option each
- * record names is the part {@link ConfiguredOptionEntry} has no room for. One raw entry can answer twice under two different options, where a hand-authored
- * legacy tail spells an id-and-value pair for one option and a scope of another at the same time.
+ * record names is the part {@link ConfiguredOptionEntry} has no room for. One raw entry reads at one identifier, so a walk of that identifier reports it once and
+ * a walk of any other reports it not at all.
  *
  * @property option - The catalog option the reading addresses, in the casing the entry carried. Every engine call that takes an option name folds case, so this
  *                    hands straight back to {@link FeatureOptions.setOption} or {@link FeatureOptions.scope}.
@@ -942,7 +942,8 @@ function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: s
 // grammar with the delimiter as ordinary value text,
 // keeping such an entry on the reading it was authored under. The legacy form, accepted for configurations hand-authored before the payload delimiter existed,
 // reads a multi-segment tail as an id followed by a value, and a single trailing segment as whatever the option's declared choices settle it to be - the global
-// value, the scope it names, or both at once where nothing settles it.
+// value, the scope it names, or both at once where nothing settles it. A multi-segment tail that is itself an address the arbitration assigns to a declared option
+// is that option's own entry rather than an id and a value, however a shorter value option's name happens to prefix it.
 //
 // Greedy longest-prefix matching against the value-option registry handles the case where a shorter value-centric option name is a prefix of a longer option in
 // the catalog - the longer match wins, so an entry like `Enable.Audio.Volume.50` (when both `Audio` and `Audio.Volume` are value-centric) is unambiguously parsed
@@ -1102,11 +1103,27 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
       parsed.value = extraOriginal;
     } else {
 
+      /* A tail the arbitration hands to a declared option is that option's own entry, however a shorter value option's name happens to prefix it. The composer
+       * spells a declared option's scoped entry as the option name plus one identifier and its global entry as the option name alone, so over a catalog carrying
+       * the boolean `Network.Mtu.Foo` beside the value option `Network.Mtu`, the tail of `Enable.Network.Mtu.Foo.B` is that boolean at the scope "B" - which is
+       * what the lookup index, the enumerators, and the writers all read it as. Such a tail genuinely spells two things at once: that entry, and the legacy
+       * id-and-value pair reading `Network.Mtu` at the scope "Foo" carrying the value "B". The declared option's reading is the one that stands, because the
+       * dotted form is the only spelling its entry has while the value reading has the "=" form to state itself outright...and because the normalizer trusts
+       * what this returns, taking the value reading would rewrite an entry the composer itself wrote.
+       *
+       * Only an option the value-option walk never considers can reach this check: the walk matches the longest value-option name first, so a value option whose
+       * name extends another's is parsed under its own name and reads as an id and a value there.
+       */
+      if(decodeKey(catalog, tail)) {
+
+        break;
+      }
+
       const idLower = extra.slice(0, separatorIndex);
       const valueOriginal = extraOriginal.slice(separatorIndex + 1);
 
-      // The id-and-value reading always registers on the index; it re-composes canonically only when the value carries content, because a rewrite has to
-      // re-read as exactly what it replaced and the canonical scoped spelling for a contentless payload holds only where the option declares a list.
+      // The id-and-value reading registers on the index; it re-composes canonically only when the value carries content, because a rewrite has to re-read as
+      // exactly what it replaced and the canonical scoped spelling for a contentless payload holds only where the option declares a list.
       if(hasValueContent(valueOriginal)) {
 
         parsed.canonicalEntry = composeEntry({ enabled, id: extraOriginal.slice(0, separatorIndex), option: optionOriginal, value: valueOriginal });
@@ -1470,29 +1487,29 @@ function decodeKey(catalog: CatalogIndex, key: string): { idLower: string; optio
   return ((optionKey in catalog.optionsByName) && keyAddressesOption({ catalog, key, optionKey })) ? { idLower: key.slice(lastDot + 1), optionKey } : undefined;
 }
 
-// Read what one parsed entry says at a scope: the value reading when its value key decodes to an address naming that scope, and the primary reading when the
-// primary key names it under an option the value reading does not already claim. This is enumerateConfiguredEntries' reading rule with the option left open, so
-// a scope walk and a per-option walk describe one entry alike. Zero, one, or two readings come back, and two only where a hand-authored legacy tail spells an
-// id-and-value pair for one option and a scope of another at once.
-function *readingsAtScope({ catalog, idLower, parsed }: {
+// Read what one parsed entry says at a scope: the value reading when its value key decodes to an address naming that scope, otherwise the primary reading when
+// the primary key names it under an option the value reading does not claim. This is enumerateConfiguredEntries' reading rule with the option left open, so a
+// scope walk and a per-option walk describe one entry alike - one entry, one reading, and none at all for an entry that says nothing at the identifier asked
+// about.
+function readingAtScope({ catalog, idLower, parsed }: {
 
   catalog: CatalogIndex;
   idLower: string;
   parsed: ParsedConfigEntry;
-}): Generator<{ key: string; optionKey: string; value?: string }, void, undefined> {
+}): { key: string; optionKey: string; value?: string } | undefined {
 
   const { primaryKey, value, valueKey, valueOnly } = parsed;
   const valueAddress = (valueKey === undefined) ? undefined : decodeKey(catalog, valueKey);
 
   if((valueKey !== undefined) && (valueAddress?.idLower === idLower)) {
 
-    yield { key: valueKey, optionKey: valueAddress.optionKey, value };
+    return { key: valueKey, optionKey: valueAddress.optionKey, value };
   }
 
   // A narrowed entry has no scope reading to report at all, the same short-circuit the per-option enumerator applies before it ever looks at the primary key.
   if(valueOnly) {
 
-    return;
+    return undefined;
   }
 
   const primaryAddress = decodeKey(catalog, primaryKey);
@@ -1503,8 +1520,10 @@ function *readingsAtScope({ catalog, idLower, parsed }: {
    */
   if((primaryAddress?.idLower === idLower) && (primaryAddress.optionKey !== valueAddress?.optionKey)) {
 
-    yield { key: primaryKey, optionKey: primaryAddress.optionKey };
+    return { key: primaryKey, optionKey: primaryAddress.optionKey };
   }
+
+  return undefined;
 }
 
 /**
@@ -1755,8 +1774,8 @@ export function applyClearOption(
  * This is the scope-level complement of {@link enumerateConfiguredEntries}: that one asks what a single option says everywhere, this one asks what a single
  * identity has configured across the whole catalog, which is the question a consumer sweeping a controller it no longer manages is actually asking.
  *
- * Yields one {@link ConfiguredScopeEntry} per reading, in the order the entries appear in the array, and nothing at all for an identity nobody configured. A
- * single entry answers twice where a hand-authored legacy tail spells an id-and-value pair for one option and a scope of another; the value reading comes first,
+ * Yields one {@link ConfiguredScopeEntry} per entry reading at the identity, in the order the entries appear in the array, and nothing at all for an identity
+ * nobody configured. An entry has one reading at most - the value reading where the address its value sits at names the identity, the primary reading otherwise -
  * exactly as the per-option enumerator weighs the two.
  *
  * The reading rule is {@link enumerateConfiguredEntries}' own, which is what lets a consumer's sweep and the scope transforms beside this agree entry for entry.
@@ -1810,16 +1829,22 @@ export function *enumerateScopeEntries({ catalog, configuredOptions, id }: {
       continue;
     }
 
-    for(const { key, optionKey, value } of readingsAtScope({ catalog, idLower, parsed })) {
+    const reading = readingAtScope({ catalog, idLower, parsed });
 
-      // The identifier and the option name are handed back in the casing the entry carried, the same "show back what the user typed" rule the per-option
-      // enumerator follows. A reading carrying no value omits the property rather than carrying an undefined one, so a boolean record compares equal to the
-      // shape a caller writes out.
-      const entry: ConfiguredScopeEntry = { enabled: parsed.enabled, id: originalId({ key, optionKey, tailOriginal: parsed.tailOriginal }),
-        option: parsed.tailOriginal.slice(0, optionKey.length) };
+    if(!reading) {
 
-      yield (value === undefined) ? entry : { ...entry, value };
+      continue;
     }
+
+    const { key, optionKey, value } = reading;
+
+    // The identifier and the option name are handed back in the casing the entry carried, the same "show back what the user typed" rule the per-option
+    // enumerator follows. A reading carrying no value omits the property rather than carrying an undefined one, so a boolean record compares equal to the
+    // shape a caller writes out.
+    const entry: ConfiguredScopeEntry = { enabled: parsed.enabled, id: originalId({ key, optionKey, tailOriginal: parsed.tailOriginal }),
+      option: parsed.tailOriginal.slice(0, optionKey.length) };
+
+    yield (value === undefined) ? entry : { ...entry, value };
   }
 }
 
@@ -1829,10 +1854,9 @@ export function *enumerateScopeEntries({ catalog, configuredOptions, id }: {
  * call rather than walking the catalog option by option.
  *
  * What counts as "at the scope" is {@link enumerateScopeEntries}' reading, so this and the sweep a consumer runs through that enumerator agree entry for entry.
- * The raw entry is the unit: an entry that answers twice - a hand-authored legacy tail spelling an id-and-value pair for one option and a scope of another - is
- * dropped whole when either reading names the scope, exactly as {@link applyClearOption} drops such an entry whole. That is the graceful degradation a shape only
- * a hand-authored configuration can produce is owed, and the alternative of rewriting the entry to carry just one of its two readings would settle, on the user's
- * behalf, an ambiguity only the user can settle.
+ * The raw entry is the unit: an entry whose reading names the scope is dropped whole, exactly as {@link applyClearOption} drops such an entry whole, and an entry
+ * reading at another identity or at none at all is left exactly as the user wrote it. Nothing is rewritten to carry part of what it said, which would settle, on
+ * the user's behalf, a reading only the user can settle.
  *
  * An empty identifier addresses nothing and answers the input reference untouched. Nothing here throws: an identifier the address grammar has no spelling for
  * simply matches nothing, and an entry whose key the catalog claims as an option in its own right is at no scope at all by the arbitration.
@@ -1858,13 +1882,13 @@ export function applyClearScope(
     return configuredOptions;
   }
 
-  // One parse per entry, and one reading is enough to settle it: the first thing the reader has to say about an entry drops it, so the rest of the generator is
-  // never pulled.
+  // One parse per entry, and the reader's answer settles it: an entry whose reading names the identity is forgotten, and an entry reading at another identity or
+  // at none at all survives.
   const filtered = configuredOptions.filter((rawEntry) => {
 
     const parsed = parseEntry(catalog, rawEntry);
 
-    return !parsed || (readingsAtScope({ catalog, idLower, parsed }).next().done === true);
+    return !parsed || (readingAtScope({ catalog, idLower, parsed }) === undefined);
   });
   const normalized = normalizeConfiguredOptions(catalog, filtered);
 

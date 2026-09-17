@@ -2023,6 +2023,34 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
     assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream" })],
       [{ enabled: true, id: "", value: "High" }], "the one record the entry yields is the value reading");
   });
+
+  test("the deprecation-window catalog's scoped entry is the boolean's, not an id and a value for the option its name extends", () => {
+
+    /* The same catalog one row up, asked about a scoped entry rather than a global one. The composer spells the boolean's scoped entry as the option name plus
+     * one identifier, so `Enable.Video.Stream.High.ABC` is that boolean at the identity ABC and every reader says so. The same tail also spells the legacy
+     * id-and-value pair Video.Stream at "High" carrying "ABC", and the boolean's reading is the one that stands, because the dotted form is the only spelling
+     * its entry has...so a save leaves the entry exactly where the plugin's own writer put it.
+     */
+    const categories: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Video: [
+
+        { choices: PIN_CHOICES, default: false, defaultValue: "Medium", description: "Stream quality selection.", name: "Stream" },
+        { default: false, description: "The boolean option whose name a declared member also spells.", name: "Stream.High" }
+      ]
+    };
+    const configured = ["Enable.Video.Stream.High.ABC"];
+    const catalog = buildCatalogIndex(categories, options);
+    const fo = new FeatureOptions(categories, structuredClone(options), [...configured]);
+
+    assert.equal(normalizeConfiguredOptions(catalog, configured), configured, "a save finds nothing to rewrite, so the input reference comes back");
+    assert.equal(fo.test("Video.Stream.High", "ABC"), true, "the boolean resolves at the identity the entry names");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream" })], [],
+      "the value option the boolean's name extends has nothing configured");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream.High" })], [{ enabled: true, id: "ABC" }],
+      "and the one record the entry yields is the boolean at that identity");
+  });
 });
 
 // Saving a configuration also modernizes it. The mutation transforms run their results through the normalizer, so entries still in the legacy form are rewritten
@@ -2132,6 +2160,77 @@ describe("FeatureOptions - normalization on save", () => {
 
     assert.deepEqual(once, [ "Enable.Motion.SmartDetect=", "Enable.Motion.SmartDetect.ABC123=" ], "both empty-selection entries are already canonical");
     assert.equal(normalizeConfiguredOptions(catalog, once), once, "a second pass finds nothing to change and returns the same reference");
+  });
+
+  test("a boolean nested under a value option's name keeps its scoped entry across a save", () => {
+
+    /* The round trip a plugin's own writer makes through the storage format, over the catalog it holds while converting boolean toggles into one value option:
+     * the composer spells the boolean's scoped entry as the option name plus one identifier, and the parser reads that tail back as the boolean at that
+     * identifier. Were the legacy id-and-value reading of the same tail taken instead - Network.Mtu at "Foo" carrying "B" - the save would rewrite what the
+     * writer had just composed, the engine contradicting itself about an entry it wrote.
+     */
+    const mtuCategories: FeatureCategoryEntry[] = [{ description: "Network Options", name: "Network" }];
+    const mtuOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Network: [ { default: false, defaultValue: "1500", description: "Override MTU size.", name: "Mtu" },
+        { default: false, description: "A boolean option nested under the value option's name.", name: "Mtu.Foo" } ]
+    };
+    const catalog = buildCatalogIndex(mtuCategories, mtuOptions);
+    const written = applySetOption({ args: { enabled: true, id: "B", option: "Network.Mtu.Foo" }, catalog, configuredOptions: [] });
+
+    assert.deepEqual(written, ["Enable.Network.Mtu.Foo.B"], "the writer composes the boolean's scoped entry as the option name plus the identifier");
+    assert.equal(normalizeConfiguredOptions(catalog, written), written, "a save finds nothing to rewrite in it, so the input reference comes back");
+
+    const fo = new FeatureOptions(mtuCategories, structuredClone(mtuOptions), [...written]);
+
+    assert.equal(fo.test("Network.Mtu.Foo", "B"), true, "the boolean resolves at the identity it was written at");
+    assert.equal(fo.test("Network.Mtu.Foo"), false, "and nowhere else");
+    assert.equal(fo.value("Network.Mtu"), null, "while the value option whose name it extends carries no value at all");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: written, option: "Network.Mtu.Foo" })], [{ enabled: true, id: "B" }],
+      "the enumeration reports the one record against the boolean");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: written, option: "Network.Mtu" })], [],
+      "and nothing against the value option, which is what agreeing with the index means here");
+  });
+
+  test("a dotted tail that is a declared option's own name is that option's global entry", () => {
+
+    // The other address the arbitration assigns: the whole tail is a declared option's name, so the entry is that option enabled globally rather than a shorter
+    // value option carrying an id and a value. Two trailing segments make it a shape only the address grammar can settle.
+    const mtuCategories: FeatureCategoryEntry[] = [{ description: "Network Options", name: "Network" }];
+    const mtuOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Network: [ { default: false, defaultValue: "1500", description: "Override MTU size.", name: "Mtu" },
+        { default: false, description: "A boolean option two segments below the value option's name.", name: "Mtu.Foo.Bar" } ]
+    };
+    const catalog = buildCatalogIndex(mtuCategories, mtuOptions);
+    const configured = ["Enable.Network.Mtu.Foo.Bar"];
+    const fo = new FeatureOptions(mtuCategories, structuredClone(mtuOptions), [...configured]);
+
+    assert.equal(normalizeConfiguredOptions(catalog, configured), configured, "a save leaves the entry as written, so the input reference comes back");
+    assert.equal(fo.test("Network.Mtu.Foo.Bar"), true, "the boolean the tail names is what the entry enables");
+    assert.equal(fo.value("Network.Mtu", "Foo"), null, "so the value option's identity named Foo carries nothing");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Network.Mtu" })], [],
+      "and the value option has nothing configured at all");
+  });
+
+  test("a value option whose name extends another value option's reads and saves as an id and a value", () => {
+
+    // The greedy walk matches the longest value-option name first, so a value option nested under a value option reaches the legacy reading under its own name
+    // and its dotted tail is an id followed by a value. Each entry modernizes into the canonical spelling exactly as any value option's legacy entry does.
+    const occupancyCategories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
+    const occupancyOptions: Record<string, FeatureOptionEntry[]> = {
+
+      Motion: [ { default: false, defaultValue: "1", description: "Occupancy sensor.", name: "Occupancy" },
+        { default: false, defaultValue: "300", description: "Occupancy sensor duration.", name: "Occupancy.Duration" } ]
+    };
+    const catalog = buildCatalogIndex(occupancyCategories, occupancyOptions);
+    const configured = [ "Enable.Motion.Occupancy.Duration.devA.600", "Enable.Motion.Occupancy.devB.5" ];
+    const fo = new FeatureOptions(occupancyCategories, structuredClone(occupancyOptions), [...configured]);
+
+    assert.equal(fo.value("Motion.Occupancy.Duration", "devA"), "600", "the longer value option reads its own id and value");
+    assert.equal(fo.value("Motion.Occupancy", "devB"), "5", "and the shorter one reads its own");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, configured), [ "Enable.Motion.Occupancy.Duration.devA=600", "Enable.Motion.Occupancy.devB=5" ],
+      "so a save modernizes both into the canonical spelling rather than leaving either to the address grammar");
   });
 });
 
@@ -2709,10 +2808,10 @@ describe("FeatureOptions - pure functional core", () => {
         "where the per-option clear, faithful to the index it writes, drops it");
     });
 
-    test("an entry answering at two identities is dropped whole when either reading names the one being forgotten", () => {
+    test("an entry the arbitration assigns to a longer declared option is forgotten at the identity that option's entry names", () => {
 
-      // The raw entry is the unit here exactly as it is for the per-option clear. Only a hand-authored legacy tail can produce an entry with two live readings,
-      // and rewriting one to carry just the other would settle, on the user's behalf, an ambiguity only the user can settle.
+      // The raw entry is the unit here exactly as it is for the per-option clear. The tail spells the boolean's scoped address, so the entry is that boolean at
+      // Def whatever shorter value option's name prefixes it, and forgetting Def forgets the entry whole.
       const mtuCategories: FeatureCategoryEntry[] = [{ description: "Network Options", name: "Network" }];
       const mtuOptions: Record<string, FeatureOptionEntry[]> = {
 
@@ -2722,7 +2821,7 @@ describe("FeatureOptions - pure functional core", () => {
 
       assert.deepEqual(applyClearScope({ args: { id: "Def" }, catalog: buildCatalogIndex(mtuCategories, mtuOptions),
         configuredOptions: ["Enable.Network.Mtu.Override.Abc.Def"] }), [],
-      "the reading at Def names the identity, so the entry goes even though its other reading names a different one");
+      "the entry reads at Def as the boolean its tail names, so forgetting Def forgets the entry");
     });
   });
 
@@ -3421,12 +3520,12 @@ describe("FeatureOptions - enumerateScopeEntries", () => {
     "\"on, with nothing selected\" is a state the list can be in, and it reads back at the identity as one");
   });
 
-  test("one entry answers at two identities where its tail spells an id-and-value pair for one option and an identity of another", () => {
+  test("a tail the arbitration assigns to a longer declared option is that option's entry at the identity its last segment names", () => {
 
-    /* The shape a catalog produces when one option's expanded name extends a value option's: the greedy prefix match reads the tail as Network.Mtu at the
-     * identity "Override" carrying "Abc.Def", while the raw tail is the longer boolean option at the identity "Def". Both readings are live on the lookup
-     * index, and the walk has to report each at the identity it names, which is why the reader consults the primary key after the value key rather than
-     * stopping at the first reading that decodes.
+    /* The shape a catalog produces when one option's expanded name extends a value option's. The composer spells the boolean's scoped entry as its own name plus
+     * one identifier, which is exactly what this tail is, so the entry is Network.Mtu.Override.Abc at "Def". The same tail also spells the legacy id-and-value
+     * pair Network.Mtu at "Override" carrying "Abc.Def", and the declared option's reading is the one the engine takes, so nothing reads at Override at all. The
+     * scope verbs follow that reading: a move from Def carries the boolean to the destination, while a move or a clear at Override finds nothing to do.
      */
     const mtuCategories: FeatureCategoryEntry[] = [{ description: "Network Options", name: "Network" }];
     const mtuOptions: Record<string, FeatureOptionEntry[]> = {
@@ -3439,13 +3538,15 @@ describe("FeatureOptions - enumerateScopeEntries", () => {
 
     assert.deepEqual([...enumerateScopeEntries({ catalog: mtuCatalog, configuredOptions, id: "def" })],
       [{ enabled: true, id: "Def", option: "Network.Mtu.Override.Abc" }], "the raw tail is the longer option at the identity its last segment names");
-    assert.deepEqual([...enumerateScopeEntries({ catalog: mtuCatalog, configuredOptions, id: "override" })],
-      [{ enabled: true, id: "Override", option: "Network.Mtu", value: "Abc.Def" }], "and the value reading is the shorter option at the identity ahead of its value");
+    assert.deepEqual([...enumerateScopeEntries({ catalog: mtuCatalog, configuredOptions, id: "override" })], [],
+      "and the value option whose name that one extends has nothing configured at the identity ahead of the rest");
 
-    // Moving one of the identities this entry answers at carries the reading that names it, in the destination's canonical spelling, and the source entry goes
-    // with it because the reading that moved was the only thing it had to say at Override.
-    assert.deepEqual(applyMoveScope({ args: { from: "Override", to: "B" }, catalog: mtuCatalog, configuredOptions }), ["Enable.Network.Mtu.B=Abc.Def"],
-      "the move carries the value reading to the destination, the source entry going with it");
+    assert.deepEqual(applyMoveScope({ args: { from: "Def", to: "B" }, catalog: mtuCatalog, configuredOptions }), ["Enable.Network.Mtu.Override.Abc.B"],
+      "a move from the identity the entry reads at carries the boolean to the destination in its own spelling");
+    assert.equal(applyMoveScope({ args: { from: "Override", to: "B" }, catalog: mtuCatalog, configuredOptions }), configuredOptions,
+      "a move from an identity the entry says nothing at answers the input reference");
+    assert.equal(applyClearScope({ args: { id: "Override" }, catalog: mtuCatalog, configuredOptions }), configuredOptions,
+      "and a clear there leaves the entry exactly as the user wrote it");
   });
 });
 

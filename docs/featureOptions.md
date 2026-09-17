@@ -96,8 +96,8 @@ One configured entry's reading at a scope: the option it addresses, beside every
 [enumerateScopeEntries](#enumeratescopeentries), one record per reading an entry has at the identifier being asked about.
 
 A scope walk asks a different question than a per-option walk - "what did the user configure for this identity", across the whole catalog - so the option each
-record names is the part [ConfiguredOptionEntry](#configuredoptionentry) has no room for. One raw entry can answer twice under two different options, where a hand-authored
-legacy tail spells an id-and-value pair for one option and a scope of another at the same time.
+record names is the part [ConfiguredOptionEntry](#configuredoptionentry) has no room for. One raw entry reads at one identifier, so a walk of that identifier reports it once and
+a walk of any other reports it not at all.
 
 #### Extends
 
@@ -309,8 +309,8 @@ Enumerate every configured entry that says something at one scope identifier, wh
 This is the scope-level complement of [enumerateConfiguredEntries](#enumerateconfiguredentries): that one asks what a single option says everywhere, this one asks what a single
 identity has configured across the whole catalog, which is the question a consumer sweeping a controller it no longer manages is actually asking.
 
-Yields one [ConfiguredScopeEntry](#configuredscopeentry) per reading, in the order the entries appear in the array, and nothing at all for an identity nobody configured. A
-single entry answers twice where a hand-authored legacy tail spells an id-and-value pair for one option and a scope of another; the value reading comes first,
+Yields one [ConfiguredScopeEntry](#configuredscopeentry) per entry reading at the identity, in the order the entries appear in the array, and nothing at all for an identity
+nobody configured. An entry has one reading at most - the value reading where the address its value sits at names the identity, the primary reading otherwise -
 exactly as the per-option enumerator weighs the two.
 
 The reading rule is [enumerateConfiguredEntries](#enumerateconfiguredentries)' own, which is what lets a consumer's sweep and the scope transforms beside this agree entry for entry.
@@ -1724,10 +1724,9 @@ scope-level complement of [applyClearOption](#applyclearoption): a consumer swee
 call rather than walking the catalog option by option.
 
 What counts as "at the scope" is [enumerateScopeEntries](#enumeratescopeentries)' reading, so this and the sweep a consumer runs through that enumerator agree entry for entry.
-The raw entry is the unit: an entry that answers twice - a hand-authored legacy tail spelling an id-and-value pair for one option and a scope of another - is
-dropped whole when either reading names the scope, exactly as [applyClearOption](#applyclearoption) drops such an entry whole. That is the graceful degradation a shape only
-a hand-authored configuration can produce is owed, and the alternative of rewriting the entry to carry just one of its two readings would settle, on the user's
-behalf, an ambiguity only the user can settle.
+The raw entry is the unit: an entry whose reading names the scope is dropped whole, exactly as [applyClearOption](#applyclearoption) drops such an entry whole, and an entry
+reading at another identity or at none at all is left exactly as the user wrote it. Nothing is rewritten to carry part of what it said, which would settle, on
+the user's behalf, a reading only the user can settle.
 
 An empty identifier addresses nothing and answers the input reference untouched. Nothing here throws: an identifier the address grammar has no spelling for
 simply matches nothing, and an entry whose key the catalog claims as an option in its own right is at no scope at all by the arbitration.

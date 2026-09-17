@@ -203,24 +203,25 @@ export const selectedController = memoize({
  *
  * A plugin may carry two distinct controller identities, and the framework holds both. The NAVIGATION identity is the serial its `getControllers` hook puts on
  * the sidebar link, which {@link selectedControllerId} reads off the scope tag; it has to exist before any connection succeeds, since a controller the page
- * cannot reach still has to appear in the list, so a plugin often names it by something configuration alone supplies, such as the address. The SCOPING identity
- * is the serial its controller-scope entries are keyed by, which the connection is what reveals - the same serial the plugin stamps on the controller's own row
- * in the device list.
+ * cannot reach still has to appear in the list, so a plugin often names it by something configuration alone supplies, such as the address. It names the
+ * controller as a place and keys nothing. The SCOPING identity is the serial its controller-scope entries are keyed by, which the connection is what reveals -
+ * the same serial the plugin stamps on the controller's own row in the device list.
  *
- * The framework recovers the second without asking the plugin for anything it does not already declare. The loaded device list carries the controller-as-device
- * row, and `ui.isController` is the plugin's own statement of which row that is, so that row's serialNumber IS the scoping identity. Everything that resolves
- * configuration reads it: the scope walk and the dependency probe in {@link projection}, the controller-page predicate, and the tri-state machine's
+ * The row `ui.isController` names IS the controller's identity on this page, and the framework asks the plugin for nothing beyond that declaration: the loaded
+ * device list carries the controller-as-device row, `ui.isController` states which row that is, and that row's serialNumber is the answer here. Everything that
+ * resolves configuration reads it: the scope walk and the dependency probe in {@link projection}, the controller-page predicate, and the tri-state machine's
  * upstream-override probe. Everything that names or highlights the controller as a place reads the navigation identity, because those consumers are addressing
  * the sidebar rather than the configuration.
  *
  * The device-list guard is what keeps the derivation honest across a navigation: the list is consulted only while it belongs to the controller currently in
- * scope, which `devicesControllerId` answers. In the window where a click has moved the scope but the incoming list has not landed, the navigation identity
- * stands in...a momentarily coarser answer, and never some other controller's.
+ * scope, which `devicesControllerId` answers. In the window where a click has moved the scope but the incoming list has not landed, the list on hand answers
+ * for a different controller, so it is not read at all.
  *
- * The fallbacks are the compatibility contract. No controller in scope - the global view, device-only mode, global-only mode - is null, which is also why a
- * page with no controller machinery never reaches `isController` at all. No controller-as-device row - a plugin that supplies no validator, or a device list
- * that carries none - is the navigation identity, which is the serial a single-identity plugin resolves by anyway, so such a plugin cannot observe this
- * derivation. When more than one row answers to `isController`, the first in list order wins: one controller in scope, one page, one identity.
+ * Null says one thing wherever it appears: there is no row to read, so the controller has no identity here. No controller in scope - the global view,
+ * device-only mode, global-only mode - is null, which is also why a page with no controller machinery never reaches `isController` at all; so is the
+ * not-landed window above; and so is a list in which no row answers to `isController`. That last case is the whole of it: a controller without a named row has
+ * no controller scope on this page, because nothing can write controller-scope entries through a page that has no controller row to present them on. When more
+ * than one row answers, the first in list order wins: one controller in scope, one page, one identity.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {string | null} The controller's scoping identity, or null when no controller is in scope.
@@ -231,17 +232,14 @@ export const scopingControllerId = memoize({
 
     const navigationId = selectedControllerId(state);
 
-    if(navigationId === null) {
+    // The loaded list can only answer for the controller it belongs to. With no controller in scope, or in the window where a click has moved the scope but the
+    // new list has not landed, there is no row to read and the controller has no identity here yet.
+    if((navigationId === null) || (state.devicesControllerId !== navigationId)) {
 
       return null;
     }
 
-    if(state.devicesControllerId !== navigationId) {
-
-      return navigationId;
-    }
-
-    return state.devices.find((device) => state.catalog.validators.isController(device))?.serialNumber ?? navigationId;
+    return state.devices.find((device) => state.catalog.validators.isController(device))?.serialNumber ?? null;
   },
   slices: [ (s) => s.catalog, (s) => s.devices, (s) => s.devicesControllerId, (s) => s.scope ]
 });

@@ -381,7 +381,9 @@ describe("mountNavView - click dispatch", () => {
 
       return { devices: fetchedDevices, error: "" };
     };
-    const { rootControllers, store } = setup({ getDevices });
+    // The fetched list carries the controller's own row, which is what gives the click somewhere to land: the predicate names it, and its serial is the identity
+    // the landing reads.
+    const { rootControllers, store } = setup({ getDevices, isController: (device) => device.serialNumber === "ctrl-a-d1" });
     const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
 
     ctrlLink.click();
@@ -393,6 +395,39 @@ describe("mountNavView - click dispatch", () => {
     assert.equal(fetched.serialNumber, "ctrl-a");
     assert.deepEqual(store.state.devices, fetchedDevices);
     assert.equal(store.state.scope.kind, "device", "scope moves to the controller-as-device entry");
+    assert.equal(store.state.scope.deviceId, "ctrl-a-d1", "and settles on the row the plugin names as the controller's own");
+  });
+
+  test("clicking a controller lands on the row isController names even when the list does not lead with it", async () => {
+
+    using dom = createTestDom();
+
+    // The list arrives with a managed device ahead of the controller's own row, the arrangement that would defeat a selection reading position rather than the
+    // declaration: what names the row is the plugin's predicate, not the place it occupies.
+    const getDevices = async () => ({ devices: [ DEVICES[0], DEVICES[1] ], error: "" });
+    const { rootControllers, store } = setup({ getDevices, isController: (device) => device.serialNumber === "dev-b" });
+
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(store.state.scope.deviceId, "dev-b", "the declared controller row is the selection");
+  });
+
+  test("clicking a controller whose list carries no controller row rests on the controller view", async () => {
+
+    using dom = createTestDom();
+
+    // The framework default calls nothing a controller, so this list names no row for the controller to be identified by. There is nothing to select, and the
+    // optimistic controller scope the click already set is where the page rests - the same resting place an empty list gets.
+    const getDevices = async () => ({ devices: [ DEVICES[0], DEVICES[1] ], error: "" });
+    const { rootControllers, store } = setup({ getDevices });
+
+    rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.deepEqual(store.state.devices, [ DEVICES[0], DEVICES[1] ], "the fetched list lands regardless");
+    assert.equal(store.state.scope.kind, "controller", "the selection rests on the controller's own view");
+    assert.equal(store.state.scope.deviceId, undefined, "with no device selected");
   });
 
   test("clicking a controller whose getDevices carries an error dispatches devices:loaded with that error, and the reducer moves the status to " +
@@ -497,7 +532,9 @@ describe("mountNavView - click dispatch", () => {
 
       return deferred.promise;
     };
-    const { rootControllers, store } = setup({ getDevices });
+
+    // Both outcomes carry a list whose row the predicate names, so each click has a landing to reach and the settled scope names which outcome got there.
+    const { rootControllers, store } = setup({ getDevices, isController: (device) => [ "dev-a", "dev-b" ].includes(device.serialNumber) });
 
     rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']").click();
     rootControllers.querySelector(".nav-link[data-device-serial='ctrl-b']").click();
@@ -560,7 +597,9 @@ describe("mountNavView - click dispatch", () => {
 
       return deferred.promise;
     };
-    const { rootControllers, store } = setup({ getDevices });
+
+    // Each outcome carries a list whose row the predicate names, so the settled selection is what tells the two clicks' outcomes apart.
+    const { rootControllers, store } = setup({ getDevices, isController: (device) => [ "dev-a", "dev-b" ].includes(device.serialNumber) });
     const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
 
     ctrlLink.click();

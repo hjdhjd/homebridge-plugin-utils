@@ -711,10 +711,12 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
     ctrlBLink.click();
     await flush();
 
-    // The click's outcome applied: the sidebar shows CTRL-B's device and highlights it.
+    // The click's outcome applied: the sidebar shows CTRL-B's device, and the selection rests on CTRL-B's own view. Neither controller's list names a controller row,
+    // so neither click has a row to select, and the outlined and active controller is what says whose outcome owns the store.
     assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-B']"), "the click's device (DEV-B) must render in the sidebar");
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "DEV-B",
-      "the click's controller-as-device scope must be the active selection");
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").classList.contains("active"), true,
+      "the click's controller scope must be the active selection");
+    assert.ok(skeleton.devicesContainer.querySelector(".nav-link.active") === null, "and no device link is active, since the click's list named no controller row");
 
     // Release the initial CTRL-A fetch. Its outcome carries the superseded sequence, so the reducer drops it and show() returns on the `devicesAppliedSeq` gate.
     releaseInitial();
@@ -725,8 +727,10 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
     // because show() returned before revealRegions - the click owns presentation, not the superseded initial flow).
     assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-A']") === null, "show()'s superseded outcome must not render its device (DEV-A)");
     assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-B']"), "the click's device must remain after the stale outcome dropped");
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "DEV-B",
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").classList.contains("active"), true,
       "show()'s initial scope dispatch must not overwrite the click's selection");
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']").classList.contains("active"), false,
+      "and the superseded controller is not the selection");
     assert.equal(skeleton.sidebar.style.display, "none", "the reveal bail: show() returned before revealRegions on its superseded outcome");
 
     orchestrator.cleanup();
@@ -1874,7 +1878,8 @@ describe("webUiFeatureOptions - device info panel", () => {
   test("the default device-info renderer populates the panel for a specific device view", async () => {
 
     // The default info-panel handler reads firmware/manufacturer/model/serial off the device and renders a stats grid. We exercise it by setting up a controller-mode
-    // orchestrator (where device views are first-class), navigating into the controller view, then asserting the panel is populated.
+    // orchestrator whose device list carries the controller's own row - the row its `ui.isController` names, which is where the boot's selection lands - then
+    // asserting the panel is populated for that view.
     using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
@@ -1891,13 +1896,14 @@ describe("webUiFeatureOptions - device info panel", () => {
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
-      getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" })
+      getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      ui: { isController: (device) => device.serialNumber === "CTRL-1" }
     });
 
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // The orchestrator landed on the controller's device view by default - the panel should carry the device's metadata.
+    // The orchestrator landed on the controller's own row by default - the panel should carry that device's metadata.
     const panelText = skeleton.deviceStatsContainer.textContent;
 
     assert.match(panelText, /1\.2\.3/, "panel must include the firmware revision");
@@ -1929,7 +1935,8 @@ describe("webUiFeatureOptions - device info panel", () => {
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
-      getDevices: () => ({ devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" })
+      getDevices: () => ({ devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
+      ui: { isController: (device) => device.serialNumber === "CTRL-1" }
     });
 
     await orchestrator.show(await openTestSession());
@@ -1986,7 +1993,8 @@ describe("webUiFeatureOptions - device info panel", () => {
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
-      infoPanel
+      infoPanel,
+      ui: { isController: (device) => device.serialNumber === "CTRL-1" }
     });
 
     await orchestrator.show(await openTestSession());
@@ -2135,6 +2143,43 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
     assert.equal(entry.classList.contains("active"), true, "the controller is the resting selection, which is where its own click leaves the page");
     assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), false, "so Global is not the selection");
     assert.ok(skeleton.devicesContainer.querySelector(".nav-link.active") === null, "and no device is selected, since the controller returned none");
+
+    orchestrator.cleanup();
+  });
+
+  test("a boot whose device list carries the controller row behind a managed device still selects that row", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    // The controller's own row sits between two managed devices, the arrangement that would defeat a selection reading position rather than the declaration. The
+    // plugin's `isController` names the row, and the boot reads the same derivation a click on that controller reads, so the page opens on the row the
+    // controller's own scope resolves from.
+    const controllerEntry = { address: "10.0.0.1", name: "Main Controller", serialNumber: "CTRL-A" };
+    const controllerAsDevice = { firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: "Main Controller", serialNumber: "CTRL-A" };
+    const deviceA = { firmwareRevision: "2.0", manufacturer: "Acme", model: "Cam", name: "Front Door", serialNumber: "DEV-A" };
+    const deviceB = { firmwareRevision: "2.0", manufacturer: "Acme", model: "Cam", name: "Side Door", serialNumber: "DEV-B" };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [controllerEntry], error: "" }),
+      getDevices: async () => ({ devices: [ deviceA, controllerAsDevice, deviceB ], error: "" }),
+      ui: { isController: (device) => device?.serialNumber === controllerEntry.serialNumber }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A",
+      "the boot's active selection is the controller-as-device row the plugin names, not the list's first row");
 
     orchestrator.cleanup();
   });
@@ -2800,10 +2845,10 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
   const DEVICE_A_SERIAL = "DEV-001";
   const DEVICE_B_SERIAL = "DEV-002";
 
-  // Build a controller-mode harness around the orchestrator. Implements the documented convention that `getDevices(controller)` returns `[controllerAsDevice,
-  // ...managedDevices]` with the controller as index 0 (so controller-scope options can be edited from the controller's row), and that `isController` is the
-  // tag the nav uses to label controllers vs. devices. The harness owns the homebridge install and the orchestrator's cleanup, exposing them via the
-  // Disposable interface so tests bind it with `using` for automatic teardown at scope exit.
+  // Build a controller-mode harness around the orchestrator. This fixture's `getDevices(controller)` leads with the controller's own row and follows it with the
+  // managed devices, so controller-scope options can be edited from that row, and `isController` is what marks that row for the nav, which labels controllers
+  // apart from devices by it. The arrangement is this fixture's, not a contract: a list may carry its controller row anywhere. The harness owns the homebridge
+  // install and the orchestrator's cleanup, exposing them via the Disposable interface so tests bind it with `using` for automatic teardown at scope exit.
   function makeControllerHarness({ options = [] } = {}) {
 
     const controllerEntry = { address: "10.0.0.1", name: "Main Controller", serialNumber: CONTROLLER_SERIAL };
@@ -4339,7 +4384,8 @@ describe("webUiFeatureOptions - status panel selection", () => {
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
       getDevices: () => ({ devices: [{ firmwareRevision: "1.2.3", manufacturer: "Acme", model: "C100", name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
-      statusPanel: { placeholderRows: [{ id: "door", label: "Door", sizer: "Stopped (100%)" }] }
+      statusPanel: { placeholderRows: [{ id: "door", label: "Door", sizer: "Stopped (100%)" }] },
+      ui: { isController: (device) => device.serialNumber === "CTRL-1" }
     });
 
     await orchestrator.show(await openTestSession());

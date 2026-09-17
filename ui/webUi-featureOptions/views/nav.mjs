@@ -6,6 +6,7 @@
 
 import { createElement, createSvgElement, errorMessage, toastError } from "../utils.mjs";
 import { effect } from "../store.mjs";
+import { scopingControllerId } from "../selectors.mjs";
 import { withDeadline } from "../../webUi-liveness.mjs";
 
 /**
@@ -507,17 +508,22 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
         // one that just happened; a result naming neither leaves both fallbacks in place.
         store.dispatch({ controllerId: deviceSerial, devices, emptyMessage, error, guidance: guidance ?? failureGuidance, headline, seq, type: "devices:loaded" });
 
-        // Gate the follow-up on the reducer's own verdict: select the controller-as-device entry only when my outcome is the one that applied, carried no failure,
-        // and returned at least one device. A superseded outcome, a connection failure (the reducer moved the store to connection-error), or an empty controller each
-        // leaves the optimistic controller scope standing with no device-scope dispatch. That resting place is exactly what a nothing-to-list notice renders over,
-        // so the empty case needs nothing here beyond the decline it already makes.
-        if((store.state.devicesAppliedSeq !== seq) || error.length || (devices.length === 0)) {
+        /* Gate the follow-up on the reducer's own verdict: select the controller-as-device row only when my outcome is the one that applied, carried no failure, and
+         * brought a list carrying the row the plugin's `isController` names - whose serial is the controller's scoping identity, which is what the derivation below
+         * answers with. Read it after the dispatch above, because the derivation reads the applied list.
+         *
+         * A superseded outcome, a connection failure (the reducer moved the store to connection-error), an empty list, and a list with no such row each leave the
+         * optimistic controller scope standing with no device-scope dispatch. That resting place is exactly what a nothing-to-list notice renders over, so those
+         * cases need nothing here beyond the decline they already make.
+         */
+        const deviceId = scopingControllerId(store.state);
+
+        if((store.state.devicesAppliedSeq !== seq) || error.length || (deviceId === null)) {
 
           return;
         }
 
-        // Select the controller-as-device entry (the first device in the returned list).
-        store.dispatch({ scope: { controllerId: deviceSerial, deviceId: devices[0].serialNumber, kind: "device" }, type: "scope:changed" });
+        store.dispatch({ scope: { controllerId: deviceSerial, deviceId, kind: "device" }, type: "scope:changed" });
       } catch(err) {
 
         // The page-teardown bail guards the reject path too. Route the rejection (an IPC failure, the contract-guard TypeError) through the same outcome channel: the

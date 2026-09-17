@@ -9,8 +9,8 @@ import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { buildCatalogIndex, expandOption } from "./featureOptions.js";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { createElement, delay, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
+import { modelLoaded, scopingControllerId } from "./webUi-featureOptions/selectors.mjs";
 import { markHandled } from "./mark-handled.js";
-import { modelLoaded } from "./webUi-featureOptions/selectors.mjs";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
 import { mountHeaderView } from "./webUi-featureOptions/views/header.mjs";
@@ -239,8 +239,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   page, or behind an affordance of its own, says so here. It reaches every controller-failure surface at once - the controller-list failure, the device-list failure,
  *   and a sidebar click's failure - and deliberately does not reach the plugin-stopped-responding copy, which is not controller trouble.
  * @property {number} [ui.controllerRetryEnableDelayMs=5000] - Interval before enabling a retry button when connecting to a controller.
- * @property {Function} [ui.isController] - Identifies the controller-as-device row in a device list. The nav view groups the sidebar by it, and the projection
- *   derives the controller's scoping identity - the serial its controller-scope entries are keyed by - from the row it names.
+ * @property {Function} [ui.isController] - Identifies the controller-as-device row in a device list. The nav view groups the sidebar by it, and the row it names
+ *   is the controller's identity on the page: the projection keys controller scope by that row's serial, and a controller selection - a sidebar click and the
+ *   page's initial selection alike - lands on that row wherever it sits in the list. A controller whose list carries no such row has no controller scope here.
  * @property {Function} [ui.validOption] - Validates if an option should display for a device.
  * @property {Function} [ui.validOptionCategory] - Validates if a category should display for a device.
  */
@@ -1038,18 +1039,19 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // Complete the selection the pre-fire began. My outcome applied, so the local `devices` is the applied list, and a controller that returned devices continues to
-    // its controller-as-device entry (devices[0]) exactly as a click on that controller does. Every other case already rests where a click would leave it: device-only
-    // and global-only on global, where the initial state points, and a controller whose list came back empty on the controller's own view - which is where a notice,
-    // if the outcome supplied one, renders in place of that view's table. Nothing about the reveal below changes for it: the notice lives inside the config table's
-    // region, so it appears with the page rather than ahead of it, and the search panel's bars settled during the dispatch above.
-    if((initialController !== null) && (devices.length > 0)) {
+    /* Complete the selection the pre-fire began. My outcome applied, so the store holds the list it brought, and a controller whose list carries the row its
+     * `isController` names continues to that row - read through the derivation a sidebar click reads, which is what lands both paths on one row.
+     *
+     * Every other case already rests where a click would leave it: device-only and global-only on global, where the initial state points, and a controller whose
+     * list came back empty or carries no such row on the controller's own view - which is where a notice, if the outcome supplied one, renders in place of that
+     * view's table. Nothing about the reveal below changes for those: the notice lives inside the config table's region, so it appears with the page rather than
+     * ahead of it, and the search panel's bars settled during the dispatch above.
+     */
+    const deviceId = (initialController !== null) ? scopingControllerId(this.#store.state) : null;
 
-      this.#store.dispatch({
+    if(deviceId !== null) {
 
-        scope: { controllerId: initialController.serialNumber, deviceId: devices[0].serialNumber, kind: "device" },
-        type: "scope:changed"
-      });
+      this.#store.dispatch({ scope: { controllerId: initialController.serialNumber, deviceId, kind: "device" }, type: "scope:changed" });
     }
 
     // Hand the frame from the boot affordance to the page itself, then reveal the full region set the views render into.

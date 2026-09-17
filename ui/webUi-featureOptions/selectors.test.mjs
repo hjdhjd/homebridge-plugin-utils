@@ -692,20 +692,20 @@ describe("the controller's scoping identity", () => {
     assert.equal(scopingControllerId(identityState({ scope: { controllerId: null, deviceId: CAMERA_MAC, kind: "device" } })), null, "device-only mode has none either");
   });
 
-  test("stands in with the navigation identity while the in-scope controller's device list has not landed", () => {
+  test("answers null while the in-scope controller's device list has not landed", () => {
 
-    // The list on hand belongs to a different controller, so it cannot answer for this one. The navigation identity is coarser for the moment and is the only
-    // answer available that is not some other controller's.
+    // The list on hand belongs to a different controller, so it holds no row that can answer for this one. No row, no identity: the alternative would be handing
+    // back the sidebar link's serial, which keys nothing.
     const state = identityState({ listOwner: "192.0.2.9", scope: CONTROLLER_PAGE });
 
-    assert.equal(scopingControllerId(state), NVR_ADDRESS);
+    assert.equal(scopingControllerId(state), null);
   });
 
-  test("stands in with the navigation identity when no row answers to isController", () => {
+  test("answers null when no row answers to isController", () => {
 
-    // A plugin that supplies no validator gets the framework default, which calls nothing a controller...this is the path that keeps such a plugin on exactly the
-    // identity it has always resolved by.
-    assert.equal(scopingControllerId(identityState({ isController: () => false, scope: CONTROLLER_PAGE })), NVR_ADDRESS);
+    // A plugin that supplies no validator gets the framework default, which calls nothing a controller, so its list carries no controller row...and a controller
+    // with no named row has no controller scope on the page, because there is nothing for controller-scope entries to be keyed by.
+    assert.equal(scopingControllerId(identityState({ isController: () => false, scope: CONTROLLER_PAGE })), null);
   });
 
   test("is the one shared serial for a plugin whose two identities coincide", () => {

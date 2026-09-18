@@ -58,6 +58,24 @@ export const editsHeld = (state) => {
 };
 
 /**
+ * Report whether an option edit is outstanding against the host. Pure helper - one-line read of the two facts that answer it, not memoized.
+ *
+ * Two situations count and they are the same question asked a moment apart: the store carries an edit the page has not written (configuredOptions has moved off
+ * the anchor), or the page is writing one (the write lifecycle is persisting). A caller that must act on the configuration as the host holds it - a coordinated
+ * write, which has to drain the user's edits before it composes - asks this before it acts, because either situation means the host's copy is about to change.
+ *
+ * The persist effect's own dirty checks ask the narrower question, and deliberately keep asking it: each of those is deciding whether there is anything to write
+ * on this iteration, which an in-flight write does not answer for.
+ *
+ * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
+ * @returns {boolean} True while an edit is unwritten or in flight, false when the store and the host agree.
+ */
+export const persistPending = (state) => {
+
+  return (state.configuredOptions !== state.persistedAnchor) || (state.write.kind === "persisting");
+};
+
+/**
  * Extract the controller serial from the scope tag, or null when no controller is in context. Pure helper - one-line tag read, not memoized.
  *
  * This is the controller's NAVIGATION identity: the serial the plugin's `getControllers` hook put on the sidebar link, which is what names, highlights, and

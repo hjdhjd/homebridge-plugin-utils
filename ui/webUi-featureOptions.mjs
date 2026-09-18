@@ -7,9 +7,10 @@
 import { DeadlineExpiredError, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { buildCatalogIndex, expandOption } from "./featureOptions.js";
+import { completeControllerSelection, fetchControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { createElement, delay, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
-import { modelLoaded, scopingControllerId } from "./webUi-featureOptions/selectors.mjs";
+import { modelLoaded, persistPending, selectedControllerId, selectedDeviceId } from "./webUi-featureOptions/selectors.mjs";
 import { markHandled } from "./mark-handled.js";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
@@ -128,6 +129,18 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  */
 
 /**
+ * What became of a {@link webUiFeatureOptions#commitConfig} call: one member per thing a consumer does about it, tagged by `kind` because the four are mutually
+ * exclusive answers to one question and two of them carry the failure that explains them.
+ *
+ * `committed` and `staged` both mean the configuration changed and the page has been reconciled to it, so a consumer updates its own caches identically for the
+ * two and differs only in what it tells the user: `staged` reached the host's memory and failed to reach disk, which the user's own Save still completes.
+ * `failed` means nothing changed - a pending option edit never reached the host, or the host refused the write - and `superseded` means a newer page copy owns
+ * the window, so the retired copy renders nothing at all.
+ *
+ * @typedef {{ kind: "committed" } | { error: *, kind: "staged" } | { error: *, kind: "failed" } | { kind: "superseded" }} CommitConfigResult
+ */
+
+/**
  * @typedef {Object} FeatureOptionsConfig
  * @property {(args: { controller: (Controller|null), panel: HTMLElement, signal: AbortSignal }) => void} [connectionErrorPanel] - Renders plugin-owned content in the
  *   connection-error view, beneath the framework's error copy and retry affordance. This is the surface that reaches a selected-but-unreachable controller: the
@@ -167,8 +180,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   choosing between the two lives on that getter.
  * @property {() => void} [onLoaded] - Invoked once per show cycle immediately after that cycle's model has loaded: the catalog and the plugin's controllers are in
  *   the store, {@link webUiFeatureOptions.editedConfig} answers the live overlay, and the options view has rendered the catalog's categories - the page is
- *   established, and a consumer that needs to act at that moment has one signal for it. Every path that reaches a loaded model announces it, the global-only path
- *   and every menu relaunch or retry that gets there included; a cycle that failed before that point, or that a newer page copy superseded, never announces at all.
+ *   established, and a consumer that needs to act at that moment has one signal for it. Every SHOW cycle that reaches a loaded model announces it once, the
+ *   global-only path and every menu relaunch or retry that gets there included; a cycle that failed before that point, or that a newer page copy superseded, never
+ *   announces at all. An establishment by {@link webUiFeatureOptions#commitConfig} is not a show cycle and does not announce: the page it re-establishes is the
+ *   one the consumer is already standing on, and the call's own result is what tells that consumer the configuration moved.
  *   The device list arrives later in the cycle and is not this hook's promise. Invoked with no arguments and no debounce.
  * @property {() => void} [onOptionsEdited] - Invoked after the store state has transitioned for any option mutation (an option set or cleared, the options reset,
  *   or the model reverted), so a consumer reading editedConfig from inside the callback sees the post-edit state. Invoked once per mutation with no arguments and no
@@ -255,7 +270,8 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * among them - its scope is `:root` and `body`, so it is registered through the page orchestrator's wiring and outlives every cycle this class tears down.
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
- * action without re-entering the whole show() cycle, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
+ * action without re-entering the whole show() cycle, `commitConfig()` writes a plugin's own configuration change through the page's session and re-establishes the
+ * page on it, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
  * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
  * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
  * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract carries the fuller vocabulary of the
@@ -266,9 +282,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * carrying the `data-fo-region` attribute: such an element hides and reveals with the page in every mode and is never cleared, so a control the plugin builds and owns
  * survives a whole cycle intact while still following the page's visibility.
  *
- * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle boundary that boots and tears them down. The
- * one piece of state it keeps itself is #initialOptions - the revert-to-saved snapshot - which must outlive the store's per-show() reset; all else flows through the
- * store.
+ * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle boundary that boots and tears them down. What
+ * it keeps in its own fields is what must outlive a cycle - the revert-to-saved snapshot, the coordinated write's serialization queue, and the commit a teardown
+ * waits for - each of which the store's per-show() reset would otherwise discard; all else flows through the store.
  *
  * @example
  *
@@ -309,6 +325,13 @@ export class webUiFeatureOptions {
   // a fresh request rather than inheriting a failure that has already been reported.
   #catalogPromise;
 
+  /* The tail of commitConfig's serialization chain: a promise that never rejects, resolved from construction. Each call chains its run onto this tail and replaces
+   * it with its own settlement, so a queued composer runs against what the call ahead of it wrote - which is the whole reason a consumer hands over a composer
+   * rather than a finished patch. Its lifetime is this instance's: it is never reset, because awaiting a settled promise costs one turn, and a write that never
+   * settles holds later calls behind it, which is what each of them would meet on its own against the same dead bridge. show() and hide() never wait on it.
+   */
+  #commitQueue;
+
   // Plugin-provided configuration captured at construction. Threaded through to effects and views at mount time via closures; never mutated after the constructor
   // returns.
   #config;
@@ -323,6 +346,15 @@ export class webUiFeatureOptions {
 
   // The page-level abort controller. Aborting it tears down every effect and every view in one operation. Recreated on every show(); nulled out on cleanup().
   #pageAbort;
+
+  /* The settlement of the commit commitConfig has issued and the host has not yet answered - a promise that never rejects - or null when no such commit is in
+   * flight. Its lifetime spans page cycles rather than belonging to one: it is written in the same synchronous turn as the session write it covers, cleared by the
+   * issuing call when that write settles either way, read by the teardown's bounded wait, and touched by nothing else. It covers the COMMIT alone and never the
+   * save, because sync() reads the host's in-memory model, which the commit has already updated, so the save to disk gates nothing the page reads. A commit the
+   * host never answers leaves this set for the instance's life and every later teardown then pays the full bound - the dead-bridge case the persist flush already
+   * pays the same bound for.
+   */
+  #pendingCommit;
 
   // The page's theming registration, supplied by the orchestrator that owns the page lifetime. Theming's scope is `:root` and `body`, so its lifetime is the page's
   // rather than this cycle's, which is why the registration is the orchestrator's to own and this class only asks for it. Memoized on the orchestrator's side, so
@@ -477,9 +509,11 @@ export class webUiFeatureOptions {
 
     this.#bootAffordance = null;
     this.#catalogPromise = null;
+    this.#commitQueue = Promise.resolve();
     this.#epochSignal = epochSignal;
     this.#flushPersist = null;
     this.#pageAbort = null;
+    this.#pendingCommit = null;
     this.#registerTheming = registerTheming;
     this.#resumeDetector = resumeDetector;
     this.#session = null;
@@ -514,7 +548,7 @@ export class webUiFeatureOptions {
     // The store's options are the overlay only once it has loaded its model. Ahead of that it carries the placeholder state, whose empty options array describes
     // nothing the user configured and would misreport a configured plugin as an unconfigured one; the session's own saved options are what the config actually
     // holds through that whole phase, and they are also what the pre-store read returns, so one expression serves both.
-    const options = (this.#store && modelLoaded(this.#store.state)) ? this.#store.state.configuredOptions : (this.#session.platform.options ?? []);
+    const options = (this.#store && modelLoaded(this.#store.state)) ? this.#store.state.configuredOptions : platformOptions(this.#session);
 
     return [ { ...this.#session.platform, options }, ...this.#session.entries.slice(1) ];
   }
@@ -619,6 +653,16 @@ export class webUiFeatureOptions {
     // Tear down any prior show() cycle first. hide() is now async (it flushes any pending edit from the prior cycle before aborting), so we await it: a re-show via
     // the menu or the connection-error retry must drain the previous cycle's debounced edit before this cycle's store replaces it.
     await this.hide();
+
+    /* The last act before the new cycle is minted, and its placement is the rule rather than a preference: the epoch may have aborted while the teardown above was
+     * running - the teardown waits for a pending edit and for a coordinated write's commit, either of which can span a supersession - and an abort that has already
+     * fired never replays into the listener composed below. A recheck placed ahead of that await would leave its whole window unguarded, so the order is the
+     * teardown's await, then the recheck, then the mint.
+     */
+    if(this.#epochSignal?.aborted) {
+
+      return;
+    }
 
     // Fresh page-level abort controller for this show() cycle.
     this.#pageAbort = new AbortController();
@@ -740,16 +784,7 @@ export class webUiFeatureOptions {
      */
     window.addEventListener("blur", () => {
 
-      const active = document.activeElement;
-      const control = active?.closest?.(".fo-option-value");
-
-      // The commit fires on the CONTROL rather than on whatever inside it holds focus, because the control is what a commit reads and what the view's delegation
-      // routes. For a plain field the two are the same element; for a composite one they are not, and a value the user typed into an editor's own field would
-      // otherwise never reach the store.
-      if(control && control.closest("#configTable")) {
-
-        control.dispatchEvent(new Event("change", { bubbles: true }));
-      }
+      this.#commitFocusedValue();
 
       void this.#flushPersist?.();
     }, { signal });
@@ -791,7 +826,7 @@ export class webUiFeatureOptions {
     // no hook and reaches here on the empty stand-in the fetch resolved, which this check passes over.
     const controllers = controllerResult.controllers;
 
-    if(this.#config.getControllers && (controllers.length === 0)) {
+    if(this.#noControllersConfigured(controllers)) {
 
       this.#removeBootAffordance();
       showNoControllersMessage();
@@ -851,7 +886,7 @@ export class webUiFeatureOptions {
       return;
     }
 
-    const loadedOptions = Array.isArray(session.platform?.options) ? session.platform.options : [];
+    const loadedOptions = platformOptions(session);
     const catalog = {
 
       ...buildCatalogIndex(features.categories, features.options),
@@ -862,22 +897,15 @@ export class webUiFeatureOptions {
 
     assertChoiceSources(catalog);
 
-    // Snapshot for revert-to-saved. Preserved across show() / cleanup() cycles when the re-loaded options are set-equal to the prior snapshot (the user reordered
-    // entries but did not save) - this means a revert after re-show restores the original order rather than the reloaded order. First show() sets the snapshot
-    // to the just-loaded array; subsequent shows preserve it only when set-equal.
-    if(!this.#initialOptions || !sameOptionsSet(this.#initialOptions, loadedOptions)) {
-
-      this.#initialOptions = [...loadedOptions];
-    }
-
-    this.#store.dispatch({
+    // The revert-to-saved snapshot moves only when this load carries a different options set. It is preserved across show() / cleanup() cycles when the re-loaded
+    // options are set-equal to the prior snapshot (the user reordered entries but did not save), so a revert after a re-show restores the original order rather
+    // than the reloaded one. The first show() has no snapshot to preserve and takes the just-loaded array.
+    this.#establishModel({
 
       catalog,
-      configuredOptions: loadedOptions,
       controllers,
-      initialOptions: this.#initialOptions,
-      mode: this.#config.globalOnly ? "global-only" : (this.#config.getControllers ? "controller-based" : "device-only"),
-      type: "model:loaded"
+      moveBoundary: !this.#initialOptions || !sameOptionsSet(this.#initialOptions, loadedOptions),
+      options: loadedOptions
     });
 
     /* Announce the loaded model to the plugin. The dispatch above is the one place a cycle crosses from an empty page into a loaded one - every mode reaches it,
@@ -1047,11 +1075,9 @@ export class webUiFeatureOptions {
      * reveal below changes for those: the notice lives inside the config table's region, so it appears with the page rather than ahead of it, and the search
      * panel's bars settled during the dispatch above.
      */
-    const deviceId = (initialController !== null) ? scopingControllerId(this.#store.state) : null;
+    if(initialController !== null) {
 
-    if(deviceId !== null) {
-
-      this.#store.dispatch({ scope: { controllerId: initialController.serialNumber, deviceId, kind: "device" }, type: "scope:changed" });
+      completeControllerSelection({ controllerId: initialController.serialNumber, store: this.#store });
     }
 
     // Hand the frame from the boot affordance to the page itself, then reveal the full region set the views render into.
@@ -1066,6 +1092,11 @@ export class webUiFeatureOptions {
    * repaint the sidebar's controller list against the current configuration. It re-syncs the session against the host config the way show() does before it reads
    * controllers, so a refresh after a Settings-tab edit acts on the current config rather than a stale key, then re-invokes the configured getControllers hook. The
    * freshness of the returned list is the consumer hook's concern: this method repaints whatever the hook resolves.
+   *
+   * This is the repaint for a plugin whose own action did not write the configuration's options - it replaces the controller list and touches nothing else, which
+   * is the whole of what it claims. A plugin that WRITES the configuration calls {@link webUiFeatureOptions#commitConfig} instead, which writes through the page's
+   * own session and re-establishes the entire model against what it wrote; repainting a list over a page whose options array the plugin has changed behind it is
+   * the exact shape that leaves the page holding a stale configuration.
    *
    * Contract:
    *
@@ -1082,6 +1113,9 @@ export class webUiFeatureOptions {
    *     the failure and can capture the error there.
    *   - A null, absent, or empty resolved controller list resolves false and leaves the store untouched - the consumer owns the messaging for the no-controllers
    *     case, exactly as show()-time handles it through a direct message that bypasses the store.
+   *   - An outcome that arrives after the session's platform entry has been replaced - by a coordinated write's commit, or by a later sync - resolves false
+   *     without dispatching. The entry's identity is the staleness test, because every act that advances the replica replaces that object, so the list this hook
+   *     read for is recognizable without any counter of this method's own.
    *   - A non-empty list dispatches controllers:loaded and resolves true once the sidebar has transitioned to the new list.
    *
    * A false return, in every case, means the view was left as it was; the caller relies on that to decide whether to surface its own no-controllers messaging.
@@ -1124,6 +1158,11 @@ export class webUiFeatureOptions {
       return false;
     }
 
+    // The platform entry this refresh reads its controllers for. Every act that advances the session's replica - a coordinated write's commit, a later sync -
+    // builds a new entry object rather than mutating this one, so holding the reference is all that is needed to recognize an outcome that answers for a
+    // configuration the page has already moved off, and no counter of this method's own has to be kept in step with the session's.
+    const platform = this.#session.platform;
+
     // Re-invoke the configured getControllers hook with the same injected-config shape show() uses, bounded on the same reasoning as the sync above. A device-only
     // plugin has no hook and thus no controllers to refresh, so its null stand-in falls through to the no-change return below; a hook that fails, never answers, or
     // reports a connection failure on its result reports no change too, since leaving the working sidebar alone is the honest outcome in every one of those cases.
@@ -1135,7 +1174,7 @@ export class webUiFeatureOptions {
 
       try {
 
-        result = await withDeadline({ promise: this.#config.getControllers({ config: this.#session.platform }), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+        result = await withDeadline({ promise: this.#config.getControllers({ config: platform }), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
       } catch {
 
         return false;
@@ -1147,6 +1186,14 @@ export class webUiFeatureOptions {
        * the deliberate divergence from show(), where the same violation lands on the framework's retry view because no plugin code is on that call stack.
        */
       assertControllerListResult(result);
+
+      // The configuration moved while the hook was pending, so this list answers for an entry the page no longer reads from and repainting it would render a
+      // sidebar built from what the config held before the write. The contract check above still runs and still reaches the caller: a hook answering in the wrong
+      // shape is the plugin's own bug whichever configuration it answered for.
+      if(this.#session.platform !== platform) {
+
+        return false;
+      }
 
       if(result.error) {
 
@@ -1167,6 +1214,510 @@ export class webUiFeatureOptions {
     // container against it; the dispatch runs its subscribers synchronously, so the sidebar has transitioned by the time we report success. The staleness guard owns
     // the verdict: a refresh whose cycle was superseded while it waited dispatches nothing and reports no change.
     return this.#unlessStale({ run: () => this.#store.dispatch({ controllers, type: "controllers:loaded" }), signal });
+  }
+
+  /**
+   * Write a plugin's own configuration change through the page's session, and re-establish the page on what was written.
+   *
+   * A plugin that edits the configuration behind this page - saving or removing a controller, rewriting a credential - hands over a composer rather than doing the
+   * write itself, and the page does the rest: it drains whatever option edits the user has in flight, holds the table so no new ones start, composes against the
+   * configuration as it stands at that moment, writes and saves through the one session the page already owns, and then makes the page agree with what was written.
+   * A plugin that opens a session of its own instead leaves the page's store holding the options array the user loaded, which the next table edit writes back over
+   * everything the plugin just saved.
+   *
+   * The composer is a synchronous function of the live platform entry returning the patch to merge onto it: `(platform) => ({ controllers })`. It is a function
+   * rather than a finished patch because a call may wait behind another one, and what it composes against must be what that earlier call wrote. It is called
+   * exactly once per call, inside the hold, with nothing awaited between the read it composes against and the write that follows. A composer that throws rejects
+   * the call with what it threw - the line {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold is
+   * released on the way out.
+   *
+   * Contract:
+   *
+   *   - The call resolves a {@link CommitConfigResult}: `committed` (written and saved), `staged` (written into the host's memory with the save to disk refused,
+   *     so the page is reconciled exactly as for `committed` and the consumer renders a warning the user's own Save answers), `failed` (nothing changed - a
+   *     pending option edit did not reach the host, or the host refused the write), or `superseded` (a newer page copy owns the window, so the retired copy
+   *     renders nothing).
+   *   - Calls serialize. Each one waits for the one ahead of it, whatever became of that one, so two plugin actions in the same moment write in the order they
+   *     were asked for and the second composes against the first's result.
+   *   - A pending option edit is written first, at the page's own drain, and the composer sees it. A value control the user has typed into but not committed is
+   *     committed ahead of that drain, so it is written rather than discarded by the hold.
+   *   - A drain whose final write the host refuses fails the call with that error, before the composer runs and before anything is written: the page must not
+   *     write the plugin's change over a store that has just rolled the user's own edit back. A failure recorded before the call, with nothing pending at the
+   *     call, describes a rollback the user has already been shown on a store that rollback left clean, and does not fail the call.
+   *   - The write belongs to the session and the reconciliation belongs to whichever page cycle is live when the call reaches it. Nothing is captured at entry:
+   *     a call whose page is hidden, torn down, or re-shown mid-flight still writes and saves, because that is what the user asked for, and only a retired page
+   *     copy - the epoch - ends it as `superseded`. This is the deliberate divergence from `refreshControllers()`, which captures its cycle at entry and drops
+   *     its outcome: a repaint belongs to the page it was asked of, while a write belongs to the configuration.
+   *   - The page is re-established in place where it can be - the model reloaded against the written configuration, the controller list refetched, the revert
+   *     target moved only when the write changed the options set - and through a fresh `show()` cycle where it cannot: a controller fetch that fails after the
+   *     write, a page that has no loaded model, and a page standing on the connection-error frame all re-enter, because the boot owns every one of those surfaces
+   *     and a write that changed the configuration those failures came from deserves an honest re-evaluation. A consumer's verdict card mounted on a frame that
+   *     re-enters is cleared by the re-entry, and the page coming up is the visible verdict.
+   *   - An in-place establishment does not invoke `onLoaded`: that hook announces a show cycle, and this is not one.
+   *   - Two calls are caller bugs and reject before anything else happens, ahead of the queue: a composer that is not a function, and a call made before the
+   *     first `show()` has supplied a session. First-run code, which is the only code with nothing to call this on, writes through a session of its own.
+   *
+   * One residual is worth naming rather than closing. A host stalled longer than the teardown's bounded wait can let an abandoned commit land after a successor
+   * cycle's own write and put a whole stale configuration back; that residual already exists for option edits, and with this method it can reach whatever else a
+   * composer writes. Closing it would mean serializing every session write behind a write that may never settle, which trades a rare clobber for a permanent
+   * wedge, so the page keeps the bound it already chose.
+   *
+   * @param {(platform: Object) => Object} compose - Synchronous composer receiving the live primary platform entry and returning the patch to merge onto it.
+   * @returns {Promise<CommitConfigResult>} What became of the write, and what the page did about it.
+   * @throws {TypeError} When `compose` is not a function.
+   * @throws {Error} When no `show()` has supplied the page's configuration session yet.
+   * @public
+   */
+  async commitConfig(compose) {
+
+    // The two caller bugs, refused ahead of the queue so neither waits on a write that has nothing to do with it and neither can be mistaken for an outcome the
+    // page produced. Both name the contract they broke, because the only party that can fix either is the one that wrote the call.
+    if(typeof compose !== "function") {
+
+      throw new TypeError("commitConfig requires a composer function: (platform) => patch, returning the fields to merge onto the primary platform entry.");
+    }
+
+    if(!this.#session) {
+
+      throw new Error("commitConfig requires a configuration session, which show() supplies - a page that has never been shown has nothing to write through.");
+    }
+
+    // Join the chain, then replace its tail with this call's settlement whatever that turns out to be. The tail never rejects, so a composer that threw or a host
+    // that refused a write leaves the next call waiting on a settled promise rather than on a rejection it would inherit.
+    const run = this.#commitQueue.then(() => this.#runCommit(compose));
+
+    this.#commitQueue = run.catch(() => undefined);
+
+    return run;
+  }
+
+  /**
+   * One coordinated configuration write, run with the queue's turn already taken.
+   *
+   * The sequence is drain, hold, compose, write, save, reconcile. Everything about the page is read live at each step rather than captured at entry, because the
+   * cycle that was live when the call was made need not be the one that is live when it runs; what IS captured, once the drain settles, is the cycle the call
+   * observed, and every later read of the page in this call compares against that rather than against whatever is live at the moment - a successor cycle's fresh
+   * signal would pass a staleness check it should fail.
+   *
+   * @param {(platform: Object) => Object} compose - The caller's composer, already validated.
+   * @returns {Promise<CommitConfigResult>} What became of the write.
+   * @private
+   */
+  async #runCommit(compose) {
+
+    // A value control the user typed into and has not committed has fired no `change` yet, so the store does not carry what is on screen. Commit it now, once,
+    // ahead of the drain that follows, so the user's own last keystroke is written rather than destroyed by the hold. Never inside the loop below: re-dispatching
+    // an unchanged control's `change` writes a fresh options array every time, which would keep the store dirty and the loop draining for as long as focus stays.
+    this.#commitFocusedValue();
+
+    // The cycle this call observed, captured when the drain settles rather than at entry, and the store this call drained (null until it drains one). The hold is
+    // a fact about a store rather than about a cycle, which is what lets it be released on a store whose cycle has since died.
+    let observedSignal = null;
+    let observedStore = null;
+    let drained = null;
+    let held = false;
+
+    // Release the hold, if one was taken. It goes straight to the store rather than through the staleness guard: the hold is this call's fact about that store,
+    // the arm is a no-op from any other lifecycle, and a store whose cycle has died has no subscribers left to hear it - while routing it through the guard would
+    // leave a dead cycle's store held for good.
+    const releaseHold = () => {
+
+      if(held) {
+
+        observedStore.dispatch({ type: "commit:failed" });
+        held = false;
+      }
+    };
+
+    /* Drain, then hold, on the live page. The loop exists because draining is an await, and the page may be a different one on the other side of it: every
+     * iteration re-reads the epoch and the cycle from scratch, so a re-show that landed mid-drain is drained and held in its own right rather than written over.
+     *
+     * It cannot spin. A refusal after a clean pending read means the reducer found something the read did not name - a dirty store, or a write in flight - and
+     * the next iteration's pending read finds it and drains it, which is a real await every time. The two lifecycles a loaded store can rest at here are idle and
+     * a recorded failure, and the reducer's entry rule accepts both; a persisting one cannot survive the flush, which answers its own `persist:started` before it
+     * returns.
+     */
+    for(;;) {
+
+      // A retired copy writes nothing at all. This is the one supersession the page cannot observe for itself, and it is read fresh on every iteration.
+      if(this.#epochSignal?.aborted) {
+
+        return { kind: "superseded" };
+      }
+
+      const signal = this.#pageAbort?.signal;
+      const store = this.#store;
+      const flush = this.#flushPersist;
+      const live = Boolean(signal) && !signal.aborted;
+
+      // No live cycle, or a cycle whose store has not loaded its model: there is nothing to drain and nothing to hold, so the call goes on to write unheld. The
+      // store is remembered only when a cycle is live to own it, which is what makes the reconciliation below able to tell "the page I observed" from "some page".
+      if(!live || !store || !modelLoaded(store.state)) {
+
+        observedSignal = live ? signal : null;
+        observedStore = live ? store : null;
+
+        break;
+      }
+
+      observedSignal = signal;
+      observedStore = store;
+
+      // A drain this call ran ended in a rollback, which put the user's last edit back the way the host has it. Writing the plugin's change over that store would
+      // hide the fact that their edit did not land, so the call fails with the error instead. A failure on a store this call did not drain is one the user has
+      // already been shown, on a store the rollback left clean, and is not this call's to report.
+      if((store === drained) && (store.state.write.kind === "persist-error")) {
+
+        return { error: store.state.write.error, kind: "failed" };
+      }
+
+      // Something is unwritten or in flight, so drain it through the cycle's own handle rather than the teardown's bounded race: a write still running is not
+      // finished, and the composer must see what the user did. The cycle may be a different one by the time it returns, which is why the loop starts over.
+      if(persistPending(store.state)) {
+
+        // The drain is this iteration's whole purpose - the loop exists to serialize against it, which is exactly what the rule's blanket concern is not about.
+        // eslint-disable-next-line no-await-in-loop
+        await flush();
+
+        drained = store;
+
+        continue;
+      }
+
+      // Nothing is pending, so ask for the store. The read above and this dispatch share one synchronous turn with nothing in between, and the reducer answers
+      // with the lifecycle it left behind - the same shape a device fetch's dispatcher reads its applied sequence back for.
+      store.dispatch({ type: "commit:started" });
+
+      if(store.state.write.kind === "committing") {
+
+        held = true;
+
+        break;
+      }
+    }
+
+    /* Compose against the configuration as the session holds it at this moment, and remember what the saved options were before the write so the revert target's
+     * boundary can be decided from this call's own effect on them rather than from anything the page read earlier.
+     */
+    const session = this.#session;
+    const before = platformOptions(session);
+    let patch;
+
+    try {
+
+      patch = compose(session.platform);
+    } catch(err) {
+
+      releaseHold();
+
+      throw err;
+    }
+
+    // Issue the write and publish its settlement in the same synchronous turn, before the first await, so a teardown that begins while it is in flight can find
+    // it and wait for it. Neither this await nor the save's is bounded, and that is deliberate: a timeout here would release a write that is still running as
+    // though it had finished. What bounds the PAGE instead is the teardown's own wait, and what bounds the CALLER is whatever deadline it puts around the call.
+    const commit = session.commit(patch);
+
+    this.#pendingCommit = commit.catch(() => undefined);
+
+    try {
+
+      await commit;
+    } catch(error) {
+
+      releaseHold();
+
+      return { error, kind: "failed" };
+    } finally {
+
+      // The queue guarantees no other call issued a commit while this one was in flight, so the field this clears can only be the one published above.
+      this.#pendingCommit = null;
+    }
+
+    // The write is staged in the host's memory and a newer page copy has taken the window. Skip the save and leave the edit staged for the user's own Save, which
+    // is the rule a consumer applies today between its commit and its save, and answer without touching a page this copy no longer owns.
+    if(this.#epochSignal?.aborted) {
+
+      releaseHold();
+
+      return { kind: "superseded" };
+    }
+
+    // The save is the only step whose failure still leaves the configuration changed, so it answers with a result of its own rather than with a failure: the host
+    // holds the new configuration either way, and the page below is reconciled to it either way.
+    let result;
+
+    try {
+
+      await session.persist();
+
+      result = { kind: "committed" };
+    } catch(error) {
+
+      result = { error, kind: "staged" };
+    }
+
+    /* The configuration changed, so the page is made to agree with it - read from the page as it stands now. The cycle this call observed is still the live one
+     * only when its store is the field's current value: every show() mints a fresh store, so store identity is what tells a standing page from a successor that
+     * came up after the write was issued - and such a successor waited for that write at its own teardown and synced afterwards, so it needs nothing from here.
+     */
+    const cycleLive = Boolean(observedStore) && (this.#store === observedStore) && Boolean(observedSignal) && !observedSignal.aborted;
+
+    if(cycleLive && held && (observedStore.state.status.kind === "ready")) {
+
+      return this.#establishInPlace({ before, observedSignal, observedStore, releaseHold, result, session });
+    }
+
+    /* Everything else with a live observed cycle re-enters the boot: a store whose model never loaded (the error card a failed sync or controller fetch left), or
+     * a loaded page standing on the connection-error frame. The write changed the very configuration those failures came from, so a fresh boot is the honest
+     * re-evaluation of it - and the consumer's card on that frame is cleared by the re-entry, which makes the page coming up the visible verdict. A hold taken on
+     * such a store needs no release: the fresh cycle discards that store along with its cycle.
+     */
+    if(cycleLive) {
+
+      await this.#reshow();
+
+      return result;
+    }
+
+    // No live cycle at all, or a successor that owns the page now. Nothing is dispatched into a cycle this call never drained; the hold, if one was taken, is
+    // released on the store it was taken from.
+    releaseHold();
+
+    return result;
+  }
+
+  /**
+   * Re-establish the standing page on the configuration a coordinated write just produced.
+   *
+   * Reached only from a live, held, ready cycle. It refetches the controller list against the written configuration, because a write that added or removed a
+   * controller changed the very list the sidebar is showing, and hands every way that fetch can go wrong to `show()`, which owns each of those surfaces already.
+   *
+   * @param {Object} args
+   * @param {Object[]} args.before - The session's saved options as they were immediately before the write, against which the revert boundary is decided.
+   * @param {AbortSignal} args.observedSignal - The signal of the cycle this call observed.
+   * @param {import("./webUi-featureOptions/store.mjs").FeatureOptionsStore} args.observedStore - The store this call drained and holds.
+   * @param {() => void} args.releaseHold - Releases this call's hold on that store.
+   * @param {CommitConfigResult} args.result - What became of the write, which every path here answers with unchanged.
+   * @param {import("./pluginConfigSession.mjs").PluginConfigSession} args.session - The session the write went through.
+   * @returns {Promise<CommitConfigResult>} The result it was handed.
+   * @private
+   */
+  async #establishInPlace({ before, observedSignal, observedStore, releaseHold, result, session }) {
+
+    // Refetch the controller list against the configuration the write produced, bounded and held to the hook contract exactly as the boot holds it. A page with no
+    // hook carries the same empty stand-in show() carries, so the paths below read one shape whether or not the plugin has controllers at all.
+    let listing = null;
+
+    try {
+
+      listing = assertControllerListResult(await withDeadline({ promise: this.#config.getControllers ?
+        this.#config.getControllers({ config: session.platform }) : Promise.resolve({ controllers: [], error: "" }), seconds: BOOT_AWAIT_DEADLINE_SECONDS,
+      signal: observedSignal }));
+    } catch {
+
+      listing = null;
+    }
+
+    const aborted = observedSignal.aborted;
+
+    /* Every way the fetch can end other than with a usable list is a surface the boot owns: the retry view for a rejection, an expiry, a wrong-shaped answer, or
+     * a reported failure, and the no-controllers message for a plugin whose last controller this write removed. The store's reachability is read AGAIN here
+     * because a sidebar click that failed while the fetch ran has moved it to the connection-error frame, and an establishment over that frame would leave the
+     * error standing beneath a page that looks loaded.
+     *
+     * An aborted cycle is none of those things and takes none of them: its page is gone, so there is nothing to re-enter on its behalf, and the fetch it was
+     * waiting on rejects on the abort rather than on any failure of the plugin's. It falls through to the staleness guard below, which answers for it.
+     */
+    if(!aborted && (!listing || listing.error.length || this.#noControllersConfigured(listing.controllers) || (observedStore.state.status.kind !== "ready"))) {
+
+      await this.#reshow();
+
+      return result;
+    }
+
+    // Establish the model on what was written: the standing catalog (fixed for a plugin version, so handing the same reference back keeps every catalog-keyed memo
+    // warm), the list just fetched, and the session's saved options read again once the write has landed. The boundary moves only when the write changed the
+    // options set, so a controllers-only write leaves the user's revert target exactly where it was. The dispatch ends the hold on its own terms.
+    const after = platformOptions(session);
+
+    if(!this.#unlessStale({ run: () => this.#establishModel({ catalog: observedStore.state.catalog, controllers: listing.controllers,
+      moveBoundary: !sameOptionsSet(before, after), options: after }), signal: observedSignal })) {
+
+      releaseHold();
+
+      return result;
+    }
+
+    /* The establishment reconciles controllers and nothing else, so a device that left a controller the list still holds is still on the page. This refetch is
+     * what answers that, and it is deliberately not awaited: the result the caller is waiting for is about the write, which has already landed.
+     */
+    const controllerId = selectedControllerId(observedStore.state);
+
+    if(controllerId !== null) {
+
+      void this.#refetchSelection({ controllerId, signal: observedSignal, store: observedStore });
+    }
+
+    return result;
+  }
+
+  /**
+   * Refetch the selected controller's devices after an in-place establishment, and move the selection only if the list that lands no longer holds it.
+   *
+   * No optimistic scope change precedes this fetch, which is what separates it from a sidebar click. The selection already stands, and a transient controller
+   * scope would hand a plugin's panel hook an undefined device and tear down the card it is rendering into - where leaving the scope alone keeps the same device
+   * through the whole window. A device the new list no longer holds renders as gone once, at the outcome, and its selection then moves to the controller's own
+   * row; that teardown is the truth about a device that left, and is not what the rule avoids.
+   *
+   * @param {Object} args
+   * @param {string} args.controllerId - The selected controller, as the sidebar names it.
+   * @param {AbortSignal} args.signal - The signal of the cycle the refetch belongs to.
+   * @param {import("./webUi-featureOptions/store.mjs").FeatureOptionsStore} args.store - The store the outcome lands at.
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #refetchSelection({ controllerId, signal, store }) {
+
+    const applied = await fetchControllerDevices({
+
+      controllerId,
+      deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS,
+      failureGuidance: this.#config.controllerFailureGuidance,
+      getDevices: (controller) => this.#devicesFor(controller),
+      signal,
+      store
+    });
+
+    if(!applied) {
+
+      return;
+    }
+
+    // A device selection the arriving list still holds is left exactly where it is. Anything else - a device that left, or no device in scope at all - continues
+    // onto the controller-as-device row, which is where a click that found no device to select also rests.
+    const deviceId = selectedDeviceId(store.state);
+
+    if((deviceId !== null) && store.state.devices.some((device) => device.serialNumber === deviceId)) {
+
+      return;
+    }
+
+    completeControllerSelection({ controllerId, store });
+  }
+
+  /**
+   * Install a loaded model on the store: move the revert boundary where the caller says it moves, then dispatch `model:loaded`.
+   *
+   * The options arrive as ONE array the caller has already read and coerced, and both the boundary decision and the dispatch read that same array, so the two can
+   * never disagree about which options were loaded. It builds no catalog and announces nothing: a boot has a catalog to build and an announcement to make, an
+   * in-place establishment has neither, and what the two genuinely share is only this.
+   *
+   * @param {Object} args
+   * @param {Object} args.catalog - The catalog the model is installed against.
+   * @param {Object[]} args.controllers - The controller list this model carries.
+   * @param {boolean} args.moveBoundary - Whether these options become the new revert-to-saved target.
+   * @param {Object[]} args.options - The configured options this model carries.
+   * @private
+   */
+  #establishModel({ catalog, controllers, moveBoundary, options }) {
+
+    if(moveBoundary) {
+
+      this.#initialOptions = [...options];
+    }
+
+    this.#store.dispatch({
+
+      catalog,
+      configuredOptions: options,
+      controllers,
+      initialOptions: this.#initialOptions,
+      mode: this.#config.globalOnly ? "global-only" : (this.#config.getControllers ? "controller-based" : "device-only"),
+      type: "model:loaded"
+    });
+  }
+
+  /**
+   * Re-enter the page through a fresh `show()` cycle, surfacing a failure as a toast rather than as an unobserved rejection.
+   *
+   * Every re-entry the page offers goes through here: the connection-error view's retry, the sidebar refresh's re-entry, and a coordinated write landing on a
+   * frame the boot owns. `show()` owns teardown, so each of them flushes any pending edit through its own `hide()` before the page signal aborts - which is why
+   * none of them calls `cleanup()`, whose abort-without-flush is exactly the dropped write they avoid. The re-show never rejects, so a throw out of a re-entered
+   * boot lands in the toast rather than replacing a result a caller has already computed.
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #reshow() {
+
+    try {
+
+      await this.show(this.#session);
+    } catch(err) {
+
+      toastError(err);
+    }
+  }
+
+  /**
+   * Commit the option value control that currently holds focus, if one does.
+   *
+   * The commit fires on the CONTROL rather than on whatever inside it holds focus, because the control is what a commit reads and what the view's delegation
+   * routes. For a plain field the two are the same element; for a composite one they are not, and a value the user typed into an editor's own field would
+   * otherwise never reach the store. It reaches only a value control inside the options table - the search field stages nothing and is deliberately outside it.
+   *
+   * @private
+   */
+  #commitFocusedValue() {
+
+    const control = document.activeElement?.closest?.(".fo-option-value");
+
+    if(control && control.closest("#configTable")) {
+
+      control.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  /**
+   * Whether this plugin is controller-based and has no controllers configured - the one case that gets the helper text instead of a page.
+   *
+   * @param {Object[]} controllers - The controller list just fetched.
+   * @returns {boolean} True when a controller-based plugin's list is empty, false in every other mode and for any non-empty list.
+   * @private
+   */
+  #noControllersConfigured(controllers) {
+
+    return Boolean(this.#config.getControllers) && (controllers.length === 0);
+  }
+
+  /**
+   * Wait, bounded, for a coordinated write's commit to settle at the host.
+   *
+   * The teardown's flush chokepoint is what reads it, so a commit already in flight when the page tears down is waited for under the same bound the persist flush
+   * is, and a page cycle that follows a teardown therefore reads the host's configuration after that write rather than racing it.
+   *
+   * Two residuals come with that bound and neither is closed here. A host write stalled past it continues on its own and still lands, and the page stops blocking
+   * on it - the persist flush's own trade. And a commit issued AFTER the teardown has read this field is not waited for at all: it lands on its own, and the next
+   * cycle's configuration read answers with whatever the host holds when it runs. The same shape is what a `hide()` with no re-show - the Settings tab - meets,
+   * where the Settings form reads the host's model as of when it opened.
+   *
+   * The save is deliberately outside this wait. `sync()` reads the host's in-memory configuration, which the commit has already updated, so the save to disk
+   * gates nothing the page goes on to read.
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #awaitPendingCommit() {
+
+    const commit = this.#pendingCommit;
+
+    if(!commit) {
+
+      return;
+    }
+
+    await Promise.race([ commit, delay(FLUSH_TEARDOWN_TIMEOUT_MS) ]);
   }
 
   /**
@@ -1311,11 +1862,16 @@ export class webUiFeatureOptions {
    * rejecting. On timeout the in-flight commit continues independently and still lands if the host recovers; under that host-stall trade the no-hang guarantee
    * supersedes same-switch Settings-freshness.
    *
+   * A coordinated write's commit is waited for here too, under the same bound and with the same residual, so both callers of this chokepoint inherit that wait:
+   * a write already at the host when the page tears down settles before the teardown reports itself finished, and the next page cycle's config read therefore
+   * follows it rather than racing it.
+   *
    * @returns {Promise<void>}
    */
   async #flushPending() {
 
     await Promise.race([ this.#flushPersist?.() ?? Promise.resolve(), delay(FLUSH_TEARDOWN_TIMEOUT_MS) ]);
+    await this.#awaitPendingCommit();
   }
 
   /**
@@ -1331,6 +1887,15 @@ export class webUiFeatureOptions {
   async hide() {
 
     await this.#flushPending();
+
+    /* An epoch that aborted while the flush ran means a newer page copy has taken the window, and hiding the regions would blank the page that copy has already
+     * rendered into. Return before any of it: the cycle's own abort has already cascaded from the epoch through the listener show() composed, so there is nothing
+     * left for the teardown below to do either.
+     */
+    if(this.#epochSignal?.aborted) {
+
+      return;
+    }
 
     for(const id of REGION_IDS) {
 
@@ -1461,19 +2026,8 @@ export class webUiFeatureOptions {
 
         connectionErrorPanel: this.#config.connectionErrorPanel,
 
-        // Retry routes through show(), which owns teardown: its internal `await this.hide()` flushes any debounced edit before aborting the page signal, so a retry
-        // cannot drop a pending write. We deliberately do not call cleanup() here - cleanup() aborts the signal without flushing, which is exactly the drop we avoid.
-        // The retry button fires this as `void onRetry()`, so a rejection is otherwise unobserved; the try/catch surfaces a failed re-show as an error toast instead.
-        onRetry: async () => {
-
-          try {
-
-            await this.show(this.#session);
-          } catch(err) {
-
-            toastError(err);
-          }
-        },
+        // The retry button fires this as `void onRetry()`, so a rejection would otherwise go unobserved; the shared re-show surfaces a failed re-entry as a toast.
+        onRetry: () => this.#reshow(),
         retryDelayMs: this.#config.controllerRetryEnableDelayMs,
         root: headerInfo,
         signal,
@@ -1526,18 +2080,9 @@ export class webUiFeatureOptions {
         labelDevices: this.#config.labelDevices,
 
         // The sidebar refresh's re-entry, composed here for the same reason the connection-error view's retry is: re-showing the page is lifecycle work, which the
-        // orchestrator owns and a view never should. show() flushes any pending edit through its own hide() before tearing down, so a refresh cannot drop a write,
-        // and the try/catch surfaces a failed re-show as a toast rather than an unobserved rejection - the plugin's handler has already succeeded by this point.
-        onReenter: async () => {
-
-          try {
-
-            await this.show(this.#session);
-          } catch(err) {
-
-            toastError(err);
-          }
-        },
+        // orchestrator owns and a view never should. The plugin's own handler has already succeeded by this point, so a failed re-entry is the shared re-show's
+        // toast rather than an unobserved rejection.
+        onReenter: () => this.#reshow(),
         refresh: this.#config.sidebarRefresh,
         rootControllers: controllersContainer,
         rootDevices: devicesContainer,
@@ -1699,7 +2244,9 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
  * on the reasoning `#devicesFor` gives: a plugin reading it wants the shape it should have resolved, not a fragment of it.
  *
  * Each caller routes the failure differently, and deliberately: show() catches it into the connection-error view, because no plugin code is on its call stack to
- * receive it, while refreshControllers lets it reach the caller that asked for the refresh and wrote the hook.
+ * receive it, while refreshControllers lets it reach the caller that asked for the refresh and wrote the hook. A wrong shape answering a coordinated write's own
+ * refetch - after that write has already landed - re-enters show(), which routes it to the retry view: the configuration changed whatever the hook answered, so
+ * the page cannot be left standing on the model the write replaced.
  */
 const assertControllerListResult = (result) => {
 
@@ -1713,6 +2260,11 @@ const assertControllerListResult = (result) => {
 
   return result;
 };
+
+// The session's saved options, as an array. Every read of them goes through here - the editing buffer's pre-model answer, the boot's model load, and a coordinated
+// write's before-and-after comparison - so a config whose options key is missing or holds something other than an array reads as an empty set everywhere rather
+// than as an empty set in some places and a surprise in others.
+const platformOptions = (session) => Array.isArray(session?.platform?.options) ? session.platform.options : [];
 
 // Set-wise equality on two string arrays. Used to decide whether a re-loaded options array represents a genuine save (different set) or a no-op reorder (same set).
 // O(n) via Set.symmetricDifference; duplicate-insensitive matches buildConfigIndex's first-write-wins semantics for the configured-options array it operates over.

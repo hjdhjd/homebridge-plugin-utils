@@ -4,10 +4,9 @@
  */
 "use strict";
 
-import { createElement, createSvgElement, errorMessage, toastError } from "../utils.mjs";
+import { completeControllerSelection, fetchControllerDevices } from "../effects/deviceFetch.mjs";
+import { createElement, createSvgElement, toastError } from "../utils.mjs";
 import { effect } from "../store.mjs";
-import { scopingControllerId } from "../selectors.mjs";
-import { withDeadline } from "../../webUi-liveness.mjs";
 
 /**
  * Mount the sidebar navigation view.
@@ -32,17 +31,16 @@ import { withDeadline } from "../../webUi-liveness.mjs";
  *   - `scope:changed` - repaint both containers' highlighting without rebuilding.
  *   - `model:loaded` - initial build (controllers + global link + mode-aware structure).
  *
- * The controller-click handler does I/O: it records the fetch at the store (`devices:requested`, which mints the fetch sequence), calls the caller-supplied
- * `getDevices` callback for the new controller's DeviceListResult, then stamps the outcome onto a `devices:loaded` carrying that sequence. The reducer applies the
- * outcome only when it still answers the pending request, so the sequence is the fetch identity and the newest click owns the store: a superseded controller click's
- * outcome - whether it resolved with devices or rejected - is dropped at the reducer rather than overwriting the newer click's rendered state. A failed fetch's
- * message travels back on that same `devices:loaded` (empty devices, non-empty error), which the reducer turns into the connection-error transition. The handler
- * wraps its fetch in a try/catch so a rejected fetch becomes that same outcome rather than an unhandled rejection; the view layer never silently swallows a failure. The
- * fetch is deadline-bounded, so a click against a bridge that never answers reaches that same catch instead of leaving the sidebar waiting on a device list forever.
+ * The controller-click handler does I/O, through the shared {@link fetchControllerDevices}: the fetch records itself at the store, calls the caller-supplied
+ * `getDevices` callback for the new controller's DeviceListResult, and stamps the outcome back, where the reducer applies it only while it still answers the
+ * pending request - so a superseded controller click's outcome, whether it resolved with devices or rejected, is dropped there rather than overwriting the newer
+ * click's rendered state. Every failure arrives as an outcome rather than a rejection, so the click has none to swallow, and the fetch is deadline-bounded, so a
+ * click against a bridge that never answers renders the failure instead of leaving the sidebar waiting on a device list forever. What belongs to the click itself
+ * is the pair of decisions around that fetch: the optimistic scope ahead of it, and the selection that continues onto the controller-as-device row behind it.
  *
- * A reported failure may decorate itself with its own headline and guidance, which travel back on the same result and pass through to the outcome dispatch untouched.
- * The view neither reads nor defaults them - which failure this was is the plugin's knowledge and how it renders is the reducer's, so the click's only job is to carry
- * the copy across. A rejection has no result to carry copy on, so its outcome falls back to this view's configured guidance and the framework's headline.
+ * A reported failure may decorate itself with its own headline and guidance, which travel back on the same result and reach the outcome untouched - which failure
+ * this was is the plugin's knowledge and how it renders is the reducer's. A rejection has no result to carry copy on, so its outcome falls back to this view's
+ * configured guidance and the framework's headline, while a deadline expiry carries the copy table's own words for a plugin that stopped answering.
  *
  * @param {Object} args
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.
@@ -445,9 +443,9 @@ const applyDevicesHighlight = (root, scope) => {
   }
 };
 
-// Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally
-// fetch the new controller's DeviceListResult via the caller-supplied `getDevices` callback, carrying the failure's display copy on the outcome - whatever the result
-// named, and the plugin's controller-failure guidance beneath it - so a click that cannot reach its controller reads exactly as a boot that cannot.
+// Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally run
+// the shared controller fetch over the caller-supplied `getDevices` callback, which carries the failure's display copy on its outcome - whatever the result named,
+// and the plugin's controller-failure guidance beneath it - so a click that cannot reach its controller reads exactly as a boot that cannot.
 const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevices, signal, store }) => {
 
   const navLink = event.target.closest(".nav-link[data-navigation]");
@@ -473,8 +471,9 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
 
     case "controller": {
 
-      // Optimistic scope update before the fetch so the sidebar highlight repaints immediately. The fetch's outcome lands through the request/outcome pairing
-      // below - the reducer owns both the staleness decision and the failure transition - and a devices-bearing outcome selects the controller-as-device entry.
+      // Optimistic scope update before the fetch so the sidebar highlight repaints immediately. The fetch's outcome lands through the shared fetch's own
+      // request-and-outcome pairing - the reducer owns both the staleness decision and the failure transition - and a clean one continues onto the
+      // controller-as-device entry.
       store.dispatch({ scope: { controllerId: deviceSerial, kind: "controller" }, type: "scope:changed" });
 
       if(!getDevices) {
@@ -482,59 +481,13 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
         return;
       }
 
-      // Record this fetch at the store's chokepoint before awaiting, then read back the minted sequence - the store's ticket for this fetch. The newest click owns
-      // the pending slot, so a superseded click's outcome finds its sequence gone when it lands and drops at the reducer.
-      store.dispatch({ controllerId: deviceSerial, type: "devices:requested" });
+      /* Gate the follow-up on the fetch's own verdict, which is the reducer's: continue onto the controller-as-device row only when this fetch's outcome is the
+       * one that applied and carried no failure. A superseded outcome, a connection failure, an empty list, and a list carrying no row the plugin's
+       * `isController` names each leave the optimistic controller scope standing, which is exactly the resting place a nothing-to-list notice renders over.
+       */
+      if(await fetchControllerDevices({ controllerId: deviceSerial, deadlineSeconds, failureGuidance, getDevices, signal, store })) {
 
-      const seq = store.state.devicesRequest.seq;
-
-      try {
-
-        const controller = store.state.controllers.find((c) => c.serialNumber === deviceSerial);
-
-        // Bound the fetch. The plugin's hook goes through the same bridge every other host call does, so an unanswered click would otherwise leave the sidebar
-        // highlighted on a controller whose devices never arrive - the deadline turns that into the rejection the catch below already knows how to render.
-        const { devices, emptyMessage, error, guidance, headline } = await withDeadline({ promise: getDevices(controller ?? null), seconds: deadlineSeconds, signal });
-
-        // Bail if the page tore down; a torn-down store must not be dispatched against. Staleness itself is the reducer's job - it drops an outcome whose sequence no
-        // longer answers the pending request.
-        if(signal.aborted) {
-
-          return;
-        }
-
-        // The copy is included unconditionally: the reducer reads it only on the fold a non-empty error triggers and ignores it on a success, so one dispatch shape
-        // serves both outcomes. What the result named wins over the configured guidance, which stands in for every failure this plugin can have rather than for the
-        // one that just happened; a result naming neither leaves both fallbacks in place.
-        store.dispatch({ controllerId: deviceSerial, devices, emptyMessage, error, guidance: guidance ?? failureGuidance, headline, seq, type: "devices:loaded" });
-
-        /* Gate the follow-up on the reducer's own verdict: select the controller-as-device row only when my outcome is the one that applied, carried no failure, and
-         * brought a list carrying the row the plugin's `isController` names - whose serial is the controller's scoping identity, which is what the derivation below
-         * answers with. Read it after the dispatch above, because the derivation reads the applied list.
-         *
-         * A superseded outcome, a connection failure (the reducer moved the store to connection-error), an empty list, and a list with no such row each leave the
-         * optimistic controller scope standing with no device-scope dispatch. That resting place is exactly what a nothing-to-list notice renders over, so those
-         * cases need nothing here beyond the decline they already make.
-         */
-        const deviceId = scopingControllerId(store.state);
-
-        if((store.state.devicesAppliedSeq !== seq) || error.length || (deviceId === null)) {
-
-          return;
-        }
-
-        store.dispatch({ scope: { controllerId: deviceSerial, deviceId, kind: "device" }, type: "scope:changed" });
-      } catch(err) {
-
-        // The page-teardown bail guards the reject path too. Route the rejection (an IPC failure, the contract-guard TypeError) through the same outcome channel: the
-        // reducer drops it if a newer click superseded this one, and otherwise clears the stale device list and moves the store to connection-error. A named Error
-        // reaches the user verbatim; other junk is stringified.
-        if(signal.aborted) {
-
-          return;
-        }
-
-        store.dispatch({ controllerId: deviceSerial, devices: [], error: errorMessage(err), guidance: failureGuidance, seq, type: "devices:loaded" });
+        completeControllerSelection({ controllerId: deviceSerial, store });
       }
 
       return;

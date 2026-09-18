@@ -269,6 +269,23 @@ describe("createFakeHomebridge - updatePluginConfig", () => {
     config[0].name = "MutatedAfter";
     assert.equal(fake.observed.updatedConfigs[0][0].name, "PluginA", "the recorded snapshot must be immune to post-call mutation of the source");
   });
+
+  test("a write advances the configuration the next read answers, held separately from the write log", async () => {
+
+    const fake = createFakeHomebridge({ config: [{ name: "Seeded" }] });
+    const next = [{ name: "Written" }];
+
+    await fake.updatePluginConfig(next);
+
+    const read = await fake.getPluginConfig();
+
+    // The real host's write replaces the in-memory configuration its reads answer from, which is what lets a page write, re-sync, and see what it wrote. The
+    // assertions below are the whole contract: the read answers what was written, and the held configuration aliases neither the caller's array nor the write log's
+    // record, so a test that edits what the fake holds cannot rewrite the record of what was written.
+    assert.deepEqual(read, next, "the read after a write must answer the written configuration");
+    assert.notEqual(read, next, "the held configuration must be a clone, not the caller's own array");
+    assert.notEqual(read, fake.observed.updatedConfigs.at(-1), "the held configuration must not be the same object as the write log's record");
+  });
 });
 
 describe("installHomebridge", () => {

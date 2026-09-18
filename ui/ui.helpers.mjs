@@ -205,9 +205,10 @@ export function createSkeletonFeatureOptionsDom({ misnestDeviceStats = false } =
  *
  * State shape:
  *
- *   - `config` - the plugin configuration array the orchestrator reads via `getPluginConfig`. Tests seed it at construction; it is also exposed as a settable `config`
- *     accessor on the returned bridge so a test can reassign it to a NEW array to simulate an external Settings-tab edit landing between two reads (in-place mutation
- *     of the same array would be vacuous, since the session's `platform` getter aliases the previously-read reference).
+ *   - `config` - the plugin configuration array the orchestrator reads via `getPluginConfig`. Tests seed it at construction; the bridge's own `updatePluginConfig`
+ *     replaces it the way the real host's write does, and it is also exposed as a settable `config` accessor on the returned bridge so a test can reassign it to a NEW
+ *     array to simulate an external Settings-tab edit landing between two reads (in-place mutation of the same array would be vacuous, since the session's `platform`
+ *     getter aliases the previously-read reference).
  *   - `cachedAccessories` - what `getCachedAccessories` returns. Default `[]`.
  *   - `lightingMode` - what `userCurrentLightingMode` returns. Default `"light"`.
  *   - `requestResponses` - a Map<path, response> consulted by `request(path)`. Defaults to empty; unknown paths resolve with `null`.
@@ -229,9 +230,10 @@ export function createSkeletonFeatureOptionsDom({ misnestDeviceStats = false } =
  */
 export function createFakeHomebridge(init = {}) {
 
-  // The plugin-config backing is a `let` so a test can reassign `fake.config` to a NEW array between two reads - the way an external Settings-tab edit lands in the
-  // host's in-memory model while the feature-options page is hidden. The session re-reads via getPluginConfig on every page entry, so a fresh array reference here is
-  // what a sync()-driven re-read observes.
+  // The plugin-config backing is a `let` because it is replaced rather than mutated in place: the bridge's own updatePluginConfig advances it as the real host's
+  // write does, and a test reassigns `fake.config` to a NEW array between two reads - the way an external Settings-tab edit lands in the host's in-memory model while
+  // the feature-options page is hidden. The session re-reads via getPluginConfig on every page entry, so a fresh array reference here is what a sync()-driven re-read
+  // observes.
   let config = init.config ?? [];
   const cachedAccessories = init.cachedAccessories ?? [];
   const lightingMode = init.lightingMode ?? "light";
@@ -328,10 +330,14 @@ export function createFakeHomebridge(init = {}) {
       warning: makeToast("warning")
     },
 
+    // Plugin configuration writes. The real host's write replaces the in-memory configuration its reads answer from, so a page that writes and then re-syncs sees
+    // what it wrote...the fake does the same. The held configuration and the recorded payload are separate clones: a test that reassigns or edits what the fake
+    // holds must not rewrite the record of what was written, and neither must a later write disturb an earlier record.
     updatePluginConfig: async (next) => {
 
       calls.push("updatePluginConfig");
       updatedConfigs.push(structuredClone(next));
+      config = structuredClone(next);
     },
 
     // Theme introspection.

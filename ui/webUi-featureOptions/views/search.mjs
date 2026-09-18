@@ -76,7 +76,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
 
       // Build the panel content. The view never reveals its own region; the orchestrator owns region visibility and reveals the search panel via revealRegions once the
       // populated UI is ready, so the search box and its metrics do not flash in before the rest of the page.
-      buildPanel({ debounce: scheduleSearchDispatch, refs, root });
+      buildPanel({ refs, root });
     },
     signal,
     store

@@ -1090,6 +1090,116 @@ describe("webUiFeatureOptions - the boot window", () => {
 
     orchestrator.cleanup();
   });
+
+  // A controller-based page whose hooks count what they are asked for: the two rows below are about how MANY boots a gesture produces, so the counters are the
+  // whole observation. Every hook answers synchronously, which keeps the entries' overlap to the teardown window the page opens for itself.
+  const countingPage = ({ controllerRetryEnableDelayMs } = {}) => {
+
+    const counts = { controllers: 0, loaded: 0 };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => {
+
+        counts.controllers += 1;
+
+        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
+      },
+
+      getDevices: () => ({ devices: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Front Door", serialNumber: "DEV-1" } ], error: "" }),
+      onLoaded: () => { counts.loaded += 1; },
+      ui: { controllerRetryEnableDelayMs, isController: (device) => device?.serialNumber === "CTRL-A" }
+    });
+
+    return { counts, orchestrator };
+  };
+
+  /* Two entries into one instance, close enough together that the second arrives while the first is still inside the teardown its own entry started. That is one
+   * user gesture landing twice - a double click on the menu - and it must produce one page. What makes the window real is that hide() is awaited: without an entry
+   * generation both entries pass their epoch check, both come out of the same teardown, and both mint a cycle, leaving the first cycle's store, effects, and
+   * listeners standing unaborted behind the second's. The counters are the observation, and the edit at the end is what proves the cycle that stood is the live
+   * one rather than a torn-down winner: an aborted cycle's persist effect drops the edit and nothing reaches the host at all.
+   */
+  test("two show() entries inside one teardown window mint one cycle between them", async () => {
+
+    using dom = createTestDom();
+
+    const { fake, homebridgeGuard, skeleton } = arrangePage();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const { counts, orchestrator } = countingPage();
+    const session = await openTestSession();
+
+    await Promise.all([ orchestrator.show(session), orchestrator.show(session) ]);
+    await flush();
+
+    assert.equal(counts.controllers, 1, "one boot fetched the controllers - a second fetch would mean a second cycle was minted");
+    assert.equal(counts.loaded, 1, "and one boot announced itself to the plugin");
+
+    skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+
+    const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
+
+    motionCheckbox.checked = false;
+    motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await settlePersist();
+
+    assert.equal(fake.observed.updatedConfigs.length, 1, "the standing cycle's persist effect is live, and its one write is the only one the host saw");
+
+    orchestrator.cleanup();
+  });
+
+  /* The same window opened by two different affordances rather than by one clicked twice: the connection-error view's retry re-enters through the page's own
+   * re-show while a menu entry is already inside its teardown. The retry is the later entry, so the page is the retry's and the menu entry mints nothing. The toast
+   * assertion is what makes the losing entry's silence part of the contract - the re-show routes a rejection into a toast, and an entry that returns before minting
+   * has nothing to reject with. The zero retry-enable delay arms the button at once, since a click on a button not yet armed reaches nothing and would leave the
+   * row asserting against a gesture that never happened.
+   */
+  test("the connection-error retry racing a menu entry boots once and raises no toast", async () => {
+
+    using dom = createTestDom();
+
+    const { fake, homebridgeGuard, skeleton } = arrangePage();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const { counts, orchestrator } = countingPage({ controllerRetryEnableDelayMs: 0 });
+    const session = await openTestSession();
+    const read = fake.getPluginConfig;
+
+    // A failed config read is what puts the page on the connection-error frame the retry belongs to.
+    fake.getPluginConfig = async () => {
+
+      throw new Error("host read failed");
+    };
+
+    await orchestrator.show(session);
+    await flush();
+
+    const retryButton = await waitFor(() => {
+
+      const button = skeleton.headerInfo.querySelector("button.btn-warning");
+
+      return (button && !button.disabled) ? button : null;
+    }, { message: "the retry button to arm" });
+
+    fake.getPluginConfig = read;
+
+    const menuEntry = orchestrator.show(session);
+
+    retryButton.click();
+
+    await menuEntry;
+    await waitFor(() => counts.loaded > 0, { message: "a boot to announce itself" });
+    await flush();
+
+    assert.equal(counts.controllers, 1, "one boot fetched the controllers, though two affordances asked for one");
+    assert.equal(counts.loaded, 1, "and one boot announced itself");
+    assert.equal(fake.observed.toasts.length, 0, "the entry that lost the window returned quietly: it had nothing to fail at and nothing to say");
+
+    orchestrator.cleanup();
+  });
 });
 
 describe("webUiFeatureOptions.hide", () => {

@@ -94,9 +94,9 @@ export class webUi {
    */
   liveness;
 
+  #chromeBound = false;
   #epochSignal;
   #firstRun;
-  #menuBound = false;
   #name;
   #resumeDetector;
   #session;
@@ -110,8 +110,8 @@ export class webUi {
    * `onSubmit` and the unspecified slots stay at the defaults that keep the flow driveable.
    *
    * Construction is also the page's retirement chokepoint: it aborts the epoch of whichever copy held the window and claims the window for this one, which retires
-   * the abandoned copy whole - its liveness subscriptions, its orchestrator cycle and every view effect and host listener that cycle scopes, its menu handlers, and
-   * any late launch settlement that would otherwise repaint shared chrome.
+   * the abandoned copy whole - its liveness subscriptions, its orchestrator cycle and every view effect and host listener that cycle scopes, its chrome handlers,
+   * and any late launch settlement that would otherwise repaint shared chrome.
    *
    * @param {WebUiConfig} [options] - Configuration options for the webUI. All fields are optional; firstRun's hooks fall back to no-op handlers, and
    * featureOptions/name simply default to undefined.
@@ -221,7 +221,7 @@ export class webUi {
    * `MutationObserver`, an interval, a subscription to a foreign API - takes the `epochSignal.addEventListener("abort", ...)` teardown idiom that getter documents.
    *
    * A nullish target registers nothing. An element the page's markup omits declares that surface absent rather than marking the page broken, which is the stance the
-   * menu bindings take on their own buttons, so a plugin may register straight against `document.getElementById(...)` output without guarding each site. The cost
+   * chrome bindings take on their own buttons, so a plugin may register straight against `document.getElementById(...)` output without guarding each site. The cost
    * this accepts is that a mistyped element id reads as an omitted surface and registers in silence, so a listener that never fires is first checked against the id
    * it was registered on.
    *
@@ -238,7 +238,7 @@ export class webUi {
    */
   on(target, event, handler, options) {
 
-    // An element the page's markup omits declares that surface absent - the menu binder's own posture - so a nullish target registers nothing rather than treating
+    // An element the page's markup omits declares that surface absent - the chrome binder's own posture - so a nullish target registers nothing rather than treating
     // the page as broken. The trade this accepts is documented on the method: a mistyped element id also lands here, silently.
     if(!target) {
 
@@ -347,53 +347,84 @@ export class webUi {
   }
 
   /**
+   * Run an entry point's work, reporting its failure and settling its chrome only while this copy still speaks for the page.
+   *
+   * Every entry point in this shell repeats one skeleton: run some async work, report a failure to the user, settle the chrome the work brackets. The toast, the
+   * spinner, the menu, the schema form, and the boot monitor are all chrome of the frame the browser reuses across panel opens rather than of any one module copy,
+   * so a copy a successor has replaced leaves every one of them alone whichever way its own work settled. Reporting would put a stale diagnostic over the
+   * successor's working page; hiding the spinner would pull it out from under the successor's own in-flight launch; standing the boot monitor down would retract a
+   * panel raised for a page this copy no longer speaks for.
+   *
+   * The epoch is tested here rather than at each entry point's own catch and finally for the reason the feature-options cycle keeps its staleness chokepoint: a
+   * test written once is a rule the code enforces, while the same test repeated at every failure path is a rule each future one has to remember. The stop a
+   * superseded continuation raises - `throwIfAborted()` after an await - arrives in this catch as the abort reason and is discarded by that same test, so the two
+   * mechanisms settle into one answer.
+   *
+   * @param {Object} args
+   * @param {(err: *) => void} [args.failed] - Reports a failure to the user. Defaults to the shared error-toast normalization.
+   * @param {() => Promise<void>} args.run - The entry point's own async work.
+   * @param {() => void} [args.settled] - The chrome work owed however that work settles. Defaults to nothing owed.
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #runEntryPoint({ failed = toastError, run, settled = () => {} }) {
+
+    try {
+
+      await run();
+    } catch(err) {
+
+      if(this.#epochSignal.aborted) {
+
+        return;
+      }
+
+      failed(err);
+    } finally {
+
+      if(!this.#epochSignal.aborted) {
+
+        settled();
+      }
+    }
+  }
+
+  /**
    * Render the webUI.
    *
-   * Public entry point Homebridge invokes when the configuration UI is opened. Delegates the actual rendering to {@link #launchWebUI}; this wrapper exists to
-   * standardize error handling (a launch failure becomes a user-facing toast rather than a silent broken UI) and to guarantee the spinner is hidden no matter how
-   * the launch settles. The `finally` runs after the awaited launch resolves or rejects, so the spinner stays visible for the full duration of the async setup
-   * rather than disappearing the moment the synchronous portion of the call returns.
+   * Public entry point Homebridge invokes when the configuration UI is opened. Delegates the actual rendering to {@link #launchWebUI} and runs it through
+   * {@link #runEntryPoint}, which is what turns a launch failure into a user-facing toast rather than a silent broken UI and guarantees the spinner is hidden no
+   * matter how the launch settles. The boundary's settle work runs after the awaited launch resolves or rejects, so the spinner stays visible for the full duration
+   * of the async setup rather than disappearing the moment the synchronous portion of the call returns.
    *
    * @returns {Promise<void>}
    * @public
    */
   async show() {
 
-    try {
+    return this.#runEntryPoint({
 
-      await this.#launchWebUI();
-    } catch(err) {
+      failed: (err) => {
 
-      // A superseded copy settles its launch late - the stalled session open it was holding expires or heals long after a reopen replaced it - and the toast and the
-      // menu below are shared chrome the successor now owns. Bail before touching either: the failure belongs to a page nobody is looking at any more, so reporting
-      // it would put a stale diagnostic over the successor's working page. This is the #unlessStale discipline the feature-options cycle already runs on, applied at
-      // this layer against this layer's own lifetime.
-      if(this.#epochSignal.aborted) {
+        // The outermost user-facing diagnostic in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape, so the shared
+        // toastError normalization extracts a useful message regardless of what bubbled out of `#launchWebUI`.
+        this.#toastLaunchFailure(err);
 
-        return;
-      }
+        // A launch that never established a session has rendered nothing, so the menu is the only way forward the user has - and it starts hidden. Reveal it here,
+        // and only here: the first-run route keeps it hidden on purpose until that flow completes, and a failure that happened after routing has already revealed
+        // it.
+        if(!this.#session) {
 
-      // The outermost user-facing diagnostic in the webUI. Caller-supplied first-run handlers and other extension points can throw any shape, so the shared
-      // toastError normalization extracts a useful message regardless of what bubbled out of `#launchWebUI`.
-      this.#toastLaunchFailure(err);
+          const menuWrapper = document.getElementById("menuWrapper");
 
-      // A launch that never established a session has rendered nothing, so the menu is the only way forward the user has - and it starts hidden. Reveal it here, and
-      // only here: the first-run route keeps it hidden on purpose until that flow completes, and a failure that happened after routing has already revealed it.
-      if(!this.#session) {
+          if(menuWrapper) {
 
-        const menuWrapper = document.getElementById("menuWrapper");
-
-        if(menuWrapper) {
-
-          menuWrapper.style.display = "inline-flex";
+            menuWrapper.style.display = "inline-flex";
+          }
         }
-      }
-    } finally {
-
-      // The spinner and the boot monitor are the same shared chrome the catch above guards, so a superseded copy's settlement leaves both alone: hiding the spinner
-      // would pull it out from under the successor's own in-flight launch, and standing the boot monitor down would retract a panel raised for a page this copy no
-      // longer speaks for.
-      if(!this.#epochSignal.aborted) {
+      },
+      run: () => this.#launchWebUI(),
+      settled: () => {
 
         homebridge.hideSpinner();
 
@@ -402,24 +433,20 @@ export class webUi {
         // a stamped region that carries no boot monitor.
         globalThis.webUiBoot?.ready?.();
       }
-    }
+    });
   }
 
   /**
    * Show the first-run user experience.
    *
-   * Wires the submit button to run the caller-supplied submit handler, swap the page from first-run to feature-options, and hand off to the feature-options view.
-   * The save button stays disabled until the user completes the first-run flow so a partially-configured plugin cannot be written back to disk. A submit failure
-   * surfaces as an error toast, and where the failure landed decides what the user is left looking at: a rejected submit throws before the page swap and leaves the
-   * first-run page fully visible for another attempt, while a failure during the feature-options handoff after a successful submit leaves the main shell visible with
-   * the menu still usable for recovery.
+   * Runs the caller-supplied start handler so the plugin can populate its form and take any startup step it needs, disables the save button so a
+   * partially-configured plugin cannot be written back to disk before the user completes the flow, and reveals the first-run page. The submit button is wired for
+   * the page's lifetime in {@link #bindChromeListeners} rather than here, so a repeated launch leaves exactly one handler on it.
    *
    * @returns {Promise<void>}
    * @private
    */
   async #showFirstRun() {
-
-    const buttonFirstRun = document.getElementById("firstRun");
 
     // Inject the primary platform-config entry so the hook reads its config from its argument rather than reaching for the session or the host. onStart only reads
     // (it pre-populates the form), so it receives config without the writer.
@@ -430,11 +457,30 @@ export class webUi {
 
     homebridge.disableSaveButton();
 
-    buttonFirstRun.addEventListener("click", async () => {
+    document.getElementById("pageFirstRun").style.display = "block";
+  }
 
-      homebridge.showSpinner();
+  /**
+   * Run the first-run submit: the caller's submit handler, the page swap, and the handoff to the feature-options view.
+   *
+   * Where a failure lands decides what the user is left looking at. A rejected onSubmit - a failed login, a configuration that did not validate - throws before the
+   * page swap, so the first-run page stays fully visible for another attempt; a rejection from the feature-options handoff after a successful submit throws after
+   * the swap, so the main shell is visible with the menu still usable for recovery. Either way {@link #runEntryPoint} is the diagnostic, through the shared
+   * error-toast normalization its default carries.
+   *
+   * The spinner is raised here rather than inside the boundary's run, so the boundary's settle work is what brings it down: it then brackets the whole flow and
+   * drains on every path a live copy can take, the early bail on a falsy submit answer included.
+   *
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #submitFirstRun() {
 
-      try {
+    homebridge.showSpinner();
+
+    return this.#runEntryPoint({
+
+      run: async () => {
 
         // onSubmit is the one write hook: it validates credentials and persists them. It receives both the current config and a `commit` bound to the session's
         // single write path, so the hook owns the shape of the write (it knows credentials live under the controllers array) while the session owns persistence.
@@ -444,28 +490,21 @@ export class webUi {
         }
 
         // Swap from the first-run page to the main configuration UI and hand off to the feature-options view. The feature-options surface manages its own
-        // progressive disclosure - page-shell visible immediately, regions populating as their I/O resolves - so the click handler's spinner is the only one that
-        // brackets this transition. The `try/finally` ensures it comes down on every exit path, including the early bail above.
+        // progressive disclosure - page-shell visible immediately, regions populating as their I/O resolves - so this flow's spinner is the only one that brackets
+        // the transition.
         document.getElementById("pageFirstRun").style.display = "none";
         document.getElementById("menuWrapper").style.display = "inline-flex";
 
         await this.featureOptions.show(this.#session);
 
+        // featureOptions.show() returns quietly on a copy a successor has replaced, so without this stop a copy that no longer speaks for the page would go on to
+        // enable the save button over the successor's own first-run flow.
+        this.#epochSignal.throwIfAborted();
+
         homebridge.enableSaveButton();
-      } catch(err) {
-
-        // A first-run submit can throw from either the onSubmit handler or the feature-options handoff, and where it threw decides what the user is left looking
-        // at. A rejected onSubmit (a failed login or configuration validation) throws before the page swap, so the first-run page stays fully visible for another
-        // attempt. A rejection from featureOptions.show() after a successful submit throws after the swap, so the main shell is visible with the menu still usable
-        // for recovery. Either way the toast is the diagnostic, and the finally below brings the spinner down.
-        toastError(err);
-      } finally {
-
-        homebridge.hideSpinner();
-      }
+      },
+      settled: () => homebridge.hideSpinner()
     });
-
-    document.getElementById("pageFirstRun").style.display = "block";
   }
 
   /**
@@ -473,32 +512,33 @@ export class webUi {
    *
    * The menuFeatureOptions button re-enters the feature-options view. `featureOptions.show()` can reject - a catalog fault such as a picker source with no resolver
    * throws straight through by design, since no retry could repair a catalog, and so does a caller-supplied loaded-model hook that throws - and the click listener
-   * drops the returned promise, so this method brackets the re-entry in a try/catch that surfaces a failed re-show as an error toast rather than an unobserved
-   * rejection.
+   * drops the returned promise, so this method runs the re-entry through {@link #runEntryPoint}, which surfaces a failed re-show as an error toast rather than an
+   * unobserved rejection.
    *
    * When no session exists, the click re-runs the launch instead. That is the recovery path for a launch whose config read never answered: the menu is bound and the
    * user is looking at a toast, so the one affordance they have must re-attempt the open rather than hand `show()` a session that was never established. The
-   * menu-binding guard keeps the re-launch from stacking a second set of listeners.
+   * one-shot chrome binder keeps the re-launch from stacking a second set of listeners.
    *
    * @returns {Promise<void>}
    * @private
    */
   async #showFeatureOptions() {
 
-    try {
+    return this.#runEntryPoint({
 
-      if(!this.#session) {
+      failed: (err) => this.#toastLaunchFailure(err),
+      run: async () => {
 
-        await this.#launchWebUI();
+        if(!this.#session) {
 
-        return;
+          await this.#launchWebUI();
+
+          return;
+        }
+
+        await this.featureOptions.show(this.#session);
       }
-
-      await this.featureOptions.show(this.#session);
-    } catch(err) {
-
-      this.#toastLaunchFailure(err);
-    }
+    });
   }
 
   /**
@@ -523,9 +563,9 @@ export class webUi {
    * spinner brackets the paint so transient layout shifts are not visible to the user.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the schema form so any debounced-but-unwritten option edit is flushed into Homebridge's in-memory config model
-   * first - the Settings form then renders against the flushed config rather than a stale snapshot. The try/finally guarantees the spinner comes down and the tab
-   * reveals on every path - the flush drain's own failure surfaces via `persist:failed`'s toast rather than through a rejection here - so nothing strands the user
-   * on a spinner.
+   * first - the Settings form then renders against the flushed config rather than a stale snapshot. The reveal and the spinner are {@link #runEntryPoint}'s settle
+   * work, so they land on every path a live copy can take and nothing strands the user on a spinner. The flush drain's own failure surfaces via `persist:failed`'s
+   * toast rather than as a rejection here, and a rejection that contract rules out reaches the boundary's default toast with the tab painted regardless.
    *
    * @returns {Promise<void>}
    * @private
@@ -534,20 +574,21 @@ export class webUi {
 
     homebridge.showSpinner();
 
-    try {
+    return this.#runEntryPoint({
 
-      await this.featureOptions.hide();
-    } finally {
+      run: () => this.featureOptions.hide(),
+      settled: () => {
 
-      paintMenuTabs("menuSettings");
+        paintMenuTabs("menuSettings");
 
-      document.getElementById("pageSupport").style.display = "none";
-      document.getElementById("pageFeatureOptions").style.display = "none";
+        document.getElementById("pageSupport").style.display = "none";
+        document.getElementById("pageFeatureOptions").style.display = "none";
 
-      homebridge.showSchemaForm();
+        homebridge.showSchemaForm();
 
-      homebridge.hideSpinner();
-    }
+        homebridge.hideSpinner();
+      }
+    });
   }
 
   /**
@@ -557,8 +598,9 @@ export class webUi {
    * paint to mask transient layout shifts.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the support page so any debounced-but-unwritten option edit is flushed first, matching the Settings path. The
-   * try/finally guarantees the spinner comes down and the tab reveals on every path - the flush drain's own failure surfaces via `persist:failed`'s toast rather
-   * than through a rejection here.
+   * reveal and the spinner are {@link #runEntryPoint}'s settle work, so they land on every path a live copy can take. The flush drain's own failure surfaces via
+   * `persist:failed`'s toast rather than as a rejection here, and a rejection that contract rules out reaches the boundary's default toast with the tab painted
+   * regardless.
    *
    * @returns {Promise<void>}
    * @private
@@ -568,46 +610,52 @@ export class webUi {
     homebridge.showSpinner();
     homebridge.hideSchemaForm();
 
-    try {
+    return this.#runEntryPoint({
 
-      await this.featureOptions.hide();
-    } finally {
+      run: () => this.featureOptions.hide(),
+      settled: () => {
 
-      paintMenuTabs("menuHome");
+        paintMenuTabs("menuHome");
 
-      document.getElementById("pageSupport").style.display = "block";
-      document.getElementById("pageFeatureOptions").style.display = "none";
+        document.getElementById("pageSupport").style.display = "block";
+        document.getElementById("pageFeatureOptions").style.display = "none";
 
-      homebridge.hideSpinner();
-    }
+        homebridge.hideSpinner();
+      }
+    });
   }
 
   /**
    * Launch the webUI.
    *
-   * Wires the menu event listeners, opens the configuration session, and routes the user to either the feature-options view (when the caller's first-run gate says
-   * no) or the first-run flow (when it says yes). The session loads the host config once and seeds the minimum shape, so routing and every downstream reader share
-   * one config owner rather than fetching it independently. The menu is wired ahead of the session because it is the recovery affordance for an open that fails.
+   * Wires the page's chrome listeners, opens the configuration session, and routes the user to either the feature-options view (when the caller's first-run gate
+   * says no) or the first-run flow (when it says yes). The session loads the host config once and seeds the minimum shape, so routing and every downstream reader
+   * share one config owner rather than fetching it independently. The menu is wired ahead of the session because it is the recovery affordance for an open that
+   * fails.
    *
    * @returns {Promise<void>}
    * @private
    */
   async #launchWebUI() {
 
-    // Bind the persistent menu listeners before any I/O. The buttons are page chrome rather than session state - each handler reads the current `this.#session` at
+    // Bind the persistent chrome listeners before any I/O. The buttons are page chrome rather than session state - each handler reads the current `this.#session` at
     // click time - so binding first is what leaves the user a working menu when the open below never answers. The binder is a no-op on any subsequent launch, so the
     // recovery path's re-launch never stacks a second handler on each button.
-    this.#bindMenuListeners();
+    this.#bindChromeListeners();
 
     // Open the configuration session: one host read, seeded to the minimum shape. Routing, the first-run flow, and the feature-options page all read their config
     // from this single owner rather than re-fetching it independently - so the routing decision lands before any UI work begins and against the same data every
     // later reader sees.
     //
     // This is the page's FIRST bridge call, and an unbounded one would be the worst place to hang: nothing has rendered, so the user sees a spinner over an empty
-    // frame with no diagnostic and no way forward. The epoch signal exists here but is deliberately not bound to this deadline: a settlement that arrives after a
-    // supersession is caught afterward in show()'s catch via `this.#epochSignal.aborted`, so binding the deadline itself would add no correctness benefit, and its
-    // failure surfaces through show()'s toast with the menu left usable for another attempt.
+    // frame with no diagnostic and no way forward. The epoch signal exists here but is deliberately not bound to this deadline: a failure that arrives after a
+    // supersession is discarded at the entry-point boundary and a success that does is stopped by the check below, so binding the deadline itself would add no
+    // correctness benefit. A live copy's expiry surfaces through show()'s toast with the menu left usable for another attempt.
     this.#session = await withDeadline({ promise: PluginConfigSession.open({ host: homebridge, name: this.#name }), seconds: BOOT_AWAIT_DEADLINE_SECONDS });
+
+    // A stalled open settles long after a reopen replaced this copy - healed or expired - and every statement below runs plugin code or writes chrome the successor
+    // owns. Stop here so a copy nobody is looking at runs no first-run hook, reveals no menu, and shows no view.
+    this.#epochSignal.throwIfAborted();
 
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
     // flow returns true on a fresh config (no valid credentials yet), and a plugin without one keeps the default `() => false` gate and lands straight on feature
@@ -621,52 +669,60 @@ export class webUi {
       return;
     }
 
-    // Await first-run setup so the spinner-bracketed window in `show()` only closes after the first-run page is fully wired up - the onStart handler has resolved,
-    // the save button is disabled, the click listener is registered, and the page is visible. Returning before this would let `show()`'s `finally` hide the spinner
-    // while initialization is still in flight, leaving the user looking at a half-rendered first-run UI.
+    // Await first-run setup so the spinner-bracketed window in `show()` only closes after the first-run page is fully prepared - the onStart handler has resolved,
+    // the save button is disabled, and the page is visible. Returning before this would let `show()`'s settle work hide the spinner while initialization is still in
+    // flight, leaving the user looking at a half-rendered first-run UI.
     await this.#showFirstRun();
   }
 
   /**
-   * Bind the top-level menu click listeners exactly once for the webUI's lifetime.
+   * Bind the page's chrome click listeners exactly once for the webUI's lifetime.
    *
-   * The menu buttons are page chrome that persists across every show() cycle, so their listeners belong to the whole page rather than to any one show()'s teardown.
-   * A one-shot guard keeps a repeated #launchWebUI from stacking a second handler on each button, which would fire every tab switch twice. Each arrow reads the
-   * current this.#session through its #show* method, so a single persistent listener always acts on the latest session even after a re-launch replaces it.
+   * The menu buttons and the first-run submit button are page chrome that persists across every show() cycle, so their listeners belong to the whole page rather
+   * than to any one show()'s teardown. A one-shot guard keeps a repeated #launchWebUI from stacking a second handler on each button, which would fire every tab
+   * switch twice and run a submit twice per click. Each arrow reads the current this.#session through the method it calls, so a single persistent listener always
+   * acts on the latest session even after a re-launch replaces it.
    *
-   * Which buttons exist is the plugin's declaration rather than this framework's: the markup carries whatever menu surfaces the plugin offers, and every one the page
+   * Which buttons exist is the plugin's declaration rather than this framework's: the markup carries whatever surfaces the plugin offers, and every one the page
    * carries is bound here. A button the markup omits offers no entry to its view, which is the whole of what its absence means, so each bind steps over an id the
    * page does not carry rather than treating it as a broken page.
    *
+   * Binding ahead of the flow a button serves offers the user nothing early, which is why the first-run submit is bound here beside the menu rather than inside the
+   * first-run flow itself. What offers a button is the display of the page it sits on: the menu buttons are bound while menuWrapper is hidden and before any session
+   * exists, and pageFirstRun is displayed only once the session is open and the caller's onStart hook has agreed. A synthetic click on a hidden button is outside
+   * the page's contract and gets no defense of its own.
+   *
    * The epoch signal is what bounds them. The buttons themselves outlive any single module copy - they are elements of the reused frame, not of the copy that bound
    * them - so a copy that is superseded and whose handlers stayed attached would answer every click alongside the successor's, running each tab switch twice against
-   * two different sessions. Binding on the epoch retires this copy's set at the moment the successor claims the window.
+   * two different sessions and answering a submit for a page it no longer speaks for. Binding on the epoch retires this copy's set at the moment the successor
+   * claims the window.
    *
-   * Menu click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
-   * async handler's promise is dropped; the handlers own their error handling so the drop carries no unobserved rejection. #showFeatureOptions serves both the first
-   * click before a session exists and every re-entry, and wraps both in one try/catch that toasts a failure. The launch path rejects by design when the session open
-   * expires or the host refuses it and when a caller-supplied first-run hook throws; featureOptions.show() routes the failures a retry can repair (the config read, the
-   * controller and device lists, the feature catalog) into the connection-error view, and lets a catalog fault - a picker source with no resolver - and a
-   * caller-supplied loaded-model hook that throws go straight through, because each is the plugin's own code and no retry could repair it. Without the wrapper each of
-   * those would vanish into the dropped promise. #showSettings and #showSupport each bracket their navigate-away flush in a try/finally that reveals the next tab and
-   * drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's toast).
+   * Chrome click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
+   * async handler's promise is dropped; every handler runs its work through {@link #runEntryPoint}, which owns both the report and the settle, so the drop carries no
+   * unobserved rejection. #showFeatureOptions serves both the first click before a session exists and every re-entry, and toasts a failure from either. The launch
+   * path rejects by design when the session open expires or the host refuses it and when a caller-supplied first-run hook throws; featureOptions.show() routes the
+   * failures a retry can repair (the config read, the controller and device lists, the feature catalog) into the connection-error view, and lets a catalog fault - a
+   * picker source with no resolver - and a caller-supplied loaded-model hook that throws go straight through, because each is the plugin's own code and no retry
+   * could repair it. Without the boundary each of those would vanish into the dropped promise. #showSettings and #showSupport hand the boundary their navigate-away
+   * flush, and it reveals the next tab and drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's toast).
    *
    * @private
    */
-  #bindMenuListeners() {
+  #bindChromeListeners() {
 
-    if(this.#menuBound) {
+    if(this.#chromeBound) {
 
       return;
     }
 
-    this.#menuBound = true;
+    this.#chromeBound = true;
 
     const signal = this.#epochSignal;
 
     document.getElementById("menuHome")?.addEventListener("click", () => this.#showSupport(), { signal });
     document.getElementById("menuFeatureOptions")?.addEventListener("click", () => this.#showFeatureOptions(), { signal });
     document.getElementById("menuSettings")?.addEventListener("click", () => this.#showSettings(), { signal });
+    document.getElementById("firstRun")?.addEventListener("click", () => this.#submitFirstRun(), { signal });
   }
 
   /**
@@ -677,6 +733,10 @@ export class webUi {
    * call sites stay flat. The context object is forwarded to the function form so each hook is a pure function of its injected config (and, for `onSubmit`, the
    * commit callback) rather than reaching for the session or the host itself.
    *
+   * Every plugin hook the shell runs is awaited here and nowhere else, which is what makes this the one place that can keep a slow hook's answer from steering a copy
+   * a successor has already replaced: a hook can take as long as a login, and the reopen that supersedes this copy can land anywhere inside that wait. The stop is
+   * the platform's own `throwIfAborted()`, and what it raises is discarded at the entry-point boundary along with any other failure that lands after a supersession.
+   *
    * @param {Function|*} handler - Caller-supplied handler. When a function, it is awaited; otherwise it is treated as a truthy/falsy continuation flag.
    * @param {FirstRunContext} [context] - The injected context forwarded to the function form of the handler.
    * @returns {Promise<boolean>} `true` when the workflow should continue, `false` when it should be aborted.
@@ -684,6 +744,10 @@ export class webUi {
    */
   async #processHandler(handler, context) {
 
-    return Boolean((typeof handler === "function") ? await handler(context) : handler);
+    const answer = (typeof handler === "function") ? await handler(context) : handler;
+
+    this.#epochSignal.throwIfAborted();
+
+    return Boolean(answer);
   }
 }

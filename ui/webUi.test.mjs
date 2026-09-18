@@ -1,14 +1,14 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi.test.mjs: Unit tests for the webUi orchestrator - constructor wiring and page-epoch claiming, show() lifecycle across the feature-options and
- * first-run routing branches, the first-run click flow, menu listeners over whichever buttons the page carries, the #processHandler function-vs-truthy
- * normalization, the boot-monitor handshake, the deadline-bounded launch race, the epochSignal/epochBounded/on() epoch-composition surfaces, the liveness
- * resume detector threaded end to end through a mounted status panel, and the page-lifetime theming registration. The orchestrator's inner webUiFeatureOptions
- * instance is constructed against the real implementation so the constructor's DOM-binding contract is exercised end-to-end. By default the harness stubs the
- * inner instance's `show()` and `hide()` methods so the orchestrator's call ordering is verified without re-exercising the entire feature-options rendering
- * pipeline (which has its own dedicated suite in `webUi-featureOptions.test.mjs`); the tab-switch reconciliation ordering, the real menu-path re-entry walk,
- * the deadline-bounded launch race, and the end-to-end resume-detector suites instead opt into the harness's `unstubbed: true` mode to drive the real pipeline,
- * since a stub's call record cannot express the orderings those suites verify.
+ * ui/webUi.test.mjs: Unit tests for the webUi orchestrator - constructor wiring and page-epoch claiming, show() lifecycle across the feature-options and first-run
+ * routing branches, the first-run click flow, chrome listeners over whichever buttons the page carries, the #processHandler function-vs-truthy normalization, the
+ * boot-monitor handshake, the deadline-bounded launch race, the windows where a superseded copy could touch chrome its successor owns, the epochSignal/epochBounded/on()
+ * epoch-composition surfaces, the liveness resume detector threaded end to end through a mounted status panel, and the page-lifetime theming registration. The
+ * orchestrator's inner webUiFeatureOptions instance is constructed against the real implementation so the constructor's DOM-binding contract is exercised end-to-end. By
+ * default the harness stubs the inner instance's `show()` and `hide()` methods so the orchestrator's call ordering is verified without re-exercising the entire
+ * feature-options rendering pipeline (which has its own dedicated suite in `webUi-featureOptions.test.mjs`); the tab-switch reconciliation ordering, the real menu-path
+ * re-entry walk, the deadline-bounded launch race, and the end-to-end resume-detector suites instead opt into the harness's `unstubbed: true` mode to drive the real
+ * pipeline, since a stub's call record cannot express the orderings those suites verify.
  */
 "use strict";
 
@@ -553,7 +553,7 @@ describe("webUi.show - menu listener idempotence across repeated launches", () =
       firstRun: { isRequired: () => false }
     });
 
-    // Two full launch cycles against the same page. #launchWebUI binds the persistent menu listeners once for the page lifetime; the one-shot #menuBound guard
+    // Two full launch cycles against the same page. #launchWebUI binds the persistent chrome listeners once for the page lifetime; the one-shot #chromeBound guard
     // exists because a repeated launch must not stack a second handler on each button, which would fire every tab switch twice.
     await harness.ui.show();
     await harness.ui.show();
@@ -1125,6 +1125,325 @@ describe("webUi - the launch-time session open is deadline-bounded", () => {
   test("a copy superseded while its launch is stalled does nothing when its open instead expires", async (t) => {
 
     await withPreLaunchRace({ assertions: assertNoZombieSideEffect, settle: () => t.mock.timers.tick(LAUNCH_DEADLINE_MS + 1), t });
+  });
+});
+
+describe("webUi - a superseded copy never continues past an await, and never reports or settles", () => {
+
+  /* The rule these rows hold the shell to, one row per window where a copy can be replaced mid-await. The settings frame is reused across panel opens and each open
+   * constructs a fresh module copy that retires the previous one, but nothing tells the retired copy to stand down: whatever it was awaiting still settles, and its
+   * continuation would write chrome the successor owns - the menu, the first-run page, the save button, the spinner, the toast, the schema form. Each row parks one
+   * await on a promise it owns, constructs the successor while the copy sits inside that window, then settles the await and asserts the chrome went untouched.
+   */
+
+  // The bound the launch carries, mirrored so a row can advance the mock clock exactly past it.
+  const LAUNCH_DEADLINE_MS = 30000;
+
+  const CONFIG = [{ name: "TestPlatform", platform: "TestPlatform" }];
+
+  /* Drain the async work a settled await releases. A fixed walk of macrotask yields rather than a wait on a predicate, because every row here asserts that
+   * something did NOT happen: the state such a row wants is the state it already had, so there is nothing to wait for and only a quiet queue to establish.
+   */
+  const drain = async (turns = 25) => {
+
+    for(let i = 0; i < turns; i++) {
+
+      // eslint-disable-next-line no-await-in-loop
+      await flushPending();
+    }
+  };
+
+  /* Close the supersession window: reopen the frame, then let the parked await answer and drain everything that answer queues.
+   *
+   * Constructing a second copy is the whole of a reopen from the retired copy's point of view, and it is the only act that retires one. Each row parks its own
+   * await and records its own before-state while the copy sits inside the window; the ending they share is this.
+   */
+  const closeTheWindow = async (settle) => {
+
+    const _successor = new webUi({ name: "Successor" });
+
+    settle();
+
+    await drain();
+  };
+
+  test("a copy superseded during its session open runs no first-run hook, reveals no menu, and shows no view", async () => {
+
+    let isRequiredCalls = 0;
+
+    const isRequired = () => {
+
+      isRequiredCalls++;
+
+      return false;
+    };
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired } });
+
+    const healthyRead = harness.fake.getPluginConfig;
+    const open = Promise.withResolvers();
+
+    // Park the page's first bridge call - the frozen-first-load shape - so the reopen lands while the copy is still inside its open.
+    harness.fake.getPluginConfig = () => open.promise;
+
+    const stalled = harness.ui.show();
+
+    await drain();
+    await closeTheWindow(() => open.resolve(healthyRead()));
+    await stalled;
+
+    assert.equal(isRequiredCalls, 0, "a healed open on a retired copy runs none of the plugin's own first-run code");
+    assert.equal(harness.skeleton.menuWrapper.style.display, "none", "and reveals no menu over the successor's page");
+    assert.deepEqual(harness.featureOptionsCalls, [], "and hands nothing to the feature-options view");
+  });
+
+  test("a copy superseded while the first-run gate is still deciding reveals no menu and shows no view", async () => {
+
+    const gate = Promise.withResolvers();
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => gate.promise } });
+
+    // isRequired is plugin code and may take as long as it likes, so the reopen can land anywhere inside it. Its answer must not route a page nobody is looking at.
+    const stalled = harness.ui.show();
+
+    await drain();
+    await closeTheWindow(() => gate.resolve(false));
+    await stalled;
+
+    assert.equal(harness.skeleton.menuWrapper.style.display, "none", "the retired copy's routing revealed no menu");
+    assert.deepEqual(harness.featureOptionsCalls, [], "and handed nothing to the feature-options view");
+  });
+
+  test("a copy superseded while its onStart hook runs leaves the save button and the first-run page alone", async () => {
+
+    const gate = Promise.withResolvers();
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => gate.promise } });
+
+    const stalled = harness.ui.show();
+
+    await drain();
+    await closeTheWindow(() => gate.resolve(true));
+    await stalled;
+
+    // The bridge default is an enabled save button, so an untouched one reads as true - the retired copy never reached disableSaveButton.
+    assert.equal(harness.fake.observed.state.saveButtonEnabled, true, "a retired copy leaves the save button to the copy that speaks for the page");
+    assert.equal(harness.skeleton.pageFirstRun.style.display, "none", "and never raises its own first-run page over the successor's");
+  });
+
+  test("a first-run submit superseded while its onSubmit hook runs swaps no page, enables no button, and leaves the spinner alone", async () => {
+
+    const gate = Promise.withResolvers();
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit: () => gate.promise } });
+
+    await harness.ui.show();
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    const spinnerBefore = harness.fake.observed.state.spinnerCount;
+
+    assert.equal(spinnerBefore, 1, "precondition: the click raised the spinner and the submit is parked inside its hook");
+
+    await closeTheWindow(() => gate.resolve(true));
+
+    assert.equal(harness.skeleton.pageFirstRun.style.display, "block", "a retired submit swaps no page");
+    assert.equal(harness.skeleton.menuWrapper.style.display, "none", "reveals no menu");
+    assert.deepEqual(harness.featureOptionsCalls, [], "hands nothing to the feature-options view");
+    assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "enables no save button");
+    assert.equal(harness.fake.observed.state.spinnerCount, spinnerBefore,
+      "and leaves the spinner where it is, rather than pulling it out from under the successor's own launch");
+  });
+
+  test("a first-run submit whose onSubmit rejects after the copy was superseded raises no toast", async () => {
+
+    const gate = Promise.withResolvers();
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit: () => gate.promise } });
+
+    await harness.ui.show();
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    const spinnerBefore = harness.fake.observed.state.spinnerCount;
+    const toastsBefore = harness.fake.observed.toasts.length;
+
+    // A genuine failure, landing after the page moved on. The diagnostic belongs to the flow the user was watching, and that flow is gone.
+    await closeTheWindow(() => gate.reject(new Error("Login failed.")));
+
+    assert.equal(harness.fake.observed.toasts.length, toastsBefore, "a stale diagnostic never lands over the successor's working page");
+    assert.equal(harness.fake.observed.state.spinnerCount, spinnerBefore, "and the retired submit leaves the spinner alone on its way out");
+  });
+
+  test("a first-run submit superseded during the feature-options handoff never enables the save button", async () => {
+
+    const handoff = Promise.withResolvers();
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit: () => true } });
+
+    await harness.ui.show();
+
+    // featureOptions.show() returns quietly on a copy that has been retired, so this window closes with an ordinary resolution rather than a rejection - and the
+    // continuation behind it would enable the save button of a page it no longer speaks for.
+    harness.ui.featureOptions.show = () => handoff.promise;
+
+    harness.skeleton.firstRun.click();
+    await drain();
+    await closeTheWindow(() => handoff.resolve());
+
+    assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "the successor's own first-run flow still owns the save button");
+  });
+
+  test("a Settings switch superseded during its flush reveals no schema form and leaves the spinner alone", async () => {
+
+    const flush = Promise.withResolvers();
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => false } });
+
+    await harness.ui.show();
+
+    // The navigate-away flush drains a debounced edit, so it can span a reopen - and the tab paint behind it would repaint the successor's menu.
+    harness.ui.featureOptions.hide = () => flush.promise;
+
+    harness.skeleton.menuSettings.click();
+    await drain();
+
+    const spinnerBefore = harness.fake.observed.state.spinnerCount;
+
+    await closeTheWindow(() => flush.resolve());
+
+    assert.equal(harness.fake.observed.calls.includes("showSchemaForm"), false, "a retired tab switch reveals nothing over the successor's page");
+    assert.equal(harness.fake.observed.state.spinnerCount, spinnerBefore, "and leaves the spinner to the copy that raised it");
+  });
+
+  test("a Support switch superseded during its flush reveals no support page and leaves the spinner alone", async () => {
+
+    const flush = Promise.withResolvers();
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => false } });
+
+    await harness.ui.show();
+
+    harness.ui.featureOptions.hide = () => flush.promise;
+
+    harness.skeleton.menuHome.click();
+    await drain();
+
+    const spinnerBefore = harness.fake.observed.state.spinnerCount;
+
+    await closeTheWindow(() => flush.resolve());
+
+    assert.equal(harness.skeleton.pageSupport.style.display, "none", "a retired tab switch reveals nothing over the successor's page");
+    assert.equal(harness.fake.observed.state.spinnerCount, spinnerBefore, "and leaves the spinner to the copy that raised it");
+  });
+
+  test("a menu re-launch whose session open expires after the copy was superseded raises no toast", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => false } });
+
+    // A host that never answers, for the whole row: the first launch expires and leaves the user the menu, and the re-launch that menu offers expires in turn.
+    harness.fake.getPluginConfig = () => new Promise(() => {});
+
+    const first = harness.ui.show();
+
+    await drain();
+    t.mock.timers.tick(LAUNCH_DEADLINE_MS + 1);
+    await first;
+    await drain();
+
+    const toastsBefore = harness.fake.observed.toasts.length;
+
+    assert.equal(toastsBefore, 1, "precondition: the first launch's expiry toasted and revealed the menu");
+
+    harness.skeleton.menuFeatureOptions.click();
+    await drain();
+
+    await closeTheWindow(() => t.mock.timers.tick(LAUNCH_DEADLINE_MS + 1));
+
+    assert.equal(harness.fake.observed.toasts.length, toastsBefore, "the re-launch's own expiry belongs to a page nobody is looking at, so it says nothing");
+  });
+
+  test("repeated launches leave exactly one first-run submit handler on the shared button", async () => {
+
+    let submits = 0;
+
+    const onSubmit = () => {
+
+      submits++;
+
+      return false;
+    };
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit } });
+
+    // Two full launch cycles against the same page. The submit button is bound once for the page lifetime beside the menu buttons, so a repeated launch cannot
+    // stack a second handler on it - which would run the plugin's submit hook twice per click, against one session.
+    await harness.ui.show();
+    await harness.ui.show();
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    assert.equal(submits, 1, "one click runs the submit hook exactly once however many launches preceded it");
+  });
+
+  test("a superseded copy's first-run submit handler stops answering the shared button", async () => {
+
+    let submits = 0;
+
+    const onSubmit = () => {
+
+      submits++;
+
+      return false;
+    };
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit } });
+
+    await harness.ui.show();
+
+    // The control. Without proving this copy's handler answers first, the silence after the reopen could mean nothing more than a click that never landed.
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    assert.equal(submits, 1, "precondition: the copy holding the window answers the shared button");
+
+    // The button is an element of the reused frame rather than of the copy that bound it, so a handler that survived the reopen would run the plugin's submit hook
+    // alongside the successor's, against a session the page has replaced.
+    await closeTheWindow(() => {});
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    assert.equal(submits, 1, "the retired copy's handler died with its epoch rather than answering beside the successor's");
+  });
+
+  test("a live copy whose flush rejects toasts the failure, paints the tab, and drops the spinner", async () => {
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => false } });
+
+    await harness.ui.show();
+
+    /* The live half of the Settings row above, and what keeps the epoch test from reading as a blanket silence: a failure on the copy that still speaks for the
+     * page is reported and its chrome settled. featureOptions.hide() is documented never to reject, so this row drives a failure that contract rules out - and the
+     * reading is that it surfaces as the boundary's own toast with the tab painted regardless, rather than vanishing into the click listener's dropped promise.
+     * That the row completes green is also the no-unhandled-rejection assertion, since node:test fails a test whose turn produced one.
+     */
+    harness.ui.featureOptions.hide = async () => { throw new Error("The pending edit could not be flushed."); };
+
+    harness.fake.observed.toasts.length = 0;
+
+    harness.skeleton.menuSettings.click();
+    await drain();
+
+    assert.deepEqual(harness.fake.observed.toasts, [{ message: "The pending edit could not be flushed.", title: "Error", variant: "error" }],
+      "a live copy's failed flush surfaces exactly one error toast");
+    assert.equal(harness.fake.observed.calls.includes("showSchemaForm"), true, "and the tab the user asked for is painted regardless");
+    assert.equal(harness.fake.observed.state.spinnerCount, 0, "and the spinner comes down, so nothing strands the user on it");
   });
 });
 

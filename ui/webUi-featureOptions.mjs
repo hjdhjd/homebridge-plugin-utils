@@ -388,6 +388,16 @@ export class webUiFeatureOptions {
   // reference shared by all three is what lets a revert made before any save land on the anchor by reference, leaving the persist drain nothing to write.
   #initialOptions;
 
+  /* The count of show() entries this instance has taken. Every entry that survives the epoch bail advances it and captures the value it advanced it to, and after
+   * its awaited teardown an entry mints its cycle only while the field still holds that value. An entry that finds the field moved past its own value was overtaken
+   * while it waited - a second click on the menu, or the connection-error retry landing on a menu entry - and the entry that overtook it is the one the user asked
+   * for, so the overtaken one returns rather than standing a second store, a second set of effects, and a second set of listeners up beside the live cycle's.
+   *
+   * Its lifetime is this instance's: advanced at every entry past the epoch bail, read once per entry after the teardown, and reset by nothing - not hide(), not
+   * cleanup(), not disposal - because a value that has already been overtaken must never come back around and match an entry still waiting on it.
+   */
+  #showGeneration;
+
   /**
    * Initialize the feature options webUI with customizable configuration.
    *
@@ -522,6 +532,7 @@ export class webUiFeatureOptions {
     this.#session = null;
     this.#store = null;
     this.#initialOptions = null;
+    this.#showGeneration = 0;
   }
 
   /**
@@ -603,7 +614,8 @@ export class webUiFeatureOptions {
    *
    *   1. Synchronous page-shell setup: hide schema form, update menu state, reveal the feature-options page. The user sees the layout immediately; the async I/O
    *      below populates each region against the visible shell.
-   *   2. Tear down any prior show() cycle via hide() (it flushes any pending edit before tearing down).
+   *   2. Tear down any prior show() cycle via hide() (it flushes any pending edit before tearing down). A show() entered while that teardown runs is the one that
+   *      mints the cycle: the earlier entry returns after its own teardown with nothing minted, so a gesture that lands twice still produces one page.
    *   3. Create the page abort controller, clear stale containers, create the store, and mount every view. The views mount here - before any data loads, against the
    *      loading placeholder - so the connection-error view already exists to render a config-sync failure into the visible shell. The boot affordance is installed
    *      once they are mounted: a centered message and an indeterminate progress bar occupying the emptied page for the length of the load, cleared by whichever
@@ -645,6 +657,11 @@ export class webUiFeatureOptions {
       return;
     }
 
+    // This entry's place in the instance's sequence of show() calls, taken before the first side effect below and read once more after the teardown.
+    this.#showGeneration += 1;
+
+    const generation = this.#showGeneration;
+
     this.#session = session;
 
     homebridge.hideSchemaForm();
@@ -661,8 +678,14 @@ export class webUiFeatureOptions {
      * running - the teardown waits for a pending edit and for a coordinated write's commit, either of which can span a supersession - and an abort that has already
      * fired never replays into the listener composed below. A recheck placed ahead of that await would leave its whole window unguarded, so the order is the
      * teardown's await, then the recheck, then the mint.
+     *
+     * The generation answers the same question about the supersession this instance CAN observe for itself: a later show() entered while this one waited on the
+     * teardown above, which is what a second click on the menu or a retry landing on a menu entry produces. The page belongs to that entry - latest wins, as it
+     * does everywhere else here - so this one returns and mints nothing, and the winner's own teardown has already run or is running over the same flush. Every
+     * side effect this entry made ahead of the await is one the winner makes again, so there is nothing to undo on the way out. Both conditions sit after the
+     * await for the same reason: the window the await opens is exactly the window each of them guards.
      */
-    if(this.#epochSignal?.aborted) {
+    if(this.#epochSignal?.aborted || (this.#showGeneration !== generation)) {
 
       return;
     }

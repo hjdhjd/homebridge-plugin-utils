@@ -238,6 +238,36 @@ describe("registerPersistEffect - concurrent mutations during in-flight persist"
   });
 });
 
+describe("registerPersistEffect - a coordinated configuration write", () => {
+
+  test("an option mutation refused while the write holds the store starts no drain", async () => {
+
+    const { events, store, updates } = await setup();
+
+    store.dispatch({ type: "commit:started" });
+
+    assert.equal(store.state.write.kind, "committing", "precondition: the hold is taken");
+
+    // The reducer returns the state reference untouched, so this effect's dirty check finds configuredOptions still equal to the anchor and starts nothing. No
+    // drain is the point: a commit begun here would either race the coordinated write or land after it and write the pre-write options back over what it staged.
+    store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+
+    await flush();
+
+    assert.equal(updates.length, 0, "nothing reached the host");
+    assert.equal(events.length, 0, "and no persist event was dispatched");
+
+    // The same gesture once the hold lifts, so the row cannot pass by the effect simply being dead.
+    store.dispatch({ type: "commit:failed" });
+    store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+
+    await flush();
+
+    assert.equal(updates.length, 1, "the identical mutation drains once the hold lifts");
+    assert.deepEqual(updates[0][0].options, ["Disable.Motion.Detect"], "carrying what the user asked for");
+  });
+});
+
 describe("registerPersistEffect - failure path", () => {
 
   test("a final-attempt failure dispatches persist:failed and rolls configuredOptions back to the anchor", async () => {
@@ -250,7 +280,7 @@ describe("registerPersistEffect - failure path", () => {
 
     assert.equal(updates.length, 1);
     assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:failed" ]);
-    assert.equal(store.state.status.kind, "persist-error");
+    assert.equal(store.state.write.kind, "persist-error");
     assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "rollback: configuredOptions reverts to the anchor reference");
     assert.deepEqual(store.state.configuredOptions, []);
   });

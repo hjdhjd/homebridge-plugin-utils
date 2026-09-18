@@ -8,7 +8,7 @@ import { applyCategoryStates, captureCategoryStates, createElement } from "../ut
 import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, toggleSecretReveal, triStateTransition,
   valueCommitTransition } from "../rendering.mjs";
 import { buildConfigIndex, hasValueContent } from "../../featureOptions.js";
-import { projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
+import { editsHeld, projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { effect } from "../store.mjs";
 
@@ -35,8 +35,10 @@ const DEVICES_NOTICE_CLASS = "fo-devices-notice";
  *      each row, which includes its visibility and the "requires parent" badge.
  *   6. **Controller refresh** on `controllers:loaded`: the same lightweight walk, for the one thing a controllers-only refresh can move - the list a plugin's
  *      choice source derives from the selected controller.
- *   7. **Busy rendering** while a controller's device list is in flight: the table goes inert - every write-capable control disabled, the rows dimmed through a
- *      marker class - so no gesture can land a write at the wrong scope during the window. Derived at every row-state application; see {@link applyBusyState}.
+ *   7. **Busy rendering** through every window in which the table must take no gesture: a controller's device list is in flight, so a write would land at the
+ *      wrong scope, or a coordinated configuration write holds the store, so the reducer would refuse the write outright. Whichever it is, the table goes inert -
+ *      every write-capable control disabled, the rows dimmed through a marker class. Derived at every row-state application, and re-derived through a projection
+ *      walk on `commit:started` / `commit:failed`; see {@link applyBusyState}.
  *   8. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), value-control changes (value-commit
  *      transition + action dispatch). A gesture that leaves `configuredOptions` unchanged - a rejection, or an arm/disarm - restores the row through the shared
  *      applyRowState writer instead of relying on the projection walk.
@@ -311,6 +313,22 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
       }
 
       applyBusyState({ configTable, state: store.state });
+    },
+    signal,
+    store
+  });
+
+  // Re-derive the table when a coordinated configuration write takes the store and when one fails. The projection walk ends by applying the busy state, so this
+  // single call answers either event: entering the hold renders every row inert, and a failed commit hands each row back exactly the interactivity the projection
+  // says it has, rather than a blanket re-enable that would unlock the rows an inheriting or parent-disabled rule keeps shut. It needs no loading guard and no
+  // cache invalidation - the reducer takes the hold only over a loaded model, and neither event moves an option's value, so every cached view still describes the
+  // configuration it was built from. The successful exit is a model:loaded, which the scope-render effect above already answers.
+  effect({
+
+    events: [ "commit:failed", "commit:started" ],
+    fn: () => {
+
+      applyProjectionToDom({ configTable, state: store.state });
     },
     signal,
     store
@@ -634,11 +652,23 @@ const applyProjectionToDom = ({ configTable, state }) => {
   applyBusyState({ configTable, state });
 };
 
-// Whether the option table must render inert: the scope names a controller whose settled device list is not what the table is showing. Facts the store
-// already carries answer that together - the loaded list belongs to a different controller, which is a first visit, or a fetch naming this controller is still
-// outstanding, which is a revisit, where the sidebar click refetches while the list already on screen still names the same controller. Every other scope kind
-// reads false: a global or device scope keys its writes from the selection itself and has no in-flight window to protect.
+/* Whether the option table must render inert. Unrelated windows can say yes, and any one of them saying so is enough.
+ *
+ * A coordinated configuration write holding the store is one, and it is read through {@link editsHeld} rather than spelled out again here, so the table and the
+ * reset controls outside it share one answer to "are option edits held." It is checked ahead of the scope test because it holds at every scope: the reducer
+ * refuses the mutation whatever the selection is, so a live-looking row at global scope would take a gesture the store answers with silence.
+ *
+ * A scope naming a controller whose settled device list is not what the table is showing is another. Facts the store already carries answer that together - the
+ * loaded list belongs to a different controller, which is a first visit, or a fetch naming this controller is still outstanding, which is a revisit, where the
+ * sidebar click refetches while the list already on screen still names the same controller. Every other scope kind reads false for that window: a global or
+ * device scope keys its writes from the selection itself and has no in-flight window to protect.
+ */
 const isTableBusy = (state) => {
+
+  if(editsHeld(state)) {
+
+    return true;
+  }
 
   if(state.scope.kind !== "controller") {
 
@@ -650,11 +680,14 @@ const isTableBusy = (state) => {
   return (state.devicesControllerId !== controllerId) || (state.devicesRequest?.controllerId === controllerId);
 };
 
-/* Apply the table's busy state over a subtree, deriving it fresh from the store on every call.
+/* Apply the table's busy state over a subtree, deriving it fresh from the store on every call. {@link isTableBusy} owns which windows count; this writes what a
+ * busy table looks like.
  *
  * An option row keys its write off the selected device, and a controller scope has none...so a gesture taken while that controller's device list is still in
- * flight would record the user's choice at global scope while the sidebar reads as the controller. Rendering the table inert for the window is what puts that
- * write out of reach, and the marker class carries the dim that tells the user why nothing answers.
+ * flight would record the user's choice at global scope while the sidebar reads as the controller. A coordinated configuration write is another window, and it
+ * closes the table for a different reason: the reducer refuses every option mutation while one holds the store, so a row that still took gestures would collect
+ * clicks that go nowhere. Rendering the table inert is what puts the write out of reach, and the marker class carries the dim that tells the user why nothing
+ * answers.
  *
  * Only the disabling half is written here. Handing a row its interactivity back belongs to {@link applyRowState}, whose derivation from the projection already
  * answers which controls a settled row locks - an inheriting row's field, a parent-disabled checkbox - so an unconditional re-enable here would unlock exactly
@@ -662,9 +695,10 @@ const isTableBusy = (state) => {
  * detached mid-window comes back inert while the window is still open and comes back live once it has closed, with nothing stale baked into the cached nodes.
  *
  * The two gesture handlers need no busy awareness of their own. A disabled input originates neither a change nor a focusout, and the one event that can still
- * arrive - the focusout a browser fires when focus sits on an input at the instant it is disabled - carries no write with it: the same gesture's scope:changed
- * pass nulls armedOption in the reducer before any subscriber re-derives a row, so {@link handleFocusOut} finds no armed row and returns on its first guard. No
- * resulting write is possible, which is a stronger claim than no event firing and the one this rests on.
+ * arrive - the focusout a browser fires when focus sits on an input at the instant it is disabled - carries no write with it. Whichever window is opening, the
+ * transition that opened it has already nulled armedOption in the reducer before any subscriber re-derives a row: the scope:changed of a sidebar click, and the
+ * commit:started of a coordinated write, which disarms for exactly this reason. {@link handleFocusOut} therefore finds no armed row and returns on its first
+ * guard. No resulting write is possible, which is a stronger claim than no event firing and the one this rests on.
  */
 const applyBusyState = ({ configTable, root = configTable, state }) => {
 

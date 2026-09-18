@@ -9,7 +9,7 @@ import { effect } from "../store.mjs";
 import { modelLoaded } from "../selectors.mjs";
 
 /**
- * Debounce window for coalescing rapid mutations before writing to disk. 300ms sits below the instant-feel ceiling - a single click feels immediate from the user's
+ * Debounce window for coalescing rapid mutations before writing to the host. 300ms sits below the instant-feel ceiling - a single click feels immediate from the user's
  * perspective (a 300ms persist completes invisibly while the next click is being decided) - yet above the burst-coalescing floor, so a rapid sequence of mutations
  * (the user dragging a slider, batching reset/revert through multiple controllers) collapses into a single write rather than one write per mutation.
  */
@@ -31,12 +31,12 @@ const DEBOUNCE_MS = 300;
  *
  * The dispatch sequence per iteration:
  *
- *   1. `persist:started` with the snapshot being written. Status transitions to `persisting`; the status bar can show a "saving" affordance.
+ *   1. `persist:started` with the snapshot being written. The write lifecycle transitions to `persisting`; the status bar can show a "saving" affordance.
  *   2. `session.commit({ options })` is awaited - the session merges the options onto its primary entry, preserves siblings, writes to the host, and advances its
  *      held reference only on success.
- *   3. Success: `persist:succeeded` with the snapshot. Status returns to `ready`; the anchor advances to this snapshot.
- *   4. Failure with no superseding mutation: `persist:failed` with the error. Status transitions to `persist-error`; the reducer rolls `configuredOptions` back to
- *      the anchor.
+ *   3. Success: `persist:succeeded` with the snapshot. The write lifecycle returns to `idle`; the anchor advances to this snapshot.
+ *   4. Failure with no superseding mutation: `persist:failed` with the error. The write lifecycle transitions to `persist-error`; the reducer rolls
+ *      `configuredOptions` back to the anchor.
  *   5. Failure with a superseding mutation: the error is swallowed; the loop continues with the newer state.
  *
  * The effect is registered with the page-level signal. Aborting the signal cleanly tears down the listener; an in-flight `updatePluginConfig` call cannot itself
@@ -44,7 +44,7 @@ const DEBOUNCE_MS = 300;
  * post-call action against a torn-down view.
  *
  * Returns a `{ flush }` handle. The page calls `flush()` at its navigate-away chokepoint (and best-effort on browser background/close) BEFORE aborting the signal,
- * so a debounced-but-unwritten edit reaches disk instead of being dropped when the signal aborts. `flush()` drives the same single-writer drain to completion - it
+ * so a debounced-but-unwritten edit reaches the host instead of being dropped when the signal aborts. `flush()` drives the same single-writer drain to completion - it
  * skips the debounce wait, never starts a parallel commit, and is a no-op when the store is already clean.
  *
  * @param {Object} args
@@ -52,7 +52,7 @@ const DEBOUNCE_MS = 300;
  * @param {{commit: (patch: Object) => Promise<void>}} args.session - The config session; option saves persist through its single write path.
  * @param {AbortSignal} args.signal - The lifecycle signal. Aborting tears down the effect.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store the effect subscribes against.
- * @returns {{flush: () => Promise<void>}} A handle whose `flush()` drains any pending edit to disk now; called at the page's navigate-away / browser-exit edges.
+ * @returns {{flush: () => Promise<void>}} A handle whose `flush()` drains any pending edit to the host now; called at the page's navigate-away / browser-exit edges.
  */
 export const registerPersistEffect = ({ host, session, signal, store }) => {
 
@@ -86,8 +86,8 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
         return;
       }
 
-      // The debounce is the burst-coalescing wait, but on the flush path (navigating away) we skip it: the edit must reach disk before teardown, so we go straight to
-      // the snapshot. In the normal path we restart the debounce on the latest mutation as before.
+      // The debounce is the burst-coalescing wait, but on the flush path (navigating away) we skip it: the edit must reach the host before teardown, so we go
+      // straight to the snapshot. In the normal path we restart the debounce on the latest mutation.
       if(!flushing) {
 
         debounceAbort?.abort();
@@ -128,7 +128,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
 
       try {
 
-        // Sequential awaits are the point: the drain serializes persists so concurrent mutations cannot race on disk. The eslint rule's concern (parallelizing
+        // Sequential awaits are the point: the drain serializes persists so concurrent mutations cannot race at the host. The eslint rule's concern (parallelizing
         // independent work) does not apply - each iteration's persist is the only legitimate I/O the drain should be running at any moment. The session owns the
         // payload shape (primary entry + siblings) and the write; we hand it only the options delta.
         // eslint-disable-next-line no-await-in-loop
@@ -156,7 +156,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
 
         store.dispatch({ error, type: "persist:failed" });
 
-        // Surface the failure via the host's toast channel so the user sees an actionable indication that their last edit did not reach disk. The single
+        // Surface the failure via the host's toast channel so the user sees an actionable indication that their last edit did not reach the host. The single
         // toast-emission path keeps the user-facing notification policy in one place; effects elsewhere that dispatch persist:failed have the same path
         // available through this effect's subscription.
         host.toast?.error?.(error?.message ?? String(error), "config-persist");
@@ -206,7 +206,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
     store
   });
 
-  // Drain any pending-but-unwritten edit to disk NOW, used by the page's navigate-away chokepoint (hide()) and the best-effort browser-exit handler. flush() drives
+  // Drain any pending-but-unwritten edit to the host NOW, used by the page's navigate-away chokepoint (hide()) and the best-effort browser-exit handler. flush() drives
   // the drain to completion by setting `flushing` (which keeps the loop running past the debounce wait) and aborting the in-flight debounce so the current iteration
   // proceeds straight to the write. It preserves single-writer serialization: it starts a NEW drain only when none is in flight; when a drain is already running it
   // merely nudges it (set `flushing`, abort the debounce) and awaits the same promise - never a parallel commit. When the store is already clean (nothing dirty), it

@@ -754,11 +754,11 @@ describe("projection - memoization", () => {
     const state = loadedState();
     const a = projection(state);
 
-    // persist:started changes status but not any projection slice.
+    // persist:started changes the write lifecycle but not any projection slice.
     const persisting = reducer(state, { snapshot: [], type: "persist:started" });
     const b = projection(persisting);
 
-    assert.equal(a, b, "status change does not invalidate the projection cache");
+    assert.equal(a, b, "a write-lifecycle change does not invalidate the projection cache");
   });
 
   test("a state mutation that touches a projection slice invalidates the cache", () => {

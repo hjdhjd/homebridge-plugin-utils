@@ -190,6 +190,67 @@ describe("mountSearchView - reset button group", () => {
   });
 });
 
+/* The reset controls sit outside the config table, so the table's own inert rendering never reaches them. While a coordinated configuration write holds the store
+ * the reducer refuses every action they dispatch, and a live-looking button that answers a press with nothing is exactly what these rows exist to prevent.
+ */
+describe("mountSearchView - a coordinated configuration write", () => {
+
+  const RESET_ACTIONS = [ "reset-toggle", "reset-defaults", "reset-revert" ];
+
+  const resetDisabled = (root) => RESET_ACTIONS.map((action) => root.querySelector("[data-action='" + action + "']").disabled);
+
+  test("every reset control is held while the write holds the store, and they come back when it fails", () => {
+
+    using dom = createTestDom();
+
+    const { root, store } = setup();
+
+    assert.deepEqual(resetDisabled(root), [ false, false, false ], "precondition: a healthy page offers every one of them");
+
+    store.dispatch({ type: "commit:started" });
+
+    assert.deepEqual(resetDisabled(root), [ true, true, true ], "the hold disables every one of them");
+
+    store.dispatch({ type: "commit:failed" });
+
+    assert.deepEqual(resetDisabled(root), [ false, false, false ], "and a failed write hands every one of them back");
+  });
+
+  test("a model arriving is the successful exit, and the reset controls work again after it", () => {
+
+    using dom = createTestDom();
+
+    const { root, store } = setup();
+
+    store.dispatch({ type: "commit:started" });
+
+    assert.deepEqual(resetDisabled(root), [ true, true, true ], "precondition: the hold stands");
+
+    store.dispatch({ catalog: CATALOG, configuredOptions: ["Disable.Motion.Detect"], controllers: [], mode: "device-only", type: "model:loaded" });
+
+    assert.deepEqual(resetDisabled(root), [ false, false, false ], "the load hands them back");
+
+    // Pressing one is what proves the whole path is open again: the control takes the click AND the reducer takes what it dispatches.
+    root.querySelector("[data-action='reset-toggle']").click();
+    root.querySelector("[data-action='reset-defaults']").click();
+
+    assert.deepEqual(store.state.configuredOptions, [], "and the reducer accepts the mutation it dispatches");
+  });
+
+  test("the search box and the filter pills stay live throughout, since filtering writes nothing", () => {
+
+    using dom = createTestDom();
+
+    const { root, store } = setup();
+
+    store.dispatch({ type: "commit:started" });
+
+    assert.equal(root.querySelector("#searchInput").disabled, false, "the search box still takes a query");
+    assert.equal(root.querySelector("#filter-all").disabled, false, "and the pills still filter");
+    assert.equal(root.querySelector("#filter-modified").disabled, false);
+  });
+});
+
 describe("mountSearchView - search input debounce", () => {
 
   test("typing in the search input dispatches filter:changed after 300ms debounce", async () => {

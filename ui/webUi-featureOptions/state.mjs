@@ -10,14 +10,16 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * State shape, action vocabulary, and reducer for the feature options webUI.
  *
  * This module is the SSOT for what state the UI carries and how that state transitions. Every dispatch lands here; every component reads from {@link FeatureOptionsState}
- * and derives its view via selectors. Scope and LifecycleStatus are the discriminated unions encoding the variant types the UI moves through; Catalog is a
- * third, differently-motivated bundled type listed alongside them below, for the same overview of what state shape looks like:
+ * and derives its view via selectors. Scope, LifecycleStatus, and WriteLifecycle are the discriminated unions encoding the variant types the UI moves through;
+ * Catalog is a differently-motivated bundled type listed alongside them below, for the same overview of what state shape looks like:
  *
  *   - {@link Scope} - `{kind: "global"}` | `{kind: "controller", controllerId}` | `{kind: "device", controllerId, deviceId}`. The selection pointer. Each kind
  *     carries different data, so merging them into a flat record would smear the guarantees across two fields and force consumers to recover the kind via
  *     predicates.
- *   - {@link LifecycleStatus} - `loading` | `ready` | `persisting` | `persist-error` | `connection-error`. The page-state pointer. The variants carry different
- *     per-state payloads (a snapshot when persisting, an error when failed, the full display copy when the connection broke).
+ *   - {@link LifecycleStatus} - `loading` | `ready` | `connection-error`. The page-reachability pointer, carrying the full display copy when the connection broke.
+ *   - {@link WriteLifecycle} - `idle` | `persisting` | `persist-error` | `committing`. What is happening to the configuration write, carrying the snapshot in
+ *     flight or the error that ended one. Separate from the status because the facts co-occur: a save can be in flight, or have failed, while a controller
+ *     cannot be reached.
  *   - {@link Catalog} - `CatalogIndex` (from featureOptions.ts) extended with plugin-provided validator callbacks and choice-source resolvers. Bundled as one
  *     value because the index, the validators, and the choice sources are plugin-provided immutable config moving together; splitting them would force every
  *     consumer that needs more than one piece to take multiple parameters.
@@ -25,7 +27,10 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * The action vocabulary names past-tense domain events. Each action below corresponds to a {@link reducer} case and to at least one effect or view subscriber.
  * Names use a `domain:event` shape so they group naturally and read as natural language at dispatch sites.
  *
- *   - `model:loaded` - first load: catalog, configuredOptions, controllers, mode are populated; status transitions to ready.
+ *   - `model:loaded` - a model arrives: catalog, configuredOptions, controllers, mode are populated and the write lifecycle returns to idle. A `loading` status
+ *     becomes ready; any other status keeps its reference, so an establishment over a standing page cannot take the frame from the view that owns it. Every fact
+ *     naming a controller is reconciled against the list the load carries, so a controller that left it takes the selection, the loaded device list, and the
+ *     pending fetch that named it along.
  *   - `controllers:loaded` - a controllers-only refresh, dispatched through the facade's public `refreshControllers()` entry point; the retry path re-runs the full
  *     `model:loaded`.
  *   - `devices:requested` - a device fetch is beginning: mints the next fetch sequence into state and records it as the pending request, so the outcome that
@@ -45,9 +50,14 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `options:reset` - every configured option dropped (reset to defaults).
  *   - `model:reverted` - configuredOptions restored to the at-show() snapshot.
  *   - `filter:changed` - search query and/or filter mode updated.
- *   - `persist:started` - persist call entering flight; status becomes persisting.
- *   - `persist:succeeded` - persist call landed on disk; anchor updated, status returns to ready.
- *   - `persist:failed` - final-attempt failure (no superseding mutation); configuredOptions rolls back to anchor, status becomes persist-error.
+ *   - `persist:started` - persist call entering flight; the write lifecycle becomes persisting, carrying the snapshot.
+ *   - `persist:succeeded` - the host accepted the write; anchor updated, the write lifecycle returns to idle.
+ *   - `persist:failed` - final-attempt failure (no superseding mutation); configuredOptions rolls back to anchor, the write lifecycle becomes persist-error.
+ *   - `commit:started` - a coordinated configuration write is taking the store: the write lifecycle becomes committing and every option mutation is refused until
+ *     it ends. Entry is conditional - a loaded model, an idle write lifecycle, and a store with nothing left to persist - and the reducer records its verdict in
+ *     the write lifecycle for the dispatcher to read back.
+ *   - `commit:failed` - the coordinated write ended without a model arriving to replace the page's own: the write lifecycle returns to idle and option mutations
+ *     are accepted again. Carries no payload, since the caller reports its own failure and nothing in the store reads one.
  *   - `connection:error` - the config re-sync failed before the page could render; status becomes connection-error carrying the full display copy the view renders.
  *
  * The reducer is pure: `(state, action) => state`. Unchanged slices retain their reference across dispatches (structural sharing), so memoized selectors that
@@ -114,8 +124,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  */
 
 /**
- * LifecycleStatus - The page-state pointer. The variants carry different per-state payloads. Drop a status variant when it stops being a
- * named UI state; add one when a new named state surfaces.
+ * LifecycleStatus - Whether the page can be reached, and nothing else. `loading` is the phase before a model arrives, `ready` is a page the user can work in, and
+ * `connection-error` is a page whose controller did not answer. Drop a variant when it stops being a named reachability state; add one when a new one surfaces.
  *
  * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps each text slot
  * without hardcoding any prose. Each supplier (the reducer's fetch-failure transition on {@link devices:loaded} and the orchestrator's config-sync-failure
@@ -123,8 +133,19 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * is reachable again - or the page re-enters through `show()`. Nothing else clears it, so a view rendering against it can
  * treat it as the whole truth about the page's reachability for as long as it holds.
  *
- * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "persisting", snapshot: readonly string[]} | {kind: "persist-error", error: Error}
- *           | {kind: "connection-error", guidance: string, headline: string, message: string}} LifecycleStatus
+ * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "connection-error", guidance: string, headline: string, message: string}} LifecycleStatus
+ */
+
+/**
+ * WriteLifecycle - What is happening to the configuration write. `idle` is a store with nothing in flight, `persisting` carries the snapshot a persist call is
+ * writing, `persist-error` carries the error that ended one, and `committing` is a coordinated configuration write holding the store: option mutations are
+ * refused for its duration, and it ends either with a model arriving to replace the page's own or with a {@link commit:failed}.
+ *
+ * Separate from {@link LifecycleStatus} because the facts co-occur and would otherwise overwrite each other. A save can be in flight, or can have failed, while
+ * a controller cannot be reached - and a device fetch that recovers reachability says nothing at all about the write, so a single slot would have each
+ * transition silently erase the other's answer.
+ *
+ * @typedef {{kind: "idle"} | {kind: "persisting", snapshot: readonly string[]} | {kind: "persist-error", error: Error} | {kind: "committing"}} WriteLifecycle
  */
 
 /**
@@ -164,10 +185,11 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {"controller-based" | "device-only" | "global-only"} mode - Operating mode. Set once at model:loaded: "controller-based" when the plugin provided
  *   `getControllers`, "global-only" when it declared `globalOnly`, otherwise "device-only". In "global-only" the scope is locked to global for the page's life and the
  *   reducer refuses any other scope kind.
- * @property {readonly string[]} persistedAnchor - The last-known-on-disk state. Updated on every successful persist; restored to configuredOptions on a final
- *                                                  persist failure (memory then matches disk).
+ * @property {readonly string[]} persistedAnchor - The last state the host accepted. Updated on every successful persist; restored to configuredOptions on a final
+ *                                                  persist failure (memory then matches what the host holds).
  * @property {Scope} scope - Selection pointer (DU).
- * @property {LifecycleStatus} status - Page-state pointer (DU).
+ * @property {LifecycleStatus} status - Page-reachability pointer (DU).
+ * @property {WriteLifecycle} write - Configuration-write pointer (DU). Held apart from `status` because the lifecycles run at the same time.
  */
 
 // The placeholder catalog used during the "loading" status, before {@link model:loaded} has fired with the real one. Built from empty inputs so every selector
@@ -320,8 +342,8 @@ export const controllerNoticeCopy = ({ devicesListed }) => devicesListed ?
   "Select a device to configure its options." : "This controller has no devices to configure.";
 
 /**
- * Build the initial state. Status is `loading`; every populated-at-runtime field is set to an empty array or default value. The first {@link model:loaded}
- * dispatch transitions every field to its loaded value in one atomic update.
+ * Build the initial state. Status is `loading` and the write lifecycle is `idle`; every populated-at-runtime field is set to an empty array or default value. The
+ * first {@link model:loaded} dispatch transitions every field to its loaded value in one atomic update.
  *
  * No constructor parameters because the variant data (mode, validators, configuredOptions) is not yet available at store-construction time - it arrives over the
  * wire from Homebridge's `getPluginConfig` + `request("/getOptions")` plus the plugin's optional `getControllers`. The orchestrator dispatches `model:loaded` once
@@ -353,9 +375,24 @@ export const initialState = () => {
     mode: "device-only",
     persistedAnchor: empty,
     scope: { kind: "global" },
-    status: { kind: "loading" }
+    status: { kind: "loading" },
+    write: { kind: "idle" }
   };
 };
+
+/* The actions a coordinated configuration write refuses while it holds the store, named here once so the refusal and the arms below cannot drift apart.
+ *
+ * Every member but `option:armed` mutates the configuration, and an edit accepted mid-write would start a persist drain whose whole-array commit either races the
+ * coordinated write or lands after it and writes the pre-write options back over what that write just staged. `option:armed` is in the set for a different
+ * reason: arming changes no option and starts no drain, but it opens an edit gesture, and no edit gesture begins while the store is held...which is the same
+ * reason {@link commit:started} disarms on entry. `option:disarmed` is deliberately outside the set - standing a row down ends a gesture rather than beginning
+ * one, and a row left armed under a hold it can never commit through is exactly the state the refusal is trying to prevent.
+ */
+const HELD_ACTIONS = new Set([ "model:reverted", "option:armed", "option:cleared", "option:set", "options:reset" ]);
+
+// Whether a controller list holds the controller a piece of state names. A null id names no controller at all - device-only mode carries one, and so does the
+// initial state - so it reads as held: there is nothing for a reconciliation to take away.
+const holdsController = ({ controllers, id }) => (id === null) || controllers.some((controller) => controller.serialNumber === id);
 
 /* Answer a write the engine refused by leaving the configuration exactly as it was. The engine turns away an address it cannot assign to the option asked for -
  * a device identifier carrying a period or an equals sign, or one whose composed address is another catalog option in its own right - and the page's identifiers
@@ -386,6 +423,15 @@ const refuseWrite = (state, error) => {
  */
 export const reducer = (state, action) => {
 
+  // A coordinated configuration write holds the store for its duration, so an option mutation arriving inside that window is answered by returning the state
+  // reference untouched - every subscriber reads a no-op, and the persist effect's dirty check finds configuredOptions still equal to the anchor and starts
+  // nothing. The rule sits ahead of the switch rather than inside each arm because it is one answer about the store as a whole; see {@link HELD_ACTIONS} for
+  // which actions it covers and why each is in the set.
+  if((state.write.kind === "committing") && HELD_ACTIONS.has(action.type)) {
+
+    return state;
+  }
+
   switch(action.type) {
 
     case "model:loaded": {
@@ -405,9 +451,29 @@ export const reducer = (state, action) => {
         throw new Error("FeatureOptionsState.reducer: model:loaded carried no catalog.");
       }
 
-      // First load: catalog, configuredOptions, mode, controllers populated. The persistence anchor seeds from the just-loaded options (pre-mutation the loaded array
-      // IS the disk state). The initial snapshot - the revert target - takes `action.initialOptions` if the dispatcher supplied it (orchestrator re-shows that
-      // detected set-equal options carry the original snapshot forward), otherwise falls back to the loaded options. Status transitions to ready.
+      /* Reconcile every fact in state that can name a controller against the list this load carries, each one independently and by serial. A load over a standing
+       * page can remove the controller the user is looking at: a selection the list cannot place falls back to global, a loaded device list whose owner is gone is
+       * emptied along with the nothing-to-list notice that described it, and a pending fetch for a departed controller is cleared so its late outcome falls to the
+       * existing sequence rule. A fact naming a controller the list still holds keeps its reference. On a first load every one of these facts is still its initial
+       * value, so nothing moves.
+       *
+       * The load carries a controller list, so controllers are the whole of what it can answer for. A device that left a controller the list still holds is a
+       * different question, and a device fetch is what answers it - which belongs to whoever dispatched this load.
+       */
+      const holdsDevicesController = holdsController({ controllers: action.controllers, id: state.devicesControllerId });
+      const holdsRequestController = holdsController({ controllers: action.controllers, id: state.devicesRequest?.controllerId ?? null });
+      const holdsScopeController = holdsController({ controllers: action.controllers, id: (state.scope.kind === "global") ? null : state.scope.controllerId });
+
+      /* A model arrives: catalog, configuredOptions, mode, controllers populated. The persistence anchor seeds from the just-loaded options (pre-mutation the
+       * loaded array IS what the host holds). The initial snapshot - the revert target - takes `action.initialOptions` if the dispatcher supplied it (orchestrator
+       * re-shows that detected set-equal options carry the original snapshot forward), otherwise falls back to the loaded options.
+       *
+       * Status moves to ready only out of `loading`. A connection error ends on a clean device outcome or on a fresh page cycle and nothing else, so an
+       * establishment that declared the page ready would take the frame away from the connection-error view while a plugin's controller card is rendering into it.
+       *
+       * The write lifecycle returns to idle unconditionally: this load installs a fresh anchor, so whatever that lifecycle held describes an anchor that no longer
+       * exists.
+       */
       return {
 
         ...state,
@@ -415,10 +481,16 @@ export const reducer = (state, action) => {
         catalog: action.catalog,
         configuredOptions: action.configuredOptions,
         controllers: action.controllers,
+        devices: holdsDevicesController ? state.devices : [],
+        devicesControllerId: holdsDevicesController ? state.devicesControllerId : null,
+        devicesEmptyMessage: holdsDevicesController ? state.devicesEmptyMessage : null,
+        devicesRequest: holdsRequestController ? state.devicesRequest : null,
         initialOptions: action.initialOptions ?? action.configuredOptions,
         mode: action.mode,
         persistedAnchor: action.configuredOptions,
-        status: { kind: "ready" }
+        scope: holdsScopeController ? state.scope : { kind: "global" },
+        status: (state.status.kind === "loading") ? { kind: "ready" } : state.status,
+        write: { kind: "idle" }
       };
     }
 
@@ -471,9 +543,9 @@ export const reducer = (state, action) => {
        * a device list that just arrived is the evidence that a controller can be reached now - leaving the error up would hold the retry view over a healthy page
        * for the rest of the session, since nothing short of a full page re-entry sets `ready` otherwise.
        *
-       * Only `connection-error` recovers. The persist statuses belong to a different lifecycle - a write in flight or a write that failed - and a device list says
-       * nothing about either, so a fetch landing mid-persist must leave that lifecycle to finish on its own terms. `loading` is left alone for the same reason from
-       * the other end: the page has not finished booting, and `model:loaded` is what declares it ready.
+       * A device outcome moves reachability and nothing else. What is happening to the configuration write is its own field, so a fetch landing mid-write leaves
+       * that lifecycle to finish on its own terms rather than answering for it. `loading` is left alone from the other end: the page has not finished booting, and
+       * `model:loaded` is what declares it ready.
        */
       if(!action.error.length) {
 
@@ -594,23 +666,66 @@ export const reducer = (state, action) => {
 
     case "persist:started": {
 
-      // Status transitions to persisting, carrying the snapshot that's now in flight. Subscribers (status bar) can show a "saving" affordance and read the snapshot
-      // when they need to know what's pending.
-      return { ...state, status: { kind: "persisting", snapshot: action.snapshot } };
+      // The write lifecycle moves to persisting, carrying the snapshot that is in flight. Subscribers (status bar) can show a "saving" affordance and read the
+      // snapshot when they need to know what is pending. Reachability is a separate fact and keeps its reference, so a save entering flight over a controller the
+      // page could not reach leaves that error standing for the view that owns it.
+      return { ...state, write: { kind: "persisting", snapshot: action.snapshot } };
     }
 
     case "persist:succeeded": {
 
-      // The in-flight snapshot landed on disk. Promote it to the anchor so any subsequent rollback (after a future failure) restores to this state, and return
-      // status to ready.
-      return { ...state, persistedAnchor: action.snapshot, status: { kind: "ready" } };
+      // The in-flight snapshot was accepted by the host. Promote it to the anchor so any subsequent rollback (after a future failure) restores to this state, and
+      // return the write lifecycle to idle.
+      return { ...state, persistedAnchor: action.snapshot, write: { kind: "idle" } };
     }
 
     case "persist:failed": {
 
-      // Final-attempt failure with no superseding mutation. Roll configuredOptions back to the last-known disk state so memory matches disk, and transition status
-      // to persist-error so subscribers (status bar / toast emitter) can surface the failure. The rollback is a configuration mutation, so it disarms too.
-      return { ...state, armedOption: null, configuredOptions: state.persistedAnchor, status: { error: action.error, kind: "persist-error" } };
+      // Final-attempt failure with no superseding mutation. Roll configuredOptions back to the last state the host accepted so memory matches it, and move the
+      // write lifecycle to persist-error so subscribers (status bar / toast emitter) can surface the failure. The rollback is a configuration mutation, so it
+      // disarms too.
+      return { ...state, armedOption: null, configuredOptions: state.persistedAnchor, write: { error: action.error, kind: "persist-error" } };
+    }
+
+    case "commit:started": {
+
+      /* A coordinated configuration write is asking for the store, and every entry condition has to hold before it gets it. A model must be loaded, because a
+       * placeholder store has no configuration worth bracketing; no write may be under way, because a persist already in flight or a hold already taken has its
+       * own claim on what the store holds; and configuredOptions must still equal the anchor, because a dirty store has an edit the page has not written yet and
+       * a coordinated write would strand it. A condition failing returns the state reference untouched, and the dispatcher reads `write.kind` back as the
+       * verdict - the same shape a device fetch's dispatcher reads `devicesAppliedSeq` for - so the entry rule is stated here once and nowhere else.
+       *
+       * A recorded `persist-error` is not a claim and does not refuse. The rollback that produced it left configuredOptions equal to the anchor with nothing in
+       * flight, so such a store is as ready for a coordinated write as an idle one; what it carries is a failure the user has already been shown, and only a
+       * later edit or a fresh model ever clears it. Refusing on it would let one failed save turn away every coordinated write for the rest of the session.
+       *
+       * What a lifecycle read does and does not say is worth being exact about: it reflects the last persist transition the store was told about, and a drain
+       * still waiting out its debounce has dispatched nothing yet. A caller therefore drains the persist effect first and only then dispatches this action.
+       *
+       * The entry also disarms. An armed row is an edit in progress, and the hold ends it rather than leaving a live-looking input the reducer would refuse to
+       * take a value from.
+       */
+      if((state.catalog === EMPTY_CATALOG) || [ "committing", "persisting" ].includes(state.write.kind) ||
+        (state.configuredOptions !== state.persistedAnchor)) {
+
+        return state;
+      }
+
+      return { ...state, armedOption: null, write: { kind: "committing" } };
+    }
+
+    case "commit:failed": {
+
+      // The coordinated write ended without a model arriving to replace the page's own, so the hold lifts and option mutations are accepted again. Everything
+      // else keeps its reference: the hold changed nothing but the write lifecycle, so there is nothing else to put back. A dispatch from any other write state
+      // is not this hold's ending and returns the state reference untouched. The successful ending is a `model:loaded`, which returns the lifecycle to idle on
+      // its own terms.
+      if(state.write.kind !== "committing") {
+
+        return state;
+      }
+
+      return { ...state, write: { kind: "idle" } };
     }
 
     case "connection:error": {

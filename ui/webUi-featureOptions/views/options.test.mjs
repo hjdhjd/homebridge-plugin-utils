@@ -1305,6 +1305,80 @@ describe("mountOptionsView - in-flight device fetch", () => {
   });
 });
 
+/* The window a coordinated configuration write opens over the table by holding the store. These rows drive it at GLOBAL scope deliberately - the device-fetch
+ * window reads false there, so nothing but the hold itself can render the table inert, and a row that passed here against a reducer that never entered the hold
+ * would be reading the wrong window.
+ */
+describe("mountOptionsView - a coordinated configuration write", () => {
+
+  // Expand Motion and hand back the row checkbox the assertions operate on. Categories render collapsed, so this is how a row comes to exist at all.
+  const expandMotion = (configTable) => {
+
+    const motion = configTable.querySelector("details[data-category='Motion']");
+
+    motion.open = true;
+    motion.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    return motion.querySelector("#Motion\\.Detect");
+  };
+
+  test("the table renders inert while the write holds the store, and comes back live when the write fails", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = setup();
+    const detect = expandMotion(configTable);
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "precondition: a global view with no fetch outstanding is live");
+    assert.equal(detect.disabled, false, "precondition: and its rows take gestures");
+
+    store.dispatch({ type: "commit:started" });
+
+    const configuredBefore = store.state.configuredOptions;
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "the hold carries the table's busy marker");
+    assert.equal(configTable.querySelector("#Motion\\.Detect").disabled, true, "and every row goes inert with it");
+
+    configTable.querySelector("#Motion\\.Detect").click();
+
+    assert.equal(store.state.configuredOptions, configuredBefore, "a click writes nothing while the hold stands");
+
+    store.dispatch({ type: "commit:failed" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "a failed write lifts the marker");
+    assert.equal(configTable.querySelector("#Motion\\.Detect").disabled, false, "and hands the row its interactivity back");
+
+    configTable.querySelector("#Motion\\.Detect").click();
+
+    assert.deepEqual(store.state.configuredOptions, ["Disable.Motion.Detect"], "so the very same gesture writes again");
+  });
+
+  test("a model arriving is the successful exit, and it lifts the window too", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = setup();
+
+    expandMotion(configTable);
+    store.dispatch({ type: "commit:started" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "precondition: the hold stands");
+
+    // The successful ending of a coordinated write is the model that replaces the page's own, which the scope-render effect answers by rebuilding the table.
+    store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+
+    const detect = expandMotion(configTable);
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "the load lifts the marker");
+    assert.equal(detect.disabled, false, "and the rebuilt rows are live");
+
+    detect.click();
+
+    assert.deepEqual(store.state.configuredOptions, ["Disable.Motion.Detect"], "and they write");
+  });
+});
+
 describe("mountOptionsView - legacy category-state key migration", () => {
 
   // The pre-reactive-store architecture wrote category-state entries under context keys of shape `"Global Options"` (for the global view) or the bare device serial

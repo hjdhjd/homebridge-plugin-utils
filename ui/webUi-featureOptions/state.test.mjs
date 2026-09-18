@@ -42,6 +42,24 @@ const CATALOG = {
   }
 };
 
+const DEVICES = [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
+
+// A store that has loaded its model, built the way the page builds one: a model:loaded over a fresh initial state. It is the precondition for most of what the
+// reducer does, so it lives here rather than being spelled out again in each block that needs one.
+const loadedState = ({ configuredOptions = [], controllers = [], mode = "device-only" } = {}) => {
+
+  return reducer(initialState(), { catalog: CATALOG, configuredOptions, controllers, mode, type: "model:loaded" });
+};
+
+// Pair a request with its answering outcome: mint the sequence, then apply the outcome stamped with it. The reducer applies a loaded only when its sequence still
+// answers the pending request, so this pairing is how a fetch's outcome lands in state.
+const requestThenLoad = (state, { controllerId = null, devices = [], emptyMessage, error = "" } = {}) => {
+
+  const requested = reducer(state, { controllerId, type: "devices:requested" });
+
+  return reducer(requested, { controllerId, devices, emptyMessage, error, seq: requested.devicesRequest.seq, type: "devices:loaded" });
+};
+
 describe("initialState", () => {
 
   test("returns a fresh state object with status = loading and every populated-at-runtime field empty", () => {
@@ -117,6 +135,121 @@ describe("reducer - model:loaded", () => {
   });
 });
 
+describe("reducer - model:loaded establishes over a standing page", () => {
+
+  test("declares the page ready only out of loading, leaving a standing connection error by reference", () => {
+
+    const first = loadedState();
+
+    assert.deepEqual(first.status, { kind: "ready" }, "a first load out of loading declares the page ready");
+
+    const errored = requestThenLoad(first, { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+
+    assert.equal(errored.status.kind, "connection-error", "precondition: the page carries a connection error");
+
+    // A connection error ends on a clean device outcome or a fresh page cycle and nothing else. An establishment that declared the page ready would take the
+    // frame away from the connection-error view while a plugin's controller card is rendering into it.
+    const reloaded = reducer(errored, { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+    assert.equal(reloaded.status, errored.status, "the error keeps its reference, so the view that owns the frame keeps it");
+  });
+
+  test("returns the write lifecycle to idle, since the load installs a fresh anchor", () => {
+
+    const base = loadedState();
+    const held = reducer(base, { type: "commit:started" });
+    const failed = reducer(base, { error: new Error("The host refused the write."), type: "persist:failed" });
+    const reload = { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" };
+
+    assert.deepEqual(reducer(held, reload).write, { kind: "idle" }, "a hold does not survive the load that ends it");
+    assert.deepEqual(reducer(failed, reload).write, { kind: "idle" }, "and neither does a failed persist, whose anchor is gone");
+  });
+});
+
+/* A load over a standing page can carry a controller list that no longer holds the controller the user is looking at. Every fact in state that names one is
+ * checked against the arriving list by serial, independently, and answered on its own terms. These rows drive each fact in both directions - a list that dropped
+ * the controller and a list that still holds it - because a reconciliation that fired on a held controller would be as wrong as one that missed a departed one.
+ */
+describe("reducer - model:loaded reconciles the facts that name a controller", () => {
+
+  const CONTROLLER_A = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+
+  const controllerBased = () => loadedState({ controllers: [CONTROLLER_A], mode: "controller-based" });
+
+  const reload = (state, controllers) => reducer(state, {
+
+    catalog: CATALOG, configuredOptions: [], controllers, mode: "controller-based", type: "model:loaded"
+  });
+
+  test("a selection naming a departed controller falls back to global, and a held one keeps its reference", () => {
+
+    const controllerScope = reducer(controllerBased(), { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const deviceScope = reducer(controllerBased(), { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+
+    assert.deepEqual(reload(controllerScope, []).scope, { kind: "global" }, "a controller selection the list cannot place falls back to global");
+    assert.deepEqual(reload(deviceScope, []).scope, { kind: "global" }, "and so does a device selection under that controller");
+    assert.equal(reload(controllerScope, [CONTROLLER_A]).scope, controllerScope.scope, "a held controller keeps the selection by reference");
+    assert.equal(reload(deviceScope, [CONTROLLER_A]).scope, deviceScope.scope, "and so does a device under a held one");
+  });
+
+  test("a device list whose controller is gone is emptied and disowned, and a held one keeps its references", () => {
+
+    const withDevices = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", devices: DEVICES });
+
+    assert.equal(withDevices.devices, DEVICES, "precondition: controller A's devices are loaded");
+
+    const dropped = reload(withDevices, []);
+
+    assert.deepEqual(dropped.devices, [], "the device list is emptied");
+    assert.notEqual(dropped.devices, withDevices.devices, "with a fresh array, not the departed controller's");
+    assert.equal(dropped.devicesControllerId, null, "and nothing owns it any more");
+
+    const kept = reload(withDevices, [CONTROLLER_A]);
+
+    assert.equal(kept.devices, withDevices.devices, "a held controller keeps its device list by reference");
+    assert.equal(kept.devicesControllerId, "ctrl-a", "and goes on owning it");
+  });
+
+  test("the nothing-to-list notice leaves with the controller it described", () => {
+
+    const NOTICE = "This controller has no cameras adopted.";
+    const withNotice = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", emptyMessage: NOTICE });
+
+    assert.equal(withNotice.devicesEmptyMessage, NOTICE, "precondition: the notice is recorded");
+    assert.equal(reload(withNotice, []).devicesEmptyMessage, null, "a departed controller takes its notice with it");
+    assert.equal(reload(withNotice, [CONTROLLER_A]).devicesEmptyMessage, NOTICE, "a held one keeps it");
+  });
+
+  test("a fetch pending against a departed controller is cleared, and its late outcome then drops", () => {
+
+    const pending = reducer(controllerBased(), { controllerId: "ctrl-a", type: "devices:requested" });
+    const seq = pending.devicesRequest.seq;
+    const reloaded = reload(pending, []);
+
+    assert.equal(reloaded.devicesRequest, null, "the pending fetch names a controller the list cannot place, so it is cleared");
+
+    const late = reducer(reloaded, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq, type: "devices:loaded" });
+
+    assert.equal(late, reloaded, "its late outcome falls to the existing sequence rule and returns the state by reference");
+    assert.equal(reload(pending, [CONTROLLER_A]).devicesRequest, pending.devicesRequest, "a held controller keeps the pending fetch by reference");
+  });
+
+  test("device-only state is untouched: a null id names no controller, so there is nothing to take away", () => {
+
+    const deviceOnly = reducer(requestThenLoad(loadedState(), { controllerId: null, devices: DEVICES }),
+      { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+
+    assert.equal(deviceOnly.devicesControllerId, null, "precondition: device-only mode owns its list under no controller");
+
+    const reloaded = reducer(deviceOnly, { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+    assert.equal(reloaded.devices, deviceOnly.devices, "the device list survives an empty controller list");
+    assert.equal(reloaded.devicesControllerId, null, "and so does its null owner");
+    assert.equal(reloaded.scope, deviceOnly.scope, "the selection keeps its reference, null controllerId and all");
+    assert.equal(reloaded.devicesRequest, deviceOnly.devicesRequest, "and so does the pending slot");
+  });
+});
+
 describe("reducer - controllers:loaded", () => {
 
   test("replaces only the controllers field without re-loading the model", () => {
@@ -158,17 +291,6 @@ describe("reducer - devices:requested", () => {
 });
 
 describe("reducer - devices:loaded", () => {
-
-  const DEVICES = [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }];
-
-  // Pair a request with its answering outcome: mint the sequence, then apply the outcome stamped with it. The reducer applies a loaded only when its sequence still
-  // answers the pending request, so this pairing is how a fetch's outcome lands in state.
-  const requestThenLoad = (state, { controllerId = null, devices = [], emptyMessage, error = "" } = {}) => {
-
-    const requested = reducer(state, { controllerId, type: "devices:requested" });
-
-    return reducer(requested, { controllerId, devices, emptyMessage, error, seq: requested.devicesRequest.seq, type: "devices:loaded" });
-  };
 
   test("an outcome that answers the pending request applies the devices and clears the pending slot", () => {
 
@@ -356,16 +478,16 @@ describe("reducer - devices:loaded", () => {
     assert.equal(recovered.status.kind, "ready", "a controller that answered with no devices still answered");
   });
 
-  test("recovery is confined to connection-error: the persist statuses and loading are untouched by a clean outcome", () => {
+  test("recovery is confined to connection-error: the write lifecycle and loading are untouched by a clean outcome", () => {
 
-    // The persist statuses belong to a different lifecycle - a write in flight, or a write that failed - and a device list says nothing about either. Loading is
-    // left alone from the other end: model:loaded is what declares the page ready.
-    const base = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+    // What is happening to the configuration write is its own field - a write in flight, or a write that failed - and a device list says nothing about either.
+    // Loading is left alone from the other end: model:loaded is what declares the page ready.
+    const base = loadedState();
     const persisting = reducer(base, { snapshot: [], type: "persist:started" });
     const persistError = reducer(base, { error: new Error("disk full"), type: "persist:failed" });
 
-    assert.equal(requestThenLoad(persisting, { devices: DEVICES }).status, persisting.status, "a persisting status survives a clean outcome by reference");
-    assert.equal(requestThenLoad(persistError, { devices: DEVICES }).status, persistError.status, "a persist-error status survives a clean outcome by reference");
+    assert.equal(requestThenLoad(persisting, { devices: DEVICES }).write, persisting.write, "a persist in flight survives a clean outcome by reference");
+    assert.equal(requestThenLoad(persistError, { devices: DEVICES }).write, persistError.write, "a failed persist survives a clean outcome by reference");
     assert.equal(requestThenLoad(initialState(), { devices: DEVICES }).status.kind, "loading", "a loading status is not promoted to ready by a device outcome");
   });
 
@@ -698,31 +820,34 @@ describe("reducer - filter:changed", () => {
 
 describe("reducer - persist lifecycle", () => {
 
-  test("persist:started transitions status to persisting and carries the snapshot", () => {
+  test("persist:started moves the write lifecycle to persisting and carries the snapshot", () => {
 
     const snapshot = ["Enable.Motion.Detect"];
-    const next = reducer(initialState(), { snapshot, type: "persist:started" });
+    const base = initialState();
 
-    assert.equal(next.status.kind, "persisting");
-    assert.equal(next.status.snapshot, snapshot);
+    assert.deepEqual(base.write, { kind: "idle" }, "precondition: a fresh store has nothing in flight");
+
+    const next = reducer(base, { snapshot, type: "persist:started" });
+
+    assert.equal(next.write.kind, "persisting");
+    assert.equal(next.write.snapshot, snapshot);
+    assert.equal(next.status, base.status, "reachability is a separate fact and keeps its reference");
   });
 
-  test("persist:succeeded promotes the snapshot to the anchor and returns status to ready", () => {
+  test("persist:succeeded promotes the snapshot to the anchor and returns the write lifecycle to idle", () => {
 
     const persisting = reducer(initialState(), { snapshot: ["Enable.Motion.Detect"], type: "persist:started" });
     const next = reducer(persisting, { snapshot: ["Enable.Motion.Detect"], type: "persist:succeeded" });
 
-    assert.equal(next.status.kind, "ready");
+    assert.equal(next.write.kind, "idle");
     assert.deepEqual(next.persistedAnchor, ["Enable.Motion.Detect"]);
+    assert.equal(next.status, persisting.status, "reachability keeps its reference");
   });
 
-  test("persist:failed rolls configuredOptions back to the anchor and transitions status to persist-error", () => {
+  test("persist:failed rolls configuredOptions back to the anchor and moves the write lifecycle to persist-error", () => {
 
     const initial = ["Enable.Motion.Detect"];
-    const loaded = reducer(initialState(), {
-
-      catalog: CATALOG, configuredOptions: initial, controllers: [], mode: "device-only", type: "model:loaded"
-    });
+    const loaded = loadedState({ configuredOptions: initial });
 
     // Simulate the optimistic-apply: mutate the model in memory, then persist failure rolls back.
     const mutated = reducer(loaded, { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
@@ -730,8 +855,209 @@ describe("reducer - persist lifecycle", () => {
     const failed = reducer(mutated, { error, type: "persist:failed" });
 
     assert.equal(failed.configuredOptions, loaded.persistedAnchor, "configuredOptions reverts to the anchor reference");
-    assert.equal(failed.status.kind, "persist-error");
-    assert.equal(failed.status.error, error);
+    assert.equal(failed.write.kind, "persist-error");
+    assert.equal(failed.write.error, error);
+    assert.equal(failed.status, mutated.status, "reachability keeps its reference");
+  });
+});
+
+/* The lifecycles the state holds apart. Reachability answers whether the page can be reached; the write lifecycle answers what is happening to the configuration
+ * write. They co-occur - a save can be in flight, or can have failed, while a controller cannot be reached - so these rows drive one while the other stands and
+ * assert that neither transition reaches across.
+ */
+describe("reducer - page reachability and the write lifecycle are independent", () => {
+
+  test("a persist action leaves a standing connection error in place by reference, while still promoting the anchor and rolling back", () => {
+
+    const base = loadedState({ configuredOptions: ["Enable.Motion.Detect"] });
+    const errored = requestThenLoad(base, { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+
+    assert.equal(errored.status.kind, "connection-error", "precondition: the failed fetch raised the error");
+
+    const snapshot = ["Enable.Audio.Volume.50"];
+    const started = reducer(errored, { snapshot, type: "persist:started" });
+
+    assert.equal(started.status, errored.status, "persist:started leaves the error in place by reference");
+    assert.equal(started.write.snapshot, snapshot, "and carries the snapshot on the write lifecycle");
+
+    const succeeded = reducer(started, { snapshot, type: "persist:succeeded" });
+
+    assert.equal(succeeded.status, errored.status, "persist:succeeded leaves it in place by reference");
+    assert.equal(succeeded.persistedAnchor, snapshot, "and still promotes the snapshot to the anchor");
+
+    const error = new Error("The host refused the write.");
+    const mutated = reducer(errored, { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+    const failed = reducer(mutated, { error, type: "persist:failed" });
+
+    assert.equal(failed.status, errored.status, "persist:failed leaves it in place by reference");
+    assert.equal(failed.configuredOptions, errored.persistedAnchor, "and still rolls configuredOptions back to the anchor");
+    assert.equal(failed.write.error, error, "carrying the error on the write lifecycle");
+  });
+
+  test("a device outcome leaves the write lifecycle by reference whatever it holds, clean or failed", () => {
+
+    const base = loadedState();
+    const writeStates = {
+
+      committing: reducer(base, { type: "commit:started" }),
+      "persist-error": reducer(base, { error: new Error("The host refused the write."), type: "persist:failed" }),
+      persisting: reducer(base, { snapshot: [], type: "persist:started" })
+    };
+
+    for(const [ kind, state ] of Object.entries(writeStates)) {
+
+      assert.equal(state.write.kind, kind, "precondition: the write lifecycle holds " + kind);
+      assert.equal(requestThenLoad(state, { controllerId: "ctrl-a", devices: DEVICES }).write, state.write,
+        "a clean outcome leaves " + kind + " by reference");
+      assert.equal(requestThenLoad(state, { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." }).write, state.write,
+        "and a failed outcome leaves " + kind + " by reference too");
+    }
+  });
+
+  test("reachability walks to connection-error and back under a coordinated write, and the hold stands throughout", () => {
+
+    // The hole a single slot would leave open. With one field carrying them, the failed fetch would overwrite the hold and the clean one would then declare the
+    // page ready, unlocking the table in the middle of a write nobody told the store had ended.
+    const held = reducer(loadedState(), { type: "commit:started" });
+
+    assert.equal(held.write.kind, "committing", "precondition: the hold is taken");
+
+    const errored = requestThenLoad(held, { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
+
+    assert.equal(errored.status.kind, "connection-error", "a failed fetch moves reachability");
+    assert.equal(errored.write, held.write, "and leaves the hold by reference");
+
+    const recovered = requestThenLoad(errored, { controllerId: "ctrl-a", devices: DEVICES });
+
+    assert.equal(recovered.status.kind, "ready", "a clean fetch walks reachability back");
+    assert.equal(recovered.write, held.write, "and the hold is still the very same object, twice untouched");
+    assert.equal(reducer(recovered, { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" }), recovered,
+      "so an option mutation is still refused by reference");
+  });
+});
+
+describe("reducer - commit:started", () => {
+
+  test("takes the hold from a loaded, idle, clean store and stands an armed row down", () => {
+
+    const armed = reducer(loadedState(), { option: "Audio.Volume", type: "option:armed" });
+
+    assert.equal(armed.armedOption, "Audio.Volume", "precondition: a row is armed");
+
+    const held = reducer(armed, { type: "commit:started" });
+
+    assert.deepEqual(held.write, { kind: "committing" });
+    assert.equal(held.armedOption, null, "an armed row is an edit in progress, and the hold ends it");
+    assert.equal(held.configuredOptions, armed.configuredOptions, "the configuration itself is untouched");
+    assert.equal(held.status, armed.status, "and so is reachability");
+  });
+
+  test("refuses by reference from every state that has its own claim on the store", () => {
+
+    const base = loadedState();
+    const unloaded = initialState();
+    const persisting = reducer(base, { snapshot: [], type: "persist:started" });
+    const persistError = reducer(base, { error: new Error("The host refused the write."), type: "persist:failed" });
+    const dirty = reducer(base, { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+    const held = reducer(base, { type: "commit:started" });
+
+    assert.notEqual(dirty.configuredOptions, dirty.persistedAnchor, "precondition: the dirty store has an edit the page has not written yet");
+
+    assert.equal(reducer(unloaded, { type: "commit:started" }), unloaded, "a placeholder store has no configuration worth bracketing");
+    assert.equal(reducer(persisting, { type: "commit:started" }), persisting, "a persist already in flight has its own claim");
+    assert.deepEqual(reducer(persistError, { type: "commit:started" }).write, { kind: "committing" },
+      "while a persist that failed is a record rather than a claim, so the hold is taken over it");
+    assert.equal(reducer(dirty, { type: "commit:started" }), dirty, "a dirty store would strand the edit it is holding");
+    assert.equal(reducer(held, { type: "commit:started" }), held, "and a hold already taken is not taken a second time");
+  });
+
+  test("every option-mutating action is refused by reference while the hold stands", () => {
+
+    /* Each action is paired with the field it moves, so the precondition asserts a real change on an idle store rather than the fresh top-level object every arm
+     * produces - without that pairing the row would pass against a reducer that refuses nothing.
+     *
+     * The base state carries an initial snapshot that differs from its configured options, which is what gives model:reverted something to restore, while
+     * configuredOptions still equals the anchor so commit:started can take the hold at all.
+     */
+    const base = reducer(initialState(), {
+
+      catalog: CATALOG,
+      configuredOptions: ["Enable.Motion.Detect"],
+      controllers: [],
+      initialOptions: [],
+      mode: "device-only",
+      type: "model:loaded"
+    });
+    const held = reducer(base, { type: "commit:started" });
+    const mutations = [
+
+      { action: { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" }, field: "configuredOptions" },
+      { action: { args: { option: "Motion.Detect" }, type: "option:cleared" }, field: "configuredOptions" },
+      { action: { option: "Audio.Volume", type: "option:armed" }, field: "armedOption" },
+      { action: { type: "options:reset" }, field: "configuredOptions" },
+      { action: { type: "model:reverted" }, field: "configuredOptions" }
+    ];
+
+    assert.equal(held.write.kind, "committing", "precondition: the hold is taken");
+
+    for(const { action, field } of mutations) {
+
+      assert.notEqual(reducer(base, action)[field], base[field], "precondition: " + action.type + " moves " + field + " on an idle store");
+      assert.equal(reducer(held, action), held, action.type + " is refused by reference while the hold stands");
+    }
+  });
+
+  test("an action outside the refused set still applies while the hold stands", () => {
+
+    // Standing a row down ends a gesture rather than beginning one, navigation and filtering write nothing, and a fetch or a controller refresh is not an edit at
+    // all...so each of these reaches its arm and returns a new state rather than the held reference.
+    const held = reducer(loadedState({ controllers: [{ address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" }] }), { type: "commit:started" });
+    const permitted = [
+
+      { type: "option:disarmed" },
+      { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" },
+      { query: "motion", type: "filter:changed" },
+      { controllerId: "ctrl-a", type: "devices:requested" },
+      { controllers: [], type: "controllers:loaded" }
+    ];
+
+    for(const action of permitted) {
+
+      assert.notEqual(reducer(held, action), held, action.type + " is not held: it reaches its arm and returns a new state");
+    }
+  });
+});
+
+describe("reducer - commit:failed", () => {
+
+  test("lifts the hold and touches nothing else", () => {
+
+    const base = loadedState({ configuredOptions: ["Enable.Motion.Detect"] });
+    const held = reducer(base, { type: "commit:started" });
+    const lifted = reducer(held, { type: "commit:failed" });
+
+    assert.deepEqual(lifted.write, { kind: "idle" });
+
+    // The hold changed nothing but the write lifecycle, so there is nothing else to put back. Walking every key is what makes that a contract rather than a claim
+    // about the fields this row happened to think of.
+    for(const field of Object.keys(held)) {
+
+      if(field === "write") {
+
+        continue;
+      }
+
+      assert.equal(lifted[field], held[field], field + " comes back by reference");
+    }
+  });
+
+  test("returns the state by reference from any other write state", () => {
+
+    const base = loadedState();
+    const persisting = reducer(base, { snapshot: [], type: "persist:started" });
+
+    assert.equal(reducer(base, { type: "commit:failed" }), base, "an idle store is not a hold this action ends");
+    assert.equal(reducer(persisting, { type: "commit:failed" }), persisting, "and neither is a persist in flight");
   });
 });
 

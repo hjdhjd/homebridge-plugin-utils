@@ -5,7 +5,7 @@
 "use strict";
 
 import { createElement, setCategoryExpanded } from "../utils.mjs";
-import { projection, tablePresentation } from "../selectors.mjs";
+import { editsHeld, projection, tablePresentation } from "../selectors.mjs";
 import { effect } from "../store.mjs";
 
 // Long enough to absorb a fast typist's keystrokes between dispatches, short enough that the filtered table still feels like it is responding to each edit.
@@ -20,7 +20,8 @@ const SEARCH_DEBOUNCE_MS = 300;
  *   - **Filter pills** (All / Modified) - dispatch `filter:changed` with the mode.
  *   - **Toggle-all categories** - imperative DOM mutation; sets `<details open>` on every category in the config table.
  *   - **Status bar counters** (total / modified / grouped / visible) - read from the projection, updated on any state change that touches it.
- *   - **Reset button group** (Reset... -> Reset to Defaults / Revert to Saved) - dispatches `options:reset` or `model:reverted`.
+ *   - **Reset button group** (Reset... -> Reset to Defaults / Revert to Saved) - dispatches `options:reset` or `model:reverted`, and renders disabled while a
+ *     coordinated configuration write holds the store, which is when the reducer refuses both.
  *
  * The panel re-builds on `model:loaded` (and only then). Subsequent dispatches update individual elements (counts, pill active-state, toggle-all label, and whether
  * the panel's bars are shown at all) without rebuilding the DOM. The view's footprint is small because the heavy work - the projection walk - is shared with
@@ -113,6 +114,31 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
 
       refs.statusBar.classList.toggle("d-none", !showPanel);
       refs.controlBar.classList.toggle("d-none", !showPanel);
+    },
+    signal,
+    store
+  });
+
+  // Hold the reset controls while a coordinated configuration write holds the store. They dispatch options:reset and model:reverted, which the reducer refuses for
+  // the duration, and they sit outside the config table, so the table's own inert rendering never reaches them - a user would be pressing live-looking buttons that
+  // answer with nothing. Its own effect rather than an addition to the projection effect above, because it answers a different question from a different set of
+  // events and needs no projection read to answer it. The disabled state is derived from the selector on every run and never recorded, so the controls come back
+  // live on the next pass whichever way the write ended. The search box and the filter pills stay live throughout: filtering writes nothing.
+  effect({
+
+    events: [ "commit:failed", "commit:started", "model:loaded" ],
+    fn: () => {
+
+      if(!refs.resetToggle) {
+
+        return;
+      }
+
+      const held = editsHeld(store.state);
+
+      refs.resetToggle.disabled = held;
+      refs.resetDefaults.disabled = held;
+      refs.resetRevert.disabled = held;
     },
     signal,
     store

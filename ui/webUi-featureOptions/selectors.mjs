@@ -43,6 +43,21 @@ export const modelLoaded = (state) => {
 };
 
 /**
+ * Report whether option edits are being held. Pure helper - one-line tag read, not memoized.
+ *
+ * A coordinated configuration write holds the store while it runs, and the reducer refuses every option mutation for that duration - so a control that could
+ * dispatch one has nothing to dispatch, and rendering it live would invite a gesture the store answers with silence. Every surface carrying such a control asks
+ * this one question, which is what keeps the config table and the reset controls outside it from disagreeing about whether an edit is possible.
+ *
+ * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
+ * @returns {boolean} True while a coordinated configuration write holds the store, false otherwise.
+ */
+export const editsHeld = (state) => {
+
+  return state.write.kind === "committing";
+};
+
+/**
  * Extract the controller serial from the scope tag, or null when no controller is in context. Pure helper - one-line tag read, not memoized.
  *
  * This is the controller's NAVIGATION identity: the serial the plugin's `getControllers` hook put on the sidebar link, which is what names, highlights, and

@@ -351,6 +351,65 @@ describe("registerPersistEffect - failure path", () => {
       "intermediate failure swallowed - only the second iteration's succeeded surfaces");
     assert.equal(store.state.status.kind, "ready");
   });
+
+  test("a swallowed failure whose superseding edits end on the saved options leaves the write lifecycle idle", async () => {
+
+    const events = [];
+    const updates = [];
+    const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+    const controller = new AbortController();
+    let release;
+
+    store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+    const host = {
+
+      getPluginConfig: async () => [PLATFORM],
+      updatePluginConfig: async (payload) => {
+
+        updates.push(payload);
+
+        // The one write this drain makes hangs until the test releases it as a refusal, so both mutations below land while it is still in flight.
+        await new Promise((resolve) => { release = resolve; });
+
+        throw new Error("Disk write failed");
+      }
+    };
+
+    for(const type of [ "persist:started", "persist:succeeded", "persist:failed" ]) {
+
+      store.addEventListener(type, (event) => events.push({ detail: event.detail, type: event.type }));
+    }
+
+    const session = await PluginConfigSession.open({ host, name: PLATFORM.name });
+
+    registerPersistEffect({ host, session, signal: controller.signal, store });
+
+    store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+
+    await flush();
+
+    assert.equal(updates.length, 1, "precondition: the write the host will refuse is in flight");
+
+    /* Two mutations during that write, which is what puts the store in the state this row exists for. The first is a genuine edit, so it marks the drain dirty and
+     * the refusal below is swallowed rather than surfaced. The second returns the options to the array the anchor holds, so the iteration that follows the swallow
+     * finds nothing left to write and never answers the swallowed write's persist:started on its own.
+     */
+    store.dispatch({ args: { enabled: true, option: "Motion.Detect" }, type: "option:set" });
+    store.dispatch({ type: "model:reverted" });
+
+    assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "precondition: the revert left the store clean by reference");
+    assert.equal(store.state.write.kind, "persisting", "precondition: the refused write is still open as far as the store knows");
+
+    release();
+
+    await flush();
+
+    assert.equal(updates.length, 1, "the rescued refusal is never retried - there is nothing left to write");
+    assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:succeeded" ], "the swallowed write's started is answered rather than left open");
+    assert.equal(store.state.write.kind, "idle", "so the lifecycle ends idle rather than at a persisting nothing will ever answer");
+    assert.equal(store.state.persistedAnchor, store.state.configuredOptions, "and the anchor still names what the host holds");
+  });
 });
 
 describe("registerPersistEffect - lifecycle", () => {

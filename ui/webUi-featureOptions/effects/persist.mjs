@@ -38,6 +38,8 @@ const DEBOUNCE_MS = 300;
  *   4. Failure with no superseding mutation: `persist:failed` with the error. The write lifecycle transitions to `persist-error`; the reducer rolls
  *      `configuredOptions` back to the anchor.
  *   5. Failure with a superseding mutation: the error is swallowed; the loop continues with the newer state.
+ *   6. A swallowed failure whose superseding edit returned the options to the anchor: the next iteration finds nothing to write, and answers that swallowed
+ *      write's `persist:started` with a `persist:succeeded` carrying the anchor, so the lifecycle ends at `idle` rather than at a `persisting` nothing answers.
  *
  * The effect is registered with the page-level signal. Aborting the signal cleanly tears down the listener; an in-flight `updatePluginConfig` call cannot itself
  * be aborted (the Homebridge bridge does not accept an `AbortSignal`), but the drain checks `signal.aborted` after every await and bails before dispatching any
@@ -116,6 +118,17 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
       // re-test here: once a just-committed edit advances `persistedAnchor` to match `configuredOptions`, there is nothing left to write, and we break rather than
       // looping again on a now-clean store. This also skips a redundant write when an edit was reverted back to the anchor within the debounce window.
       if(store.state.configuredOptions === store.state.persistedAnchor) {
+
+        /* One route reaches this break with a write still in flight as far as the store is concerned: a commit the host rejected was rescued by a superseding edit,
+         * which took the swallow-on-pending path below without answering that write's `persist:started`, and the edit returned the options to the anchor. The
+         * lifecycle would otherwise sit at `persisting` for the store's life with nothing running, which a coordinated write's entry rule reads as a claim and
+         * refuses forever. The anchor is what the host holds and what the store holds, and nothing is in flight, so the action that states exactly that is a
+         * success carrying the anchor as its snapshot. No toast goes with it: the user's own edit made the failure moot.
+         */
+        if(store.state.write.kind === "persisting") {
+
+          store.dispatch({ snapshot: store.state.persistedAnchor, type: "persist:succeeded" });
+        }
 
         break;
       }

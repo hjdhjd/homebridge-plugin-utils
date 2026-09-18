@@ -2801,6 +2801,52 @@ describe("webUiFeatureOptions - revert snapshot survives a re-show with set-equa
 
     orchestrator.cleanup();
   });
+
+  /* The other half of what the snapshot is: not just which options it carries, but which array. The orchestrator holds the loaded options array itself as the
+   * revert target, and the store seeds both configuredOptions and persistedAnchor from that same array, so a revert taken before anything has been saved returns
+   * the store to the reference its anchor already holds. The drain's clean-store check reads exactly that agreement and writes nothing. Were the target a copy,
+   * the check would compare two arrays that can never match by reference and every such revert would write the host the configuration it already has.
+   */
+  test("an edit reverted inside the debounce window leaves the store on its anchor, so the drain writes nothing", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig({ options: ["Enable.Motion.Detect"] }),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions();
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    // The edit and the revert land in the same tick, well inside the 300ms debounce window: the user clicking an option and taking it back a moment later.
+    skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+
+    const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
+
+    motionCheckbox.checked = false;
+    motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    document.querySelector("button[data-action='reset-revert']").click();
+
+    // hide() is what makes the assertion honest rather than a race against the debounce: its flush drives the drain to completion instead of letting the window
+    // quietly expire, so a write this edit still owed the host would have to happen here.
+    await orchestrator.hide();
+    await flush();
+
+    assert.equal(fake.observed.updatedConfigs.length, 0,
+      "an edit taken back before it was ever written owes the host nothing, so the drain sent it no configuration at all");
+
+    orchestrator.cleanup();
+  });
 });
 
 describe("webUiFeatureOptions - boundary coercion of malformed config", () => {

@@ -383,6 +383,9 @@ export class webUiFeatureOptions {
   // The configuredOptions array captured at the FIRST show()'s `model:loaded`. Survives subsequent cleanup() / show() cycles so a re-show that loads a set-equal
   // (possibly reordered) options array preserves the original snapshot for revert-to-saved. The set-equality probe in show() is the boundary where this is decided.
   // Set on first model:loaded; updated only when the loaded options are NOT set-equal to the stored snapshot.
+  //
+  // It holds the loaded array itself rather than a copy of it, because the store seeds `configuredOptions` and `persistedAnchor` from that same array: one
+  // reference shared by all three is what lets a revert made before any save land on the anchor by reference, leaving the persist drain nothing to write.
   #initialOptions;
 
   /**
@@ -1231,6 +1234,9 @@ export class webUiFeatureOptions {
    * the call with what it threw - the line {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold is
    * released on the way out.
    *
+   * The entry is handed over to be read, and a composer answers with its patch rather than editing what it was given: the page's store holds that entry's options
+   * array by reference, as its live edits and as the target a revert returns to, so an edit made in place would rewrite the user's own state underneath them both.
+   *
    * Contract:
    *
    *   - The call resolves a {@link CommitConfigResult}: `committed` (written and saved), `staged` (written into the host's memory with the save to disk refused,
@@ -1262,7 +1268,8 @@ export class webUiFeatureOptions {
    * composer writes. Closing it would mean serializing every session write behind a write that may never settle, which trades a rare clobber for a permanent
    * wedge, so the page keeps the bound it already chose.
    *
-   * @param {(platform: Object) => Object} compose - Synchronous composer receiving the live primary platform entry and returning the patch to merge onto it.
+   * @param {(platform: Object) => Object} compose - Synchronous composer receiving the live primary platform entry and returning the patch to merge onto it. The
+   *                                                 entry is the composer's to read and not to edit: the page's store holds its options array by reference.
    * @returns {Promise<CommitConfigResult>} What became of the write, and what the page did about it.
    * @throws {TypeError} When `compose` is not a function.
    * @throws {Error} When no `show()` has supplied the page's configuration session yet.
@@ -1613,6 +1620,16 @@ export class webUiFeatureOptions {
    * never disagree about which options were loaded. It builds no catalog and announces nothing: a boot has a catalog to build and an announcement to make, an
    * in-place establishment has neither, and what the two genuinely share is only this.
    *
+   * The revert target a boundary move installs IS that array, not a copy of it, and the sharing is the design. The reducer seeds `configuredOptions` and
+   * `persistedAnchor` from the same array the dispatch below carries, so all three references agree: a revert made before any save since the load puts
+   * `configuredOptions` back to the very reference the anchor holds, the persist drain's clean-store check finds the two equal, and an edit the user took back
+   * writes nothing. A copy would hand that check two arrays it can never find equal by reference, and every such revert would write the host a configuration it
+   * already has.
+   *
+   * Sharing one array is safe because nothing anywhere mutates an options array in place: every option transform allocates a fresh array or hands its input
+   * straight back, and the session replaces the entry it holds on each read and each write rather than editing the entry it has. Outside this repository the
+   * guarantee is the composer contract {@link webUiFeatureOptions#commitConfig} states, since a composer is the one caller handed the live entry.
+   *
    * @param {Object} args
    * @param {Object} args.catalog - The catalog the model is installed against.
    * @param {Object[]} args.controllers - The controller list this model carries.
@@ -1624,7 +1641,7 @@ export class webUiFeatureOptions {
 
     if(moveBoundary) {
 
-      this.#initialOptions = [...options];
+      this.#initialOptions = options;
     }
 
     this.#store.dispatch({

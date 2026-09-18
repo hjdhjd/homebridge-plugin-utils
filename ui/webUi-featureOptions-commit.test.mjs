@@ -120,15 +120,26 @@ const makePage = ({ config = makePluginConfig(), epochSignal = undefined } = {})
 
 /* Hold the host's configuration write open. The fake's own recording is preserved - `observed.calls` and `observed.updatedConfigs` read exactly as they would -
  * and only the settlement becomes the test's to choose, which is how every "while the write is in flight" window in this file is opened.
+ *
+ * `count` bounds how many writes are taken: each write past it settles on the host's own answer instead of waiting for the test. That is what lets a row hold one
+ * write open, fail it, and still have the writes that follow reach the host under their own power - the shape a rescued failure takes.
  */
-const holdWrites = (fake) => {
+const holdWrites = (fake, { count = Infinity } = {}) => {
 
   const settlers = [];
   const original = fake.updatePluginConfig;
+  let taken = 0;
 
   fake.updatePluginConfig = async (next) => {
 
     await original(next);
+
+    if(taken >= count) {
+
+      return;
+    }
+
+    taken += 1;
 
     return new Promise((resolve, reject) => settlers.push({ reject, resolve }));
   };
@@ -524,6 +535,46 @@ describe("webUiFeatureOptions.commitConfig - the revert target", () => {
 
     assert.deepEqual(page.orchestrator.editedConfig[0].options, ["Disable.Audio.Capture"],
       "the written options are the saved state now, so they are what revert returns to");
+  });
+
+  /* The page's side of the drain's rescued failure: a write the host refused, superseded by an edit before the refusal surfaced, ends with the store on its
+   * anchor and the write lifecycle answered rather than parked at `persisting` forever. The persist effect's own suite proves the drain swallows that failure;
+   * this row proves what the page owes afterwards, because a coordinated write refuses to start against a claim it thinks is still in flight. The revert is what
+   * takes the store back to the array it loaded, so it also shows the revert itself writing nothing: two writes reach the host, the refused edit and the
+   * coordinated write, and never a third one for the revert.
+   */
+  test("a coordinated write takes the store a rescued drain left behind, and the revert that rescued it wrote nothing of its own", async () => {
+
+    using dom = createTestDom();
+    using page = makePage({ config: makePluginConfig({ options: ["Enable.Motion.Detect"] }) });
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    // Only the first write is the test's to settle: the coordinated write below must reach the host under its own power.
+    const writes = holdWrites(page.fake, { count: 1 });
+
+    optionRow(page.skeleton, "Motion", "Motion.Detect").click();
+
+    await waitFor(() => page.fake.observed.updatedConfigs.length === 1, { message: "the first edit's write must reach the host before it is held" });
+
+    // A second edit while that write hangs marks the drain dirty, which is the condition under which it swallows the refusal rather than surfacing it. The revert
+    // then returns the store to the options the page loaded - the same array its anchor holds - so the drain finds nothing left to write.
+    optionRow(page.skeleton, "Motion", "Motion.Detect").click();
+    document.querySelector("button[data-action='reset-revert']").click();
+
+    writes.fail(new Error("The host refused the write."));
+
+    const result = await page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }));
+
+    await flush();
+
+    const written = page.fake.observed.updatedConfigs.at(-1)[0];
+
+    assert.deepEqual(result, { kind: "committed" }, "the write found no claim standing in its way and reached the host");
+    assert.equal(page.fake.observed.updatedConfigs.length, 2, "the refused edit and the coordinated write are the only two writes: the revert wrote nothing");
+    assert.deepEqual(written.options, ["Enable.Motion.Detect"], "the coordinated write carries the loaded options the revert returned the store to");
+    assert.deepEqual(written.controllers, [ CONTROLLER_A, CONTROLLER_B ], "and the controllers the composer asked for");
   });
 });
 

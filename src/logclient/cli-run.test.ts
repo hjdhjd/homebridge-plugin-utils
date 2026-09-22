@@ -710,6 +710,72 @@ describe("runHblog - failures, EPIPE, and signals", () => {
 
     assert.equal(code, 0, "a SIGTERM-terminated follow must exit 0");
   });
+
+  test("a dial that keeps failing the same way reports once on stderr, with the token redacted", async () => {
+
+    const token = "super.secret.jwt";
+    const { fetch } = fakeFetch();
+    const { socketFactory, wsFactory } = realSocketFactory();
+    const { options, stderr } = makeOptions({ argv: [ "--token", token, "--follow" ], fetch, socketFactory });
+
+    const run = runHblog(options);
+
+    // The identical failure twice over: a dial refused with the connect URL, token and all, in its cause. The second is the repeat the socket demotes to debug, which
+    // this CLI's logger discards - so the user's stderr must carry the fault once rather than once per attempt.
+    const refused = (): { readonly error: Error } => ({ error: Object.assign(
+      new Error("connect ECONNREFUSED http://localhost:8581/socket.io/?EIO=4&token=" + token), { code: "ECONNREFUSED" }) });
+
+    (await wsFactory.socketCreated(0)).emitError(refused());
+    (await wsFactory.socketCreated(1)).emitError(refused());
+
+    await wsFactory.socketCreated(2);
+
+    process.emit("SIGINT");
+
+    const code = await run;
+    const reported = stderr.text.split("\n").filter((line) => line.includes("Unable to connect to the Homebridge log stream:"));
+
+    assert.equal(code, 0, "a SIGINT-terminated follow must still exit 0");
+    assert.equal(reported.length, 1, "an unchanged repeat is demoted to debug, which this CLI discards, so the fault must reach stderr exactly once");
+    assert.ok(!stderr.text.includes(token), "the token must never appear in a diagnostic");
+    assert.match(stderr.text, /<redacted>/, "the token-bearing connect URL must be replaced with the redaction placeholder");
+  });
+
+  test("a token-bearing URL keeps the sentence's period while the whole token is replaced", async () => {
+
+    // A three-segment JWT shape, so the token carries two periods of its own that must stay inside the match rather than ending it.
+    const token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoYiJ9.s1gnatur3";
+    const url = "http://localhost:8581/socket.io/?EIO=4&token=" + token;
+    const lastSegment = "s1gnatur3";
+
+    // The URL at the very end of the message, so the period the CLI appends closes the string and only the end-of-text branch of the boundary can keep it.
+    const ending = await (async (): Promise<string> => {
+
+      const { fetch } = fakeFetch({ downloadError: new Error("connect ECONNREFUSED " + url) });
+      const { options, stderr } = makeOptions({ argv: [ "--token", token, "--all" ], fetch });
+
+      assert.equal(await runHblog(options), 1, "the connection failure must exit 1");
+
+      return stderr.text;
+    })();
+
+    assert.ok(ending.includes("token=<redacted>."), "a URL ending the text must keep the sentence's period after the placeholder");
+    assert.ok(!ending.includes(lastSegment), "no base64url segment of the token may survive");
+
+    // The same URL mid-sentence, which is the shape the socket's own warn line produces every time it fires.
+    const middle = await (async (): Promise<string> => {
+
+      const { fetch } = fakeFetch({ downloadError: new Error("connect ECONNREFUSED " + url + ". Retrying") });
+      const { options, stderr } = makeOptions({ argv: [ "--token", token, "--all" ], fetch });
+
+      assert.equal(await runHblog(options), 1, "the connection failure must exit 1");
+
+      return stderr.text;
+    })();
+
+    assert.ok(middle.includes("token=<redacted>. Retrying"), "a URL mid-sentence must keep the period that follows it");
+    assert.ok(!middle.includes(lastSegment), "no base64url segment of the token may survive");
+  });
 });
 
 describe("runHblog - backpressure", () => {

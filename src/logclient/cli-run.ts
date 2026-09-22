@@ -19,15 +19,15 @@
  * @module
  */
 import type { HblogConnectionFlags, HblogEnv, ResolvedConnection } from "./config.ts";
+import type { HomebridgePluginLogging, Nullable } from "../util.ts";
 import type { LogClientCredentials, LogQuantity, LogRecord, TailRequest } from "./types.ts";
+import { format, parseArgs } from "node:util";
 import { formatErrorMessage, onAbort } from "../util.ts";
 import { loadConfigFile, resolveConfigPath, resolveConnection } from "./config.ts";
 import type { Clock } from "../clock.ts";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogSocketFactory } from "./socket.ts";
-import type { Nullable } from "../util.ts";
 import { createLogFilter } from "./filter.ts";
-import { parseArgs } from "node:util";
 import { parseTimeExpression } from "./time-expression.ts";
 import { systemClock } from "../clock.ts";
 
@@ -196,12 +196,15 @@ function stripAnsi(text: string): string {
 // Redact a bearer token from any text the CLI is about to print. A network-level error message can embed the connect URL (which carries `token=<jwt>`), and a token can
 // appear in other diagnostic shapes, so we replace both the bare token substring and any `token=...` query parameter with a placeholder. This is the chokepoint for
 // credential-safe diagnostics: the hard-error stderr writes (the setup failure, a captured stdout write error - via failWithStdoutError, on either the normal-completion
-// or the catch path - and the streaming catch's generic error) route through it, while the usage banner, the config-permission warning, and the level advisory never
-// carry a token.
+// or the catch path - and the streaming catch's generic error) route through it, as does every connection diagnostic the log client reports - via writeDiagnostic,
+// which renders the client's own printf-style line before redacting it - while the usage banner, the config-permission warning, and the level advisory never carry a
+// token.
 function redactToken(text: string, token: Nullable<string>): string {
 
   // Always scrub a `token=...` query parameter regardless of whether we hold the literal token, since a URL built from a refreshed token may carry a value we never saw.
-  let redacted = text.replace(/([?&]token=)[^&\s"]+/g, "$1<redacted>");
+  // A period ends the value only when whitespace, a quote, an ampersand, or the end of the text follows it, so a URL written into a sentence keeps that sentence's own
+  // period while a JWT's internal periods - each sitting between base64url characters - stay inside the match and are replaced along with the rest of the token.
+  let redacted = text.replace(/([?&]token=)(?:[^&\s".]|\.(?![\s"&]|$))+/g, "$1<redacted>");
 
   // When we hold the literal token, scrub any bare occurrence of it too (e.g., a message that interpolated the token without the URL framing).
   if((token !== null) && (token.length > 0)) {
@@ -728,6 +731,27 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
   const { stderr, stdout } = options;
   const token = connection.token;
 
+  // Render one diagnostic and write it to stderr. A `HomebridgePluginLogging` call carries its values printf-style, so the line has to be rendered before it can reach a
+  // `write(chunk: string)` sink, and `node:util`'s `format` is the renderer this repository already uses for exactly that. Every line goes through `redactToken` because
+  // a connect failure's cause chain can carry the connect URL with the bearer token in it.
+  const writeDiagnostic = (message: string, ...parameters: unknown[]): void => {
+
+    stderr.write(redactToken(format(message, ...parameters), token) + "\n");
+  };
+
+  /* The client's own diagnostics about its connection. They go to stderr rather than stdout so a diagnostic never mixes into the log content a pipeline is reading.
+   * Error, warn and info share one render because they differ only in what the caller meant by them, not in where the line belongs. Debug is discarded: what a user
+   * waiting on a connection needs is the failure and the recovery, not the wire narration underneath them, and the socket's demoted repeats arrive at that level by
+   * design.
+   */
+  const log: HomebridgePluginLogging = {
+
+    debug: (): void => { /* Intentionally empty - the CLI reports the failure and the recovery, not the narration below them. */ },
+    error: writeDiagnostic,
+    info: writeDiagnostic,
+    warn: writeDiagnostic
+  };
+
   // The run controller: SIGINT/SIGTERM and an EPIPE all abort it, which tears down the client and ends iteration cleanly. A clean abort is success; a fault is reported.
   const controller = new AbortController();
 
@@ -793,6 +817,7 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
       credentials,
       fetch: options.fetch,
       host: connection.host,
+      log,
       port: connection.port,
       signal: controller.signal,
       socketFactory: options.socketFactory,

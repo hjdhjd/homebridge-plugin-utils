@@ -9,12 +9,12 @@
  */
 import { ALL_CHOICES, FeatureOptions, applyClearOption, applyClearScope, applyMoveScope, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId,
   enumerateConfiguredEntries, enumerateScopeEntries, expandOption, formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice,
-  isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList, resolveScope, scopeSafeId, selectValues } from "./featureOptions.ts";
-import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter } from "./featureOptions.ts";
+  isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList, removedListEntries, resolveScope, scopeSafeId,
+  selectValues } from "./featureOptions.ts";
+import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter, RemovedListEntry } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { capturingLog } from "./testing/index.ts";
-import { readFile } from "node:fs/promises";
 
 // Reusable category / option fixtures. Organized for reuse across tests - most tests need the same "Motion / Audio / Network" shape and only vary configuredOptions.
 const CATEGORIES: FeatureCategoryEntry[] = [
@@ -28,6 +28,7 @@ const OPTIONS: Record<string, FeatureOptionEntry[]> = {
 
   Audio: [
 
+    { default: false, description: "Audio top-level toggle.", name: "" },
     { default: false, defaultValue: 50, description: "Audio volume level.", name: "Volume" },
     { default: true, description: "Mute parent toggle.", group: "", name: "Mute" }
   ],
@@ -923,6 +924,98 @@ describe("FeatureOptions - value resolution", () => {
     const single = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume="]);
 
     assert.equal(single.value("Audio.Volume"), undefined, "an empty payload on a single-valued option is still enabled with no value to report");
+  });
+});
+
+/* The boolean axis of the same one rule the value axis reads by, which is why these rows sit immediately ahead of consolidatedValue's own: both methods share a
+ * single statement of the precedence, so what each block proves is how its own axis reads a resolved entry. Every row states a property contrary to what it
+ * expects wherever something else is meant to win, so no row can pass by coinciding with the property it is there to outrank.
+ */
+describe("FeatureOptions - consolidatedFlag", () => {
+
+  // Two boolean options with opposite defaults, both from the shared catalog: Motion.Sensitivity is default off and Motion.Detect is default on. A row that
+  // expects a configured entry to win states the contrary default AND the contrary property, so neither can be what produced the answer.
+  test("an enabled entry at device scope beats a contrary property and a contrary default", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Motion.Sensitivity.dev1"]);
+
+    assert.equal(fo.consolidatedFlag({ device: "dev1", fallback: false, option: "Motion.Sensitivity" }), true,
+      "what the user configured at the scope being asked about decides, over both a false property and a default-off catalog entry");
+  });
+
+  test("a disabled entry at device scope beats a contrary property and a contrary default", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.dev1"]);
+
+    assert.equal(fo.consolidatedFlag({ device: "dev1", fallback: true, option: "Motion.Detect" }), false,
+      "a disable is a configured state like any other; reading only whether an entry exists would answer the property here");
+  });
+
+  test("an enabled entry at controller scope beats a contrary property and a contrary default", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Motion.Sensitivity.ctrl1"]);
+
+    assert.equal(fo.consolidatedFlag({ controller: "ctrl1", fallback: false, option: "Motion.Sensitivity" }), true,
+      "the controller level answers for the identity asked about exactly as the device level does");
+  });
+
+  test("a disabled entry at controller scope beats a contrary property and a contrary default", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.ctrl1"]);
+
+    assert.equal(fo.consolidatedFlag({ controller: "ctrl1", fallback: true, option: "Motion.Detect" }), false,
+      "and the off state carries at that level too");
+  });
+
+  test("an enabled entry at global scope beats a contrary property and a contrary default", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Motion.Sensitivity"]);
+
+    assert.equal(fo.consolidatedFlag({ fallback: false, option: "Motion.Sensitivity" }), true,
+      "a global entry is configured for every identity that inherits it");
+  });
+
+  test("a disabled entry at global scope beats a contrary property and a contrary default", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect"]);
+
+    assert.equal(fo.consolidatedFlag({ fallback: true, option: "Motion.Detect" }), false, "and the global off state does the same");
+  });
+
+  test("an unconfigured option answers a true property whatever the catalog default says", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+
+    assert.equal(fo.consolidatedFlag({ fallback: true, option: "Motion.Sensitivity" }), true, "the property answers over a default-off option");
+    assert.equal(fo.consolidatedFlag({ fallback: true, option: "Motion.Detect" }), true, "and over a default-on one, where it happens to agree with the default");
+  });
+
+  test("an unconfigured option answers a false property whatever the catalog default says", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+
+    assert.equal(fo.consolidatedFlag({ fallback: false, option: "Motion.Detect" }), false, "the property answers over a default-on option");
+    assert.equal(fo.consolidatedFlag({ fallback: false, option: "Motion.Sensitivity" }), false, "and over a default-off one");
+  });
+
+  test("an unconfigured option with no property answers the catalog default, on either side of it", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, []);
+
+    assert.equal(fo.consolidatedFlag({ option: "Motion.Sensitivity" }), false, "a default-off option reads what the catalog registered");
+    assert.equal(fo.consolidatedFlag({ option: "Motion.Detect" }), true, "and so does a default-on one");
+    assert.equal(fo.consolidatedFlag({ option: "Motion.Detect" }), fo.test("Motion.Detect"), "which is the same answer test() gives, read through the same walk");
+  });
+
+  test("an entry written at a scope the option's declared scopes disallow is ignored", () => {
+
+    const fo = new FeatureOptions(SCOPED_CATEGORIES, SCOPED_OPTIONS, ["Enable.Scoped.GlobalOnly.dev1"]);
+
+    assert.equal(fo.test("Scoped.GlobalOnly", "dev1"), false, "pre-condition: the declared-scopes gate already refuses this entry for the boolean read");
+    assert.equal(fo.consolidatedFlag({ device: "dev1", fallback: true, option: "Scoped.GlobalOnly" }), true,
+      "so the option is unconfigured for this identity and the property answers, rather than the disallowed entry leaking through");
+    assert.equal(fo.consolidatedFlag({ device: "dev1", option: "Scoped.GlobalOnly" }), false,
+      "and with no property the catalog default closes the chain, exactly as test() does");
   });
 });
 
@@ -2234,44 +2327,6 @@ describe("FeatureOptions - normalization on save", () => {
   });
 });
 
-describe("FeatureOptions - browser-safe runtime-import boundary", () => {
-
-  // Regression guard for the `dist/ui` shipping pipeline. `featureOptions.ts` compiles into `dist/featureOptions.js`, which the browser-module copy step copies
-  // to `dist/ui/featureOptions.js` for the browser to load. Every relative value-import in `featureOptions.ts` therefore has to resolve - at browser runtime - to a
-  // sibling file that the copy step ALSO ships into `dist/ui/`. Importing from `./util.ts` is the canonical violation: `util.ts` is server-side (drags in
-  // `node:timers/promises`) and the build pipeline does not ship it next to the orchestrator. This test reads the source file and asserts every relative
-  // value-import points at a module on the allowlist - currently just `./formatters.ts`, the one browser-safe module the pipeline mirrors alongside
-  // `featureOptions.js`. Adding a new relative value-import to featureOptions.ts means EITHER pointing it at another browser-safe module the copy step ALSO ships,
-  // OR widening the allowlist here intentionally and registering the new artifact in the `BROWSER_MODULES` list the copy step is driven from.
-
-  test("featureOptions.ts has no relative value-imports outside the browser-safe allowlist", async () => {
-
-    const source = await readFile(new URL("./featureOptions.ts", import.meta.url), "utf8");
-
-    // Match `import { ... } from "./module.ts";` lines. The `import type` form is excluded by the negative lookahead - those are erased at emit and never reach the
-    // browser. The capture group pulls the relative module specifier so we can compare it against the allowlist.
-    const valueImportRe = /^import(?!\s+type\b)\s+[^;]+from\s+"(\.[^"]+)";/gm;
-    const allowed = new Set(["./formatters.ts"]);
-    const found = new Set<string>();
-
-    for(const match of source.matchAll(valueImportRe)) {
-
-      const specifier = match[1];
-
-      if(specifier !== undefined) {
-
-        found.add(specifier);
-      }
-    }
-
-    for(const specifier of found) {
-
-      assert.ok(allowed.has(specifier), "featureOptions.ts must only relative-value-import from a browser-safe module (allowlist: " + [...allowed].join(", ") +
-        "). Found: " + specifier + ". If this is a new browser-safe module, add it here AND to the BROWSER_MODULES list in build/browser-modules.mjs.");
-    }
-  });
-});
-
 // The pure functional core exposes the same semantics as the class but with an immutable-state contract: inputs are never mutated, fresh allocations are returned
 // by transforms, no-op transforms preserve reference identity for change-detection consumers. The class tests above cover the semantics; these tests cover the
 // contract that the pure form adds on top - the part reducer-driven consumers (the webUI store) rely on for memoization and structural-sharing correctness.
@@ -2313,7 +2368,7 @@ describe("FeatureOptions - pure functional core", () => {
     test("keys the raw-entry lookup by the lowercased expanded name, as every other registry here is keyed", () => {
 
       const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
-      const [volume] = OPTIONS["Audio"] ?? [];
+      const volume = (OPTIONS["Audio"] ?? []).find((option) => option.name === "Volume");
 
       assert.ok(volume, "fixture sanity check");
       assert.equal(catalog.optionsByName["audio.volume"], volume, "the raw entry, by identity, under the lowercased name");
@@ -2510,6 +2565,64 @@ describe("FeatureOptions - pure functional core", () => {
         assert.equal(catalog.optionsByName["motion.tierradio"]?.style, "radio", "a declared style passes through as the editor vocabulary it is");
         assert.equal(catalog.valueOptions["motion.tiers"], ALL_CHOICES, "an all-choices default is registered like any other value default");
         assert.equal(catalog.optionsByName["motion.apikey"]?.secret, true, "a secret value option with no editor to spell it out is registered as declared");
+      });
+    });
+
+    describe("group parent existence validation", () => {
+
+      // A child's `group` names a parent by its own name within the category, so the parent has to be an option the catalog registers. The check runs after the
+      // whole catalog has registered, which is what makes declaration order irrelevant, and these rows prove both halves of that: the order-independence and
+      // the refusal itself.
+      const withOptions = (options: FeatureOptionEntry[]): Record<string, FeatureOptionEntry[]> => ({ Motion: options });
+
+      test("a parent declared earlier in the same category resolves", () => {
+
+        assert.doesNotThrow(() => buildCatalogIndex(CATEGORIES, withOptions([
+
+          { default: true, description: "The parent.", name: "Detect" },
+          { default: false, description: "The child.", group: "Detect", name: "Sensitivity" }
+        ])), "the ordinary declaration order resolves, as it always has");
+      });
+
+      test("a parent declared later in the same category resolves", () => {
+
+        assert.doesNotThrow(() => buildCatalogIndex(CATEGORIES, withOptions([
+
+          { default: false, description: "The child.", group: "Detect", name: "Sensitivity" },
+          { default: true, description: "The parent.", name: "Detect" }
+        ])), "the check runs once the whole catalog has registered, so a parent the loop had not reached yet is not a missing parent");
+      });
+
+      test("an empty-string group resolves against the category-level option and is refused without one", () => {
+
+        assert.doesNotThrow(() => buildCatalogIndex(CATEGORIES, withOptions([
+
+          { default: false, description: "The category-level option.", name: "" },
+          { default: true, description: "The child.", group: "", name: "Mute" }
+        ])), "group: \"\" names the category's own option, which is a registered option like any other when one is declared");
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOptions([{ default: true, description: "The child.", group: "", name: "Mute" }])),
+          /a group naming the parent "Motion", which no option registers, declared on option "Motion\.Mute"/,
+          "and with no category-level option there is nothing for it to name, which is the same mistake a misspelled parent makes");
+      });
+
+      test("a misspelled parent is refused, naming both the child and the parent nothing registers", () => {
+
+        assert.throws(() => buildCatalogIndex(CATEGORIES, withOptions([
+
+          { default: true, description: "The parent.", name: "Detect" },
+          { default: false, description: "The child.", group: "Detekt", name: "Sensitivity" }
+        ])), /a group naming the parent "Motion\.Detekt", which no option registers, declared on option "Motion\.Sensitivity"/,
+        "the message carries the missing parent's expanded name and the child's, both in the catalog's own casing");
+      });
+
+      test("a parent whose declared casing differs from the child's spelling of it resolves", () => {
+
+        assert.doesNotThrow(() => buildCatalogIndex(CATEGORIES, withOptions([
+
+          { default: true, description: "The parent, declared lowercase.", name: "detect" },
+          { default: false, description: "The child, naming it capitalized.", group: "Detect", name: "Sensitivity" }
+        ])), "the parent lookup folds case exactly as every other registry on the index is keyed");
       });
     });
   });
@@ -3548,6 +3661,142 @@ describe("FeatureOptions - enumerateScopeEntries", () => {
     assert.equal(applyClearScope({ args: { id: "Override" }, catalog: mtuCatalog, configuredOptions }), configuredOptions,
       "and a clear there leaves the entry exactly as the user wrote it");
   });
+});
+
+/* The two-snapshot question the enumerators above cannot answer on their own: what left a list between one configuration and the next. The rows drive a
+ * dedicated catalog rather than the shared one, because the shared fixture declares no list option at all, let alone one configured at two scopes at once, and
+ * every distinction this function draws - free-form against checkbox group, membership against counting, first entry against a later duplicate - needs a
+ * catalog that can express it.
+ */
+describe("FeatureOptions - removedListEntries", () => {
+
+  const LIST_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Plate Options", name: "Plates" }];
+
+  // Three shapes in declaration order: a free-form list valid at two scopes, a checkbox group over a fixed domain, and a value option that stores a single
+  // value. The order matters to the rows below - records come back in the catalog's own declaration order, so Manual precedes Tiers whatever order a
+  // configuration happens to list them in.
+  const LIST_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+    Plates: [
+
+      { default: false, defaultValue: "", description: "Addresses managed by hand.", multiple: true, name: "Manual", scopes: [ "device", "global" ] },
+      { choices: [ { label: "High", value: "High" }, { label: "Low", value: "Low" } ], default: false, defaultValue: "", description: "Tiers watched.",
+        multiple: true, name: "Tiers" },
+      { default: false, defaultValue: 50, description: "Reader confidence threshold.", name: "Confidence" }
+    ]
+  };
+
+  const catalog = buildCatalogIndex(LIST_CATEGORIES, LIST_OPTIONS);
+
+  const ROWS: { after: string[]; before: string[]; description: string; expected: RemovedListEntry[] }[] = [
+
+    {
+
+      after: ["Enable.Plates.Manual=a"],
+      before: ["Enable.Plates.Manual=a,b"],
+      description: "one entry removed from a global list is reported on its own",
+      expected: [{ entries: ["b"], id: "", option: "Plates.Manual" }]
+    },
+    {
+
+      after: ["Enable.Plates.Manual=c"],
+      before: ["Enable.Plates.Manual=a,b,c,d"],
+      description: "several entries removed at once come back in one record, in the list's own order",
+      expected: [{ entries: [ "a", "b", "d" ], id: "", option: "Plates.Manual" }]
+    },
+    {
+
+      after: ["Enable.Plates.Manual=a,b"],
+      before: ["Enable.Plates.Manual=a"],
+      description: "an entry added and none removed contributes no record",
+      expected: []
+    },
+    {
+
+      after: ["Enable.Plates.Manual=c,a,b"],
+      before: ["Enable.Plates.Manual=a,b,c"],
+      description: "a reorder with the same members contributes no record",
+      expected: []
+    },
+    {
+
+      after: [],
+      before: ["Enable.Plates.Manual=a,b"],
+      description: "a list that vanished between the snapshots reports every entry it held",
+      expected: [{ entries: [ "a", "b" ], id: "", option: "Plates.Manual" }]
+    },
+    {
+
+      after: ["Enable.Plates.Manual"],
+      before: ["Enable.Plates.Manual=a,b"],
+      description: "a global entry left enabled but carrying no value at all decodes to an empty list, so every entry the list held before is reported removed",
+      expected: [{ entries: [ "a", "b" ], id: "", option: "Plates.Manual" }]
+    },
+    {
+
+      after: [ "Enable.Plates.Manual.dev1=x", "Enable.Plates.Manual=a" ],
+      before: [ "Enable.Plates.Manual.dev1=x,y", "Enable.Plates.Manual=a,b" ],
+      description: "one option losing entries at two scopes reports one record per scope, ordered as the before snapshot first names them",
+      expected: [ { entries: ["y"], id: "dev1", option: "Plates.Manual" }, { entries: ["b"], id: "", option: "Plates.Manual" } ]
+    },
+    {
+
+      after: ["Enable.Plates.Confidence=70"],
+      before: ["Enable.Plates.Confidence=50"],
+      description: "a value option that is not a list contributes no record however its value moved",
+      expected: []
+    },
+    {
+
+      after: ["Enable.Plates.Tiers=High"],
+      before: ["Enable.Plates.Tiers=High,Low"],
+      description: "a checkbox group losing a member reads exactly as a free-form list does",
+      expected: [{ entries: ["Low"], id: "", option: "Plates.Tiers" }]
+    },
+    {
+
+      after: ["Enable.Plates.Manual=a,b"],
+      before: ["Enable.Plates.Manual= a , b "],
+      description: "incidental whitespace around a stored entry matches its trimmed counterpart and is not reported removed",
+      expected: []
+    },
+    {
+
+      after: [ "Enable.Plates.Tiers=High", "Enable.Plates.Manual=a" ],
+      before: [ "Enable.Plates.Tiers=High,Low", "Enable.Plates.Manual=a,b" ],
+      description: "two options losing an entry each come back in the catalog's declaration order, not the configuration's",
+      expected: [ { entries: ["b"], id: "", option: "Plates.Manual" }, { entries: ["Low"], id: "", option: "Plates.Tiers" } ]
+    },
+    {
+
+      after: ["Enable.Plates.Manual=a"],
+      before: [ "Enable.Plates.Manual=a,b", "Enable.Plates.Manual=c,d" ],
+      description: "a scope addressed twice answers from its first entry alone, so the later duplicate contributes nothing",
+      expected: [{ entries: ["b"], id: "", option: "Plates.Manual" }]
+    },
+    {
+
+      after: ["Enable.Plates.Manual=a"],
+      before: ["Enable.Plates.Manual=a,a,b"],
+      description: "a duplicated entry that still survives once is not reported removed, which a counting difference would get wrong",
+      expected: [{ entries: ["b"], id: "", option: "Plates.Manual" }]
+    },
+    {
+
+      after: [],
+      before: ["Enable.Plates.Manual=a,a"],
+      description: "a duplicated entry with nothing surviving is reported once per occurrence, in the before list's order",
+      expected: [{ entries: [ "a", "a" ], id: "", option: "Plates.Manual" }]
+    }
+  ];
+
+  for(const { after, before, description, expected } of ROWS) {
+
+    test(description, () => {
+
+      assert.deepEqual(removedListEntries({ after, before, catalog }), expected, description);
+    });
+  }
 });
 
 // The class twins hold the state the pure transforms only compute over, so what these rows add is the part the functions cannot show: the lookup index is

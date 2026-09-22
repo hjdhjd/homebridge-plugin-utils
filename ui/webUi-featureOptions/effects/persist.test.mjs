@@ -34,9 +34,17 @@ const PLATFORM = { name: "MyPlugin Platform", platform: "MyPlugin" };
 // get an inspection surface for both the dispatched store events and the host calls. Async because opening the session reads the host config once. `loaded: false`
 // withholds the model:loaded dispatch, leaving the store in the placeholder state a page holds when its model never arrives - the input the model-load boundary
 // tests need, and the only thing that option changes about the rig.
+//
+// `configuredOptions` seeds the store's own starting state as well as the model:loaded dispatch, with the anchor seeded to match so the store starts clean. On
+// the loaded path the dispatch installs the same array over both fields and the seeding is invisible; on the unloaded path it is the only way to give a
+// placeholder store something configured to mutate away from, which a reset has to have before it is a change at all.
 const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = true } = {}) => {
 
-  const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+  const store = new FeatureOptionsStore({
+
+    initialState: { ...initialState(), configuredOptions, persistedAnchor: configuredOptions },
+    reducer
+  });
 
   if(loaded) {
 
@@ -558,10 +566,11 @@ describe("registerPersistEffect - model-load boundary", () => {
 
   test("a store that never loaded its model writes nothing, even with a mutation dispatched and flushed", async () => {
 
-    const { flush, store, updates } = await setup({ loaded: false });
+    const { flush, store, updates } = await setup({ configuredOptions: ["Enable.Motion.Detect"], loaded: false });
 
-    // A mutation against the placeholder state forks configuredOptions off the anchor's shared empty array, so the effect sees a dirty store and starts the drain.
-    // What that drain would commit is the placeholder's own emptiness, landing on disk as an erasure of whatever the user had saved.
+    // A mutation against the placeholder state forks configuredOptions off the anchor, so the effect sees a dirty store and starts the drain. What that drain
+    // would commit is the placeholder's own emptiness, landing on disk as an erasure of whatever the user had saved. The seeded configuration is what makes the
+    // reset a real change: a reset of nothing keeps its reference and never reaches the drain at all, which would leave this refusal unexercised.
     store.dispatch({ type: "options:reset" });
 
     await flush();
@@ -571,7 +580,7 @@ describe("registerPersistEffect - model-load boundary", () => {
 
   test("the refusal holds once the status has left loading - a connection error before the model does not license a write", async () => {
 
-    const { flush, store, updates } = await setup({ loaded: false });
+    const { flush, store, updates } = await setup({ configuredOptions: ["Enable.Motion.Detect"], loaded: false });
 
     store.dispatch({
 
@@ -587,5 +596,25 @@ describe("registerPersistEffect - model-load boundary", () => {
 
     assert.equal(store.state.status.kind, "connection-error", "pre-condition: the status has left loading with no model ever having arrived");
     assert.equal(updates.length, 0, "the refusal keys on the model, not on the status");
+  });
+});
+
+describe("registerPersistEffect - a reset with nothing configured", () => {
+
+  // The reducer's reset arm hands back the configured options it was given when there is nothing to wipe, so the effect's own dirty check finds the store clean
+  // and no drain starts. The write this row proves absent would have carried the same empty configuration the host already holds.
+
+  test("a reset of an already-empty configuration reaches the host with nothing", async () => {
+
+    const { flush, store, updates } = await setup();
+
+    assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "pre-condition: a loaded store with nothing configured is clean");
+
+    store.dispatch({ type: "options:reset" });
+
+    await flush();
+
+    assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "the reset left the configuration exactly where it was");
+    assert.equal(updates.length, 0, "so nothing reached the host");
   });
 });

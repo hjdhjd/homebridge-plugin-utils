@@ -89,6 +89,44 @@ describe("FeatureOptionsStore", () => {
     assert.equal(store.state, next, "post-dispatch state reference is the reducer's return value");
   });
 
+  test("a dispatched event carries the state the reducer replaced, so a second dispatch reports the first dispatch's own result", () => {
+
+    // The seed and the first dispatch's result are deep-equal on purpose: a subscriber comparing by structure could not tell them apart, so asserting identity
+    // here is what proves the capture happens before the reducer runs rather than after it.
+    const initial = { count: 0 };
+    const first = { count: 0 };
+    const second = { count: 1 };
+    const store = new FeatureOptionsStore({ initialState: initial, reducer: (_state, action) => action.nextState });
+    const seen = [];
+
+    store.addEventListener("replace", (event) => seen.push(event.previous));
+
+    store.dispatch({ nextState: first, type: "replace" });
+    store.dispatch({ nextState: second, type: "replace" });
+
+    assert.equal(seen[0], initial, "the first dispatch reports the state the store was seeded with");
+    assert.equal(seen[1], first, "the second dispatch reports the first dispatch's own result, by reference");
+    assert.notEqual(seen[1], initial, "and not the seed it is structurally identical to");
+  });
+
+  test("the dispatched event answers three distinct readings - the action, the state the dispatch replaced, and the store's post-dispatch state", () => {
+
+    const initial = { count: 0 };
+    const next = { count: 1 };
+    const store = new FeatureOptionsStore({ initialState: initial, reducer: (_state, action) => action.nextState });
+    const observed = [];
+
+    store.addEventListener("replace", (event) => observed.push({ detail: event.detail, previous: event.previous, state: store.state }));
+
+    const action = { nextState: next, type: "replace" };
+
+    store.dispatch(action);
+
+    assert.equal(observed[0].detail, action, "the detail is the dispatched action itself");
+    assert.equal(observed[0].previous, initial, "previous hands back the state captured before the reducer ran, by reference");
+    assert.equal(observed[0].state, next, "while the store itself already answers the reducer's result");
+  });
+
   test("multiple subscribers all fire in registration order on a single dispatch", () => {
 
     const store = new FeatureOptionsStore({ initialState: {}, reducer: passThroughReducer });
@@ -204,6 +242,35 @@ describe("effect", () => {
     assert.equal(received[0], undefined, "immediate run carries no triggering action");
     assert.deepEqual(received[1], { payload: 1, type: "tick" }, "first dispatch firing receives the dispatched action verbatim");
     assert.deepEqual(received[2], { payload: 2, type: "tick" }, "second dispatch firing receives its own dispatched action");
+  });
+
+  test("the immediate run carries no replaced state, matching the undefined action it already carries", () => {
+
+    const store = new FeatureOptionsStore({ initialState: { count: 0 }, reducer: passThroughReducer });
+    const controller = new AbortController();
+    const received = [];
+
+    effect({ events: ["tick"], fn: (action, previous) => received.push({ action, previous }), signal: controller.signal, store });
+
+    assert.equal(received.length, 1, "registration runs the body once");
+    assert.equal(received[0].action, undefined, "no triggering action on the immediate run");
+    assert.equal(received[0].previous, undefined, "and no replaced state either - the two arguments are defined together or not at all");
+  });
+
+  test("a subscribed handler receives the state the dispatch replaced as its second argument", () => {
+
+    const store = new FeatureOptionsStore({ initialState: { count: 0 }, reducer: (state, action) => ({ count: state.count + action.by }) });
+    const controller = new AbortController();
+    const received = [];
+    const before = store.state;
+
+    effect({ events: ["add"], fn: (_action, previous) => received.push(previous), signal: controller.signal, store });
+
+    store.dispatch({ by: 1, type: "add" });
+
+    assert.equal(received.length, 2, "the immediate run plus the one dispatch");
+    assert.equal(received[1], before, "the dispatch hands the handler the pre-reducer state by reference");
+    assert.notEqual(received[1], store.state, "which is a different object from the post-dispatch state the handler can already read off the store");
   });
 
   test("multiple effects on the same store coexist - aborting one does not affect the others", () => {

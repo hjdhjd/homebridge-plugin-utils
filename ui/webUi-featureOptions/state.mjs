@@ -106,6 +106,7 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {Readonly<Record<string, boolean>>} defaults
  * @property {Readonly<Record<string, string>>} groupParents
  * @property {Readonly<Record<string, readonly string[]>>} groups
+ * @property {readonly string[]} multipleOptionNames
  * @property {Readonly<Record<string, readonly import("../featureOptions.js").FeatureOptionEntry[]>>} options
  * @property {Readonly<Record<string, import("../featureOptions.js").FeatureOptionEntry>>} optionsByName
  * @property {Readonly<Record<string, (value: string) => string>>} renderers
@@ -388,6 +389,11 @@ export const initialState = () => {
   };
 };
 
+/* The action types that mutate the configured options, named here once so every subscriber that cares about a real edit - the page's plugin-hook effect and
+ * the persist effect's own dirty check - reads this one list rather than restating it, and so the refusal set below extends it rather than respelling it.
+ */
+export const MUTATING_ACTIONS = [ "model:reverted", "option:cleared", "option:set", "options:reset" ];
+
 /* The actions a coordinated configuration write refuses while it holds the store, named here once so the refusal and the arms below cannot drift apart.
  *
  * Every member but `option:armed` mutates the configuration, and an edit accepted mid-write would start a persist drain whose whole-array commit either races the
@@ -396,7 +402,7 @@ export const initialState = () => {
  * reason {@link commit:started} disarms on entry. `option:disarmed` is deliberately outside the set - standing a row down ends a gesture rather than beginning
  * one, and a row left armed under a hold it can never commit through is exactly the state the refusal is trying to prevent.
  */
-const HELD_ACTIONS = new Set([ "model:reverted", "option:armed", "option:cleared", "option:set", "options:reset" ]);
+const HELD_ACTIONS = new Set([ ...MUTATING_ACTIONS, "option:armed" ]);
 
 // Whether a controller list holds the controller a piece of state names. A null id names no controller at all - device-only mode carries one, and so does the
 // initial state - so it reads as held: there is nothing for a reconciliation to take away.
@@ -673,9 +679,12 @@ export const reducer = (state, action) => {
 
     case "options:reset": {
 
-      // Wipe every configured option. Fresh empty array so reference equality reflects the change. The initial snapshot and the anchor are untouched - revert
-      // and persist failure still have their respective rollback targets. The reset is a configuration mutation, so it disarms like any other.
-      return { ...state, armedOption: null, configuredOptions: [] };
+      // Wipe every configured option. A fresh empty array is what makes reference equality report the change, and a configuration that was already empty has no
+      // change to report, so it keeps the reference it holds: the wipe and the nothing-to-wipe case are told apart by whether anything was configured, which is
+      // what lets every subscriber reading reference equality treat a redundant reset as the no-op it is. The initial snapshot and the anchor are untouched -
+      // revert and persist failure still have their respective rollback targets. Disarming happens either way, because standing a row down is the arm's other
+      // job and is independent of whether the wipe found anything to remove.
+      return { ...state, armedOption: null, configuredOptions: state.configuredOptions.length ? [] : state.configuredOptions };
     }
 
     case "model:reverted": {

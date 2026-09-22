@@ -4,6 +4,7 @@
  */
 "use strict";
 
+import { MUTATING_ACTIONS } from "../state.mjs";
 import { delay } from "../utils.mjs";
 import { effect } from "../store.mjs";
 import { modelLoaded } from "../selectors.mjs";
@@ -186,7 +187,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
 
   effect({
 
-    events: [ "option:set", "option:cleared", "options:reset", "model:reverted" ],
+    events: MUTATING_ACTIONS,
     fn: () => {
 
       // Reference-equality dirty check: when configuredOptions matches the anchor, there is nothing new to persist. Handles both the registration-time immediate

@@ -849,6 +849,31 @@ describe("reducer - options:reset", () => {
     assert.equal(next.initialOptions, loaded.initialOptions, "initialOptions reference preserved - revert can still restore it");
     assert.equal(next.persistedAnchor, loaded.persistedAnchor, "persistedAnchor reference preserved - rollback target unchanged");
   });
+
+  test("a reset with nothing configured keeps the configuredOptions reference; a reset with something configured replaces it", () => {
+
+    const empty = reducer(initialState(), {
+
+      catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded"
+    });
+    const configured = reducer(initialState(), {
+
+      catalog: CATALOG, configuredOptions: ["Enable.Motion.Detect"], controllers: [], mode: "device-only", type: "model:loaded"
+    });
+    const armed = reducer(empty, { option: "Motion.Detect", type: "option:armed" });
+
+    assert.equal(armed.armedOption, "Motion.Detect", "precondition: a row is armed on the store with nothing configured");
+
+    const resetEmpty = reducer(armed, { type: "options:reset" });
+    const resetConfigured = reducer(configured, { type: "options:reset" });
+
+    assert.equal(resetEmpty.configuredOptions, empty.configuredOptions,
+      "a reset with nothing to wipe reports no change, so a subscriber reading reference equality sees the no-op it is");
+    assert.equal(resetEmpty.armedOption, null, "and it still disarms, which is the arm's other job and independent of whether the wipe found anything");
+    assert.notEqual(resetConfigured.configuredOptions, configured.configuredOptions,
+      "a reset that wipes something reports the change with a fresh array");
+    assert.deepEqual(resetConfigured.configuredOptions, [], "which carries nothing");
+  });
 });
 
 describe("reducer - model:reverted", () => {

@@ -336,6 +336,25 @@ export interface ConfiguredScopeEntry extends ConfiguredOptionEntry {
 }
 
 /**
+ * One entry that left a {@link FeatureOptionEntry.multiple} option's configured list between two configured-options snapshots. Yielded by
+ * {@link removedListEntries}, one record per option-and-scope pair that lost at least one entry.
+ *
+ * @property entries - The entries present in the earlier snapshot's list and absent from the later one, in the earlier list's order. Never empty -
+ *                     {@link removedListEntries} emits a record only when at least one entry was removed.
+ * @property id      - The scope identifier the entries were configured at, in the same form {@link ConfiguredOptionEntry.id} uses - the empty string for the
+ *                     global scope.
+ * @property option  - The catalog option whose list lost the entries, in the catalog's own casing.
+ *
+ * @category Feature Options
+ */
+export interface RemovedListEntry {
+
+  entries: readonly [string, ...string[]];
+  id: string;
+  option: string;
+}
+
+/**
  * Immutable derived index over the catalog inputs ({@link FeatureCategoryEntry}[] + the options map). Every field except `categories` / `options` is derived from
  * those two; the index bundles them with their derivations so a single value carries everything any caller needs to make catalog-level decisions in O(1).
  *
@@ -348,6 +367,8 @@ export interface ConfiguredScopeEntry extends ConfiguredOptionEntry {
  * @property groupParents           - Lowercased-key reverse index from a child option's canonical name to its parent group's expanded name. The value keeps the
  *                                    catalog's own casing, which is the spelling scope resolution and the webUI read it back as.
  * @property groups                 - Forward index from a parent group's expanded name to its child options' expanded names.
+ * @property multipleOptionNames    - Every {@link FeatureOptionEntry.multiple} option's expanded name, in the catalog's own casing and declaration order,
+ *                                    precomputed so a consumer asking which options store a list needs no second walk of the categories and options maps.
  * @property options                - The raw options map, preserved alongside categories for the same reason.
  * @property optionsByName          - Lowercased-key map from canonical option name to the raw catalog entry, the general per-option lookup for any consumer that
  *                                    needs the entry itself rather than one of the derivations beside it. Keyed exactly as `valueOptions` is, so one key
@@ -369,6 +390,7 @@ export interface CatalogIndex {
   readonly defaults: Readonly<Record<string, boolean>>;
   readonly groupParents: Readonly<Record<string, string>>;
   readonly groups: Readonly<Record<string, readonly string[]>>;
+  readonly multipleOptionNames: readonly string[];
   readonly options: Readonly<Record<string, readonly FeatureOptionEntry[]>>;
   readonly optionsByName: Readonly<Record<string, FeatureOptionEntry>>;
   readonly renderers: Readonly<Record<string, (value: string) => string>>;
@@ -451,6 +473,25 @@ export interface MoveScopeArgs {
 
   from: string;
   to: string;
+}
+
+/**
+ * Arguments for {@link FeatureOptions.consolidatedFlag}. Carries the addressing intent - the option and the identities to resolve it at - plus the
+ * configuration property the caller still offers as that option's transition fallback.
+ *
+ * @property controller - Optional controller scope identifier.
+ * @property device     - Optional device scope identifier.
+ * @property fallback   - Optional. The configuration property the plugin still carries for this option, read exactly as it is supplied.
+ * @property option     - Feature option to read (case-insensitive).
+ *
+ * @category Feature Options
+ */
+export interface ConsolidatedFlagArgs {
+
+  controller?: string;
+  device?: string;
+  fallback?: boolean;
+  option: string;
 }
 
 /**
@@ -770,6 +811,98 @@ export function parseValueList(value: string): readonly string[] {
 export function formatValueList(values: readonly string[]): string {
 
   return values.join(VALUE_LIST_DELIMITER);
+}
+
+// The list each scope identifier configures for one option in one snapshot, decoded through the module's own entry reader and list grammar. Where an identifier
+// carries more than one entry the earliest one answers for it, which is the rule buildConfigIndex applies to this same array - the enumerator reports every raw
+// entry rather than a deduplicated view, so the rule is restated in terms of what it yields rather than shared as code. The map's insertion order is the order
+// the identifiers first appear in the snapshot, which is what orders the records one option contributes.
+function listsByScope({ catalog, configuredOptions, option }: {
+
+  catalog: CatalogIndex;
+  configuredOptions: readonly string[];
+  option: string;
+}): Map<string, readonly string[]> {
+
+  const lists = new Map<string, readonly string[]>();
+
+  for(const entry of enumerateConfiguredEntries({ catalog, configuredOptions, option })) {
+
+    if(lists.has(entry.id)) {
+
+      continue;
+    }
+
+    lists.set(entry.id, parseValueList(entry.value ?? ""));
+  }
+
+  return lists;
+}
+
+/**
+ * Answer which entries left each `multiple: true` option's configured list between two configured-options snapshots, per option and per scope.
+ *
+ * The comparison is over CONFIGURED entries alone - never effective or inherited values - and is exact string comparison after {@link parseValueList}'s own
+ * trimming, with no case folding, matching that function's own behavior exactly. An option whose entry was disabled, cleared, or removed entirely between the
+ * two snapshots has an empty list after, so every entry it held before is reported as removed. An option and scope with nothing removed contributes no record. A
+ * `multiple` option with `choices` (a checkbox group) and one without (a free-form list) are covered identically, because both store through the identical
+ * comma-joined grammar {@link FeatureOptionEntry.multiple}'s own declaration describes.
+ *
+ * Every multiple-value option in the catalog is considered, read from `catalog.multipleOptionNames`, the same precomputed, catalog-ordered list
+ * {@link buildCatalogIndex} builds once per catalog - no second walk of `catalog.categories` and `catalog.options`. Each option's before-and-after configured
+ * entries are read through {@link enumerateConfiguredEntries}, the engine's own decoder for "what did the user write" - never a second parser of the
+ * configured-options grammar.
+ *
+ * The result is ordered deterministically: by the option's own position in the catalog's declaration order (category order, then option order within a category
+ * - the same order {@link buildCatalogIndex} registers options in), and within one option, by the order its scope identifiers first appear in the BEFORE
+ * snapshot. No new ordering rule is invented; both orderings already exist as guarantees the catalog and the configured-options array provide.
+ *
+ * @param args
+ * @param args.after   - The configured-options array after the mutation.
+ * @param args.before  - The configured-options array before the mutation.
+ * @param args.catalog - The catalog index, which defines which options are `multiple: true`.
+ *
+ * @returns The removals, one record per option-and-scope pair that lost at least one entry. Empty when nothing was removed.
+ *
+ * @category Feature Options
+ */
+export function removedListEntries({ after, before, catalog }: {
+
+  after: readonly string[];
+  before: readonly string[];
+  catalog: CatalogIndex;
+}): readonly RemovedListEntry[] {
+
+  const removals: RemovedListEntry[] = [];
+
+  for(const option of catalog.multipleOptionNames) {
+
+    const afterLists = listsByScope({ catalog, configuredOptions: after, option });
+    const beforeLists = listsByScope({ catalog, configuredOptions: before, option });
+
+    for(const [ id, entries ] of beforeLists) {
+
+      /* Membership against the surviving list rather than a count-based difference. A duplicated entry the user left in place survives as itself, so a list that
+       * held one value twice and still holds it once has lost nothing - a multiset difference would report the extra occurrence as a removal nobody made. The
+       * order is the BEFORE list's, because that is the list these entries were part of.
+       */
+      const survivors = new Set(afterLists.get(id) ?? []);
+      const removed = entries.filter((entry) => !survivors.has(entry));
+
+      // Destructuring is both the emptiness test and the proof the record's non-empty tuple needs: a head that is undefined means nothing was removed, and a
+      // head that is defined composes the tuple by construction, where a cast over the filtered array would assert what it cannot show.
+      const [ first, ...rest ] = removed;
+
+      if(first === undefined) {
+
+        continue;
+      }
+
+      removals.push({ entries: [ first, ...rest ], id, option });
+    }
+  }
+
+  return removals;
 }
 
 /**
@@ -1281,8 +1414,9 @@ function createRegistry<T>(): Record<string, T> {
  * Build the catalog-derived index from raw categories + options. The result carries the raw inputs alongside every derivation needed for O(1) catalog queries -
  * defaults, value-options registry, groups (both directions), renderers, the raw-entry lookup, and the longest-first cache the entry parser consumes. Throws when a
  * built-in formatter name on a `render` declaration does not resolve, and on any picker declaration the engine cannot honor (see {@link FeatureOptionEntry.choices}
- * and {@link FeatureOptionEntry.multiple}), and when two entries expand to the same lowercased name, surfacing the misconfiguration at load time rather than
- * degrading a display path in silence.
+ * and {@link FeatureOptionEntry.multiple}), and when two entries expand to the same lowercased name, and when a `group` names a parent no option registers,
+ * refusing a broken parent/child relation at load time rather than leaving a child with no resolvable ancestor, surfacing the misconfiguration at load time
+ * rather than degrading a display path in silence.
  *
  * The index is the catalog-side input to every other pure helper in this module. Build it once per catalog; reuse it across every configured-options mutation
  * because the catalog is unchanged across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for
@@ -1298,6 +1432,7 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
   const defaults = createRegistry<boolean>();
   const groupParents = createRegistry<string>();
   const groups = createRegistry<string[]>();
+  const multipleOptionNames: string[] = [];
   const optionsByName = createRegistry<FeatureOptionEntry>();
   const renderers = createRegistry<(value: string) => string>();
   const scopes = createRegistry<readonly FeatureOptionScope[]>();
@@ -1370,6 +1505,14 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
         scopes[key] = option.scopes;
       }
 
+      // Collect the list-valued options as the loop meets them, so the catalog carries this derived view the same way it carries the value-option name cache
+      // rather than leaving each consumer to re-walk the categories and options maps for it. Declaration order is the catalog's own, which is what orders the
+      // answers of every reader built on it.
+      if(option.multiple) {
+
+        multipleOptionNames.push(entry);
+      }
+
       if(option.group !== undefined) {
 
         const expandedGroup = category.name + (option.group.length ? ("." + option.group) : "");
@@ -1384,12 +1527,31 @@ export function buildCatalogIndex(categories: readonly FeatureCategoryEntry[], o
     }
   }
 
+  // Every child's parent group must itself be a registered option, checked once the whole catalog has registered rather than inside the loop above so a parent
+  // declared later in its category - or in a later category - still resolves. `groups` already carries each parent's children in the catalog's own casing, so a
+  // missing parent's own error can name one of them without reconstructing the child's expanded name a second way; `groupParents`, whose keys are already
+  // lowercased, is the wrong registry to walk for exactly that reason.
+  for(const [ parent, children ] of Object.entries(groups)) {
+
+    if(parent.toLowerCase() in optionsByName) {
+
+      continue;
+    }
+
+    // Iterating rather than indexing the first child is what compiles under noUncheckedIndexedAccess with no cast and no widening of the public groups type:
+    // for...of answers `string` per element where a bracket read would answer `string | undefined`. The first child of the first unregistered parent throws.
+    for(const child of children) {
+
+      throw catalogError("a group naming the parent \"" + parent + "\", which no option registers,", child);
+    }
+  }
+
   // Cache the value-option names sorted longest-first. parseEntry consumes this directly on every Enable-entry parse; precomputing here means the sort runs once
   // per catalog change rather than once per parse. The list mirrors valueOptions's key set, so any future mutation that touches valueOptions must rebuild through
   // this method to keep the two views consistent.
   const sortedValueOptionNames = Object.keys(valueOptions).sort((a, b) => b.length - a.length);
 
-  return { categories, defaults, groupParents, groups, options, optionsByName, renderers, scopes, sortedValueOptionNames, valueOptions };
+  return { categories, defaults, groupParents, groups, multipleOptionNames, options, optionsByName, renderers, scopes, sortedValueOptionNames, valueOptions };
 }
 
 /**
@@ -2823,6 +2985,58 @@ export class FeatureOptions {
     return this.#valueOf(option, this.#resolve(option, device, controller));
   }
 
+  // The precedence {@link FeatureOptions.consolidatedValue} and {@link FeatureOptions.consolidatedFlag} both implement: an explicit entry at the resolved scope
+  // wins outright, in every state it can be in; otherwise the caller's fallback; otherwise the value the render function itself answers at scope "none", which
+  // for the boolean axis is already the catalog default (resolveScope's own "none" branch computes resolved.enabled through the identical call defaultValue()
+  // makes) and for the value axis is #valueOf's own internal default-closing branch. One statement of the precedence; each public method supplies only how it
+  // reads a resolved entry.
+  #resolveConsolidated<T>({ controller, device, fallback, option, render }: {
+
+    controller?: string;
+    device?: string;
+    fallback?: T;
+    option: string;
+    render: (resolved: ResolvedOptionEntry) => T;
+  }): T {
+
+    const resolved = this.#resolve(option, device, controller);
+
+    return (resolved.scope !== "none") ? render(resolved) : (fallback ?? render(resolved));
+  }
+
+  /**
+   * Return the effective state of a feature option for a plugin that still carries a configuration property as that option's transition fallback.
+   *
+   * The boolean-axis companion to {@link FeatureOptions.consolidatedValue | consolidatedValue}, sharing its precedence exactly: an explicit entry at the
+   * resolved scope wins outright, enabled or disabled alike, because configuring an option is the user saying what they want; an option nobody has configured
+   * yields to the property; the catalog's registered default closes the chain for an unconfigured option with no property beside it, answering exactly what
+   * {@link FeatureOptions.test | test} answers.
+   *
+   * Configured-ness here is the resolution's own scope, the same rule {@link FeatureOptions.consolidatedValue | consolidatedValue} reads by. The walk honors the
+   * entry's declared scopes, so an entry written where the option does not apply cannot make it configured for an identity it never reaches.
+   *
+   * @param args
+   * @param args.controller - Optional controller scope identifier.
+   * @param args.device     - Optional device scope identifier.
+   * @param args.fallback   - Optional. The configuration property that answers for an option nobody has configured.
+   * @param args.option     - Feature option to read (case-insensitive).
+   *
+   * @returns The configured entry's state, the fallback, or the registered default, in that precedence.
+   *
+   * @example
+   *
+   * ```ts
+   * // A boolean setting the plugin still accepts as a configuration property while the option takes it over.
+   * const verbose = featureOpts.consolidatedFlag({ fallback: config.debug, option: "Log.Verbose" });
+   * ```
+   *
+   * @category Feature Options
+   */
+  public consolidatedFlag({ controller, device, fallback, option }: ConsolidatedFlagArgs): boolean {
+
+    return this.#resolveConsolidated({ controller, device, fallback, option, render: (resolved) => resolved.enabled });
+  }
+
   /**
    * Return the effective value of a value-centric option for a plugin that still carries a configuration property as that option's transition fallback.
    *
@@ -2866,18 +3080,9 @@ export class FeatureOptions {
       return null;
     }
 
-    const resolved = this.#resolve(option, device, controller);
-
-    // The user reached for this option at a scope that answers for this identity, so what they wrote decides - whether that is a value, an off state, or an enable
-    // carrying nothing.
-    if(resolved.scope !== "none") {
-
-      return this.#valueOf(option, resolved);
-    }
-
-    // Nobody configured it, so the property answers if the plugin still carries one. Failing that, the catalog's registered default closes the chain through the
-    // same ladder `value` reads, which is what keeps the two reads from drifting on an option neither the user nor the configuration has spoken about.
-    return fallback ?? this.#valueOf(option, resolved);
+    // The precedence itself is the shared step's, so the only thing left here is how a resolved entry reads on the value axis: what the user wrote decides at
+    // any scope that answers for this identity, and at no scope the property answers first with the catalog's registered default behind it.
+    return this.#resolveConsolidated({ controller, device, fallback, option, render: (entry) => this.#valueOf(option, entry) });
   }
 
   /**

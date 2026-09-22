@@ -10,6 +10,43 @@
 // the same load timestamp keeps the implementation family coherent.
 const ModuleCustomEvent = CustomEvent;
 
+/* The event a dispatch fires: everything the platform event already carried, plus the state the reducer replaced. A subscriber that needs to know WHAT changed
+ * compares that state against the store's own rather than keeping a shadow copy of state ahead of every dispatch, which would be a second owner of the one
+ * thing the store exists to own. It extends the captured constructor rather than the live global for the same coherence reason the capture above exists, and it
+ * is a subclass rather than a property assigned onto a plain event after construction because a subclass states the shape once, in the type, where an
+ * after-construction assignment restates it at every construction site.
+ */
+class StoreDispatchEvent extends ModuleCustomEvent {
+
+  #previous;
+
+  /**
+   * Create the event for one dispatch.
+   *
+   * @param {string} type - The event type, which is the dispatched action's own `type`.
+   * @param {Object} args
+   * @param {{ type: string }} args.detail - The dispatched action, carried verbatim as the event's detail.
+   * @param {Object} args.previous - The state captured before the reducer ran.
+   */
+  constructor(type, { detail, previous }) {
+
+    super(type, { detail });
+    this.#previous = previous;
+  }
+
+  /**
+   * Read the state this dispatch replaced. Returned by reference - callers MUST treat the result as readonly. The reducer's structural-sharing contract
+   * guarantees that unchanged slices retain their reference across dispatches, so subscribers can use reference equality (`===`) to detect what changed without
+   * a deep comparison.
+   *
+   * @returns {Object} The state the reducer was handed for this dispatch.
+   */
+  get previous() {
+
+    return this.#previous;
+  }
+}
+
 /**
  * FeatureOptionsStore - The event-emitting state container at the heart of the feature options webUI.
  *
@@ -19,7 +56,9 @@ const ModuleCustomEvent = CustomEvent;
  *     store and re-derive their view from {@link state} on dispatch.
  *   - **Unidirectional flow.** Mutations enter through {@link dispatch}, which feeds the action to the pure reducer and atomically replaces the state. The store
  *     then fires a {@link CustomEvent} naming the action's type, with the full action as `event.detail` so subscribers receive the payload without reaching back
- *     into the store for "what changed."
+ *     into the store for "what changed." The state the reducer replaced is captured ahead of it and handed to subscribers alongside the action, so a subscriber
+ *     that reacts to what a mutation changed compares the states it is given rather than shadow-copying state before every dispatch to have something to
+ *     compare against.
  *   - **Platform-native subscription.** The class extends {@link EventTarget} so subscribers register via the standard `addEventListener({ signal })` idiom -
  *     cleanup follows the caller's {@link AbortSignal} automatically, no `destroy()` ceremony required. The signal-keyed lifecycle is the same primitive every
  *     other part of the webUI already uses for its DOM listeners, so the store's subscription model integrates without a new lifecycle concept.
@@ -66,20 +105,26 @@ export class FeatureOptionsStore extends EventTarget {
    *
    * Sequence:
    *
-   *   1. The reducer is invoked with the current state and the action; its return value becomes the new state.
-   *   2. A {@link CustomEvent} named after `action.type` is dispatched on the store, with the full action as `event.detail`.
+   *   1. The state about to be replaced is captured, so subscribers can be handed it once the replacement has happened.
+   *   2. The reducer is invoked with the current state and the action; its return value becomes the new state.
+   *   3. A {@link CustomEvent} named after `action.type` is dispatched on the store, with the full action as `event.detail` and the captured state as
+   *      `event.previous`.
    *
    * The state replacement happens BEFORE the event dispatches, so subscribers reading `store.state` from inside their handler see the post-dispatch state. Reversing
    * this order would force subscribers to either read from `event.detail` only (losing access to other state slices the dispatch did not touch) or to compute their
-   * view from stale state (a correctness hazard). The current order is the only one that satisfies "subscribers see consistent state every time they read."
+   * view from stale state (a correctness hazard). The current order is the only one that satisfies "subscribers see consistent state every time they read." The
+   * prior state is captured ahead of that replacement because it is the only moment it can be: the replacement is what makes it unreachable, and a subscriber
+   * asking what a mutation changed needs both sides of the transition rather than only the side that survived it.
    *
    * @param {{ type: string }} action - The action to dispatch. Must carry a string `type` field naming a past-tense domain event. Additional payload fields are
    *                                    forwarded verbatim as `event.detail` to subscribers.
    */
   dispatch(action) {
 
+    const previous = this.#state;
+
     this.#state = this.#reducer(this.#state, action);
-    this.dispatchEvent(new ModuleCustomEvent(action.type, { detail: action }));
+    this.dispatchEvent(new StoreDispatchEvent(action.type, { detail: action, previous }));
   }
 }
 
@@ -92,8 +137,9 @@ export class FeatureOptionsStore extends EventTarget {
  *      for a dispatch. This eliminates the "render on mount AND on every event" boilerplate every subscriber would otherwise repeat. {@link fn} receives
  *      `undefined` for the action argument at the immediate run - the marker for "no triggering action."
  *   2. **Subscription.** The function is registered as a listener for every event type in `events`. Every subsequent {@link FeatureOptionsStore.dispatch} of a
- *      listed type fires the function with the action as its argument (extracted from the {@link CustomEvent}'s `detail`). Cleanup is automatic: when the
- *      supplied {@link AbortSignal} aborts, every registered listener is removed in one operation.
+ *      listed type fires the function with the action as its first argument and the state that dispatch replaced as its second (extracted from the
+ *      {@link CustomEvent}'s `detail` and `previous`). Cleanup is automatic: when the supplied {@link AbortSignal} aborts, every registered listener is removed
+ *      in one operation.
  *
  * A pre-aborted signal short-circuits the entire effect: neither the immediate run nor the subscription registration takes effect. This protects views that
  * subscribed during a mount sequence from running against a torn-down DOM when an abort races the mount.
@@ -101,12 +147,18 @@ export class FeatureOptionsStore extends EventTarget {
  * The handler receives the action as its argument so subscribers that care about the dispatched payload can read it directly; subscribers that only need the
  * post-mutation state ignore the argument and read `store.state` as usual. JavaScript's parameter semantics mean a handler declared as `() => void` silently
  * ignores the action, so consumers pay no cost for the extra capability. Action-aware consumers declare `(action) => void` (or `(action) => { if(action) ... }`
- * to gate on subscription-only logic) without needing a parallel API.
+ * to gate on subscription-only logic) without needing a parallel API, and the same reasoning carries the second argument: a subscriber that has to know what a
+ * mutation changed declares `(action, previous) => void` and compares, while every handler that does not name the parameter is untouched by its existence.
+ *
+ * `previous` is defined exactly when `action` is - both are `undefined` on the immediate-run pass and both are set on every dispatch - so a handler that gates
+ * on `action` before reading `previous` never observes one without the other. It is the state captured before this action's reducer ran, where `store.state`
+ * read inside the handler is the live state: this action's own result, unless a listener registered earlier on the same event already dispatched synchronously.
  *
  * @param {Object} args
  * @param {readonly string[]} args.events - The action types this effect subscribes to.
- * @param {(action?: { type: string }) => void} args.fn - The effect body. Runs once immediately with `action === undefined`, then on every dispatch of a listed
- *                                                        action type with the dispatched action as its argument.
+ * @param {(action?: { type: string }, previous?: Object) => void} args.fn - The effect body. Runs once immediately with `action === undefined`, then on every
+ *                                                                          dispatch of a listed action type with the dispatched action as its first argument
+ *                                                                          and the state that dispatch replaced as its second.
  * @param {AbortSignal} args.signal - The lifecycle signal. Every listener registered by this effect is bound to this signal and cleaned up on abort.
  * @param {FeatureOptionsStore} args.store - The store to subscribe against.
  */
@@ -122,10 +174,10 @@ export const effect = ({ events, fn, signal, store }) => {
 
   fn(undefined);
 
-  // One wrapper closure shared across every listener registration extracts the action from the event's detail and hands it to the handler. Centralizing the
-  // extraction here means each handler sees the same "action or undefined" contract regardless of which event type triggered it, and the addEventListener
-  // registrations themselves stay symmetric.
-  const dispatch = (event) => fn(event.detail);
+  // One wrapper closure shared across every listener registration extracts the action from the event's detail, and the replaced state from the event beside it,
+  // and hands both to the handler. Centralizing the extraction here means each handler sees the same "action or undefined" contract regardless of which event
+  // type triggered it, and the addEventListener registrations themselves stay symmetric.
+  const dispatch = (event) => fn(event.detail, event.previous);
 
   for(const type of events) {
 

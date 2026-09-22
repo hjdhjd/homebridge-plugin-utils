@@ -4293,6 +4293,390 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
     orchestrator.cleanup();
   });
+
+  test("a mutation a coordinated write holds announces nothing, because it changed no configured option", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let fireCount = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      onOptionsEdited: () => fireCount++
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    clickCategoryHeader(skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    // The composer runs inside the hold, which is the one window where an option mutation reaches the reducer and comes back as the state reference it was
+    // handed. Driving the row's own gesture from in here is the page's only synchronous way into that window, since the store is a true private field with no
+    // accessor anywhere. The dispatch happens; what does not happen is a change to the configured options, and that is what the hook is about.
+    const result = await orchestrator.commitConfig(() => {
+
+      const held = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+      held.checked = false;
+      held.dispatchEvent(new Event("change", { bubbles: true }));
+
+      return { controllers: [] };
+    });
+
+    await flush();
+
+    assert.equal(result.kind, "committed", "precondition: the coordinated write ran to completion, so the hold was genuinely taken");
+    assert.deepEqual(orchestrator.editedConfig[0]?.options ?? [], [], "precondition: the held gesture wrote nothing, which is what makes it the no-op case");
+    assert.equal(fireCount, 0, "a mutation the hold refused changed no configured options, so the edit hook announced nothing");
+
+    orchestrator.cleanup();
+  });
+
+  test("a clear against an option nothing is configured under announces nothing, though the dispatch itself is unheld", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig({ options: ["Disable.Motion.Detect"] }),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let fireCount = 0;
+    let removalCount = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      onListEntriesRemoved: () => removalCount++,
+      onOptionsEdited: () => fireCount++
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    clickCategoryHeader(skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    // Checking a row back to its catalog default clears the override, which is a real edit: the disable entry leaves the configuration.
+    const restore = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    restore.checked = true;
+    restore.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    assert.equal(fireCount, 1, "precondition: the clear that actually removed the entry announced itself");
+    assert.deepEqual(orchestrator.editedConfig[0]?.options ?? [], [], "precondition: nothing is configured now");
+
+    /* The same gesture on the same row again composes the same clear, and this time it matches nothing: the engine's clear hands back the configured-options
+     * array it was given. The reducer still allocates a fresh state object around it, which is exactly what tells this row apart from the held one above - a
+     * gate comparing whole states would announce here, where the gate comparing the configured options alone correctly stays quiet.
+     */
+    const again = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    again.checked = true;
+    again.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    assert.equal(fireCount, 1, "a clear that matched nothing left the configured options where they were, so the hook announced nothing");
+    assert.equal(removalCount, 0, "and the removal hook, computed and fired from inside the same gate, announced nothing either");
+
+    orchestrator.cleanup();
+  });
+
+  test("resetting a configuration that is already empty announces nothing", async () => {
+
+    using dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let fireCount = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      onOptionsEdited: () => fireCount++
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.deepEqual(orchestrator.editedConfig[0]?.options ?? [], [], "precondition: the page starts with nothing configured");
+
+    // The reset gesture as the user performs it: the status bar's reset group opens, then "Reset to Defaults" wipes the configuration. There is nothing to wipe
+    // here, so the configured options come out of the reducer as the array they went in as and the hook has nothing to announce.
+    document.querySelector("button[data-action='reset-toggle']").click();
+    await flush();
+
+    document.querySelector("button[data-action='reset-defaults']").click();
+    await settlePersist();
+
+    assert.equal(fireCount, 0, "a reset with nothing configured changed nothing, so the edit hook announced nothing");
+    assert.equal(fake.observed.updatedConfigs.length, 0, "and no write reached the host either");
+
+    orchestrator.cleanup();
+  });
+});
+
+describe("webUiFeatureOptions - onListEntriesRemoved removal hook", () => {
+
+  /* The removal hook answers a question the edit hook cannot: which entries left a list-valued option. It is computed and fired from the SAME handler the edit
+   * hook fires from, inside the same changed-reference gate, which is what lets these rows assert both hooks' relative order from one shared array. The catalog
+   * below declares two list options so a single reset can produce two records and prove the call is per mutation rather than per option.
+   */
+  const LIST_FEATURES = {
+
+    categories: [{ description: "Motion Options", name: "Motion" }],
+
+    options: {
+
+      Motion: [
+
+        { default: true, defaultValue: "a,b", description: "Licence plates.", multiple: true, name: "Plates" },
+        { default: true, defaultValue: "x,y", description: "Watched zones.", multiple: true, name: "Zones" }
+      ]
+    }
+  };
+
+  // Stand up the page over the list catalog with the supplied configuration, with the Motion category already disclosed so its rows exist. Every row below needs
+  // the same five steps, and the hooks each row wants are whatever it passes through.
+  const openListPage = async ({ config, ...hooks }) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig({ options: config }),
+      requestResponses: new Map([[ "/getOptions", LIST_FEATURES ]])
+    });
+
+    const homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions(hooks);
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+    await flush();
+
+    return { fake, homebridgeInstall, orchestrator, skeleton };
+  };
+
+  // The row's list editor, and the click that takes one entry out of it - the same gesture the options view's own rows drive.
+  const listEditor = (skeleton, option) => skeleton.configTable.querySelector("[id='row-Motion." + option + "'] .fo-option-value");
+
+  test("a chip removal announces the one entry that left, ahead of the edit notification", async () => {
+
+    using dom = createTestDom();
+
+    const order = [];
+    const removals = [];
+    const { homebridgeInstall, orchestrator, skeleton } = await openListPage({
+
+      config: ["Enable.Motion.Plates=a,b"],
+      onListEntriesRemoved: (received) => {
+
+        order.push("removed");
+        removals.push(received);
+      },
+      onOptionsEdited: () => order.push("edited")
+    });
+
+    using install = homebridgeInstall;
+
+    listEditor(skeleton, "Plates").querySelectorAll(".fo-list-remove")[0].click();
+    await flush();
+
+    assert.deepEqual(order, [ "removed", "edited" ], "the removal hook runs first, so a consumer sees what left before it is told the edit landed");
+    assert.equal(removals.length, 1, "one call for the one mutation");
+    assert.deepEqual([...removals[0]], [{ entries: ["a"], id: "", option: "Motion.Plates" }], "carrying the entry the chip stood for, at the global scope");
+
+    orchestrator.cleanup();
+  });
+
+  test("a reset that empties two lists announces once, carrying both records", async () => {
+
+    using dom = createTestDom();
+
+    const removals = [];
+    const { homebridgeInstall, orchestrator } = await openListPage({
+
+      config: [ "Enable.Motion.Plates=a,b", "Enable.Motion.Zones=x,y" ],
+      onListEntriesRemoved: (received) => removals.push(received)
+    });
+
+    using install = homebridgeInstall;
+
+    document.querySelector("button[data-action='reset-toggle']").click();
+    await flush();
+
+    document.querySelector("button[data-action='reset-defaults']").click();
+    await flush();
+
+    assert.equal(removals.length, 1, "one call for the one mutation, never one per option and never one per entry");
+    assert.deepEqual([...removals[0]], [
+
+      { entries: [ "a", "b" ], id: "", option: "Motion.Plates" },
+      { entries: [ "x", "y" ], id: "", option: "Motion.Zones" }
+    ], "both options' whole lists, in the catalog's own declaration order");
+
+    orchestrator.cleanup();
+  });
+
+  test("a revert announces exactly the entries this session added, then the edit notification", async () => {
+
+    using dom = createTestDom();
+
+    const order = [];
+    const removals = [];
+    const { homebridgeInstall, orchestrator, skeleton } = await openListPage({
+
+      config: ["Enable.Motion.Plates=a"],
+      onListEntriesRemoved: (received) => {
+
+        order.push("removed");
+        removals.push(received);
+      },
+      onOptionsEdited: () => order.push("edited")
+    });
+
+    using install = homebridgeInstall;
+
+    // Add an entry this session, which is what a revert then has to take back. The added entry is the whole of the revert's removal set: `a` was saved before
+    // the session began and survives it.
+    const field = listEditor(skeleton, "Plates").querySelector(".fo-list-entry");
+
+    field.value = "z";
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
+    await flush();
+
+    assert.deepEqual(order, ["edited"], "precondition: the addition announced an edit and no removal");
+
+    document.querySelector("button[data-action='reset-toggle']").click();
+    await flush();
+
+    document.querySelector("button[data-action='reset-revert']").click();
+    await flush();
+
+    assert.deepEqual(order, [ "edited", "removed", "edited" ], "the revert announces the removal first, then its own edit");
+    assert.equal(removals.length, 1, "one call for the revert");
+    assert.deepEqual([...removals[0]], [{ entries: ["z"], id: "", option: "Motion.Plates" }], "naming the entry this session added and nothing the save held");
+
+    orchestrator.cleanup();
+  });
+
+  test("an addition announces an edit and no removal", async () => {
+
+    using dom = createTestDom();
+
+    let fireCount = 0;
+    let removalCount = 0;
+    const { homebridgeInstall, orchestrator, skeleton } = await openListPage({
+
+      config: ["Enable.Motion.Plates=a"],
+      onListEntriesRemoved: () => removalCount++,
+      onOptionsEdited: () => fireCount++
+    });
+
+    using install = homebridgeInstall;
+
+    const field = listEditor(skeleton, "Plates").querySelector(".fo-list-entry");
+
+    field.value = "z";
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
+    await flush();
+
+    assert.equal(fireCount, 1, "the addition is an edit");
+    assert.equal(removalCount, 0, "and nothing left the list, so the removal hook has nothing to announce");
+
+    orchestrator.cleanup();
+  });
+
+  test("a page that never adopted the removal hook still gets its edit notification, exactly once, from the same handler", async () => {
+
+    using dom = createTestDom();
+
+    let fireCount = 0;
+    const { homebridgeInstall, orchestrator, skeleton } = await openListPage({
+
+      config: ["Enable.Motion.Plates=a,b"],
+      onOptionsEdited: () => fireCount++
+    });
+
+    using install = homebridgeInstall;
+
+    assert.doesNotThrow(() => listEditor(skeleton, "Plates").querySelectorAll(".fo-list-remove")[0].click(),
+      "a removal with no removal hook configured must not throw");
+
+    await flush();
+
+    assert.equal(fireCount, 1, "the edit notification arrives from the same handler that would have computed the removals");
+    assert.deepEqual(orchestrator.editedConfig[0]?.options ?? [], ["Enable.Motion.Plates=b"], "and the edit itself landed");
+
+    orchestrator.cleanup();
+  });
+
+  test("a commitConfig call made from inside the hook settles without the hook firing again, behind the edit that triggered it", async () => {
+
+    using dom = createTestDom();
+
+    let removalCount = 0;
+    let pending = null;
+    const { fake, homebridgeInstall, orchestrator, skeleton } = await openListPage({
+
+      config: ["Enable.Motion.Plates=a,b"],
+      onListEntriesRemoved: () => {
+
+        removalCount++;
+
+        // The plugin's own write, asked for from inside the hook. commitConfig queues its body behind the dispatch that is running, and its own drain waits on
+        // the pending persist of this very edit, so the entry just reported removed reaches the host before this patch composes against it.
+        pending ??= orchestrator.commitConfig(() => ({ controllers: [{ name: "Hub" }] }));
+      }
+    });
+
+    using install = homebridgeInstall;
+
+    listEditor(skeleton, "Plates").querySelectorAll(".fo-list-remove")[0].click();
+    await flush();
+
+    const result = await pending;
+
+    await settlePersist();
+
+    assert.equal(result.kind, "committed", "the plugin's own write ran to completion");
+    assert.equal(removalCount, 1, "and the establishment that followed it dispatched model:loaded, which neither hook subscribes to");
+
+    const writes = fake.observed.updatedConfigs;
+
+    assert.ok(writes.length >= 2, "the edit's own persist and the plugin's write are two separate host calls");
+    assert.deepEqual(writes[0][0].options, ["Enable.Motion.Plates=b"], "the edit that triggered the hook reached the host first");
+    assert.ok(writes.some((payload) => payload[0].controllers?.length === 1), "and the plugin's patch composed against it afterwards");
+
+    orchestrator.cleanup();
+  });
 });
 
 describe("webUiFeatureOptions.refreshControllers", () => {

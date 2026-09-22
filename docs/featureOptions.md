@@ -114,6 +114,22 @@ a walk of any other reports it not at all.
 
 ***
 
+### ConsolidatedFlagArgs
+
+Arguments for [FeatureOptions.consolidatedFlag](#consolidatedflag). Carries the addressing intent - the option and the identities to resolve it at - plus the
+configuration property the caller still offers as that option's transition fallback.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="controller"></a> `controller?` | `string` | Optional controller scope identifier. |
+| <a id="device"></a> `device?` | `string` | Optional device scope identifier. |
+| <a id="fallback"></a> `fallback?` | `boolean` | Optional. The configuration property the plugin still carries for this option, read exactly as it is supplied. |
+| <a id="option-2"></a> `option` | `string` | Feature option to read (case-insensitive). |
+
+***
+
 ### ConsolidatedValueArgs
 
 Arguments for [FeatureOptions.consolidatedValue](#consolidatedvalue). Carries the addressing intent - the option and the identities to resolve it at - plus the configuration
@@ -123,10 +139,10 @@ property the caller still offers as that option's transition fallback.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="controller"></a> `controller?` | `string` | Optional controller scope identifier. |
-| <a id="device"></a> `device?` | `string` | Optional device scope identifier. |
-| <a id="fallback"></a> `fallback?` | `string` | Optional. The configuration property the plugin still carries for this option, read exactly as it is supplied. An empty string answers as itself, because what counts as an empty property is the caller's rule rather than the engine's. |
-| <a id="option-2"></a> `option` | `string` | Feature option to read (case-insensitive). |
+| <a id="controller-1"></a> `controller?` | `string` | Optional controller scope identifier. |
+| <a id="device-1"></a> `device?` | `string` | Optional device scope identifier. |
+| <a id="fallback-1"></a> `fallback?` | `string` | Optional. The configuration property the plugin still carries for this option, read exactly as it is supplied. An empty string answers as itself, because what counts as an empty property is the caller's rule rather than the engine's. |
+| <a id="option-3"></a> `option` | `string` | Feature option to read (case-insensitive). |
 
 ***
 
@@ -144,6 +160,21 @@ catalog-build time, and the webUI's projection applies it to whatever a source r
 | ------ | ------ | ------ |
 | <a id="label"></a> `label` | `string` | The text the editor shows for this choice. |
 | <a id="value-3"></a> `value` | `string` | The text the configuration stores when this choice is picked. |
+
+***
+
+### RemovedListEntry
+
+One entry that left a [FeatureOptionEntry.multiple](#multiple) option's configured list between two configured-options snapshots. Yielded by
+[removedListEntries](#removedlistentries), one record per option-and-scope pair that lost at least one entry.
+
+#### Properties
+
+| Property | Type | Description |
+| ------ | ------ | ------ |
+| <a id="entries"></a> `entries` | readonly \[`string`, `string`\] | The entries present in the earlier snapshot's list and absent from the later one, in the earlier list's order. Never empty - [removedListEntries](#removedlistentries) emits a record only when at least one entry was removed. |
+| <a id="id-4"></a> `id` | `string` | The scope identifier the entries were configured at, in the same form [ConfiguredOptionEntry.id](#id-2) uses - the empty string for the global scope. |
+| <a id="option-4"></a> `option` | `string` | The catalog option whose list lost the entries, in the catalog's own casing. |
 
 ***
 
@@ -503,6 +534,46 @@ The entries the text names, in the order it names them.
 
 ***
 
+### removedListEntries()
+
+```ts
+function removedListEntries(args): readonly RemovedListEntry[];
+```
+
+Answer which entries left each `multiple: true` option's configured list between two configured-options snapshots, per option and per scope.
+
+The comparison is over CONFIGURED entries alone - never effective or inherited values - and is exact string comparison after [parseValueList](#parsevaluelist)'s own
+trimming, with no case folding, matching that function's own behavior exactly. An option whose entry was disabled, cleared, or removed entirely between the
+two snapshots has an empty list after, so every entry it held before is reported as removed. An option and scope with nothing removed contributes no record. A
+`multiple` option with `choices` (a checkbox group) and one without (a free-form list) are covered identically, because both store through the identical
+comma-joined grammar [FeatureOptionEntry.multiple](#multiple)'s own declaration describes.
+
+Every multiple-value option in the catalog is considered, read from `catalog.multipleOptionNames`, the same precomputed, catalog-ordered list
+[buildCatalogIndex](#buildcatalogindex) builds once per catalog - no second walk of `catalog.categories` and `catalog.options`. Each option's before-and-after configured
+entries are read through [enumerateConfiguredEntries](#enumerateconfiguredentries), the engine's own decoder for "what did the user write" - never a second parser of the
+configured-options grammar.
+
+The result is ordered deterministically: by the option's own position in the catalog's declaration order (category order, then option order within a category
+- the same order [buildCatalogIndex](#buildcatalogindex) registers options in), and within one option, by the order its scope identifiers first appear in the BEFORE
+snapshot. No new ordering rule is invented; both orderings already exist as guarantees the catalog and the configured-options array provide.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | \{ `after`: readonly `string`[]; `before`: readonly `string`[]; `catalog`: [`CatalogIndex`](#catalogindex); \} | - |
+| `args.after` | readonly `string`[] | The configured-options array after the mutation. |
+| `args.before` | readonly `string`[] | The configured-options array before the mutation. |
+| `args.catalog` | [`CatalogIndex`](#catalogindex) | The catalog index, which defines which options are `multiple: true`. |
+
+#### Returns
+
+readonly [`RemovedListEntry`](#removedlistentry)[]
+
+The removals, one record per option-and-scope pair that lost at least one entry. Empty when nothing was removed.
+
+***
+
 ### scopeSafeId()
 
 ```ts
@@ -658,13 +729,52 @@ Create a new FeatureOptions instance.
 const featureOpts = new FeatureOptions(categories, options, ["Enable.motion.detect"]);
 ```
 
-#### Properties
+#### Feature Options
 
-| Property | Modifier | Type | Description |
-| ------ | ------ | ------ | ------ |
-| <a id="defaultreturnvalue"></a> `defaultReturnValue` | `public` | `boolean` | Default return value for unknown options (defaults to false). |
+##### consolidatedFlag()
 
-#### Accessors
+```ts
+consolidatedFlag(args): boolean;
+```
+
+Return the effective state of a feature option for a plugin that still carries a configuration property as that option's transition fallback.
+
+The boolean-axis companion to [consolidatedValue](#consolidatedvalue), sharing its precedence exactly: an explicit entry at the
+resolved scope wins outright, enabled or disabled alike, because configuring an option is the user saying what they want; an option nobody has configured
+yields to the property; the catalog's registered default closes the chain for an unconfigured option with no property beside it, answering exactly what
+[test](#test) answers.
+
+Configured-ness here is the resolution's own scope, the same rule [consolidatedValue](#consolidatedvalue) reads by. The walk honors the
+entry's declared scopes, so an entry written where the option does not apply cannot make it configured for an identity it never reaches.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | [`ConsolidatedFlagArgs`](#consolidatedflagargs) | - |
+
+###### Returns
+
+`boolean`
+
+The configured entry's state, the fallback, or the registered default, in that precedence.
+
+###### Example
+
+```ts
+// A boolean setting the plugin still accepts as a configuration property while the option takes it over.
+const verbose = featureOpts.consolidatedFlag({ fallback: config.debug, option: "Log.Verbose" });
+```
+
+#### Other
+
+##### defaultReturnValue
+
+```ts
+defaultReturnValue: boolean;
+```
+
+Default return value for unknown options (defaults to false).
 
 ##### categories
 
@@ -801,8 +911,6 @@ Set the list of available feature options.
 ###### Returns
 
 `void`
-
-#### Methods
 
 ##### clearOption()
 
@@ -1468,6 +1576,7 @@ directly hold it as state and reuse it across every dispatch that does not touch
 | <a id="defaults"></a> `defaults` | `readonly` | `Readonly`\<`Record`\<`string`, `boolean`\>\> | Lowercased-key map from canonical option name (the form [expandOption](#expandoption-1) produces) to its catalog-declared default. |
 | <a id="groupparents-1"></a> `groupParents` | `readonly` | `Readonly`\<`Record`\<`string`, `string`\>\> | Lowercased-key reverse index from a child option's canonical name to its parent group's expanded name. The value keeps the catalog's own casing, which is the spelling scope resolution and the webUI read it back as. |
 | <a id="groups-1"></a> `groups` | `readonly` | `Readonly`\<`Record`\<`string`, readonly `string`[]\>\> | Forward index from a parent group's expanded name to its child options' expanded names. |
+| <a id="multipleoptionnames"></a> `multipleOptionNames` | `readonly` | readonly `string`[] | Every [FeatureOptionEntry.multiple](#multiple) option's expanded name, in the catalog's own casing and declaration order, precomputed so a consumer asking which options store a list needs no second walk of the categories and options maps. |
 | <a id="options-1"></a> `options` | `readonly` | `Readonly`\<`Record`\<`string`, readonly [`FeatureOptionEntry`](#featureoptionentry)[]\>\> | The raw options map, preserved alongside categories for the same reason. |
 | <a id="optionsbyname"></a> `optionsByName` | `readonly` | `Readonly`\<`Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)\>\> | Lowercased-key map from canonical option name to the raw catalog entry, the general per-option lookup for any consumer that needs the entry itself rather than one of the derivations beside it. Keyed exactly as `valueOptions` is, so one key discipline serves every registry on the index. It is named for what it holds because `entries` already means a category's projected rows in the webUI's vocabulary. |
 | <a id="renderers"></a> `renderers` | `readonly` | `Readonly`\<`Record`\<`string`, (`value`) => `string`\>\> | Lowercased-key map from canonical option name to its resolved value renderer (built-in or inline function). Built-in names that fail to resolve throw at index-build time rather than degrading silently at log time. |
@@ -1609,8 +1718,8 @@ and optional value for value-centric options.
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="enabled-3"></a> `enabled` | `boolean` | True to enable, false to disable. |
-| <a id="id-4"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one whose composed address names another catalog option, is refused rather than written - see [composeScopeId](#composescopeid), which composes a controller-qualified identifier under the same rule. |
-| <a id="option-3"></a> `option` | `string` | Feature option to set (case-insensitive). |
+| <a id="id-5"></a> `id?` | `string` | Optional device or controller scope identifier. Omit to address the global scope. An identifier carrying a period or an equals sign, or one whose composed address names another catalog option, is refused rather than written - see [composeScopeId](#composescopeid), which composes a controller-qualified identifier under the same rule. |
+| <a id="option-5"></a> `option` | `string` | Feature option to set (case-insensitive). |
 | <a id="value-5"></a> `value?` | `string` \| `number` | Optional value for value-centric options. Honored only when `enabled` is true and the option is value-centric. Free-form at either scope: the composed entry carries it behind a payload delimiter, trimmed of surrounding whitespace, and it persists only when content survives the trim (see [hasValueContent](#hasvaluecontent)). At a device or controller scope an enable without value content reduces to clearing the scope, because a scoped entry storing a single value always carries one. Supplying the empty string for a [FeatureOptionEntry.multiple](#multiple) option is the one value without content that persists: it is the explicit empty selection, and it composes at either scope. Omitting `value` entirely says nothing about the selection and keeps the plain enable, for every option alike. |
 
 ***
@@ -1624,11 +1733,11 @@ stored value read against.
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="controller-1"></a> `controller?` | `string` | Optional controller scope identifier. |
+| <a id="controller-2"></a> `controller?` | `string` | Optional controller scope identifier. |
 | <a id="defaultwhenunset"></a> `defaultWhenUnset?` | `boolean` | Optional. Read an option that is enabled at an explicit scope with nothing stored as its registered default rather than as the empty list. It reaches that one state and no other: a disabled option, an option the catalog does not carry, and one that is not value-centric all still read empty, and a `multiple` option whose selection the user emptied stays empty, since emptying it was a choice the user made rather than a value they omitted. |
-| <a id="device-1"></a> `device?` | `string` | Optional device scope identifier. |
+| <a id="device-2"></a> `device?` | `string` | Optional device scope identifier. |
 | <a id="domain-1"></a> `domain?` | readonly `string`[] | Optional. The values the option offers in this context, which a plugin derives from whatever the device reported. Supplying it is what lets the read drop a stored value the device no longer offers and expand an [ALL\_CHOICES](#all_choices) default. Omit it for an option whose catalog entry declares its choices inline, since the entry already holds them, and for a raw read of what the user stored. |
-| <a id="option-4"></a> `option` | `string` | Feature option to read (case-insensitive). |
+| <a id="option-6"></a> `option` | `string` | Feature option to read (case-insensitive). |
 
 ***
 
@@ -1860,8 +1969,9 @@ function buildCatalogIndex(categories, options): CatalogIndex;
 Build the catalog-derived index from raw categories + options. The result carries the raw inputs alongside every derivation needed for O(1) catalog queries -
 defaults, value-options registry, groups (both directions), renderers, the raw-entry lookup, and the longest-first cache the entry parser consumes. Throws when a
 built-in formatter name on a `render` declaration does not resolve, and on any picker declaration the engine cannot honor (see [FeatureOptionEntry.choices](#choices)
-and [FeatureOptionEntry.multiple](#multiple)), and when two entries expand to the same lowercased name, surfacing the misconfiguration at load time rather than
-degrading a display path in silence.
+and [FeatureOptionEntry.multiple](#multiple)), and when two entries expand to the same lowercased name, and when a `group` names a parent no option registers,
+refusing a broken parent/child relation at load time rather than leaving a child with no resolvable ancestor, surfacing the misconfiguration at load time
+rather than degrading a display path in silence.
 
 The index is the catalog-side input to every other pure helper in this module. Build it once per catalog; reuse it across every configured-options mutation
 because the catalog is unchanged across those mutations. Categories without an entry in the options map are skipped silently (a plugin defines a category for

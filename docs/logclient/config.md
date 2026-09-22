@@ -199,7 +199,8 @@ This is a PURE function: it reads only its arguments and allocates only the resu
 [loadConfigFile](#loadconfigfile)), extracted the environment slice, and parsed the flags. `host`, `port`, and `tls` always resolve to a concrete value (their defaults are
 `localhost`, `8581`, and `false`); the credential fields resolve to `null` when no source supplied them, leaving the CLI to decide which
 [LogClientCredentials](types.md#logclientcredentials) arm the resolved material implies. The `port` from the environment is a string, so it is
-parsed here; a non-numeric `HBLOG_PORT` is ignored (falls through to the next source) rather than producing a `NaN` port.
+parsed here; a non-numeric `HBLOG_PORT` is ignored (falls through to the next source) rather than producing a `NaN` port. An empty string is read the same way for
+every string field: it is not a value, so it falls through to the next source and finally to the default.
 
 #### Parameters
 

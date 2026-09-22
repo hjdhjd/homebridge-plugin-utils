@@ -94,7 +94,6 @@ if(isEntryPoint()) {
   process.exitCode = await engine.runHblog({
 
     argv: process.argv.slice(2),
-    cwd: process.cwd(),
     env: process.env,
     homedir: (await import("node:os")).homedir(),
     stderr: process.stderr,

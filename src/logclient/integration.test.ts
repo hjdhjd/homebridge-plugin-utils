@@ -72,7 +72,6 @@ function liveOptions(argv: readonly string[]): { options: RunHblogOptions; stder
   const options: RunHblogOptions = {
 
     argv,
-    cwd: process.cwd(),
     env: process.env,
     homedir: homedir(),
     stderr,

@@ -229,3 +229,60 @@ describe("resolveConnection - precedence", () => {
     assert.equal(resolved.port, 3333, "the flag port must take precedence over the env port");
   });
 });
+
+describe("resolveConnection - an empty value yields to the next source", () => {
+
+  // The string fields the environment and the config file can both supply, each with the value it resolves to when no source supplies one. `otp` is not in the table: the
+  // config file never persists a one-time passcode, so its rows sit below in the shape the tiers it does have allow.
+  const fields = [
+    { fallback: "localhost", field: "host" },
+    { fallback: null, field: "password" },
+    { fallback: null, field: "token" },
+    { fallback: null, field: "username" }
+  ] as const;
+
+  for(const { fallback, field } of fields) {
+
+    test("an empty environment " + field + " yields to the file's value", () => {
+
+      const resolved = resolveConnection({ env: { [field]: "" }, file: { [field]: "file.value" }, flags: {} });
+
+      assert.equal(resolved[field], "file.value", "an empty environment value must not mask the file's value");
+    });
+
+    test("an empty file " + field + " with no other source yields the default", () => {
+
+      const resolved = resolveConnection({ env: {}, file: { [field]: "" }, flags: {} });
+
+      assert.equal(resolved[field], fallback, "an empty file value must not mask the default");
+    });
+
+    test("an empty environment and file " + field + " yield the default", () => {
+
+      const resolved = resolveConnection({ env: { [field]: "" }, file: { [field]: "" }, flags: {} });
+
+      assert.equal(resolved[field], fallback, "with every source empty the default must apply");
+    });
+
+    test("a non-empty environment " + field + " still wins over the file", () => {
+
+      const resolved = resolveConnection({ env: { [field]: "env.value" }, file: { [field]: "file.value" }, flags: {} });
+
+      assert.equal(resolved[field], "env.value", "a value a source really supplies must keep its place in the precedence order");
+    });
+  }
+
+  test("an empty environment otp yields the default", () => {
+
+    const resolved = resolveConnection({ env: { otp: "" }, file: undefined, flags: {} });
+
+    assert.equal(resolved.otp, null, "an empty environment passcode must resolve to no passcode");
+  });
+
+  test("a flag otp still wins over a non-empty environment otp", () => {
+
+    const resolved = resolveConnection({ env: { otp: "env.otp" }, file: undefined, flags: { otp: "flag.otp" } });
+
+    assert.equal(resolved.otp, "flag.otp", "the precedence order must be unchanged where the passcode has no file tier");
+  });
+});

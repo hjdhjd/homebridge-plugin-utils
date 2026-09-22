@@ -6,14 +6,15 @@
 /**
  * The `hblog` command-line logic, written pure-by-injection.
  *
- * {@link runHblog} is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, working/home directories,
+ * {@link runHblog} is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, home directory,
  * and the filesystem and transport dependencies as arguments rather than reading them from globals, and it returns the process exit code rather than calling
  * `process.exit`. That makes the entire flow - argument parsing, `~/.hblog.json` resolution, credential/request mapping, transport orchestration, output formatting,
  * signal handling, and exit codes - exercisable in tests against captured streams and fake transports, with no live server and no real process signals.
  *
  * The bin (`cli.ts`) is a thin shell that resolves its own real directory, dynamic-imports this module, and calls {@link runHblog} with the real `process` streams,
- * environment, and directories. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code. The
- * bin records that code on `process.exitCode` and lets the event loop drain - so a piped stdout flushes in full - rather than forcing termination with `process.exit`.
+ * environment, and home directory. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code.
+ * The bin records that code on `process.exitCode` and lets the event loop drain - so a piped stdout flushes in full - rather than forcing termination with
+ * `process.exit`.
  *
  * @module
  */
@@ -30,9 +31,14 @@ import { parseArgs } from "node:util";
 import { parseTimeExpression } from "./time-expression.ts";
 import { systemClock } from "../clock.ts";
 
-// The usage banner shown for `--help` and on a usage error. Kept as a module constant so the help text and the misuse text are one source of truth and a test can assert
-// against it without coupling to formatting. The flags here mirror the `parseArgs` option table below; the two must stay in lockstep.
-const USAGE = [
+/**
+ * The usage banner shown for `--help` and on a usage error. Kept as an exported constant so the help text and the misuse text are one source of truth, and so a test
+ * reads the banner itself rather than a rendering of it: the row that holds the README's hand-typed copy of these flag lines imports this constant, and a flag added
+ * to or reworded in the banner fails that row until the README carries it too. The flags mirror the `parseArgs` option table below; the two must stay in lockstep.
+ *
+ * @category Log Client
+ */
+export const USAGE = [
 
   "Usage: hblog [filters] [options]",
   "",
@@ -117,7 +123,6 @@ export interface CliStream {
  * @property clock         - Optional time source. It resolves the `--since`/`--until` expressions against a single deterministic instant AND is handed to the engine,
  *                           whose window channel arms its own deadlines on it. Defaults to {@link systemClock}; a test injects a `TestClock` seeded at a fixed instant
  *                           so a windowed run's bounds and its terminators are reproducible together. One process, one time source.
- * @property cwd           - The current working directory. Reserved for future relative-path resolution; the home directory is the config-file anchor today.
  * @property env           - The environment map (typically `process.env`).
  * @property fetch         - Optional `fetch` implementation forwarded to the engine's auth and REST transports. Defaults to the global `fetch`.
  * @property homedir       - The user's home directory, used to locate `~/.hblog.json` unless `HBLOG_CONFIG` overrides the path.
@@ -135,7 +140,6 @@ export interface RunHblogOptions {
 
   readonly argv: readonly string[];
   readonly clock?: Clock;
-  readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly fetch?: typeof fetch;
   readonly homedir: string;
@@ -277,8 +281,11 @@ function parseFlags(argv: readonly string[]): ParsedFlags {
   };
 }
 
-// Build the connection-flag slice `resolveConnection` consumes from the parsed flags, parsing the `--port` string into a number. A non-numeric `--port` is a usage error
-// (the user explicitly typed a bad value, unlike the environment's lower-precedence port which is silently ignored).
+// Build the connection-flag slice `resolveConnection` consumes from the parsed flags, parsing the `--port` string into a number and refusing an empty value on any of
+// the value-bearing connection flags. Both checks rest on one rule: a flag is something the user typed in this invocation, so a value that cannot mean anything - a
+// non-numeric port, an empty host or token - is refused loudly rather than resolved past, because a silent fallback would hide the mistake behind whatever a lower
+// source happens to carry. The environment is held to a gentler standard, since a stale variable is not a statement about this invocation: an unusable environment
+// port is discarded rather than reported.
 function connectionFlags(flags: ParsedFlags): HblogConnectionFlags {
 
   let port: number | undefined;
@@ -293,6 +300,15 @@ function connectionFlags(flags: ParsedFlags): HblogConnectionFlags {
     }
 
     port = parsed;
+  }
+
+  // One pass over the value-bearing flag names rather than a check per flag, so the refusal has exactly one form and a flag added to the table inherits it.
+  for(const name of [ "host", "otp", "pass", "token", "user" ] as const) {
+
+    if(flags[name] === "") {
+
+      throw new UsageError("The --" + name + " value must not be empty.");
+    }
   }
 
   return { host: flags.host, otp: flags.otp, password: flags.pass, port, tls: flags.tls, token: flags.token, username: flags.user };
@@ -571,7 +587,7 @@ function formatRecord(record: LogRecord, json: boolean, color: boolean): string 
  * authentication failure returns 1. Token redaction is applied at the hard-error stderr writes (the setup failure, a captured stdout write error on either the
  * normal-completion or the catch path, and the streaming catch's generic error); the usage and advisory writes never carry a token.
  *
- * @param options - The injected argument vector, environment, streams, directories, and dependencies. See {@link RunHblogOptions}.
+ * @param options - The injected argument vector, environment, streams, home directory, and dependencies. See {@link RunHblogOptions}.
  *
  * @returns The process exit code: 0 success / clean signal / help / version, 1 connection or auth failure, 2 usage error.
  *

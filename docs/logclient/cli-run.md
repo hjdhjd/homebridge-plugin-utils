@@ -8,14 +8,15 @@
 
 The `hblog` command-line logic, written pure-by-injection.
 
-[runHblog](#runhblog) is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, working/home directories,
+[runHblog](#runhblog) is the whole CLI behavior with none of the process coupling: it takes its argument vector, environment, output streams, home directory,
 and the filesystem and transport dependencies as arguments rather than reading them from globals, and it returns the process exit code rather than calling
 `process.exit`. That makes the entire flow - argument parsing, `~/.hblog.json` resolution, credential/request mapping, transport orchestration, output formatting,
 signal handling, and exit codes - exercisable in tests against captured streams and fake transports, with no live server and no real process signals.
 
 The bin (`cli.ts`) is a thin shell that resolves its own real directory, dynamic-imports this module, and calls [runHblog](#runhblog) with the real `process` streams,
-environment, and directories. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code. The
-bin records that code on `process.exitCode` and lets the event loop drain - so a piped stdout flushes in full - rather than forcing termination with `process.exit`.
+environment, and home directory. Everything that can go wrong (a usage error, an auth failure, a broken pipe, a SIGINT) is decided here and reported as an exit code.
+The bin records that code on `process.exitCode` and lets the event loop drain - so a piped stdout flushes in full - rather than forcing termination with
+`process.exit`.
 
 ## Log Client
 
@@ -96,7 +97,6 @@ Options accepted by [runHblog](#runhblog). Every external dependency the CLI tou
 | ------ | ------ | ------ | ------ |
 | <a id="argv"></a> `argv` | `readonly` | readonly `string`[] | The argument vector (typically `process.argv.slice(2)`). |
 | <a id="clock"></a> `clock?` | `readonly` | [`Clock`](../clock.md#clock) | Optional time source. It resolves the `--since`/`--until` expressions against a single deterministic instant AND is handed to the engine, whose window channel arms its own deadlines on it. Defaults to [systemClock](../clock.md#systemclock); a test injects a `TestClock` seeded at a fixed instant so a windowed run's bounds and its terminators are reproducible together. One process, one time source. |
-| <a id="cwd"></a> `cwd` | `readonly` | `string` | The current working directory. Reserved for future relative-path resolution; the home directory is the config-file anchor today. |
 | <a id="env"></a> `env` | `readonly` | `ProcessEnv` | The environment map (typically `process.env`). |
 | <a id="fetch"></a> `fetch?` | `readonly` | \{ (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; \} | Optional `fetch` implementation forwarded to the engine's auth and REST transports. Defaults to the global `fetch`. |
 | <a id="homedir"></a> `homedir` | `readonly` | `string` | The user's home directory, used to locate `~/.hblog.json` unless `HBLOG_CONFIG` overrides the path. |
@@ -105,6 +105,18 @@ Options accepted by [runHblog](#runhblog). Every external dependency the CLI tou
 | <a id="stat"></a> `stat?` | `readonly` | (`path`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<\{ `mode`: `number`; \}\> | Optional file-stat implementation forwarded to the config loader for the permissions warning. Defaults to `node:fs/promises` `stat`. |
 | <a id="stderr"></a> `stderr` | `readonly` | [`CliStream`](#clistream) | The diagnostics/warnings stream. Production passes `process.stderr`. |
 | <a id="stdout"></a> `stdout` | `readonly` | [`CliStream`](#clistream) | The log-data stream. Production passes `process.stdout`. |
+
+***
+
+### USAGE
+
+```ts
+const USAGE: string;
+```
+
+The usage banner shown for `--help` and on a usage error. Kept as an exported constant so the help text and the misuse text are one source of truth, and so a test
+reads the banner itself rather than a rendering of it: the row that holds the README's hand-typed copy of these flag lines imports this constant, and a flag added
+to or reworded in the banner fails that row until the README carries it too. The flags mirror the `parseArgs` option table below; the two must stay in lockstep.
 
 ***
 
@@ -127,7 +139,7 @@ normal-completion or the catch path, and the streaming catch's generic error); t
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`RunHblogOptions`](#runhblogoptions) | The injected argument vector, environment, streams, directories, and dependencies. See [RunHblogOptions](#runhblogoptions). |
+| `options` | [`RunHblogOptions`](#runhblogoptions) | The injected argument vector, environment, streams, home directory, and dependencies. See [RunHblogOptions](#runhblogoptions). |
 
 #### Returns
 

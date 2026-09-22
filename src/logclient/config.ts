@@ -297,6 +297,13 @@ export async function loadConfigFile(path: string, options: LoadConfigFileOption
   };
 }
 
+// A source supplies a value only when it is present and non-empty. One predicate rather than a copy per caller, so the file states that rule once and every consumer of
+// a configured string reads it the same way. Written as a type guard so a caller that passes the check is handed a `string` with no second check to satisfy the compiler.
+function isSupplied(value: string | undefined): value is string {
+
+  return (value !== undefined) && (value.length > 0);
+}
+
 /**
  * Resolve the absolute path of the config file to load.
  *
@@ -317,7 +324,7 @@ export function resolveConfigPath(sources: { env: NodeJS.ProcessEnv; homedir: st
 
   const override = sources.env["HBLOG_CONFIG"];
 
-  if((override !== undefined) && (override.length > 0)) {
+  if(isSupplied(override)) {
 
     return override;
   }
@@ -325,11 +332,22 @@ export function resolveConfigPath(sources: { env: NodeJS.ProcessEnv; homedir: st
   return sources.homedir.replace(/[/\\]+$/, "") + "/" + DEFAULT_CONFIG_FILENAME;
 }
 
-// Resolve one optional string across the configured sources in precedence order (flags > env > file), returning `null` when none supplied. The first defined value wins;
-// an empty string is a defined value (the user explicitly passed it) so it is honored rather than skipped.
+// Resolve one optional string across the configured sources in precedence order (flags > env > file), returning `null` when none supplied. A source counts as supplying
+// a value only when {@link isSupplied} accepts it: an empty string can never be a usable host or credential, so letting it win would only convert a lower source's good
+// value into a guaranteed failure rather than express a choice. An empty value therefore yields to the next source and, with nothing left, to the caller's default - the
+// same reading `resolveConfigPath` just above gives an empty `HBLOG_CONFIG`. A flag never arrives here empty: the CLI refuses that where it parses the flag, because a
+// value the user typed in this invocation deserves a loud answer rather than a quiet fallback.
 function pickString(flag: string | undefined, env: string | undefined, file: string | undefined): Nullable<string> {
 
-  return flag ?? env ?? file ?? null;
+  for(const value of [ flag, env, file ]) {
+
+    if(isSupplied(value)) {
+
+      return value;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -339,7 +357,8 @@ function pickString(flag: string | undefined, env: string | undefined, file: str
  * {@link loadConfigFile}), extracted the environment slice, and parsed the flags. `host`, `port`, and `tls` always resolve to a concrete value (their defaults are
  * `localhost`, `8581`, and `false`); the credential fields resolve to `null` when no source supplied them, leaving the CLI to decide which
  * {@link logclient/types!LogClientCredentials | LogClientCredentials} arm the resolved material implies. The `port` from the environment is a string, so it is
- * parsed here; a non-numeric `HBLOG_PORT` is ignored (falls through to the next source) rather than producing a `NaN` port.
+ * parsed here; a non-numeric `HBLOG_PORT` is ignored (falls through to the next source) rather than producing a `NaN` port. An empty string is read the same way for
+ * every string field: it is not a value, so it falls through to the next source and finally to the default.
  *
  * @param sources       - The configured sources.
  * @param sources.env   - The environment slice. See {@link HblogEnv}.
@@ -361,7 +380,7 @@ export function resolveConnection(sources: { env: HblogEnv; file: HblogConfigFil
 
   return {
 
-    host: flags.host ?? env.host ?? file?.host ?? DEFAULT_HOST,
+    host: pickString(flags.host, env.host, file?.host) ?? DEFAULT_HOST,
     // A one-time passcode is single-use and time-bound, so the config file deliberately never persists one; the file source here is intentionally `undefined`.
     otp: pickString(flags.otp, env.otp, undefined),
     password: pickString(flags.password, env.password, file?.password),

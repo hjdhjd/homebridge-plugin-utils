@@ -5,11 +5,13 @@
 import type { CliStream, RunHblogOptions } from "./cli-run.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
 import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
+import { USAGE, runHblog } from "./cli-run.ts";
 import { describe, test } from "node:test";
 import { LogSocket } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
-import { runHblog } from "./cli-run.ts";
+import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 import { settle } from "../testing/index.ts";
 
 // A capturing CliStream double. Records every chunk written so a test asserts the exact output, exposes a settable `isTTY`, and supports `on`/`off` hooks for the stdout
@@ -203,7 +205,6 @@ function makeOptions(overrides: Partial<RunHblogOptions> & { argv: readonly stri
 
   const options: RunHblogOptions = {
 
-    cwd: "/work",
     env: {},
     homedir: "/home/dev",
     readFile: missingFileReadFile,
@@ -238,6 +239,37 @@ describe("runHblog - help and version", () => {
 
     assert.equal(code, 0, "--version must exit 0");
     assert.match(stdout.text, /hblog 9\.9\.9/, "--version must print the resolved package version");
+  });
+});
+
+describe("runHblog - usage banner documentation", () => {
+
+  test("the README's hblog block carries every flag line of the usage banner", async () => {
+
+    /* The README shows the hblog flags as a fenced block, which is a hand copy of the banner this module exports. Holding that block to the banner's flag lines keeps
+     * the documented flag list from aging behind the bin's own: a flag added to or reworded in the banner fails this row until the README carries it too. The
+     * comparison covers flag lines only and runs one way, since the README block opens without the banner's "Usage:" line and its one-line description.
+     */
+    const readme = await readFile(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8");
+    const lines = readme.split("\n");
+    const opening = lines.indexOf("hblog [filters] [options]");
+
+    assert.ok(opening > 0, "the README must show the hblog usage block");
+    assert.equal(lines[opening - 1], "```", "and that block must open a fence");
+
+    const closing = lines.indexOf("```", opening);
+
+    assert.ok(closing > opening, "the fenced block must be closed");
+
+    const block = lines.slice(opening, closing);
+    const flagLines = USAGE.split("\n").filter((line) => line.trimStart().startsWith("-"));
+
+    assert.ok(flagLines.length > 0, "the usage banner must carry flag lines to compare");
+
+    for(const flagLine of flagLines) {
+
+      assert.ok(block.includes(flagLine), "the README's hblog block must carry this flag line of the usage banner verbatim: " + flagLine);
+    }
   });
 });
 
@@ -288,6 +320,19 @@ describe("runHblog - usage errors", () => {
     assert.equal(code, 2, "a non-numeric --port must be a usage error");
   });
 
+  // One row per value-bearing connection flag, from one list rather than a block per flag, so every flag is asserted the same way and none drifts.
+  for(const flag of [ "host", "otp", "pass", "token", "user" ]) {
+
+    test("an empty --" + flag + " value is a usage error (exit 2)", async () => {
+
+      const { options, stderr } = makeOptions({ argv: [ "--" + flag, "", "-n", "1" ] });
+      const code = await runHblog(options);
+
+      assert.equal(code, 2, "an empty --" + flag + " value must be a usage error");
+      assert.match(stderr.text, new RegExp("--" + flag + " value must not be empty"), "the refusal must name the flag whose value was empty");
+    });
+  }
+
   test("an unknown --level is a usage error (exit 2)", async () => {
 
     const { options, stderr } = makeOptions({ argv: [ "--level", "eror", "-n", "1" ] });
@@ -334,6 +379,62 @@ describe("runHblog - request and credential mapping (history channel)", () => {
     assert.ok(calls.some((url) => url.includes("/api/auth/login")), "a password credential must authenticate via the login endpoint");
   });
 
+  test("an empty environment token yields to the config file's credential pair, which authenticates via the login endpoint", async () => {
+
+    const { calls, fetch } = fakeFetch({ lines: ["[t] [P] one"] });
+    const configFile = async (): Promise<string> => JSON.stringify({ password: "file.pass", username: "file.user" });
+    const { options } = makeOptions({ argv: [ "-n", "1" ], env: { HBLOG_TOKEN: "" }, fetch, readFile: configFile });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 0);
+    assert.ok(calls.some((url) => url.includes("/api/auth/login")),
+      "the file's credential pair must reach the login endpoint once the empty environment token yields");
+  });
+
+  // One row per credential variable that can stand alone in the environment, from one list rather than a block apiece. Each names the only credential material the run
+  // has, so once it yields there is nothing left to log in with and the honest outcome is the no-auth endpoint the server may or may not honor. History mode is chosen
+  // deliberately: it is the single-shot path, so the run has a terminal state to assert on, which the live-tail path does not.
+  for(const variable of [ "HBLOG_OTP", "HBLOG_PASS", "HBLOG_USER" ]) {
+
+    test("an empty " + variable + " alone leaves no credential material, so the run reaches the no-auth endpoint", async () => {
+
+      const { calls, fetch } = fakeFetch({ lines: ["[t] [P] one"] });
+      const { options } = makeOptions({ argv: [ "-n", "1" ], env: { [variable]: "" }, fetch });
+
+      const code = await runHblog(options);
+
+      assert.ok(calls.some((url) => url.includes("/api/auth/noauth")), "with every credential field yielding, the run must take the no-auth arm");
+      assert.equal(code, 0, "an empty " + variable + " must not be refused as supplied credential material");
+    });
+  }
+
+  test("a config file carrying a username and an empty password is an incomplete pair, refused before any network attempt", async () => {
+
+    const { calls, fetch } = fakeFetch({ lines: ["[t] [P] one"] });
+    const configFile = async (): Promise<string> => JSON.stringify({ password: "", username: "admin" });
+    const { options, stderr } = makeOptions({ argv: [ "-n", "1" ], fetch, readFile: configFile });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "a half-supplied file credential pair must be a usage error rather than a doomed login");
+    assert.match(stderr.text, /Both --user and --pass/, "the refusal must name the missing half of the credential pair");
+    assert.equal(calls.length, 0, "a usage error must be reported before any network attempt");
+  });
+
+  test("an empty environment token over a file carrying only a username is an incomplete pair, refused before any network attempt", async () => {
+
+    const { calls, fetch } = fakeFetch({ lines: ["[t] [P] one"] });
+    const configFile = async (): Promise<string> => JSON.stringify({ username: "admin" });
+    const { options, stderr } = makeOptions({ argv: [ "-n", "1" ], env: { HBLOG_TOKEN: "" }, fetch, readFile: configFile });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 2, "the empty token must yield and expose the file's half-supplied pair rather than masking it");
+    assert.match(stderr.text, /Both --user and --pass/, "the refusal must name the missing half of the credential pair");
+    assert.equal(calls.length, 0, "a usage error must be reported before any network attempt");
+  });
+
   test("no credential in history mode uses the noauth endpoint", async () => {
 
     const { calls, fetch } = fakeFetch({ lines: ["[t] [P] one"] });
@@ -343,6 +444,17 @@ describe("runHblog - request and credential mapping (history channel)", () => {
 
     assert.equal(code, 0);
     assert.ok(calls.some((url) => url.includes("/api/auth/noauth")), "no credential must use the noauth endpoint");
+  });
+
+  test("a --port value reaches the resolved request", async () => {
+
+    const { calls, fetch } = fakeFetch({ lines: ["[t] [P] one"] });
+    const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--port", "9999", "--all" ], fetch });
+
+    const code = await runHblog(options);
+
+    assert.equal(code, 0);
+    assert.ok(calls.some((url) => url.includes(":9999")), "a supplied --port must reach the resolved request");
   });
 
   test("a numeric -n retains only the most recent N lines", async () => {

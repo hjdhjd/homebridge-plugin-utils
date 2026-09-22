@@ -13,7 +13,8 @@ the group on every non-internal interface of that family, asks the browsing ques
 section 7.1, caches what the responses carry, re-queries each cached record at the checkpoints section 5.2 names, holds a goodbye (section 10.1) and a flushed
 name and type (section 10.2) for one second before deleting, and asks RFC 6763 section 12's follow-up questions for the records a responder did not attach.
 Each transition it derives - a service found, updated, or lost - reaches the `onEvent` it was constructed with at the moment it derives it. Devices and
-consumer projections belong to `discovery.ts` above this module, and the bytes belong to `message.ts` below it.
+consumer projections belong to `discovery.ts` above this module, the bytes belong to `message.ts` below it, and address classification belongs to
+`address.ts` below it.
 
 **One socket per family.** A reuse-bound socket receives what its siblings receive, so each of these sits beside the operating system's own responder on the
 well-known port and a second browser in the same process opens sockets of its own. The multicast interface is set on a socket before each of its sends rather
@@ -292,7 +293,7 @@ One service instance, as the cache currently resolves it. Every field is what th
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="addresses"></a> `addresses` | `readonly` | readonly `string`[] | Every address of the host, of every family the browser serves, in arrival order and without duplicates, as a consumer connects to it: an IPv6 link-local address carries the zone of the link it was heard on. |
+| <a id="addresses"></a> `addresses` | `readonly` | readonly `string`[] | Every address of the host, of every family the browser serves, in arrival order and without duplicates, as a consumer connects to it: an IPv6 link-local address carries the zone of the link it was heard on. [dialAddress](address.md#dialaddress) ranks this set into the one address a consumer dials. |
 | <a id="host"></a> `host` | `readonly` | [`DnsName`](message.md#dnsname) | The host name the SRV record targets. |
 | <a id="instance"></a> `instance` | `readonly` | `string` | The first label of `name`: the free-text instance label RFC 6763 section 4.1.1 defines, which is what a person recognizes the device by. |
 | <a id="name"></a> `name` | `readonly` | [`DnsName`](message.md#dnsname) | The full instance name, which is this service's identity and the key it is held under. |

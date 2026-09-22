@@ -23,7 +23,8 @@
  * @module
  */
 import type { DnsARecord, DnsAaaaRecord, DnsName, DnsOtherRecord, DnsPtrRecord, DnsRecord, DnsSrvRecord, DnsTxtRecord } from "./message.ts";
-import { encodeDnsMessage, parseDnsName, parseIpv4, parseIpv6 } from "./message.ts";
+import { dnsNamesEqual, encodeDnsMessage, formatDnsName, isServiceTypeName, parseDnsName, parseIpv4, parseIpv6 } from "./message.ts";
+import type { Nullable } from "../util.ts";
 
 // RFC 6762 section 10's recommended ttl for a record whose name or rdata is a host name, in seconds: short, because a host that moves should stop being found
 // quickly.
@@ -150,6 +151,48 @@ export function makeTxtRecord({ flush = false, name, strings = [], ttl = SERVICE
 }
 
 /**
+ * Build the wire strings for a TXT record from a plain fields object, the inverse of {@link mdns/message!txtEntries | txtEntries} up to key case, which
+ * `txtEntries` folds to lowercase: a string value becomes `key=value` (an empty string becomes `key=`), a `null` value becomes the bare key alone (the
+ * wire's flag form), and an `undefined` value is omitted, so a field a caller does not want to advertise this round needs no special casing. Strings are
+ * emitted in insertion order as JavaScript enumerates the object's keys (integer-like keys enumerate first).
+ *
+ * A key that is empty or that itself contains `=` cannot be written as one wire string (RFC 6763 section 6.4 splits on the first `=`), and is refused
+ * with a `TypeError` rather than encoded ambiguously; a mixed-case key is legitimate wire content and round-trips to its lowercase form through
+ * `txtEntries`.
+ *
+ * Composes with {@link makeTxtRecord}'s own `strings` parameter: `makeTxtRecord({ name, strings: makeTxtStrings({ ... }) })`.
+ *
+ * @param fields - The TXT fields to advertise, one string per key.
+ *
+ * @returns The wire strings, in insertion order as JavaScript enumerates the object's keys.
+ *
+ * @throws {TypeError} If a key is empty or contains `=`, naming the key.
+ *
+ * @category Testing
+ */
+export function makeTxtStrings(fields: Partial<Record<string, Nullable<string>>>): readonly string[] {
+
+  const strings: string[] = [];
+
+  for(const [ key, value ] of Object.entries(fields)) {
+
+    if(value === undefined) {
+
+      continue;
+    }
+
+    if((key.length === 0) || key.includes("=")) {
+
+      throw new TypeError("makeTxtStrings: a TXT key must be non-empty and contain no \"=\", and \"" + key + "\" is not.");
+    }
+
+    strings.push((value === null) ? key : (key + "=" + value));
+  }
+
+  return strings;
+}
+
+/**
  * Build a record of a type the union does not model, carrying its rdata verbatim.
  *
  * @param options        - The record.
@@ -195,11 +238,12 @@ export function makeResponse({ additionals = [], answers = [], authorities = [],
  *
  * @property addresses    - Every address of the host, IPv4 in dotted decimal or IPv6 in the RFC 4291 text form without a zone. Each is carried by a record of
  *                          its own, an A or an AAAA by that address's own spelling.
- * @property domain       - The domain every name sits under, as labels or as a flat string. Defaults to `"local"`.
- * @property host         - The host's own label, as labels or as a flat string, placed under the domain.
+ * @property host         - The host's own label, as labels or as a flat string, placed under the service type's own domain labels.
  * @property instance     - The instance label, taken verbatim as one label: RFC 6763 section 4.1.1 makes it free text, so a dot in it is part of the name.
  * @property port         - The port the service answers on.
- * @property serviceType  - The service type, as labels or as a flat string (`"_hap._tcp"`), placed under the domain.
+ * @property serviceType  - The base service type, spelled as a full DNS-SD type name including its domain, as labels or as a flat string
+ *                          (`"_hap._tcp.local"`) - the same spelling {@link mdns/browser!MdnsBrowserOptions.serviceType | MdnsBrowserOptions.serviceType}
+ *                          takes for a base type. A subtype form is not a fixture input: build its PTR by hand, as browser.test.ts's own subtype rows do.
  * @property strings      - The TXT record's strings. Defaults to none.
  *
  * @category Testing
@@ -207,7 +251,6 @@ export function makeResponse({ additionals = [], answers = [], authorities = [],
 export interface MdnsServiceFixture {
 
   readonly addresses: readonly string[];
-  readonly domain?: DnsName | string;
   readonly host: DnsName | string;
   readonly instance: string;
   readonly port: number;
@@ -230,14 +273,41 @@ export interface MdnsServiceFixture {
  *
  * @category Testing
  */
-export function makeServiceRecords({ addresses, domain = "local", flush = false, host, instance, port, serviceType,
+export function makeServiceRecords({ addresses, flush = false, host, instance, port, serviceType,
   strings = [] }: MdnsServiceFixture & { readonly flush?: boolean }): readonly DnsRecord[] {
 
-  const domainLabels = toDnsName(domain);
-  const serviceName = [ ...toDnsName(serviceType), ...domainLabels ];
+  const serviceName = toDnsName(serviceType);
+
+  /* A service type is a name, a transport, and a domain at the very least - the same rule production enforces through the same shared predicate at
+   * `MdnsBrowser`'s own constructor - so a caller passing a short, domain-stripped spelling fails here rather than building a record with no domain
+   * at all.
+   */
+  if(!isServiceTypeName(serviceName)) {
+
+    throw new TypeError("makeServiceRecords: `serviceType` must be a DNS-SD service type such as \"_esphomelib._tcp.local\", and \"" +
+      formatDnsName(serviceName) + "\" is not.");
+  }
+
+  /* This fixture builds base-type records only: the domain labels below are read positionally as every label after the name and the transport, an
+   * assumption that puts the transport at the second label. A subtype form, such as "_printer._sub._http._tcp.local", would otherwise read its own
+   * second label, "_sub", as the transport and fabricate a domain no responder ever advertised; this guard refuses it instead of building the wrong
+   * record, using the same fold `dnsNamesEqual` already applies to a label rather than a second, hand-rolled lowercasing. The label-count check above
+   * narrows the name to one carrying at least three labels, so reading the transport by position is total.
+   */
+  const transport = serviceName[1];
+
+  if(!dnsNamesEqual([transport], ["_tcp"]) && !dnsNamesEqual([transport], ["_udp"])) {
+
+    throw new TypeError("makeServiceRecords: `serviceType` must be a base DNS-SD service type such as \"_esphomelib._tcp.local\" - name, transport, " +
+      "domain, and \"" + formatDnsName(serviceName) + "\" is not.");
+  }
+
+  const domainLabels = serviceName.slice(2);
   const hostName = [ ...toDnsName(host), ...domainLabels ];
   const instanceName = [ instance, ...serviceName ];
 
+  // The PTR, the SRV, and the TXT lead in that order, ahead of the address records: makeService on the testing entry point reads this same order by
+  // position rather than by kind, so a caller of either function describes one instance by construction.
   return [ makePtrRecord({ name: serviceName, target: instanceName }), makeSrvRecord({ flush, name: instanceName, port, target: hostName }),
     makeTxtRecord({ flush, name: instanceName, strings }),
     ...addresses.map((address) => address.includes(":") ? makeAaaaRecord({ address, flush, name: hostName }) : makeARecord({ address, flush, name: hostName })) ];

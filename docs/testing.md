@@ -568,6 +568,12 @@ Re-exports [makeTxtRecord](mdns/message-builders.md#maketxtrecord)
 
 ***
 
+### makeTxtStrings
+
+Re-exports [makeTxtStrings](mdns/message-builders.md#maketxtstrings)
+
+***
+
 ### MdnsServiceFixture
 
 Re-exports [MdnsServiceFixture](mdns/message-builders.md#mdnsservicefixture)

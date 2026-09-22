@@ -29,7 +29,7 @@ interface TestDevice {
 function service({ instance = "Garage Door", port = 6053, strings = ["mac=aabbccddeeff"] }: { instance?: string; port?: number;
   strings?: readonly string[]; } = {}): MdnsService {
 
-  return makeService({ addresses: ["192.0.2.50"], host: "gdo", instance, port, serviceType: "_esphomelib._tcp", strings });
+  return makeService({ addresses: ["192.0.2.50"], host: "gdo", instance, port, serviceType: "_esphomelib._tcp.local", strings });
 }
 
 // The consumer's own classification: the device this plugin would build from a service, and `null` for one it does not want.

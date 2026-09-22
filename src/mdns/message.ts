@@ -8,8 +8,10 @@
  *
  * One datagram goes in and one readonly {@link DnsMessage} or `null` comes out. {@link encodeDnsMessage} is the single encoder for the whole record union,
  * compressing names as it writes. {@link buildMdnsQuery} splits a query whose known answers overflow a packet. The name readings ({@link parseDnsName},
- * {@link formatDnsName}, {@link dnsNameKey}, {@link dnsNamesEqual}) and {@link txtEntries} are the presentations a consumer applies to what it parsed. Sockets,
- * cadence, caches, service types, and devices belong to the browser above this module; the wire is all that lives here.
+ * {@link formatDnsName}, {@link dnsNameKey}, {@link dnsNamesEqual}, {@link isServiceTypeName}) and {@link txtEntries} are the presentations a consumer
+ * applies to what it parsed. Sockets, cadence, caches, and devices belong to the browser above this module, and so does what to browse for and how it
+ * reacts to a name that falls short of a service type's shape; this module owns the wire and the structural readings of what it carries,
+ * {@link isServiceTypeName}'s label count among them.
  *
  * The two directions answer a malformed input differently, and the difference is the design rather than an inconsistency. The parser reads an untrusted wire at
  * the rate a LAN answers a service-enumeration query, so every length, offset, count, and pointer is checked against the datagram and every rejection collapses
@@ -414,6 +416,23 @@ export function dnsNameKey(name: DnsName): string {
 export function dnsNamesEqual(a: DnsName, b: DnsName): boolean {
 
   return (a.length === b.length) && a.every((label, index) => foldAscii(label) === foldAscii(b[index] ?? ""));
+}
+
+/**
+ * Whether a DNS name carries the labels a full DNS-SD service type needs: a service name, a transport, and a domain, at least three labels in total.
+ *
+ * A caller past this check reads the service name, the transport, and the first domain label by position, with no fallback for an index the type system
+ * would otherwise treat as possibly absent.
+ *
+ * @param name - The name as its labels.
+ *
+ * @returns Whether `name` carries at least the three labels a service type needs.
+ *
+ * @category mDNS
+ */
+export function isServiceTypeName(name: DnsName): name is readonly [ string, string, string, ...string[] ] {
+
+  return name.length >= 3;
 }
 
 /**

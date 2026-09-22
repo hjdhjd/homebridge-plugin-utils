@@ -68,7 +68,7 @@ interface AgedAdvertisementOptions extends AdvertisementOptions {
 function advertisement({ address = "192.0.2.50", host = "gdo", instance = "Garage Door", port = 6053,
   strings = ["mac=aabbccddeeff"] }: AdvertisementOptions = {}): readonly DnsRecord[] {
 
-  return makeServiceRecords({ addresses: [address], host, instance, port, serviceType: "_esphomelib._tcp", strings });
+  return makeServiceRecords({ addresses: [address], host, instance, port, serviceType: "_esphomelib._tcp.local", strings });
 }
 
 // The same advertisement with a lifetime named for each record, which is what the rows about maintenance, goodbyes, and flushes turn on.
@@ -456,7 +456,7 @@ describe("MdnsBrowser - receive", () => {
 
     const rig = await makeBrowser();
 
-    deliver(rig.socket, makeServiceRecords({ addresses: ["192.0.2.50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp",
+    deliver(rig.socket, makeServiceRecords({ addresses: ["192.0.2.50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp.local",
       strings: [ "mac=aabbccddeeff", "project_name=ratgdo.ratgdo" ] }));
 
     const found = expectAt(rig.events, 0, "the found event");
@@ -502,7 +502,7 @@ describe("MdnsBrowser - receive", () => {
 
     // RFC 6763 section 7.1: a subtype PTR and the plain PTR point at the same instance, and a browser for the subtype sees the subtype's.
     deliver(rig.socket, [ makePtrRecord({ name: [ "_printer", "_sub", "_http", "_tcp", "local" ], target: printer, ttl: 4500 }),
-      ...makeServiceRecords({ addresses: ["192.0.2.60"], host: "printer", instance: "Printer", port: 631, serviceType: "_http._tcp", strings: ["rp=queue"] }) ]);
+      ...makeServiceRecords({ addresses: ["192.0.2.60"], host: "printer", instance: "Printer", port: 631, serviceType: "_http._tcp.local", strings: ["rp=queue"] }) ]);
 
     assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
     assert.equal(onlyService(rig).port, 631);
@@ -522,7 +522,7 @@ describe("MdnsBrowser - receive", () => {
   test("V2: an IPv6 browser caches its own family's address records, each link-local one carrying the zone it arrived on", async () => {
 
     const rig = await makeIpv6Browser();
-    const records = makeServiceRecords({ addresses: ["fe80::50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp",
+    const records = makeServiceRecords({ addresses: ["fe80::50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp.local",
       strings: ["mac=aabbccddeeff"] });
 
     // The builder reads the address's own spelling, so what a responder of this family advertises is an AAAA.
@@ -565,7 +565,7 @@ describe("MdnsBrowser - receive", () => {
 
     const rig = await makeBrowser();
 
-    deliver(rig.socket, [ ...makeServiceRecords({ addresses: ["192.0.2.50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp",
+    deliver(rig.socket, [ ...makeServiceRecords({ addresses: ["192.0.2.50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp.local",
       strings: ["mac=aabbccddeeff"] }), makeAaaaRecord({ address: "fe80::50", name: [ "gdo", "local" ], ttl: 120 }) ]);
     assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
     assert.deepEqual(onlyService(rig).addresses, ["192.0.2.50"], "an AAAA beside the A belongs to the other family");
@@ -889,7 +889,7 @@ describe("MdnsBrowser - cache", () => {
   test("V5: one link-local address heard on two links is two addresses, each carrying its own zone", async () => {
 
     const rig = await makeIpv6Browser({ interfaces: fixedInterfaces({ ipv6: [ "fe80::1", "fe80::2" ] }) });
-    const records = makeServiceRecords({ addresses: ["fe80::50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp",
+    const records = makeServiceRecords({ addresses: ["fe80::50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp.local",
       strings: ["mac=aabbccddeeff"] });
 
     // RFC 6762 section 14: the same link-local name may be in use on different links, so the zone is what tells one link's copy of an address from another's.
@@ -1119,7 +1119,7 @@ describe("MdnsBrowser - both families", () => {
 
       // An advertisement of a dual-stack host, delivered on the IPv4 socket: the A is cached and the AAAA beside it is left to the socket of its own family.
       deliver(ipv4, makeServiceRecords({ addresses: [ "192.0.2.50", "fe80::50" ], host: "gdo", instance: "Garage Door", port: 6053,
-        serviceType: "_esphomelib._tcp", strings: ["mac=aabbccddeeff"] }));
+        serviceType: "_esphomelib._tcp.local", strings: ["mac=aabbccddeeff"] }));
       assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
       assert.deepEqual(onlyService(rig).addresses, ["192.0.2.50"], "an AAAA heard on the IPv4 socket is a record of the other family");
 

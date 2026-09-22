@@ -10,8 +10,10 @@ The DNS message vocabulary, parser, and encoder the mDNS browser composes over.
 
 One datagram goes in and one readonly [DnsMessage](#dnsmessage) or `null` comes out. [encodeDnsMessage](#encodednsmessage) is the single encoder for the whole record union,
 compressing names as it writes. [buildMdnsQuery](#buildmdnsquery) splits a query whose known answers overflow a packet. The name readings ([parseDnsName](#parsednsname),
-[formatDnsName](#formatdnsname), [dnsNameKey](#dnsnamekey), [dnsNamesEqual](#dnsnamesequal)) and [txtEntries](#txtentries) are the presentations a consumer applies to what it parsed. Sockets,
-cadence, caches, service types, and devices belong to the browser above this module; the wire is all that lives here.
+[formatDnsName](#formatdnsname), [dnsNameKey](#dnsnamekey), [dnsNamesEqual](#dnsnamesequal), [isServiceTypeName](#isservicetypename)) and [txtEntries](#txtentries) are the presentations a consumer
+applies to what it parsed. Sockets, cadence, caches, and devices belong to the browser above this module, and so does what to browse for and how it
+reacts to a name that falls short of a service type's shape; this module owns the wire and the structural readings of what it carries,
+[isServiceTypeName](#isservicetypename)'s label count among them.
 
 The two directions answer a malformed input differently, and the difference is the design rather than an inconsistency. The parser reads an untrusted wire at
 the rate a LAN answers a service-enumeration query, so every length, offset, count, and pointer is checked against the datagram and every rejection collapses
@@ -487,6 +489,31 @@ recommends. There is no trailing dot, and the root reads as the empty string.
 `string`
 
 The escaped, dot-joined presentation.
+
+***
+
+### isServiceTypeName()
+
+```ts
+function isServiceTypeName(name): name is readonly [string, string, string, string];
+```
+
+Whether a DNS name carries the labels a full DNS-SD service type needs: a service name, a transport, and a domain, at least three labels in total.
+
+A caller past this check reads the service name, the transport, and the first domain label by position, with no fallback for an index the type system
+would otherwise treat as possibly absent.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `name` | [`DnsName`](#dnsname) | The name as its labels. |
+
+#### Returns
+
+`name is readonly [string, string, string, string]`
+
+Whether `name` carries at least the three labels a service type needs.
 
 ***
 

@@ -17,7 +17,7 @@ const SERVICE_TYPE = "_esphomelib._tcp.local";
 // it, so the shape a row delivers is the shape a browser derives from the same advertisement.
 function service({ instance = "Garage Door", port = 6053 }: { instance?: string; port?: number } = {}): MdnsService {
 
-  return makeService({ addresses: ["192.0.2.50"], host: "gdo", instance, port, serviceType: "_esphomelib._tcp", strings: ["mac=aabbccddeeff"] });
+  return makeService({ addresses: ["192.0.2.50"], host: "gdo", instance, port, serviceType: "_esphomelib._tcp.local", strings: ["mac=aabbccddeeff"] });
 }
 
 // The options a consumer would have handed the real browser, with the sink pointed at a row's own array.
@@ -159,7 +159,7 @@ describe("makeService", () => {
   test("T9: the composed service reads its names, its endpoint, and its TXT off the records the same options advertise, and holds addresses of its own", () => {
 
     const addresses: readonly [string, ...string[]] = [ "192.0.2.50", "fe80::1" ];
-    const options = { addresses, host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp", strings: ["mac=aabbccddeeff"] };
+    const options = { addresses, host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp.local", strings: ["mac=aabbccddeeff"] };
     const advertised = makeServiceRecords(options);
     const derived = makeService(options);
     const ptr = expectAt(advertised, 0, "the PTR of the advertisement");

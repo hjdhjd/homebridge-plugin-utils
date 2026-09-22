@@ -5,11 +5,12 @@
  * consume them, here and in every consumer's tests, silently lose their meaning if a builder drifts from the DNS-SD shape it encodes.
  */
 import { describe, test } from "node:test";
-import { makeARecord, makeAaaaRecord, makeOtherRecord, makePtrRecord, makeResponse, makeServiceRecords, makeSrvRecord,
-  makeTxtRecord } from "./message-builders.ts";
+import { makeARecord, makeAaaaRecord, makeOtherRecord, makePtrRecord, makeResponse, makeServiceRecords, makeSrvRecord, makeTxtRecord,
+  makeTxtStrings } from "./message-builders.ts";
+import { parseDnsMessage, txtEntries } from "./message.ts";
+import type { Nullable } from "../util.ts";
 import assert from "node:assert/strict";
 import { expectAt } from "../testing/index.ts";
-import { parseDnsMessage } from "./message.ts";
 
 describe("the record factories", () => {
 
@@ -108,7 +109,7 @@ describe("makeServiceRecords", () => {
     const service = [ "_hap", "_tcp", "local" ];
     const instance = [ "Living Room", "_hap", "_tcp", "local" ];
     const host = [ "gateway", "local" ];
-    const records = makeServiceRecords({ addresses: ["192.168.1.20"], host: "gateway", instance: "Living Room", port: 8080, serviceType: "_hap._tcp",
+    const records = makeServiceRecords({ addresses: ["192.168.1.20"], host: "gateway", instance: "Living Room", port: 8080, serviceType: "_hap._tcp.local",
       strings: ["md=x"] });
 
     assert.deepEqual(records, [ makePtrRecord({ name: service, target: instance }), makeSrvRecord({ name: instance, port: 8080, target: host }),
@@ -117,12 +118,12 @@ describe("makeServiceRecords", () => {
     // A PTR is a shared record, and RFC 6762 section 10.2 reserves the cache-flush bit for the records one responder owns outright, so `flush` reaches the other
     // three and never the PTR.
     const flushed = makeServiceRecords({ addresses: ["192.168.1.20"], flush: true, host: "gateway", instance: "Living Room", port: 8080,
-      serviceType: "_hap._tcp", strings: ["md=x"] });
+      serviceType: "_hap._tcp.local", strings: ["md=x"] });
 
     assert.deepEqual(flushed.map((record) => record.flush), [ false, true, true, true ]);
 
-    const elsewhere = makeServiceRecords({ addresses: ["192.168.1.20"], domain: "example.org", host: "gateway", instance: "Living Room", port: 8080,
-      serviceType: "_hap._tcp" });
+    const elsewhere = makeServiceRecords({ addresses: ["192.168.1.20"], host: "gateway", instance: "Living Room", port: 8080,
+      serviceType: "_hap._tcp.example.org" });
 
     assert.deepEqual(elsewhere.map((record) => record.name), [ [ "_hap", "_tcp", "example", "org" ], [ "Living Room", "_hap", "_tcp", "example", "org" ],
       [ "Living Room", "_hap", "_tcp", "example", "org" ], [ "gateway", "example", "org" ] ]);
@@ -131,13 +132,13 @@ describe("makeServiceRecords", () => {
   test("K1: the address record is an AAAA or an A, by the spelling of the address it was given", () => {
 
     // The address says which record carries it: a spelling with a colon is IPv6, so the choice is read off the address rather than an option a caller has to set.
-    const sixteenByte = expectAt(makeServiceRecords({ addresses: ["fe80::1"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp" }), 3,
+    const sixteenByte = expectAt(makeServiceRecords({ addresses: ["fe80::1"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }), 3,
       "the address record of an IPv6 advertisement");
 
     assert.ok(sixteenByte.kind === "aaaa");
     assert.equal(sixteenByte.address, "fe80::1");
 
-    const fourByte = expectAt(makeServiceRecords({ addresses: ["10.0.0.5"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp" }), 3,
+    const fourByte = expectAt(makeServiceRecords({ addresses: ["10.0.0.5"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }), 3,
       "the address record of an IPv4 advertisement");
 
     assert.ok(fourByte.kind === "a");
@@ -148,16 +149,16 @@ describe("makeServiceRecords", () => {
 
     // A zone suffix reaches the AAAA builder and is refused there, and a malformed IPv6 spelling is refused by the IPv6 reader with the message that explains it
     // rather than routed to the A builder and refused as a dotted quad that is not four octets.
-    assert.throws(() => makeServiceRecords({ addresses: ["fe80::50%en0"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp" }),
+    assert.throws(() => makeServiceRecords({ addresses: ["fe80::50%en0"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }),
       { message: /^parseIpv6: the address "fe80::50%en0" carries "50%en0"/, name: "TypeError" }, "a zone suffix must be refused through the advertisement");
-    assert.throws(() => makeServiceRecords({ addresses: ["fe80:::1"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp" }),
+    assert.throws(() => makeServiceRecords({ addresses: ["fe80:::1"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }),
       { message: /^parseIpv6: the address "fe80:::1" carries ""/, name: "TypeError" }, "a malformed IPv6 spelling must be refused by the IPv6 reader");
   });
 
   test("K3: every address named is an address record of its own, in the order they were given and each of its own address's family", () => {
 
     const host = [ "gdo", "local" ];
-    const records = makeServiceRecords({ addresses: [ "10.0.0.5", "fe80::1" ], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp" });
+    const records = makeServiceRecords({ addresses: [ "10.0.0.5", "fe80::1" ], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" });
 
     // A dual-stack host advertises an address record per address under one host name, which RFC 6762 section 6.2 has a responder attach to the same name for
     // fate sharing. The order is the order they were named, and each address's own spelling is what chooses the record that carries it.
@@ -166,9 +167,91 @@ describe("makeServiceRecords", () => {
 
   test("K4: an instance named with no address at all is its PTR, SRV, and TXT alone", () => {
 
-    const records = makeServiceRecords({ addresses: [], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp" });
+    const records = makeServiceRecords({ addresses: [], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" });
 
     // A responder that attaches no address record is exactly what RFC 6763 section 12 has a client ask about by name, and this is the advertisement of one.
     assert.deepEqual(records.map((record) => record.kind), [ "ptr", "srv", "txt" ]);
+  });
+
+  test("K5: a service type spelled without its domain is refused, naming the builder and the spelling it was given", () => {
+
+    // The label floor is the rule production enforces at MdnsBrowser's own constructor, through the same shared predicate, so a domain-stripped spelling is
+    // refused at the call rather than building a PTR whose name carries no domain at all.
+    assert.throws(() => makeServiceRecords({ addresses: [], host: "x", instance: "y", port: 1, serviceType: "_hap._tcp" }),
+      { message: /^makeServiceRecords: `serviceType` must be a DNS-SD service type such as "_esphomelib\._tcp\.local", and "_hap\._tcp" is not\.$/,
+        name: "TypeError" }, "the two-label spelling alone must be refused, with nothing else about the call");
+  });
+
+  test("K6: a subtype-form service type is refused, since the domain labels are read positionally after the transport", () => {
+
+    // A subtype form carries five labels and clears the label floor, so nothing but its own guard stops its second label, `_sub`, from being read as the
+    // transport and a domain no responder ever advertised from being fabricated. A suite that wants a subtype PTR builds that record by hand instead.
+    assert.throws(() => makeServiceRecords({ addresses: [], host: "x", instance: "y", port: 1, serviceType: "_printer._sub._http._tcp.local" }),
+      { message: /^makeServiceRecords: `serviceType` must be a base DNS-SD service type such as "_esphomelib\._tcp\.local" - name, transport, domain, and/,
+        name: "TypeError" }, "the subtype form must be refused, since this fixture builds base-type records only");
+  });
+
+  test("K6b: a base type whose transport is _udp is accepted and its records built, since the guard admits either transport", () => {
+
+    // RFC 6763's service-type grammar admits a UDP transport as well as a TCP one, so the guard above compares the second label against each spelling rather
+    // than assuming TCP. This row is the accepting side of that comparison: a guard narrowed to TCP alone would refuse a service this fixture must build.
+    const records = makeServiceRecords({ addresses: [], host: "sleeper", instance: "Proxy", port: 5353, serviceType: "_sleep-proxy._udp.local" });
+    const ptr = expectAt(records, 0, "the PTR of a _udp advertisement");
+    const srv = expectAt(records, 1, "the SRV of a _udp advertisement");
+
+    assert.deepEqual(ptr.name, [ "_sleep-proxy", "_udp", "local" ], "the PTR is owned by the service type exactly as it was spelled");
+    assert.ok(srv.kind === "srv");
+    assert.deepEqual(srv.target, [ "sleeper", "local" ], "the host sits under the domain labels read off the service type's own tail");
+  });
+});
+
+describe("makeTxtStrings", () => {
+
+  test("K7: encodes each of the three value states, omits an undefined field, and emits the object's own key order", () => {
+
+    // RFC 6763 section 6.4 splits a string on its first `=`, so the three states a consumer can advertise are a value, an empty value, and a bare flag with
+    // no `=` at all. An undefined field is the fourth case and is not a state on the wire: it is absent.
+    assert.deepEqual(makeTxtStrings({ mac: "aabbccddeeff" }), ["mac=aabbccddeeff"], "a string value carries its key and an equals sign");
+    assert.deepEqual(makeTxtStrings({ note: "" }), ["note="], "an empty string value is a key written with nothing after the equals sign");
+    assert.deepEqual(makeTxtStrings({ flag: null }), ["flag"], "a null value is the wire's flag form, the bare key alone");
+    assert.deepEqual(makeTxtStrings({ mac: "aabbccddeeff", skip: undefined }), ["mac=aabbccddeeff"], "an undefined field is omitted, not written as a flag");
+    assert.deepEqual(makeTxtStrings({}), [], "an object with no fields at all advertises nothing");
+
+    /* The fields are built from an ordered entry list rather than written as one object literal: the order they are inserted in is precisely what this row
+     * distinguishes, and a literal here would be held to alphabetical key order, which is the order the row exists to prove the output is NOT.
+     */
+    const unsorted: Partial<Record<string, Nullable<string>>> = Object.fromEntries([ [ "zebra", "z" ], [ "mac", null ], [ "empty", "" ] ] as const);
+
+    assert.deepEqual(makeTxtStrings(unsorted), [ "zebra=z", "mac", "empty=" ], "the object's own key order reaches the wire");
+  });
+
+  test("K8: refuses the two keys RFC 6763 section 6.4 cannot express, naming the key it was given", () => {
+
+    assert.throws(() => makeTxtStrings({ "": "x" }),
+      { message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "" is not\.$/, name: "TypeError" },
+      "an empty key has no way to be written before the equals sign");
+    assert.throws(() => makeTxtStrings({ "a=b": "x" }),
+      { message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "a=b" is not\.$/, name: "TypeError" },
+      "a key already carrying an equals sign would be read back as a shorter key and a longer value");
+  });
+
+  test("K9: a mixed-case key is legitimate wire content, and only the read side folds it", () => {
+
+    assert.deepEqual(makeTxtStrings({ MAC: "aabbccddeeff" }), ["MAC=aabbccddeeff"], "the case a caller wrote survives onto the wire");
+
+    // The fold to lowercase is txtEntries' own RFC 6762 section 16 rule applied at the read, not something this builder does to what it was handed.
+    assert.deepEqual(txtEntries(makeTxtRecord({ name: "i.local", strings: makeTxtStrings({ MAC: "aabbccddeeff" }) })),
+      new Map([[ "mac", "aabbccddeeff" ]]), "the key folds to lowercase only when it is read back");
+  });
+
+  test("K10: is the inverse of txtEntries over a fields object whose keys are already lowercase", () => {
+
+    /* The two are inverses up to key case, so a round trip is exact only when txtEntries' own fold is a no-op - which is what the lowercase keys here make
+     * it. The property holds for a fields object carrying no undefined value: an undefined field is omitted by design rather than round-tripped.
+     */
+    const fields = { mac: "aabbccddeeff", model: null, note: "" };
+
+    assert.deepEqual(txtEntries(makeTxtRecord({ name: "i.local", strings: makeTxtStrings(fields) })),
+      new Map([ [ "mac", "aabbccddeeff" ], [ "model", null ], [ "note", "" ] ]), "every field reads back as the state it was written in");
   });
 });

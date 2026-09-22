@@ -35,11 +35,10 @@ with one and delivers with the other describes one instance by construction.
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
 | <a id="addresses"></a> `addresses` | `readonly` | readonly `string`[] | Every address of the host, IPv4 in dotted decimal or IPv6 in the RFC 4291 text form without a zone. Each is carried by a record of its own, an A or an AAAA by that address's own spelling. |
-| <a id="domain"></a> `domain?` | `readonly` | `string` \| [`DnsName`](message.md#dnsname) | The domain every name sits under, as labels or as a flat string. Defaults to `"local"`. |
-| <a id="host"></a> `host` | `readonly` | `string` \| [`DnsName`](message.md#dnsname) | The host's own label, as labels or as a flat string, placed under the domain. |
+| <a id="host"></a> `host` | `readonly` | `string` \| [`DnsName`](message.md#dnsname) | The host's own label, as labels or as a flat string, placed under the service type's own domain labels. |
 | <a id="instance"></a> `instance` | `readonly` | `string` | The instance label, taken verbatim as one label: RFC 6763 section 4.1.1 makes it free text, so a dot in it is part of the name. |
 | <a id="port"></a> `port` | `readonly` | `number` | The port the service answers on. |
-| <a id="servicetype"></a> `serviceType` | `readonly` | `string` \| [`DnsName`](message.md#dnsname) | The service type, as labels or as a flat string (`"_hap._tcp"`), placed under the domain. |
+| <a id="servicetype"></a> `serviceType` | `readonly` | `string` \| [`DnsName`](message.md#dnsname) | The base service type, spelled as a full DNS-SD type name including its domain, as labels or as a flat string (`"_hap._tcp.local"`) - the same spelling [MdnsBrowserOptions.serviceType](browser.md#servicetype) takes for a base type. A subtype form is not a fixture input: build its PTR by hand, as browser.test.ts's own subtype rows do. |
 | <a id="strings"></a> `strings?` | `readonly` | readonly (`string` \| `Buffer`\<`ArrayBufferLike`\>)[] | The TXT record's strings. Defaults to none. |
 
 ***
@@ -254,3 +253,38 @@ Build a TXT record.
 [`DnsTxtRecord`](message.md#dnstxtrecord)
 
 The record.
+
+***
+
+### makeTxtStrings()
+
+```ts
+function makeTxtStrings(fields): readonly string[];
+```
+
+Build the wire strings for a TXT record from a plain fields object, the inverse of [txtEntries](message.md#txtentries) up to key case, which
+`txtEntries` folds to lowercase: a string value becomes `key=value` (an empty string becomes `key=`), a `null` value becomes the bare key alone (the
+wire's flag form), and an `undefined` value is omitted, so a field a caller does not want to advertise this round needs no special casing. Strings are
+emitted in insertion order as JavaScript enumerates the object's keys (integer-like keys enumerate first).
+
+A key that is empty or that itself contains `=` cannot be written as one wire string (RFC 6763 section 6.4 splits on the first `=`), and is refused
+with a `TypeError` rather than encoded ambiguously; a mixed-case key is legitimate wire content and round-trips to its lowercase form through
+`txtEntries`.
+
+Composes with [makeTxtRecord](#maketxtrecord)'s own `strings` parameter: `makeTxtRecord({ name, strings: makeTxtStrings({ ... }) })`.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `fields` | `Partial`\<`Record`\<`string`, [`Nullable`](../util.md#nullable)\<`string`\>\>\> | The TXT fields to advertise, one string per key. |
+
+#### Returns
+
+readonly `string`[]
+
+The wire strings, in insertion order as JavaScript enumerates the object's keys.
+
+#### Throws
+
+If a key is empty or contains `=`, naming the key.

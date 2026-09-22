@@ -5,7 +5,7 @@
  * alongside the well-formed vector it is one byte away from, and the parser and the encoder are proven inverses over one record of every kind.
  */
 import { DNS_TYPE_A, DNS_TYPE_AAAA, DNS_TYPE_PTR, DNS_TYPE_SRV, DNS_TYPE_TXT, buildMdnsQuery, dnsNameKey, dnsNamesEqual, dnsRecordType, encodeDnsMessage,
-  formatDnsName, parseDnsMessage, parseDnsName, parseIpv4, parseIpv6, txtEntries } from "./message.ts";
+  formatDnsName, isServiceTypeName, parseDnsMessage, parseDnsName, parseIpv4, parseIpv6, txtEntries } from "./message.ts";
 import type { DnsMessage, DnsRecord } from "./message.ts";
 import { describe, test } from "node:test";
 import { makeARecord, makeAaaaRecord, makeOtherRecord, makePtrRecord, makeResponse, makeServiceRecords, makeSrvRecord,
@@ -140,11 +140,23 @@ describe("dnsNameKey / dnsNamesEqual - the RFC 6762 fold", () => {
   });
 });
 
+describe("isServiceTypeName - the label floor a service type needs", () => {
+
+  test("N5: a name needs a service name, a transport, and a domain to qualify", () => {
+
+    assert.equal(isServiceTypeName([ "_hap", "_tcp", "local" ]), true);
+    assert.equal(isServiceTypeName([ "_hap", "_tcp", "example", "org" ]), true, "a longer domain still qualifies");
+    assert.equal(isServiceTypeName([ "_hap", "_tcp" ]), false, "no domain label at all");
+    assert.equal(isServiceTypeName(["_hap"]), false);
+    assert.equal(isServiceTypeName([]), false);
+  });
+});
+
 describe("dnsRecordType - the wire type of a record", () => {
 
   test("R1: every modeled arm answers the type the encoder writes for it, and an unmodeled one answers the type it was read with", () => {
 
-    const advertisement = makeServiceRecords({ addresses: ["192.0.2.50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp",
+    const advertisement = makeServiceRecords({ addresses: ["192.0.2.50"], host: "gdo", instance: "Garage Door", port: 6053, serviceType: "_esphomelib._tcp.local",
       strings: ["mac=aabbccddeeff"] });
 
     assert.deepEqual(advertisement.map((record) => dnsRecordType(record)), [ DNS_TYPE_PTR, DNS_TYPE_SRV, DNS_TYPE_TXT, DNS_TYPE_A ]);
@@ -354,7 +366,7 @@ describe("parseDnsMessage - records", () => {
 
   test("P13: reads a whole service advertisement back with every name in full", () => {
 
-    const answers = makeServiceRecords({ addresses: ["192.168.1.20"], host: "gateway", instance: "Living Room", port: 8080, serviceType: "_hap._tcp" });
+    const answers = makeServiceRecords({ addresses: ["192.168.1.20"], host: "gateway", instance: "Living Room", port: 8080, serviceType: "_hap._tcp.local" });
     const encoded = makeResponse({ answers });
 
     /* The PTR's owner name is 17 bytes at offset 12 and its fixed fields are 10, so its rdata begins at 39 with the `Living Room` label. The SRV's owner name is

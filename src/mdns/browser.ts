@@ -11,7 +11,8 @@
  * section 7.1, caches what the responses carry, re-queries each cached record at the checkpoints section 5.2 names, holds a goodbye (section 10.1) and a flushed
  * name and type (section 10.2) for one second before deleting, and asks RFC 6763 section 12's follow-up questions for the records a responder did not attach.
  * Each transition it derives - a service found, updated, or lost - reaches the `onEvent` it was constructed with at the moment it derives it. Devices and
- * consumer projections belong to `discovery.ts` above this module, and the bytes belong to `message.ts` below it.
+ * consumer projections belong to `discovery.ts` above this module, the bytes belong to `message.ts` below it, and address classification belongs to
+ * `address.ts` below it.
  *
  * **One socket per family.** A reuse-bound socket receives what its siblings receive, so each of these sits beside the operating system's own responder on the
  * well-known port and a second browser in the same process opens sockets of its own. The multicast interface is set on a socket before each of its sends rather
@@ -65,11 +66,12 @@
  *
  * @module
  */
-import { DNS_TYPE_A, DNS_TYPE_AAAA, DNS_TYPE_PTR, DNS_TYPE_SRV, DNS_TYPE_TXT, buildMdnsQuery, dnsNameKey, dnsNamesEqual, dnsRecordType, formatDnsName, parseDnsMessage,
-  parseDnsName } from "./message.ts";
+import { DNS_TYPE_A, DNS_TYPE_AAAA, DNS_TYPE_PTR, DNS_TYPE_SRV, DNS_TYPE_TXT, buildMdnsQuery, dnsNameKey, dnsNamesEqual, dnsRecordType, formatDnsName,
+  isServiceTypeName, parseDnsMessage, parseDnsName } from "./message.ts";
 import type { DnsName, DnsQuestion, DnsRecord, DnsRecordKind, DnsSrvRecord, DnsTxtRecord } from "./message.ts";
 import { HbpuAbortError, composeSignals, exponentialBackoff, formatErrorMessage, membershipDelta, onAbort, sameEntries } from "../util.ts";
 import type { HomebridgePluginLogging, Nullable } from "../util.ts";
+import { isLinkLocal, zoneOf } from "./address.ts";
 import type { Clock } from "../clock.ts";
 import type { IpFamily } from "../dgram-util.ts";
 import type { NetworkInterfaceInfo } from "node:os";
@@ -135,11 +137,6 @@ const MDNS_INTERFACE_POLL_MS = 15000;
 
 // The hop limit RFC 6762 section 11 asks every multicast DNS datagram to carry, so a packet that escapes onto a routed path is dropped rather than delivered.
 const MDNS_MULTICAST_TTL = 255;
-
-// RFC 4291 section 2.5.6: a link-local address is one whose first ten bits read 1111111010, which is fe80::/10 - the first group, masked to those ten bits,
-// reads fe80.
-const IPV6_LINK_LOCAL_PREFIX = 0xfe80;
-const IPV6_LINK_LOCAL_PREFIX_MASK = 0xffc0;
 
 /* What the family decides: the platform's own spelling of it, the group a socket of it sends to and joins, the address record it caches and asks for, and how a
  * host link of the family is named to that socket. One socket holds one profile for its life, so no site of it branches on the family.
@@ -249,7 +246,8 @@ export type MdnsInterfaceSource = () => NodeJS.Dict<NetworkInterfaceInfo[]>;
  * One service instance, as the cache currently resolves it. Every field is what the most recent records said.
  *
  * @property addresses - Every address of the host, of every family the browser serves, in arrival order and without duplicates, as a consumer connects to it: an
- *                       IPv6 link-local address carries the zone of the link it was heard on.
+ *                       IPv6 link-local address carries the zone of the link it was heard on. {@link mdns/address!dialAddress | dialAddress} ranks this set
+ *                       into the one address a consumer dials.
  * @property host      - The host name the SRV record targets.
  * @property instance  - The first label of `name`: the free-text instance label RFC 6763 section 4.1.1 defines, which is what a person recognizes the device by.
  * @property name      - The full instance name, which is this service's identity and the key it is held under.
@@ -546,22 +544,6 @@ function copyRecord(record: DnsRecord): DnsRecord {
   return (record.kind === "txt") ? { ...record, strings: record.strings.map((value) => Buffer.from(value)) } : record;
 }
 
-// Whether an IPv6 address in the text form the parser writes is link-local: its first group falls in fe80::/10, which reads fe80 through febf.
-function isLinkLocal(address: string): boolean {
-
-  const group = Number.parseInt(address.slice(0, address.indexOf(":")), 16);
-
-  return (group & IPV6_LINK_LOCAL_PREFIX_MASK) === IPV6_LINK_LOCAL_PREFIX;
-}
-
-// The zone a datagram's source carries, which the platform writes after a percent sign for a link-local source, and null for a source without one.
-function zoneOf(source: string): Nullable<string> {
-
-  const at = source.indexOf("%");
-
-  return (at === -1) ? null : source.slice(at + 1);
-}
-
 /* The address record as the cache keeps it. A link-local IPv6 address means nothing without the link it was heard on, and a consumer cannot connect to one
  * without its zone, so the address is stamped with the zone of the datagram that delivered it, here, where the datagram is in hand. A global or unique-local
  * address is routable as the wire spelled it and stays bare, and so does an IPv4 address. Stamping at the cache rather than at derivation is what makes the
@@ -723,10 +705,11 @@ export class MdnsBrowser implements MdnsBrowserLike {
       random = Math.random, serviceType, signal, socketFactory = mdnsSocketFactory, warmupMs = MDNS_WARMUP_MS } = options;
     const serviceName = parseDnsName(serviceType);
 
-    /* A service type is a name, a transport, and a domain at the very least, and `parseDnsName` is total rather than throwing, so the judgement of what it read
-     * is the browser's to make. Anything shorter would browse for something no responder can answer.
+    /* The label-count rule that decides a service type lives in isServiceTypeName; what happens when a name fails it is the browser's own reaction, since
+     * `parseDnsName` is total rather than throwing and this constructor is the first place a caller's spelling is judged. A name that falls short would
+     * browse for something no responder can answer.
      */
-    if(serviceName.length < 3) {
+    if(!isServiceTypeName(serviceName)) {
 
       throw new TypeError("MdnsBrowser: `serviceType` must be a DNS-SD service type such as \"_esphomelib._tcp.local\", and \"" + serviceType + "\" is not.");
     }

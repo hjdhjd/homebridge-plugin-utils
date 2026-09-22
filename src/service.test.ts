@@ -11,7 +11,7 @@
 import * as hap from "@homebridge/hap-nodejs";
 import type { Assert, Equal } from "./testing/index.ts";
 import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
-import type { PresenceReading, PresenceTransition, ValidCharacteristicOptions } from "./service.ts";
+import type { PresenceReading, PresenceTransition, ValidCharacteristicOptions, ValidServiceOptions } from "./service.ts";
 import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic, updateServices,
   validCharacteristic, validService } from "./service.ts";
 import { describe, test } from "node:test";
@@ -285,18 +285,51 @@ const _validCharacteristicShapeExercises = (): void => {
   const _closed: boolean = validCharacteristic(_booleanVerdict) === "present";
 };
 
+/* Compile-time shape exercises for ValidServiceOptions's field requiredness and the transition-narrowed result {@link validService} answers. These
+ * never run - the function is never called, and its leading underscore marks it, with its bindings, as a compile-time exercise the typecheck reads -
+ * so they add nothing to the runtime totals. The negative cases use `@ts-expect-error`, which fails the build if the error each expects ever stops
+ * occurring.
+ */
+const _validServiceShapeExercises = (): void => {
+
+  const accessory = makeAccessory();
+  const result = validService({ accessory, name: "Switch", serviceType: hap.Service.Switch, validate: true });
+
+  // @ts-expect-error - serviceType is required, because there is nothing else naming which service kind to reconcile.
+  const _noServiceType: ValidServiceOptions = { accessory, name: "Switch", validate: true };
+
+  // @ts-expect-error - name is required, because a creating verdict needs a display name to pass through to acquireService.
+  const _noName: ValidServiceOptions = { accessory, serviceType: hap.Service.Switch, validate: true };
+
+  // @ts-expect-error - validate is required, because there is nothing else for the service's presence to follow.
+  const _noValidate: ValidServiceOptions = { accessory, name: "Switch", serviceType: hap.Service.Switch };
+
+  if((result.transition === "attached") || (result.transition === "kept")) {
+
+    // An "attached" or "kept" transition narrows `service` to the acquired type, readable with no cast.
+    const _service: Service = result.service;
+  }
+
+  if(result.transition === "removed") {
+
+    // @ts-expect-error - a "removed" transition carries a null service, so reading it as the service type is a compile error.
+    const _service: Service = result.service;
+  }
+};
+
 describe("acquireService - creation path", () => {
 
   test("creates the service, adds it to the accessory, and invokes onServiceCreate exactly once", () => {
 
     const accessory = makeAccessory();
     let invocations = 0;
-    const service = acquireService(accessory, hap.Service.Switch, "Patio Switch", undefined, () => {
+    const { service, transition } = acquireService({ accessory, name: "Patio Switch", onServiceCreate: () => {
 
       invocations++;
-    });
+    }, serviceType: hap.Service.Switch });
 
     assert.ok(service, "acquireService must return the created service");
+    assert.equal(transition, "attached", "a creating call must answer attached");
     assert.equal(invocations, 1, "onServiceCreate must fire exactly once on the creation path");
     assert.equal(accessory.getService(hap.Service.Switch), service, "created service must be reachable via getService");
   });
@@ -306,7 +339,7 @@ describe("acquireService - creation path", () => {
     // "Patio|Switch" contains a disallowed character that sanitizeName replaces with a space. The displayName and the ConfiguredName / Name characteristic values should
     // all carry the sanitized form, not the raw input. This is service.ts's documented contract: HomeKit-safe naming at every surface.
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Switch, "Patio|Switch");
+    const { service } = acquireService({ accessory, name: "Patio|Switch", serviceType: hap.Service.Switch });
 
     assert.ok(service, "acquireService must return the created service");
     assert.equal(service.displayName, "Patio Switch");
@@ -320,10 +353,12 @@ describe("acquireService - creation path", () => {
     // which is the "newly created services only" guarantee acquireService documents.
     const accessory = makeAccessory();
     let invocations = 0;
-    const first = acquireService(accessory, hap.Service.Switch, "Switch A", undefined, () => { invocations++; });
-    const second = acquireService(accessory, hap.Service.Switch, "Switch B", undefined, () => { invocations++; });
+    const first = acquireService({ accessory, name: "Switch A", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch });
+    const second = acquireService({ accessory, name: "Switch B", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch });
 
-    assert.equal(first, second, "second acquisition must return the same service instance");
+    assert.equal(first.service, second.service, "second acquisition must return the same service instance");
+    assert.equal(first.transition, "attached", "the first, creating call must answer attached");
+    assert.equal(second.transition, "kept", "the second, re-acquiring call must answer kept");
     assert.equal(invocations, 1, "onServiceCreate must not fire on the get path");
   });
 });
@@ -335,8 +370,8 @@ describe("acquireService - subtype handling", () => {
     // Two acquisitions with different subtypes must produce two different service instances, each reachable via getServiceById. This validates the "uniquely identify
     // the service" subtype contract at both ends: the lookup side and the creation side.
     const accessory = makeAccessory();
-    const alpha = acquireService(accessory, hap.Service.Switch, "Alpha", "sub-alpha");
-    const beta = acquireService(accessory, hap.Service.Switch, "Beta", "sub-beta");
+    const { service: alpha } = acquireService({ accessory, name: "Alpha", serviceType: hap.Service.Switch, subtype: "sub-alpha" });
+    const { service: beta } = acquireService({ accessory, name: "Beta", serviceType: hap.Service.Switch, subtype: "sub-beta" });
 
     assert.ok(alpha, "first subtype acquisition must return its service");
     assert.ok(beta, "second subtype acquisition must return its service");
@@ -348,10 +383,10 @@ describe("acquireService - subtype handling", () => {
   test("returns the existing subtype-keyed service on re-acquisition", () => {
 
     const accessory = makeAccessory();
-    const first = acquireService(accessory, hap.Service.Switch, "Alpha", "sub-alpha");
-    const second = acquireService(accessory, hap.Service.Switch, "Alpha 2", "sub-alpha");
+    const first = acquireService({ accessory, name: "Alpha", serviceType: hap.Service.Switch, subtype: "sub-alpha" });
+    const second = acquireService({ accessory, name: "Alpha 2", serviceType: hap.Service.Switch, subtype: "sub-alpha" });
 
-    assert.equal(first, second, "re-acquisition with the same subtype must return the same instance");
+    assert.equal(first.service, second.service, "re-acquisition with the same subtype must return the same instance");
   });
 });
 
@@ -364,7 +399,7 @@ describe("acquireService - name characteristic management", () => {
     // block. Using `readNamedCharacteristic` (direct array scan) is deliberate - HAP's getCharacteristic() would lazily add the missing characteristic and corrupt the
     // signal we want to measure.
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Fan, "Room Fan");
+    const { service } = acquireService({ accessory, name: "Room Fan", serviceType: hap.Service.Fan });
 
     assert.ok(service, "acquireService(Fan) must succeed before we inspect characteristic management");
     assert.equal(readNamedCharacteristic(service, "Name"), "Room Fan", "Name must be set on a service that supports it");
@@ -375,7 +410,7 @@ describe("acquireService - name characteristic management", () => {
   test("sets both ConfiguredName and Name on a service that supports both", () => {
 
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Switch, "Kitchen Switch");
+    const { service } = acquireService({ accessory, name: "Kitchen Switch", serviceType: hap.Service.Switch });
 
     assert.ok(service, "acquireService(Switch) must succeed before we inspect characteristic management");
     assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Kitchen Switch");
@@ -389,7 +424,7 @@ describe("acquireService - name characteristic management", () => {
     // ConfiguredName, which the Home app honors as the button's name. StatelessProgrammableSwitch is in the hasConfiguredName catalog for exactly this reason, so a
     // multi-button remote (a fob, a scene controller) surfaces its button names rather than generic numeric indices.
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.StatelessProgrammableSwitch, "Panic");
+    const { service } = acquireService({ accessory, name: "Panic", serviceType: hap.Service.StatelessProgrammableSwitch });
 
     assert.ok(service, "acquireService(StatelessProgrammableSwitch) must succeed before we inspect characteristic management");
     assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Panic", "the Home app shows the ConfiguredName instead of the ServiceLabelIndex label");
@@ -402,11 +437,11 @@ describe("acquireService - name characteristic management", () => {
     // Re-acquiring the same service must hit the get-path, not the create-path, so the add-optional-characteristic branches do not run a second time. We prove that
     // by asserting the optional catalog carries exactly one ConfiguredName entry after two acquisitions - a duplicated add would surface as `count === 2`.
     const accessory = makeAccessory();
-    const first = acquireService(accessory, hap.Service.Switch, "One");
+    const { service: first } = acquireService({ accessory, name: "One", serviceType: hap.Service.Switch });
 
     assert.ok(first, "first acquisition must return a service before we re-acquire");
 
-    acquireService(accessory, hap.Service.Switch, "Two");
+    acquireService({ accessory, name: "Two", serviceType: hap.Service.Switch });
 
     assert.equal(optionalCount(first, "ConfiguredName"), 1, "ConfiguredName must appear exactly once on the optional catalog across repeated acquisitions");
   });
@@ -436,7 +471,7 @@ describe("acquireService - name characteristic management", () => {
 
     const accessory = makeAccessory();
     const ctor = SwitchWithoutNameOptional;
-    const service = acquireService(accessory, ctor, "Sentinel Switch");
+    const { service } = acquireService({ accessory, name: "Sentinel Switch", serviceType: ctor });
 
     assert.ok(service, "acquireService must return the constructed service");
     assert.equal(optionalIncludes(service, "Name"), true, "acquireService must add Name to the optional catalog when the service supports Name but lacks it by default");
@@ -463,40 +498,82 @@ describe("acquireService - name characteristic management", () => {
     const accessory = makeAccessory();
     const ctor = CharacteristicLessSwitch;
 
-    assert.throws(() => acquireService(accessory, ctor, "broken"), { message: /Service has no characteristics/ },
+    assert.throws(() => acquireService({ accessory, name: "broken", serviceType: ctor }), { message: /Service has no characteristics/ },
       "the defensive guard must throw with the documented message when a service arrives without characteristics");
   });
 });
 
 describe("validService", () => {
 
-  test("returns true and keeps the service when `validate` is true", () => {
+  test("a true verdict on an absent service creates it through acquireService, answers attached, and fires onServiceCreate exactly once", () => {
 
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Switch, "Keep Me");
+    let invocations = 0;
+    const result = validService({ accessory, name: "New Switch", onServiceCreate: () => {
 
-    assert.ok(service, "the service must exist before validService verifies its retention contract");
-    assert.equal(validService(accessory, hap.Service.Switch, true), true);
-    assert.ok(accessory.getService(hap.Service.Switch), "service must remain on the accessory");
+      invocations++;
+    }, serviceType: hap.Service.Switch, validate: true });
+
+    assert.equal(result.transition, "attached");
+    assert.equal(result.service, accessory.getService(hap.Service.Switch), "the created service must be reachable via getService");
+    assert.equal(result.service.displayName, "New Switch", "the created service must carry the acquired name, proving creation ran through acquireService");
+    assert.equal(invocations, 1, "onServiceCreate must fire exactly once on the creating path");
   });
 
-  test("returns false and removes the service when `validate` is false", () => {
+  test("a true verdict on an absent service with a subtype creates the subtype-scoped service, answers attached, and fires onServiceCreate exactly once", () => {
 
-    // Boolean-false path: the service exists on the accessory, validation rejects it, the service is removed. `getService` must report absence afterwards.
+    // Proves the subtype travels through validService's delegation to acquireService: a mutant that dropped subtype from the forwarded object would
+    // create a subtype-less service, so getServiceById(serviceType, subtype) would find nothing and this assertion would fail.
+    const accessory = makeAccessory();
+    let invocations = 0;
+    const result = validService({ accessory, name: "Sub Switch", onServiceCreate: () => {
+
+      invocations++;
+    }, serviceType: hap.Service.Switch, subtype: "sub-a", validate: true });
+
+    assert.equal(result.transition, "attached");
+    assert.equal(result.service, accessory.getServiceById(hap.Service.Switch, "sub-a"), "the created service must be reachable by its subtype");
+    assert.equal(invocations, 1, "onServiceCreate must fire exactly once on the creating path");
+  });
+
+  test("a true verdict on a present service answers kept with the existing service and does not fire onServiceCreate", () => {
+
+    const accessory = makeAccessory();
+    const { service: existing } = acquireService({ accessory, name: "Keep Me", serviceType: hap.Service.Switch });
+    let invocations = 0;
+
+    const result = validService({ accessory, name: "Keep Me", onServiceCreate: () => {
+
+      invocations++;
+    }, serviceType: hap.Service.Switch, validate: true });
+
+    assert.equal(result.transition, "kept");
+    assert.equal(result.service, existing, "the kept service must be the same instance already on the accessory");
+    assert.equal(invocations, 0, "onServiceCreate must not fire on the kept path");
+  });
+
+  test("a false verdict on a present service removes it and answers removed with a null service", () => {
+
+    // Boolean-false path: the service exists on the accessory, validation rejects it, the service is removed. getService must report absence afterwards.
     const accessory = makeAccessory();
 
-    acquireService(accessory, hap.Service.Switch, "Remove Me");
+    acquireService({ accessory, name: "Remove Me", serviceType: hap.Service.Switch });
 
-    assert.equal(validService(accessory, hap.Service.Switch, false), false);
+    const result = validService({ accessory, name: "Remove Me", serviceType: hap.Service.Switch, validate: false });
+
+    assert.equal(result.transition, "removed");
+    assert.equal(result.service, null);
     assert.equal(accessory.getService(hap.Service.Switch), undefined, "service must be removed from the accessory");
   });
 
-  test("returns false without error when the service does not exist and `validate` is false", () => {
+  test("a false verdict on an absent service answers absent with a null service and no error", () => {
 
     // No service to remove; the function short-circuits cleanly. This is the typical "clean up a feature the user disabled" case when the feature was never enabled.
     const accessory = makeAccessory();
+    const result = validService({ accessory, name: "Never Created", serviceType: hap.Service.Switch, validate: false });
 
-    assert.equal(validService(accessory, hap.Service.Switch, false), false);
+    assert.equal(result.transition, "absent");
+    assert.equal(result.service, null);
   });
 
   test("callback form receives the current existence state", () => {
@@ -505,53 +582,56 @@ describe("validService", () => {
     // does not the boolean is false. Returning the boolean verbatim keeps the service's state unchanged in each case.
     const accessory = makeAccessory();
 
-    acquireService(accessory, hap.Service.Switch, "Present");
+    acquireService({ accessory, name: "Present", serviceType: hap.Service.Switch });
 
     let observedHas: boolean | undefined;
 
-    validService(accessory, hap.Service.Switch, (hasService) => {
+    validService({ accessory, name: "Present", serviceType: hap.Service.Switch, validate: (hasService) => {
 
       observedHas = hasService;
 
       return hasService;
-    });
+    } });
 
     assert.equal(observedHas, true, "callback must observe the service as present");
 
     // Now prove the inverse: a service type that was never created should be reported as absent.
     let observedMissing: boolean | undefined;
 
-    validService(accessory, hap.Service.Outlet, (hasService) => {
+    validService({ accessory, name: "Absent", serviceType: hap.Service.Outlet, validate: (hasService) => {
 
       observedMissing = hasService;
 
       return hasService;
-    });
+    } });
 
     assert.equal(observedMissing, false, "callback must observe an uncreated service type as absent");
   });
 
-  test("callback form removes the service when it returns false", () => {
+  test("callback form removes the service when it returns false, answering removed with a null service", () => {
 
     const accessory = makeAccessory();
 
-    acquireService(accessory, hap.Service.Switch, "Conditional");
+    acquireService({ accessory, name: "Conditional", serviceType: hap.Service.Switch });
 
-    const kept = validService(accessory, hap.Service.Switch, () => false);
+    const result = validService({ accessory, name: "Conditional", serviceType: hap.Service.Switch, validate: () => false });
 
-    assert.equal(kept, false);
+    assert.equal(result.transition, "removed");
+    assert.equal(result.service, null);
     assert.equal(accessory.getService(hap.Service.Switch), undefined);
   });
 
   test("respects subtype when locating the service to validate", () => {
 
-    // Only the matching-subtype service should be considered and (when invalidated) removed. The sibling subtype must survive a `validService(...sub-a, false)` call.
+    // Only the matching-subtype service should be considered and (when invalidated) removed. The sibling subtype must survive a validate: false call scoped to sub-a.
     const accessory = makeAccessory();
 
-    acquireService(accessory, hap.Service.Switch, "Alpha", "sub-a");
-    acquireService(accessory, hap.Service.Switch, "Beta", "sub-b");
+    acquireService({ accessory, name: "Alpha", serviceType: hap.Service.Switch, subtype: "sub-a" });
+    acquireService({ accessory, name: "Beta", serviceType: hap.Service.Switch, subtype: "sub-b" });
 
-    assert.equal(validService(accessory, hap.Service.Switch, false, "sub-a"), false);
+    const result = validService({ accessory, name: "Alpha", serviceType: hap.Service.Switch, subtype: "sub-a", validate: false });
+
+    assert.equal(result.transition, "removed");
     assert.equal(accessory.getServiceById(hap.Service.Switch, "sub-a"), undefined, "matching-subtype service must be removed");
     assert.ok(accessory.getServiceById(hap.Service.Switch, "sub-b"), "non-matching-subtype service must remain");
   });
@@ -911,7 +991,7 @@ describe("getServiceName", () => {
   test("returns the ConfiguredName value when it is set", () => {
 
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Switch, "Configured");
+    const { service } = acquireService({ accessory, name: "Configured", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before we read its name");
     assert.equal(getServiceName(service), "Configured");
@@ -921,7 +1001,7 @@ describe("getServiceName", () => {
 
     // Precedence contract: `ConfiguredName ?? Name`. With both characteristics populated we expect the ConfiguredName value to win.
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Switch, "Primary");
+    const { service } = acquireService({ accessory, name: "Primary", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before we exercise the precedence contract");
     assert.equal(getServiceName(service), "Primary");
@@ -942,7 +1022,7 @@ describe("getServiceName", () => {
     // `getCharacteristic` would lazily attach the missing ConfiguredName (and log an "Adding anyway." warning); `getServiceName` gates reads behind `testCharacteristic`,
     // so the characteristic stays absent. `readNamedCharacteristic` scans `service.characteristics` directly, giving a true present-right-now snapshot.
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Fan, "Room Fan");
+    const { service } = acquireService({ accessory, name: "Room Fan", serviceType: hap.Service.Fan });
 
     assert.ok(service, "the service must exist before we read its name");
     assert.equal(readNamedCharacteristic(service, "ConfiguredName"), undefined, "precondition: a Fan must not carry ConfiguredName");
@@ -960,7 +1040,7 @@ describe("setServiceName", () => {
   test("updates displayName and the supported name characteristics in place", () => {
 
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Switch, "Original");
+    const { service } = acquireService({ accessory, name: "Original", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before setServiceName updates it");
 
@@ -975,7 +1055,7 @@ describe("setServiceName", () => {
 
     // Same sanitization contract as acquireService: setServiceName calls sanitizeName internally so the stored form is always HomeKit-safe regardless of caller input.
     const accessory = makeAccessory();
-    const service = acquireService(accessory, hap.Service.Switch, "Original");
+    const { service } = acquireService({ accessory, name: "Original", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before setServiceName sanitizes its rename");
 

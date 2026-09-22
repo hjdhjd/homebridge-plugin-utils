@@ -106,20 +106,74 @@ export type AcquireServiceTarget<T extends Service = Service> = WithUUID<typeof 
 export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => Characteristic);
 
 /**
- * Utility method that either creates a new service on an accessory if needed, or returns an existing one. Optionally, it executes a callback to initialize a new
- * service instance. For a newly created service, the various name characteristics are also set to the specified name and added where necessary; re-acquiring an
- * existing service returns it with its name characteristics untouched.
+ * The inputs {@link acquireService} creates or retrieves a service from: the accessory, the display name a newly created service takes, an optional
+ * callback fired only on creation, the service type, and an optional subtype disambiguating more than one service of the same type.
  *
- * @typeParam T          - The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back rather than
- *                         the wider `Service` type.
- * @param accessory       - The Homebridge accessory to check or modify.
- * @param serviceType     - The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor;
- *                         see {@link AcquireServiceTarget}.
- * @param name            - Name to be displayed to the end user for this service.
- * @param subtype         - Optional service subtype to uniquely identify the service.
- * @param onServiceCreate - Optional callback invoked only when a new service is created, receiving the new service as its argument.
+ * @typeParam T - The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back.
  *
- * @returns Returns the created or retrieved service. Construction failures throw rather than returning `null`.
+ * @category Accessory
+ */
+export interface AcquireServiceOptions<T extends Service = Service> {
+
+  /**
+   * The Homebridge accessory to check or modify.
+   */
+  readonly accessory: PlatformAccessory;
+
+  /**
+   * Name to be displayed to the end user for this service.
+   */
+  readonly name: string;
+
+  /**
+   * Optional callback invoked only when a new service is created, receiving the new service as its argument.
+   */
+  readonly onServiceCreate?: (svc: T) => void;
+
+  /**
+   * The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see
+   * {@link AcquireServiceTarget}.
+   */
+  readonly serviceType: AcquireServiceTarget<T>;
+
+  /**
+   * Optional service subtype to uniquely identify the service.
+   */
+  readonly subtype?: string;
+}
+
+/**
+ * The service {@link acquireService} answers, and the transition it performed to answer it: `"attached"` when this call created the service, `"kept"`
+ * when it already existed. This is the present arm of {@link ValidServiceResult}, reused rather than declared a second time, since a successful
+ * acquisition and a validated service that already existed or was just created are the same fact.
+ *
+ * @category Accessory
+ */
+export interface AcquireServiceResult<T extends Service = Service> {
+
+  /**
+   * The service {@link acquireService} found or created.
+   */
+  readonly service: T;
+
+  /**
+   * The transition this call performed to answer the service: `"attached"` when this call created it, `"kept"` when it already existed.
+   */
+  readonly transition: Extract<PresenceTransition, "attached" | "kept">;
+}
+
+/**
+ * Reconciles a service's presence on an accessory in one call: creates it when it does not exist, or returns it unchanged when it does. Optionally
+ * executes a callback to initialize a newly created service. For a newly created service, the various name characteristics are also set to the
+ * specified name and added where necessary; re-acquiring an existing service returns it with its name characteristics untouched.
+ *
+ * @typeParam T    - The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back rather
+ *                   than the wider `Service` type.
+ * @param options - The accessory, the display name, the service type, an optional subtype, and an optional creation callback. See
+ *                   {@link AcquireServiceOptions}.
+ *
+ * @returns The service and the transition this call performed to answer it - `"attached"` when this call created the service, `"kept"` when it already
+ * existed. See {@link AcquireServiceResult}. Construction failures throw rather than answering a result.
  *
  * @remarks
  * This method ensures that a newly created service's display name and available name characteristics are updated to the specified name; re-acquiring an
@@ -130,24 +184,27 @@ export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => 
  *
  * @example
  * ```typescript
- * // Example: Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created. The return type is narrowed to `Lightbulb`, so
- * // callers invoke subclass-specific behavior on the result without casts.
- * const lightbulbService = acquireService(accessory, hap.Service.Lightbulb, "Living Room Lamp", undefined, (svc): void => {
+ * // Ensure a Lightbulb service exists with a user-friendly name, and initialize it if newly created. The return narrows to `Lightbulb`, so callers
+ * // invoke subclass-specific behavior on the result without casts.
+ * const { service: lightbulbService } = acquireService({ accessory, name: "Living Room Lamp", onServiceCreate: (svc): void => {
  *
  *   // Called only if the service is newly created. `svc` is typed as `Lightbulb` here.
  *   svc.setCharacteristic(hap.Characteristic.On, false);
- * });
+ * }, serviceType: hap.Service.Lightbulb });
  *
  * // Service is now available, with display name set and optional characteristics managed.
  * lightbulbService.updateCharacteristic(hap.Characteristic.Brightness, 75);
+ *
+ * // Read whether this call created the service from the result, instead of threading a separate flag through onServiceCreate.
+ * const { service: switchService, transition } = acquireService({ accessory, name: "Suspend All Zones", serviceType: hap.Service.Switch });
+ * const isNewSwitch = transition === "attached";
  * ```
  *
  * @see setServiceName - updates the newly created (or existing) service's name-related characteristics.
- * @see validService - validate or prune services after acquisition.
+ * @see validService - reconciles a service's presence from a verdict, creating through this function when the verdict says it should exist.
  * @category Accessory
  */
-export function acquireService<T extends Service>(accessory: PlatformAccessory, serviceType: AcquireServiceTarget<T>, name: string, subtype?: string,
-  onServiceCreate?: (svc: T) => void): T {
+export function acquireService<T extends Service>({ accessory, name, onServiceCreate, serviceType, subtype }: AcquireServiceOptions<T>): AcquireServiceResult<T> {
 
   // Sanitize once up front because HomeKit's strict naming rules apply both to the constructor's displayName and to the ConfiguredName / Name characteristics that
   // setServiceName populates - same source string, same validation contract.
@@ -187,47 +244,88 @@ export function acquireService<T extends Service>(accessory: PlatformAccessory, 
 
       onServiceCreate(service);
     }
+
+    return { service, transition: "attached" };
   }
 
-  return service;
+  return { service, transition: "kept" };
 }
 
 /**
- * Validates whether a specific service should exist on the given accessory, removing the service if it fails validation.
+ * The inputs {@link validService} reconciles a service's presence from: everything {@link acquireService} needs to create the service when the verdict
+ * says it should exist, plus the verdict itself.
  *
- * @param accessory   - The Homebridge accessory to inspect and potentially modify.
- * @param serviceType - The type of Homebridge service being checked or instantiated.
- * @param validate    - A boolean or a function that determines if the service should exist. If a function is provided, it receives a boolean indicating whether the
- *                      service currently exists, and should return `true` to keep the service, or `false` to remove it.
- * @param subtype     - Optional service subtype to uniquely identify the service.
+ * @typeParam T - The concrete Service subclass being reconciled. Inferred from `serviceType` so callers receive the specific subclass type back.
  *
- * @returns `true` if the service is valid (and kept), or `false` if it was removed.
+ * @category Accessory
+ */
+export interface ValidServiceOptions<T extends Service = Service> extends AcquireServiceOptions<T> {
+
+  /**
+   * A boolean, or a predicate handed the service's current presence and answering whether it should exist. The predicate form is a synchronous
+   * verdict only: it neither adds nor removes the service itself, and the presence it is handed is the presence {@link acquireService} then reads
+   * when the verdict says the service should exist.
+   */
+  readonly validate: boolean | ((hasService: boolean) => boolean);
+}
+
+/**
+ * The service {@link validService} answers, and the transition it performed to answer it: `"attached"` or `"kept"` pair a live service - the present arm
+ * {@link AcquireServiceResult} already declares, reused here rather than restated - and `"removed"` or `"absent"` pair `null`, since neither transition
+ * leaves a service behind to read. Reading `transition` narrows `service`: a check against `"attached"` or `"kept"` types it as `T`, and a check against
+ * `"removed"` or `"absent"` types it as `null`.
+ *
+ * @category Accessory
+ */
+export type ValidServiceResult<T extends Service = Service> = AcquireServiceResult<T> |
+  { readonly service: null; readonly transition: Exclude<PresenceTransition, "attached" | "kept"> };
+
+/**
+ * Reconciles a service's presence on the given accessory from one verdict: creates it through {@link acquireService} when the verdict says it should
+ * exist and it does not, removes it when the verdict says it should not and it does, and leaves it alone otherwise.
+ *
+ * @typeParam T    - The concrete Service subclass being reconciled. Inferred from `serviceType` so callers receive the specific subclass type back.
+ * @param options - The accessory, the service type, the display name and optional creation callback {@link acquireService} uses on a creating verdict,
+ *                   an optional subtype, and the verdict that decides the service's presence. See {@link ValidServiceOptions}.
+ *
+ * @returns The service and the transition this call performed - `"attached"` or `"kept"` pair the service, `"removed"` or `"absent"` pair `null`. See
+ * {@link ValidServiceResult}.
  *
  * @remarks
  * The `validate` parameter can be either:
- *   - a boolean (where `true` means keep the service, `false` means remove it).
- *   - a function (which is called with `hasService: boolean` and returns whether to keep the service).
+ *   - a boolean (where `true` means the service should exist, `false` means remove it).
+ *   - a function (which is called with `hasService: boolean` and returns whether the service should exist).
  *
- * If the service should not exist according to `validate`, and it is currently present, this function will remove it from the accessory.
+ * A true verdict on an absent service is answered by {@link acquireService}, so creation exists in exactly one place in this module.
  *
  * @example
  * ```typescript
- * // Remove a service if it exists
- * validService(accessory, Service.Switch, false);
+ * // Remove a service if it exists.
+ * validService({ accessory, name: "Switch", serviceType: Service.Switch, validate: false });
  *
- * // Only keep a service if a configuration flag is true
- * validService(accessory, Service.Switch, config.enableSwitch);
+ * // Only keep a service if a configuration flag is true, creating it when the flag says it should exist.
+ * validService({ accessory, name: "Switch", serviceType: Service.Switch, validate: config.enableSwitch });
  *
- * // Keep a service if it currently exists, or add it if a certain condition is met
- * validService(accessory, Service.Switch, (hasService) => hasService || config.enableSwitch);
+ * // Keep a service if it currently exists, or add it if a certain condition is met. A true verdict on an absent service creates it through
+ * // acquireService, so `service` reads the live instance either way.
+ * const { service } = validService({ accessory, name: "Switch", serviceType: Service.Switch,
+ *   validate: (hasService) => hasService || config.enableSwitch });
+ *
+ * // `transition` narrows `service`: an "attached" or "kept" transition types it as the service, and a "removed" or "absent" transition types it as
+ * // `null`.
+ * const result = validService({ accessory, name: "Switch", serviceType: Service.Switch, validate: config.enableSwitch });
+ *
+ * if((result.transition === "attached") || (result.transition === "kept")) {
+ *
+ *   result.service.updateCharacteristic(Characteristic.On, false);
+ * }
  * ```
  *
- * @see acquireService - to add or retrieve services.
+ * @see acquireService - the creation this function delegates to on a verdict that should exist.
  * @see validCharacteristic - the same contract, applied to one characteristic's presence on a service.
  * @category Accessory
  */
-export function validService(accessory: PlatformAccessory, serviceType: WithUUID<typeof Service>, validate: boolean | ((hasService: boolean) => boolean),
-  subtype?: string): boolean {
+export function validService<T extends Service>({ accessory, name, onServiceCreate, serviceType, subtype, validate }: ValidServiceOptions<T>): ValidServiceResult<T> {
 
   const service = subtype ? accessory.getServiceById(serviceType, subtype) : accessory.getService(serviceType);
 
@@ -238,12 +336,16 @@ export function validService(accessory: PlatformAccessory, serviceType: WithUUID
     if(service) {
 
       accessory.removeService(service);
+
+      return { service: null, transition: "removed" };
     }
 
-    return false;
+    return { service: null, transition: "absent" };
   }
 
-  return true;
+  // A true verdict acquires the service, creation and all, so the family's only construction path stays acquireService's own. This costs a second
+  // presence read on a true verdict, at accessory construction time, chosen over a second creation entry point.
+  return acquireService({ accessory, name, onServiceCreate, serviceType, subtype });
 }
 
 /**
@@ -316,7 +418,7 @@ export interface ValidCharacteristicOptions {
  * }
  * ```
  *
- * @see validService - the same contract, applied to whether a service should exist on an accessory.
+ * @see validService - the same contract, applied to whether a service should exist on an accessory, its answer carrying the service alongside the transition.
  * @see capabilityGate - builds a predicate for either applier.
  * @category Accessory
  */
@@ -363,7 +465,8 @@ export function validCharacteristic({ characteristic, service, validate }: Valid
  * @example
  * ```typescript
  * // Keep the service while its user toggle is on, add it when the capability reports, and keep an existing one through a transient capability-false.
- * validService(accessory, Service.Switch, capabilityGate({ capability: deviceReportsFeature, toggle: config.enableSwitch }));
+ * validService({ accessory, name: "Switch", serviceType: Service.Switch,
+ *   validate: capabilityGate({ capability: deviceReportsFeature, toggle: config.enableSwitch }) });
  * ```
  *
  * @see validService - consumes the returned predicate.

@@ -63,8 +63,13 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
   //   - `inFlight`: the in-flight drain promise. When non-null, the drain loop is active; subsequent mutations only set `pending` and return.
   //   - `pending`: the dirty flag. Set by every subscribed mutation; cleared by the drain loop at the top of each iteration. Setting it during an in-flight persist
   //     is the signal "your current snapshot is already stale; iterate again with the newer state."
-  //   - `debounceAbort`: the abort controller for the current debounce window. Every new mutation aborts the prior debounce so the timer always restarts from zero
-  //     on the latest mutation - the burst-mutation case (drag/keystroke) collapses to one debounced fire after the burst ends.
+  //   - `debounceAbort`: the abort controller for the window the drain is currently waiting out. It is minted fresh at the top of every iteration that waits and
+  //     aborted only by flush(), which is how a navigate-away cuts the wait short. A mutation arriving mid-window neither shortens nor restarts that window...it
+  //     only sets `pending`, and the write at the end of the wait samples the store then, so it carries the latest state regardless. A steady run of edits therefore
+  //     settles at about one write per window plus the commit's own latency, nothing is lost, and the host is never written more often than that. A window that
+  //     restarted on each mutation would need a maximum wait so a continuous stream could not starve the write, plus a second in-flight state to tell waiting apart
+  //     from committing, and this page has no such stream to justify either: value fields commit on blur or Enter rather than per keystroke, so mutations arrive
+  //     as discrete acts spaced wider than the window.
   //   - `flushing`: set by flush() to drive the drain to completion NOW (skipping the debounce wait) when the page is navigating away. It keeps the loop running even
   //     once `pending` has been consumed, so an edit made within the debounce window is written before teardown rather than dropped. Reset in every drain's `finally`
   //     so it never outlives the drain it belongs to - the set-once-never-cleared leak this flag would otherwise introduce.
@@ -89,7 +94,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
       }
 
       // The debounce is the burst-coalescing wait, but on the flush path (navigating away) we skip it: the edit must reach the host before teardown, so we go
-      // straight to the snapshot. In the normal path we restart the debounce on the latest mutation.
+      // straight to the snapshot. On the normal path the iteration mints its own window and waits it out in full, sampling the store once the wait ends.
       if(!flushing) {
 
         debounceAbort?.abort();
@@ -103,8 +108,8 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
           await delay(DEBOUNCE_MS, AbortSignal.any([ debounceAbort.signal, signal ]));
         } catch {
 
-          // Debounce was aborted. If the page signal aborted, bail entirely. Otherwise the abort was a new mutation arriving during the debounce window - continue
-          // the loop and the next iteration starts a fresh debounce.
+          // Debounce was aborted. If the page signal aborted, bail entirely. Otherwise flush() cut the wait short on its way to the host - continue the loop, and
+          // the next iteration takes the flush path, which skips the wait and goes on to the write.
           if(signal.aborted) {
 
             return;

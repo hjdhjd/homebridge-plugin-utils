@@ -1,10 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-liveness.mjs: Connection-liveness primitives for plugin webUIs - request deadlines, a trip-signal watchdog, and a page-resume detector.
+ * ui/webUi-liveness.mjs: Connection-liveness primitives for plugin webUIs - request deadlines, an action guard, a trip-signal watchdog, and a page-resume detector.
  */
 
 /**
- * The webUI's liveness layer: a small set of primitives that answer one question - is the host bridge still there?
+ * The webUI's liveness layer: a small set of primitives that answer the questions a bare await cannot answer for itself - is the host bridge still there, and is
+ * this answer still the one the user asked for?
  *
  * The Homebridge UI bridge is a postMessage round trip with no timeout and no cancellation on any of its methods, so a relay that dies mid-flight leaves every
  * outstanding call pending forever - no rejection, no console signal, nothing for a caller to route into a recovery surface. A page that awaits such a call simply
@@ -12,6 +13,9 @@
  *
  *   - {@link withDeadline} bounds an await that HAS failure plumbing. The caller already knows what to render when its fetch fails, so the deadline's job is only to
  *     make the failure happen: it turns "pending forever" into a rejection the caller's existing catch handles.
+ *   - {@link createActionGuard} answers the other question, about a surface whose own actions supersede one another rather than about a bridge that went quiet. A
+ *     settings card's probe, save, and close each retire whatever was in flight, so the guard hands every action a signal that aborts the moment that action stops
+ *     being the one the user is waiting on.
  *   - {@link createRequestWatchdog} watches awaits that have NO failure plumbing - fire-and-forget probes whose results arrive over push events rather than the
  *     response. There is no caller to reject, so the evidence is a trip signal instead: one shared timer, armed by the first unanswered request and cancelled by any
  *     settlement, that fires a caller-supplied callback when nothing answers in time.
@@ -129,6 +133,95 @@ export const withDeadline = ({ promise, seconds, signal = undefined }) => {
   requireDurationSeconds({ label: "withDeadline's seconds", value: seconds });
 
   return raceDeadline({ promise, seconds, signal });
+};
+
+/**
+ * Create a latest-action-wins guard for a surface whose asynchronous actions supersede one another.
+ *
+ * A settings card is the shape this exists for: its probe, its save, and its close all reach the host, and only the most recent of them is the one the user is
+ * waiting on. Every `start()` retires whatever was in flight and hands the new action a signal that is aborted exactly when that action stops being current - a
+ * later `start()`, a `cancel()`, or the parent lifetime ending. A retired action can never come back as the current one, because its signal never returns to life.
+ *
+ * The answer is a signal rather than a token the caller compares, because a signal is the one value the whole action already needs: the staleness check after an
+ * await reads `signal.aborted`, {@link withDeadline} takes it as its own `signal` and settles a superseded await at once instead of waiting out the deadline, and
+ * any fetch or listener the action owns takes it too. A token would answer only the first of those, and would stand as a second staleness vocabulary beside the
+ * signals this module and the page shell are already written in.
+ *
+ * One guard serves one surface, shared across that surface's action functions rather than minted per function: a save must retire a probe that is still in flight,
+ * and that only happens when both actions start on the same guard. A surface that closes calls `cancel()`, which retires the action in flight without starting
+ * another.
+ *
+ * What the losing call site sees: its bounded await rejects with the signal's own abort reason rather than with {@link DeadlineExpiredError}, so the catch path
+ * checks `signal.aborted` before it renders anything. A superseded action has no failure to report, because the action that superseded it owns the surface.
+ *
+ * The parent is whatever bounds the surface's life - the shell's page epoch for a card that lives as long as the page - and it is injected rather than reached for,
+ * so the guard composes with a lifetime it never has to know the shape of.
+ *
+ * @example
+ *
+ * const guard = createActionGuard({ signal: ui.epochSignal });
+ *
+ * const probe = async () => {
+ *
+ *   const signal = guard.start();
+ *
+ *   try {
+ *
+ *     const answer = await withDeadline({ promise: homebridge.request("/probe", payload), seconds: 10, signal });
+ *
+ *     if(signal.aborted) {
+ *
+ *       return;
+ *     }
+ *
+ *     render(answer);
+ *   } catch(error) {
+ *
+ *     if(signal.aborted) {
+ *
+ *       return;
+ *     }
+ *
+ *     renderFailure(error);
+ *   }
+ * };
+ *
+ * @param {Object} [options]
+ * @param {AbortSignal} [options.signal] - The lifetime that bounds the surface: its abort retires the action in flight, and every action started afterwards begins
+ *                                         already aborted.
+ * @returns {{ cancel: () => void, start: () => AbortSignal }} The guard handle: `start` retires the previous action and returns the new one's signal, `cancel`
+ *   retires the current action without starting another.
+ */
+export const createActionGuard = ({ signal = undefined } = {}) => {
+
+  // The current action's controller, or null when nothing is in flight. This is the guard's whole state: currency is the controller's identity, so there is no
+  // counter to keep and nothing for a stale action to compare itself against.
+  let current = null;
+
+  // Retire the current action, which is what makes its signal read as aborted everywhere that action carried it. A no-op when nothing is in flight, so a surface
+  // can close, and close again, without guarding the call. The abort is bare: a superseded action reads its own signal rather than the reason behind it.
+  const cancel = () => {
+
+    if(current !== null) {
+
+      current.abort();
+      current = null;
+    }
+  };
+
+  // Begin the next action. Retiring the previous one first is the ordering rule: the action that started last is the one the surface honors, and every earlier one
+  // learns it lost through the signal it is already carrying. The parent joins through AbortSignal.any rather than through a listener of this module's own, so a
+  // long-lived parent accumulates nothing per action, and a parent that has already aborted yields an aborted signal with no special case needed here.
+  const start = () => {
+
+    cancel();
+
+    current = new AbortController();
+
+    return signal ? AbortSignal.any([ current.signal, signal ]) : current.signal;
+  };
+
+  return { cancel, start };
 };
 
 /**

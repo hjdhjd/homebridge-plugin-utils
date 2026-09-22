@@ -260,8 +260,9 @@ export const toggleSecretReveal = (toggle) => {
  *
  *   - **armed, just unchecked** -> the user stood the armed row down before committing a value. Action: disarm - nothing was ever persisted, so there is nothing
  *     to clear or disable, and a write-shaped action would disturb state the arming gesture never touched.
- *   - **readOnly (was indeterminate)** -> the user clicked through to an explicit state at this scope. Action: set explicitly, or clear when the write rule says the
- *     entry-less resolution already matches the user's intent.
+ *   - **readOnly (was indeterminate)** -> the user asked an inheriting row to stop inheriting at this scope. Action: an explicit disable, whichever way the inherited
+ *     value points, or a clear when the write rule says the entry-less resolution already matches that intent. The transition never consults the checkbox's
+ *     post-toggle state here, so both inherited directions land on one predictable explicit state; the next click sets the value like any other explicit row.
  *   - **just unchecked (was checked)** -> if an upstream entry exists, clear so resolution falls back to inheritance (the row returns to indeterminate); otherwise the
  *     explicit disable stays, recorded or normalized to a clear per the write rule.
  *   - **just checked (was unchecked)** -> set explicitly (or clear when the post-state matches default with no upstream). A value-centric row whose input carries no
@@ -300,7 +301,10 @@ export const triStateTransition = ({ armed = false, catalog, checkbox, configInd
     return { action: { type: "option:disarmed" } };
   }
 
-  // Transition 1: was indeterminate (readOnly). The user clicked through to an explicit state at this scope.
+  // Transition 1: was indeterminate (readOnly). The first click on an inheriting row says "stop inheriting at this scope", and it resolves to an explicit disable
+  // whichever way the inherited value pointed and whichever way the browser just toggled the box - which is why the write below never consults `checked`. Both
+  // inherited directions landing on one explicit state is what gives the gesture a single meaning on every inheriting row, and from there the row cycles through
+  // the transitions below like any other explicit row.
   if(checkbox.readOnly) {
 
     return { action: writeAction({ control, deviceId, enabled: false, entry, expandedName, upstream, valueCentric: isValueOption(catalog, expandedName) }) };

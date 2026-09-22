@@ -671,6 +671,84 @@ describe("reducer - scope:changed", () => {
   });
 });
 
+describe("reducer - takeover", () => {
+
+  test("a fresh state holds no takeover", () => {
+
+    assert.equal(initialState().takeover, false, "a page begins with its own content area");
+  });
+
+  test("takeover:started records the hold, and a second one answers with the same state", () => {
+
+    const base = loadedState();
+    const held = reducer(base, { type: "takeover:started" });
+
+    assert.equal(held.takeover, true, "the hold is recorded");
+    assert.notEqual(held, base, "and recording it produced a new state for subscribers to see");
+    assert.equal(reducer(held, { type: "takeover:started" }), held,
+      "a second start over a standing hold answers by reference, so nothing comparing references wakes for it");
+  });
+
+  test("takeover:released gives the area back, and a second one answers with the same state", () => {
+
+    const held = reducer(loadedState(), { type: "takeover:started" });
+    const released = reducer(held, { type: "takeover:released" });
+
+    assert.equal(released.takeover, false, "the area comes back to the page");
+    assert.notEqual(released, held, "and giving it back produced a new state");
+    assert.equal(reducer(released, { type: "takeover:released" }), released, "a release with nothing held answers by reference");
+  });
+
+  test("a selection change releases the hold while it disarms the armed row and moves the scope", () => {
+
+    const held = reducer(loadedState(), { type: "takeover:started" });
+    const armed = reducer(held, { option: "Audio.Volume", type: "option:armed" });
+
+    assert.equal(armed.takeover, true, "precondition: the area is held and a row is armed");
+
+    const next = reducer(armed, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+
+    assert.equal(next.takeover, false, "the area belongs to the selection, so moving the selection gives it back");
+    assert.equal(next.armedOption, null, "the armed row still stands down");
+    assert.deepEqual(next.scope, { controllerId: "ctrl-a", kind: "controller" }, "and the selection still moves");
+  });
+
+  test("a model arriving over a standing takeover leaves it standing", () => {
+
+    const held = reducer(loadedState(), { type: "takeover:started" });
+    const reloaded = reducer(held, { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+    assert.equal(reloaded.takeover, true, "an in-place re-establish replaces the model without disturbing who holds the content area");
+  });
+
+  test("the takeover actions are not option mutations, so a coordinated write does not hold them", () => {
+
+    const held = reducer(loadedState(), { type: "commit:started" });
+
+    assert.equal(held.write.kind, "committing", "precondition: the coordinated write holds the store");
+
+    const taken = reducer(held, { type: "takeover:started" });
+
+    assert.equal(taken.takeover, true, "taking the content area is not an option edit, so the hold does not refuse it");
+    assert.equal(reducer(taken, { type: "takeover:released" }).takeover, false, "and neither is giving it back");
+  });
+
+  test("neither takeover action moves a configuration or presentation slice", () => {
+
+    const base = reducer(loadedState({ configuredOptions: ["Enable.Motion.Detect"] }), { mode: "modified", query: "motion", type: "filter:changed" });
+    const held = reducer(base, { type: "takeover:started" });
+    const released = reducer(held, { type: "takeover:released" });
+
+    // Every slice a persist, a selector cache, or the search view keys on. A takeover that moved any of them would start a drain, invalidate a cache, or repaint a
+    // panel that nothing about the content area should reach.
+    for(const field of [ "catalog", "configuredOptions", "filter", "persistedAnchor", "scope" ]) {
+
+      assert.equal(held[field], base[field], field + " comes through a start by reference");
+      assert.equal(released[field], base[field], field + " comes through a release by reference");
+    }
+  });
+});
+
 describe("reducer - option:set", () => {
 
   test("applies the pure transform - configuredOptions reference changes, catalog reference does not", () => {

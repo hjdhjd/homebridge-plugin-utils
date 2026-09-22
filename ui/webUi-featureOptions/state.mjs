@@ -41,7 +41,10 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     that copy are the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw.
  *     A clean outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry. A clean outcome
  *     that carried no devices and an `emptyMessage` also records that message, which is how a plugin says its controller is reachable with nothing to list.
- *   - `scope:changed` - selection pointer moved (global / controller / device).
+ *   - `scope:changed` - selection pointer moved (global / controller / device). An armed row and a plugin's hold on the main-content area both belong to the
+ *     selection the user moved away from, so both stand down here.
+ *   - `takeover:started` - a plugin took the page's main-content area: the framework's own regions step aside and the plugin's node stands in their place.
+ *   - `takeover:released` - the plugin gave the main-content area back, and the framework's regions return to it.
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
  *   - `option:armed` - a value option's row is awaiting its first value: the checkbox gesture opened the input, and nothing persists until a value commits. At
@@ -189,6 +192,10 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *                                                  persist failure (memory then matches what the host holds).
  * @property {Scope} scope - Selection pointer (DU).
  * @property {LifecycleStatus} status - Page-reachability pointer (DU).
+ * @property {boolean} takeover - Whether a plugin currently holds the page's main-content area, with the framework's own regions there stepped aside and the
+ *   plugin's node standing in their place. Page-lifecycle state and never configuration: no option-mutating action touches it, nothing persisted reads it, and the
+ *   fresh store every show() builds starts without a hold. One fact is all there is to carry - held or not - because the node itself is DOM, owned by the view that
+ *   renders the framework's takeover element from this field.
  * @property {WriteLifecycle} write - Configuration-write pointer (DU). Held apart from `status` because the lifecycles run at the same time.
  */
 
@@ -376,6 +383,7 @@ export const initialState = () => {
     persistedAnchor: empty,
     scope: { kind: "global" },
     status: { kind: "loading" },
+    takeover: false,
     write: { kind: "idle" }
   };
 };
@@ -577,8 +585,36 @@ export const reducer = (state, action) => {
       }
 
       // Replace the selection pointer wholesale. The DU is atomic - controllerId, deviceId, and kind all move together so subscribers never observe a partial
-      // selection state. An armed row belongs to the view that armed it, so the selection moving disarms it.
-      return { ...state, armedOption: null, scope: action.scope };
+      // selection state. An armed row belongs to the view that armed it, so the selection moving disarms it. The main-content area belongs to the selection in the
+      // same way: a plugin holding it was showing the user something about where they were, so the selection moving gives the area back exactly as an armed row
+      // stands down. Every plugin that takes the area over needs that rule, and owning it here is what spares each of them from writing it again.
+      return { ...state, armedOption: null, scope: action.scope, takeover: false };
+    }
+
+    case "takeover:started": {
+
+      // A plugin took the page's main-content area. The fact lives here while the node itself lives with the view that mounts it, so the two can never disagree
+      // about whether the area is held. A takeover is page-lifecycle state rather than a configuration edit, which is why neither takeover action joins
+      // {@link HELD_ACTIONS}: a coordinated write holds option mutations so its whole-array commit cannot be raced, and taking the content area is not one.
+      // Answering an area that is already held with the state reference itself keeps a redundant dispatch from waking anything that compares by reference.
+      if(state.takeover) {
+
+        return state;
+      }
+
+      return { ...state, takeover: true };
+    }
+
+    case "takeover:released": {
+
+      // The plugin gave the main-content area back. Nothing held is answered by reference for the same reason the arm above answers an area already held that way:
+      // a handle released a second time, or released after a selection change had already taken the area back, is a no-op rather than a fresh state.
+      if(!state.takeover) {
+
+        return state;
+      }
+
+      return { ...state, takeover: false };
     }
 
     case "option:set": {

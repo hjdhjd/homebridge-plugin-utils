@@ -4,8 +4,9 @@
  */
 "use strict";
 
-import { DeadlineExpiredError, withDeadline } from "./webUi-liveness.mjs";
+import { DeadlineExpiredError, createActionGuard, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
+import { TAKEOVER_REGION_IDS, mountTakeoverView, releasedTakeover } from "./webUi-featureOptions/views/takeover.mjs";
 import { buildCatalogIndex, expandOption } from "./featureOptions.js";
 import { completeControllerSelection, fetchControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
 import { connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
@@ -56,11 +57,15 @@ const CATALOG_DEADLINE_SECONDS = 5;
 // The page's content regions, in alphabetical id order. hide() sets each to display:none during teardown so the user never sees a half-built page; the coordinated
 // end-of-load reveal restores them together. Both the teardown-hide loop and the reveal read this single list so the two can never drift.
 //
+// The main-content subset - the regions a plugin's card stands in place of - lives with the view that hides them for the length of a takeover, and this list is
+// composed from it so the two can never come to disagree about which regions those are. It is the same derivation the global-only set below is built on, in the
+// other direction: that set narrows this list, and this list widens that subset with the header bar and the sidebar that frame the content area.
+//
 // A plugin joins its own page chrome to the same visibility rhythm by putting `data-fo-region` on the element: the teardown-hide loop and every reveal sweep that
 // attribute alongside these ids, so plugin chrome hides and returns with the page in every mode. What the attribute does not join is the clear cycle - clearContainers
 // reaches only the containers it names and never a plugin region - and that guarantee is the whole reason the attribute is markup rather than another managed id: a
 // plugin's control keeps its content, its listeners, and its state across an entire show(), which is what put plugin chrome outside this list to begin with.
-const REGION_IDS = [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ];
+const REGION_IDS = [ ...TAKEOVER_REGION_IDS, "headerInfo", "sidebar" ].toSorted();
 
 // The regions global-only mode never reveals: the device sidebar and the precedence header bar. The reduced global-only reveal set is derived by filtering these
 // out of REGION_IDS, so the reduced set can never name a region the full set does not.
@@ -271,14 +276,16 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
  * action without re-entering the whole show() cycle, `commitConfig()` writes a plugin's own configuration change through the page's session and re-establishes the
- * page on it, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
+ * page on it, `takeover()` gives a plugin's own node the page's main-content area until it is released, `hide()` is the navigate-away (it flushes any pending edit,
+ * then tears down), `cleanup()` is immediate
  * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
  * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
  * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract carries the fuller vocabulary of the
  * two, since a controller can be unreachable, populated, or reachable with nothing to list, and only the plugin can tell the last two apart.
  *
  * The page contract is markup the consumer supplies. The framework's own content regions are addressed by id - `deviceStatsContainer`, `headerInfo`,
- * `optionsContainer`, `search`, and `sidebar` - and are hidden at teardown and revealed together at the end of a load. A plugin's own chrome joins that rhythm by
+ * `optionsContainer`, `search`, and `sidebar` - and are hidden at teardown and revealed together at the end of a load; the main-content regions among them also
+ * stand aside for the length of a takeover, while a plugin holds that area. A plugin's own chrome joins that rhythm by
  * carrying the `data-fo-region` attribute: such an element hides and reveals with the page in every mode and is never cleared, so a control the plugin builds and owns
  * survives a whole cycle intact while still following the page's visibility.
  *
@@ -380,6 +387,11 @@ export class webUiFeatureOptions {
   // orchestrator never reaches into store state for state management - all reads/writes go through dispatched actions and subscribed events.
   #store;
 
+  // This cycle's takeover view - the function that hands a plugin the page's main-content area - or null before the first show(). Reassigned on every show() and
+  // deliberately not cleared at teardown, on the statusPanel field's precedent: a call against a retired cycle reads that mount's already-aborted signal and answers
+  // with a handle that is already released, so a reference left behind is harmless rather than something a teardown has to chase down.
+  #takeoverView;
+
   // The configuredOptions array captured at the FIRST show()'s `model:loaded`. Survives subsequent cleanup() / show() cycles so a re-show that loads a set-equal
   // (possibly reordered) options array preserves the original snapshot for revert-to-saved. The set-equality probe in show() is the boundary where this is decided.
   // Set on first model:loaded; updated only when the loaded options are NOT set-equal to the stored snapshot.
@@ -388,15 +400,16 @@ export class webUiFeatureOptions {
   // reference shared by all three is what lets a revert made before any save land on the anchor by reference, leaving the persist drain nothing to write.
   #initialOptions;
 
-  /* The count of show() entries this instance has taken. Every entry that survives the epoch bail advances it and captures the value it advanced it to, and after
-   * its awaited teardown an entry mints its cycle only while the field still holds that value. An entry that finds the field moved past its own value was overtaken
-   * while it waited - a second click on the menu, or the connection-error retry landing on a menu entry - and the entry that overtook it is the one the user asked
-   * for, so the overtaken one returns rather than standing a second store, a second set of effects, and a second set of listeners up beside the live cycle's.
+  /* The guard that orders this instance's show() entries. Every entry that survives the epoch bail starts an action on it, which retires the entry before it, and
+   * after its awaited teardown an entry mints its cycle only while its own action is still the current one. An entry whose signal has aborted by the time that
+   * teardown returns was either overtaken - a second click on the menu, or the connection-error retry landing on a menu entry - or belongs to a page copy the
+   * epoch has superseded. Either way the page is someone else's, so the entry returns rather than standing a second store, a second set of effects, and a second
+   * set of listeners up beside the live cycle's. The guard's parent is the page epoch, which is what lets one signal answer both questions at once.
    *
-   * Its lifetime is this instance's: advanced at every entry past the epoch bail, read once per entry after the teardown, and reset by nothing - not hide(), not
-   * cleanup(), not disposal - because a value that has already been overtaken must never come back around and match an entry still waiting on it.
+   * Its lifetime is this instance's: an action started at every entry past the epoch bail, read once per entry after the teardown, and reset by nothing - not
+   * hide(), not cleanup(), not disposal - because an entry that has already been overtaken must never read as current again.
    */
-  #showGeneration;
+  #showGuard;
 
   /**
    * Initialize the feature options webUI with customizable configuration.
@@ -531,8 +544,9 @@ export class webUiFeatureOptions {
     this.#resumeDetector = resumeDetector;
     this.#session = null;
     this.#store = null;
+    this.#takeoverView = null;
     this.#initialOptions = null;
-    this.#showGeneration = 0;
+    this.#showGuard = createActionGuard({ signal: epochSignal });
   }
 
   /**
@@ -657,10 +671,8 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // This entry's place in the instance's sequence of show() calls, taken before the first side effect below and read once more after the teardown.
-    this.#showGeneration += 1;
-
-    const generation = this.#showGeneration;
+    // This entry's own action on the instance's show() guard, started before the first side effect below and read once more after the teardown.
+    const entry = this.#showGuard.start();
 
     this.#session = session;
 
@@ -679,13 +691,13 @@ export class webUiFeatureOptions {
      * fired never replays into the listener composed below. A recheck placed ahead of that await would leave its whole window unguarded, so the order is the
      * teardown's await, then the recheck, then the mint.
      *
-     * The generation answers the same question about the supersession this instance CAN observe for itself: a later show() entered while this one waited on the
-     * teardown above, which is what a second click on the menu or a retry landing on a menu entry produces. The page belongs to that entry - latest wins, as it
-     * does everywhere else here - so this one returns and mints nothing, and the winner's own teardown has already run or is running over the same flush. Every
-     * side effect this entry made ahead of the await is one the winner makes again, so there is nothing to undo on the way out. Both conditions sit after the
-     * await for the same reason: the window the await opens is exactly the window each of them guards.
+     * One signal answers for both ways this entry can lose, because the guard's parent is the page epoch: the epoch's abort reaches this entry's signal, and so
+     * does a later show() entered while this one waited on the teardown above - a second click on the menu, or a retry landing on a menu entry. The page belongs
+     * to whichever of them arrived - latest wins, as it does everywhere else here - so this entry returns and mints nothing, and the winner's own teardown has
+     * already run or is running over the same flush. Every side effect this entry made ahead of the await is one the winner makes again, so there is nothing to
+     * undo on the way out. The check sits after the await for the same reason in either case: the window the await opens is exactly the window it guards.
      */
-    if(this.#epochSignal?.aborted || (this.#showGeneration !== generation)) {
+    if(entry.aborted) {
 
       return;
     }
@@ -1000,7 +1012,7 @@ export class webUiFeatureOptions {
       }
 
       this.#removeBootAffordance();
-      revealRegions(GLOBAL_ONLY_REGION_IDS, { warnOnNesting: true });
+      revealRegions(this.#revealable(GLOBAL_ONLY_REGION_IDS), { warnOnNesting: true });
 
       return;
     }
@@ -1108,7 +1120,7 @@ export class webUiFeatureOptions {
 
     // Hand the frame from the boot affordance to the page itself, then reveal the full region set the views render into.
     this.#removeBootAffordance();
-    revealRegions(REGION_IDS);
+    revealRegions(this.#revealable(REGION_IDS));
   }
 
   /**
@@ -1914,6 +1926,70 @@ export class webUiFeatureOptions {
     await this.#awaitPendingCommit();
   }
 
+  /* Narrow a reveal's region list to what the page's state says should be visible. A plugin can take the content area over from its `onLoaded` hook, which fires
+   * while every region is still hidden and before the end-of-load reveal runs, so the reveal shows what the page's state says is visible rather than everything it
+   * was handed - the same narrowing global-only mode already applies, for its own reason, one step further along. When that takeover ends, the takeover view's
+   * restore is what reveals these regions, so nothing the reveal skipped here is left hidden behind.
+   */
+  #revealable(ids) {
+
+    if(!this.#store.state.takeover) {
+
+      return ids;
+    }
+
+    return ids.filter((id) => !TAKEOVER_REGION_IDS.includes(id));
+  }
+
+  /**
+   * Hand a plugin's own node the page's main-content area, and answer with the handle that gives it back.
+   *
+   * A takeover is how a plugin puts a card of its own where the page's content normally sits - an add-a-controller form, a gateway pairing panel - without owning
+   * any of the mechanism. The framework hides its main-content regions, mounts the supplied element inside an element of its own standing immediately ahead of them,
+   * and reveals them again when the takeover ends. The header bar and the device sidebar stay visible throughout, so the user keeps their navigation and the page
+   * keeps its status while the card has the area. The framework is the only writer of those regions' display and the only owner of the element the card is mounted
+   * in: a plugin supplies its node and never touches a framework element or moves one in the page.
+   *
+   * A takeover ends in any of several ways, and every one of them aborts the handle's `signal`: the plugin calls `release()`; the user moves the selection in the
+   * sidebar, because the content area belongs to the selection; a later `takeover()` takes the area for another card, the latest call winning; or the page cycle
+   * ends - a navigate-away through `hide()`, a re-show, or this page copy being superseded by a newer one. A call made when no cycle is live answers with a handle
+   * that is already released, so a consumer never has to ask whether the page is up before asking for the area.
+   *
+   * A card that saves something calls `release()` itself when its save resolves, without exception. A configuration write through {@link commitConfig} may re-show
+   * the whole page, or re-establish it in place with the cycle left standing, and a card cannot tell which of those it got. `release()` is safe either way, and
+   * safe to call more than once, including on a takeover something else already ended; the handle's `signal` is the one truth about whether the area is still held.
+   *
+   * That `signal` is the natural parent for everything else the card owns: register the card's listeners with it and they leave when the card does, and hand it to
+   * a latest-action-wins guard - `createActionGuard` from `./webUi-liveness.mjs` - when the card runs asynchronous actions whose stale answers must not land.
+   *
+   * Timing a consumer needs to know about. A takeover begun from the `onLoaded` hook mounts beneath the page's loading affordance and waits there until the load
+   * completes, since `onLoaded` fires before the end-of-load reveal. And a controller-list refresh - {@link refreshControllers}, or a `getControllers` hook run by
+   * an in-place re-establish - leaves a standing takeover exactly where it is, so a card that must close when the controller list is refreshed calls `release()`
+   * from the plugin's own `getControllers` hook.
+   *
+   * @example
+   *
+   * // A plugin's button opens its own card over the page's content, and the card closes on cancel or whenever the page takes the area back.
+   * addControllerButton.addEventListener("click", () => {
+   *
+   *   const card = buildAddControllerCard();
+   *   const handle = ui.featureOptions.takeover(card);
+   *
+   *   // Whatever ends the takeover - this card's own cancel, a sidebar click, a navigate-away - arrives here as one abort.
+   *   handle.signal.addEventListener("abort", () => stopPollingTheGateway(), { once: true });
+   *   card.querySelector("#cancel").addEventListener("click", () => handle.release(), { signal: handle.signal });
+   * });
+   *
+   * @param {HTMLElement} element - The plugin's own node, to stand in the page's main-content area.
+   * @returns {{ release: () => void, signal: AbortSignal }} The takeover handle: `release()` gives the area back, and `signal` aborts when the takeover ends,
+   *                                                          whatever ended it.
+   * @public
+   */
+  takeover(element) {
+
+    return this.#takeoverView?.(element) ?? releasedTakeover();
+  }
+
   /**
    * Hide the feature options webUI - the navigate-away chokepoint. Flushes any pending edit to disk (see `#flushPending`), then visually hides the regions, then tears
    * down. The flush precedes the teardown so a debounced-but-unwritten edit reaches the host before the page signal aborts.
@@ -2076,6 +2152,10 @@ export class webUiFeatureOptions {
     }
 
     if(deviceStatsContainer) {
+
+      // The takeover view stands its framework element immediately before this region - the first of the main-content regions in the page's markup - so a plugin's
+      // card occupies exactly the space those regions leave when they step aside.
+      this.#takeoverView = mountTakeoverView({ anchor: deviceStatsContainer, signal, store });
 
       const { infoPanel, statusPanel } = this.#config;
 

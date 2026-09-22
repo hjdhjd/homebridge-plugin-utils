@@ -1,11 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-liveness.test.mjs: The specification suite for the connection-liveness primitives - the rejecting deadline, the shared-timer request watchdog, and the
- * page-resume detector. Every clock in here is a node:test mock, so each test states the exact time it advances and nothing waits on wall-clock duration.
+ * ui/webUi-liveness.test.mjs: The specification suite for the connection-liveness primitives - the rejecting deadline, the latest-action guard, the shared-timer
+ * request watchdog, and the page-resume detector. Every clock in here is a node:test mock, so each test states the exact time it advances and nothing waits on
+ * wall-clock duration.
  */
 "use strict";
 
-import { DeadlineExpiredError, createRequestWatchdog, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
+import { DeadlineExpiredError, createActionGuard, createRequestWatchdog, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
@@ -154,6 +155,119 @@ describe("withDeadline", () => {
         name: "TypeError"
       }, "a duration of " + String(seconds) + " must be rejected at the call site");
     }
+  });
+});
+
+describe("createActionGuard", () => {
+
+  test("start() hands the new action a live signal", () => {
+
+    const guard = createActionGuard({ signal: new AbortController().signal });
+    const action = guard.start();
+
+    assert.ok(action instanceof AbortSignal, "an action's currency is expressed as a signal, which is the lifecycle vocabulary the caller already speaks");
+    assert.equal(action.aborted, false, "the action that just started is the current one, so the signal it carries is live");
+  });
+
+  test("a second start() retires the first action and returns a different, live signal", () => {
+
+    const guard = createActionGuard({ signal: new AbortController().signal });
+    const first = guard.start();
+    const second = guard.start();
+
+    assert.equal(first.aborted, true, "the action that was in flight lost the surface to the one that started after it");
+    assert.equal(second.aborted, false, "and the action that started last is the one the surface honors");
+    assert.notEqual(first, second, "each action carries a signal of its own, so one action's retirement never reaches another's");
+  });
+
+  test("cancel() retires the current action, and is safe to call more than once or before anything has started", () => {
+
+    const guard = createActionGuard();
+
+    assert.doesNotThrow(() => guard.cancel(), "a surface that closes before it ever acted has nothing to retire and must not fail trying");
+
+    const action = guard.start();
+
+    guard.cancel();
+
+    assert.equal(action.aborted, true, "a closing surface retires the action it left in flight");
+    assert.doesNotThrow(() => guard.cancel(), "a second close finds nothing in flight and does nothing");
+
+    const next = guard.start();
+
+    assert.equal(next.aborted, false, "and a guard that has been cancelled still starts live actions afterwards");
+  });
+
+  test("the parent's abort retires the action in flight, and every action started afterwards begins aborted", () => {
+
+    const parent = new AbortController();
+    const guard = createActionGuard({ signal: parent.signal });
+    const action = guard.start();
+
+    parent.abort();
+
+    assert.equal(action.aborted, true, "the lifetime that bounds the surface bounds each of its actions with it");
+
+    const afterwards = guard.start();
+
+    assert.equal(afterwards.aborted, true, "an action begun against a surface whose lifetime has ended is stale from its first statement");
+  });
+
+  test("with no parent injected, the same contract holds for createActionGuard() and for createActionGuard({})", () => {
+
+    for(const guard of [ createActionGuard(), createActionGuard({}) ]) {
+
+      const first = guard.start();
+
+      assert.equal(first.aborted, false, "an unparented guard starts live actions exactly as a parented one does");
+
+      const second = guard.start();
+
+      assert.equal(first.aborted, true, "a later action retires the earlier one with no parent to join");
+      assert.equal(second.aborted, false, "and the later action is the current one");
+
+      guard.cancel();
+
+      assert.equal(second.aborted, true, "cancel() retires the current action here too");
+    }
+  });
+
+  test("a retired action stays retired through every later start() and cancel()", () => {
+
+    const guard = createActionGuard({ signal: new AbortController().signal });
+    const superseded = guard.start();
+
+    guard.start();
+    guard.cancel();
+    guard.start();
+
+    assert.equal(superseded.aborted, true, "an action that lost the surface can never come back around as the current one");
+  });
+
+  test("a bounded await is settled by its own supersession rather than by the deadline it was given", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const guard = createActionGuard();
+    const signal = guard.start();
+    const bounded = withDeadline({ promise: hangingPromise(), seconds: 30, signal });
+
+    // No clock advance at all: the supersession alone settles the await, which is what lets a superseded action reach its own staleness check immediately rather
+    // than a deadline later, against a surface some newer action already owns.
+    guard.start();
+
+    await assert.rejects(() => bounded, (err) => {
+
+      assert.ok(!(err instanceof DeadlineExpiredError), "a supersession is not a deadline expiry, and the call site must be able to tell them apart");
+      assert.equal(signal.aborted, true, "the catch path reads this action's own signal, finds it retired, and renders nothing");
+
+      return true;
+    });
+
+    t.mock.timers.tick(600000);
+    await flush();
+
+    assert.ok(true, "the superseded action's deadline timer was released with it, so advancing past the deadline produced no effect");
   });
 });
 

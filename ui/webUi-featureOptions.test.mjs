@@ -1200,6 +1200,64 @@ describe("webUiFeatureOptions - the boot window", () => {
 
     orchestrator.cleanup();
   });
+
+  /* A re-entry's own await opens the same window a synchronous double-entry does, just on the clock instead of the call stack: the epoch can abort while this entry
+   * is inside its own teardown, and the guard must catch that exactly as it catches a synchronous supersession, because both are the same "someone else owns the
+   * page now" fact arriving through the guard's one parent. The stalled host write is what holds the window open long enough for the abort to land inside it, the
+   * same stall the no-hang guarantee test below exercises for a different purpose.
+   */
+  test("an epoch that aborts while a re-entry's show() awaits its own teardown mints no second cycle", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    fake.updatePluginConfig = () => new Promise(() => {});
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const counts = { controllers: 0 };
+    const epoch = new AbortController();
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => {
+
+        counts.controllers += 1;
+
+        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
+      },
+
+      getDevices: () => ({ devices: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Front Door", serialNumber: "DEV-1" } ], error: "" }),
+      ui: { isController: (device) => device?.serialNumber === "CTRL-A" }
+    }, { epochSignal: epoch.signal });
+
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.equal(counts.controllers, 1, "the first cycle stood up normally");
+
+    skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+
+    const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
+
+    motionCheckbox.checked = false;
+    motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    const reentry = orchestrator.show(session);
+
+    epoch.abort();
+
+    await reentry;
+
+    assert.equal(counts.controllers, 1, "the epoch's abort during the re-entry's teardown left no second cycle standing");
+
+    orchestrator.cleanup();
+  });
 });
 
 describe("webUiFeatureOptions.hide", () => {
@@ -6261,6 +6319,326 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
 
     assert.equal(fired, 2, "each cycle announces its own loaded model");
     assert.equal(calls.length, 1, "while the catalog behind both was read once");
+
+    orchestrator.cleanup();
+  });
+});
+
+describe("webUiFeatureOptions - takeover", () => {
+
+  /* Stand up the page skeleton and a fake bridge, with one controller carrying one device so the sidebar a row clicks is the real one. Kept apart from the
+   * orchestrator itself, since the rows below construct a variety of them - a global-only page, a page with an `onLoaded` hook that takes the area during the boot,
+   * a page carrying an epoch signal.
+   */
+  const arrange = () => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    return { fake, homebridgeGuard, skeleton };
+  };
+
+  // The hooks that give the page a sidebar to click: one controller, one device behind it. show() auto-selects a lone controller and awaits its device fetch, so a
+  // row that clicks the sidebar finds it fully built.
+  const SIDEBAR_HOOKS = {
+
+    getControllers: () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+    getDevices: async () => ({ devices: [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }], error: "" })
+  };
+
+  // A plugin's own card - a node the framework never built, which is what makes the rows that follow it across a takeover a test of the real contract.
+  const pluginCard = () => {
+
+    const card = document.createElement("section");
+
+    card.id = "pluginCard";
+    card.textContent = "Add a controller";
+
+    return card;
+  };
+
+  // The main-content regions' inline display, hand-spelled so a row reads the same ids a consumer's markup carries rather than the constant the page composes its
+  // own list from.
+  const contentDisplays = () => [ "deviceStatsContainer", "optionsContainer", "search" ].map((id) => document.getElementById(id).style.display);
+
+  /* Element presence is asserted as a count and element identity through `assert.ok(a === b, ...)`, never by handing an element to `assert.equal` as a value to be
+   * compared. A failing comparison has to render the values it compared, and rendering a Happy-DOM element walks its way out through the document to the window and
+   * never finishes...which turns a one-line regression into a suite that hangs instead of one that reports.
+   */
+
+  test("a call before the first show() answers a handle that is already released", () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+    const handle = orchestrator.takeover(pluginCard());
+
+    assert.equal(handle.signal.aborted, true, "a page with no cycle behind it has no area to give");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and nothing is mounted onto a page that has never been shown");
+    assert.equal(handle.release(), undefined, "the handle still answers release(), so a consumer needs no special case for it");
+  });
+
+  test("a takeover after show() holds the content area, and release() gives it back", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const card = pluginCard();
+    const handle = orchestrator.takeover(card);
+
+    assert.ok(document.querySelector("[data-fo-takeover]")?.firstChild === card, "the plugin's card stands in the framework's own element");
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "with the page's content regions stepped aside for it");
+    assert.equal(skeleton.headerInfo.style.display, "", "the header bar stays where it was");
+    assert.equal(skeleton.sidebar.style.display, "", "and so does the device sidebar");
+
+    handle.release();
+
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "release() takes the framework element back out of the page");
+    assert.deepEqual(contentDisplays(), [ "", "", "" ], "and the page's own content returns");
+    assert.equal(handle.signal.aborted, true, "the handle's signal is how the card learns the area is no longer its own");
+
+    orchestrator.cleanup();
+  });
+
+  test("clicking a sidebar entry ends a standing takeover", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions(SIDEBAR_HOOKS);
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const handle = orchestrator.takeover(pluginCard());
+    const globalLink = skeleton.controllersContainer.querySelector(".nav-link[data-navigation='global']");
+
+    assert.equal(handle.signal.aborted, false, "precondition: the takeover this row ends is actually standing.");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 1, "precondition: exactly one framework container holds the area.");
+    assert.ok(globalLink, "precondition: the sidebar rendered the entries a user navigates with");
+
+    globalLink.click();
+    await flush();
+
+    assert.equal(handle.signal.aborted, true, "the content area belongs to the selection, so moving the selection ends the takeover");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "the card leaves the page with it");
+    assert.deepEqual(contentDisplays(), [ "", "", "" ], "and the page's content comes back to the area it was holding");
+
+    orchestrator.cleanup();
+  });
+
+  test("hide() ends a standing takeover, leaves the content regions hidden, and leaves no container behind", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    const handle = orchestrator.takeover(pluginCard());
+
+    assert.equal(handle.signal.aborted, false, "precondition: the takeover this row ends is actually standing.");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 1, "precondition: exactly one framework container holds the area.");
+
+    await orchestrator.hide();
+    await flush();
+
+    assert.equal(handle.signal.aborted, true, "a takeover ends with the page cycle that carried it");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "with nothing of the framework's own element left on the page");
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "and the teardown's own hide standing, never undone by the takeover ending under it");
+
+    await orchestrator.show(session);
+    await flush();
+
+    for(const id of [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ]) {
+
+      assert.equal(document.getElementById(id).style.display, "", id + " is revealed by a cycle that holds no takeover");
+    }
+
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and no container accumulates across cycles");
+
+    orchestrator.cleanup();
+  });
+
+  test("an epoch abort ends a standing takeover and removes its container", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const epoch = new AbortController();
+    const orchestrator = new webUiFeatureOptions({}, { epochSignal: epoch.signal });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const handle = orchestrator.takeover(pluginCard());
+
+    assert.ok(document.querySelector("[data-fo-takeover]"), "precondition: the card holds the area");
+
+    epoch.abort();
+
+    assert.equal(handle.signal.aborted, true, "a page copy a successor superseded takes its takeover with it");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and the retired copy's own element leaves the page");
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "while the regions are left exactly as they were, for the successor to arrange");
+  });
+
+  test("a takeover begun from onLoaded survives the end-of-load reveal", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    /* `onLoaded` fires while every region is still hidden and before the coordinated reveal runs, so a plugin opening its card there is the case where the reveal
+     * could un-hide what the takeover holds. The card is taken during the boot and read back after show() has fully settled.
+     */
+    let handle = null;
+    const orchestrator = new webUiFeatureOptions({ onLoaded: () => (handle = orchestrator.takeover(pluginCard())) });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(handle.signal.aborted, false, "the takeover is still standing when the load completes");
+    assert.ok(document.querySelector("[data-fo-takeover]"), "with its card still on the page");
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "the reveal shows what the page's state says is visible, so it leaves the held regions alone");
+    assert.equal(skeleton.headerInfo.style.display, "", "while the header bar is revealed with the rest of the page");
+    assert.equal(skeleton.sidebar.style.display, "", "and so is the sidebar");
+
+    handle.release();
+
+    assert.deepEqual(contentDisplays(), [ "", "", "" ], "and the release is what reveals the regions the load's own reveal skipped");
+
+    orchestrator.cleanup();
+  });
+
+  test("a takeover begun from onLoaded survives the reduced reveal of global-only mode", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    let handle = null;
+    const orchestrator = new webUiFeatureOptions({ globalOnly: true, onLoaded: () => (handle = orchestrator.takeover(pluginCard())) });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(handle.signal.aborted, false, "the reduced reveal is a reveal like any other, and it leaves the takeover standing");
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "with every region the takeover holds still stepped aside");
+    assert.equal(skeleton.sidebar.style.display, "none", "and this mode's own hidden regions untouched by any of it");
+
+    orchestrator.cleanup();
+  });
+
+  test("a takeover cycle writes nothing to the host", async () => {
+
+    using dom = createTestDom();
+
+    const { fake, homebridgeGuard } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const writesBefore = fake.observed.updatedConfigs.length;
+
+    const handle = orchestrator.takeover(pluginCard());
+
+    assert.equal(handle.signal.aborted, false, "precondition: the takeover whose cost this row measures is actually standing.");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 1, "precondition: exactly one framework container holds the area.");
+
+    handle.release();
+
+    await settlePersist();
+
+    assert.equal(fake.observed.updatedConfigs.length, writesBefore, "taking the content area is not a configuration edit, so nothing reaches the host for it");
+
+    orchestrator.cleanup();
+  });
+
+  test("a takeover neither invents a pending edit nor swallows one", async () => {
+
+    using dom = createTestDom();
+
+    const { fake, homebridgeGuard, skeleton } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const orchestrator = new webUiFeatureOptions();
+    const session = await openTestSession();
+
+    /* One option edit, left inside its debounce window, and then a navigate-away that has to flush it. Running the same sequence with and without a takeover in
+     * between is the distinguishing input: a takeover that made the page read as having a pending edit would add a write, and one that swallowed the edit would
+     * lose one, so the two counts moving apart in either direction is the failure.
+     */
+    const writesForSequence = async ({ withTakeover }) => {
+
+      const before = fake.observed.updatedConfigs.length;
+
+      await orchestrator.show(session);
+      await flush();
+
+      skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+
+      const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
+
+      motionCheckbox.checked = !motionCheckbox.checked;
+      motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+      if(withTakeover) {
+
+        const handle = orchestrator.takeover(pluginCard());
+
+        assert.equal(handle.signal.aborted, false, "precondition: the takeover this sequence puts between the edit and the flush is actually standing.");
+        assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 1, "precondition: exactly one framework container holds the area.");
+
+        handle.release();
+      }
+
+      await orchestrator.hide();
+      await flush();
+
+      return fake.observed.updatedConfigs.length - before;
+    };
+
+    const plain = await writesForSequence({ withTakeover: false });
+    const withTakeover = await writesForSequence({ withTakeover: true });
+
+    assert.equal(plain, 1, "precondition: the edit alone reaches the host exactly once, through the navigate-away's flush");
+    assert.equal(withTakeover, plain, "and a takeover standing between the edit and the flush changes nothing about what the host is told");
 
     orchestrator.cleanup();
   });

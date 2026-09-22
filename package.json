@@ -36,7 +36,7 @@
     "clean": "node build/fs-ops.mjs clean dist && npm run build-ui",
     "lint": "eslint --max-warnings=${ESLINT_MAX_WARNINGS:-\"0\"} eslint.config.mjs build src ui",
     "postpublish": "npm run clean",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm run build",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run build && node build/fs-ops.mjs audit-package",
     "test": "node --import ./ui/test-loader.mjs --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-include='ui/**/*.mjs' --test-coverage-exclude='src/**/*.test.ts' --test-coverage-exclude='ui/**/*.test.mjs' --test-coverage-exclude='ui/**/*.helpers.mjs' --test-coverage-exclude='ui/test-loader.mjs' --test-coverage-lines=85 --test-coverage-branches=80 --test-coverage-functions=85 --test-timeout=15000 \"src/**/*.test.ts\" \"ui/**/*.test.mjs\" \"build/**/*.test.mjs\"",
     "test:all": "npm run test && npm run test:e2e",
     "test:e2e": "node --import ./ui/test-loader.mjs --test --test-timeout=120000 \"test/e2e/**/*.test.ts\" \"test/e2e/**/*.test.mjs\"",

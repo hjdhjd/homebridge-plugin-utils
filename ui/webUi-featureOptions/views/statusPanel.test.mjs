@@ -188,10 +188,14 @@ afterEach(() => {
   mountControllers.length = 0;
 });
 
-// DOM readers keyed by a cell's label so tests never address cells by child position.
+/** DOM readers keyed by a cell's label so tests never address cells by child position.
+ *
+ * @returns {Element | null} The stat item whose label matches, or null when no cell carries that label.
+ */
 const itemFor = (root, label) => [...root.querySelectorAll(".stat-item")].find((el) => el.querySelector(".stat-label")?.textContent === label) ?? null;
 const valueSpanFor = (root, label) => itemFor(root, label)?.querySelector(".stat-value:not(.fo-phantom)") ?? null;
 const valueFor = (root, label) => valueSpanFor(root, label)?.textContent ?? null;
+/** @returns {Element[]} The label's phantom cells, or an empty array when the label carries no item or the item holds none. */
 const phantomsFor = (root, label) => {
 
   const item = itemFor(root, label);
@@ -200,11 +204,16 @@ const phantomsFor = (root, label) => {
 };
 const labelsIn = (root) => [...root.querySelectorAll(".stat-item .stat-label")].map((el) => el.textContent);
 const messageText = (root) => root.querySelector(".fo-status-message .stat-value")?.textContent ?? null;
+/** @returns {Element | null} The status reload line, or null when the panel renders no reload affordance. */
 const reloadLineIn = (root) => root.querySelector(".fo-status-reload");
+/** @returns {Element | null} The reload action's anchor, or null when the panel renders no reload affordance. */
 const reloadAnchorIn = (root) => root.querySelector(".fo-status-reload button");
 
-// Readers for a choices row, addressed by its label the way every cell reader addresses its cell: the container itself, the rendered glyph-and-name pairs, and the
-// placeholder dash a row with no list to show renders in place of them.
+/** Readers for a choices row, addressed by its label the way every cell reader addresses its cell: the container itself, the rendered glyph-and-name pairs, and the
+ * placeholder dash a row with no list to show renders in place of them.
+ *
+ * @returns {Element | null} The label's choices row, or null when no row carries that label.
+ */
 const choicesRowFor = (root, label) => [...root.querySelectorAll(".fo-status-choices")].find((el) => el.querySelector(".stat-label")?.textContent === label) ?? null;
 const choicesIn = (root, label) => [...(choicesRowFor(root, label)?.querySelectorAll(".fo-status-choice") ?? [])].map((el) => ({
 
@@ -272,7 +281,7 @@ describe("statusPanel - selection and the view request", () => {
     // alignment itself, which only a live panel can show.
     const grid = root.querySelector(".device-stats-grid.fo-status-grid");
 
-    assert.equal(grid.querySelector(".fo-status-identity"), null, "no wrapper element stands between the identity cells and the grid");
+    assert.ok(grid.querySelector(".fo-status-identity") === null, "no wrapper element stands between the identity cells and the grid");
 
     // Identity and state cells alike hang off the grid itself, which is what puts every one of them on the same set of column tracks.
     for(const label of [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status", "Door", "Motion" ]) {
@@ -285,7 +294,7 @@ describe("statusPanel - selection and the view request", () => {
       [ "Firmware", "Serial Number", "Model", "Manufacturer", "Status" ], "the identity quartet and the Status cell lead the grid, defining its tracks");
     assert.equal(grid.style.getPropertyValue("--fo-status-tracks"), "5", "the track count is stated as the identity quartet plus the Status cell");
 
-    assert.equal(root.querySelector(".fo-row-break"), null, "the shared tracks are the one alignment mechanism, so no spacer element joins them");
+    assert.ok(root.querySelector(".fo-row-break") === null, "the shared tracks are the one alignment mechanism, so no spacer element joins them");
   });
 
   test("a run of state cells anchors its ends to the outermost tracks and spreads the rest between them", () => {
@@ -449,7 +458,7 @@ describe("statusPanel - push handling by kind", () => {
 
     assert.equal(valueFor(root, "Status"), LOCKED_CONNECTED, "an encrypted snapshot sets the lock-prefixed Connected label");
     assert.equal(valueFor(root, "Door"), "Open", "the snapshot installs the door value");
-    assert.equal(itemFor(root, "Motion"), null, "a row absent from the snapshot disappears");
+    assert.ok(itemFor(root, "Motion") === null, "a row absent from the snapshot disappears");
     assert.equal(messageText(root), null, "the snapshot clears the error message");
   });
 
@@ -932,7 +941,7 @@ describe("statusPanel - the choices row", () => {
     ], "every choice renders at all times, each name beside the glyph its selected flag calls for");
 
     assert.equal(choicesDashIn(root, "Modes"), null, "a populated list renders no placeholder dash");
-    assert.equal(itemFor(root, "Modes"), null, "a choices row is a line rather than a stat cell");
+    assert.ok(itemFor(root, "Modes") === null, "a choices row is a line rather than a stat cell");
     assert.equal(valueFor(root, "Door"), "Open", "and the text row beside it renders exactly as it always has");
   });
 
@@ -1058,7 +1067,7 @@ describe("statusPanel - the choices row", () => {
     fake.observed.emitPush(STATUS_EVENT, choicesEvent("AA", 3, "door", [{ label: "Away", selected: true }]));
 
     assert.equal(valueFor(root, "Door"), "-", "the text row shows the placeholder dash");
-    assert.equal(itemFor(root, "Door").querySelector(".fo-status-choice"), null, "and renders no choice of its own");
+    assert.ok(itemFor(root, "Door").querySelector(".fo-status-choice") === null, "and renders no choice of its own");
   });
 
   test("an empty choices list renders the placeholder dash, exactly as an empty text value does", () => {
@@ -1845,7 +1854,7 @@ describe("statusPanel - the link-lost watchdog", () => {
     fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 2, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "Open" }]));
     assert.equal(valueFor(root, "Status"), "Connected", "the snapshot restored the connected label");
     assert.equal(messageText(root), null, "the snapshot cleared the link-lost message");
-    assert.equal(reloadAnchorIn(root), null, "the reload action is gone after recovery");
+    assert.ok(reloadAnchorIn(root) === null, "the reload action is gone after recovery");
     assert.equal(valueFor(root, "Door"), "Open", "the snapshot rebuilt the rows");
   });
 
@@ -1974,20 +1983,20 @@ describe("statusPanel - the link-lost watchdog", () => {
     fake.observed.emitPush(STATUS_EVENT, connectingEvent("AA", 1));
     assert.equal(valueFor(root, "Status"), "Connecting...", "a connecting push cleared the link-lost Status");
     assert.equal(messageText(root), null, "a connecting push cleared the lingering link-lost message");
-    assert.equal(reloadAnchorIn(root), null, "no reload action after the connecting push");
+    assert.ok(reloadAnchorIn(root) === null, "no reload action after the connecting push");
 
     // An "availability" push clears the marker and message and sets its own connected label.
     tripFresh();
     fake.observed.emitPush(STATUS_EVENT, availabilityEvent("AA", 2, true, false));
     assert.equal(valueFor(root, "Status"), "Connected", "an availability push set the connected label");
     assert.equal(messageText(root), null, "an availability push cleared the lingering link-lost message");
-    assert.equal(reloadAnchorIn(root), null, "no reload action after the availability push");
+    assert.ok(reloadAnchorIn(root) === null, "no reload action after the availability push");
 
     // A "row" push - the least-touching handler - still clears the marker and the message; the Status is corrected by a later status-bearing push.
     tripFresh();
     fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 3, "door", "Open"));
     assert.equal(messageText(root), null, "a row push cleared the lingering link-lost message");
-    assert.equal(reloadAnchorIn(root), null, "no reload action after the row push");
+    assert.ok(reloadAnchorIn(root) === null, "no reload action after the row push");
     assert.equal(valueFor(root, "Door"), "Open", "the row push applied its own value");
 
     // An "error" push renders the error copy but carries NO reload action - the marker gates the anchor, not the message string.
@@ -1995,7 +2004,7 @@ describe("statusPanel - the link-lost watchdog", () => {
     fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 4, "unreachable"));
     assert.equal(valueFor(root, "Status"), "Unreachable", "the error push set the error label");
     assert.equal(messageText(root), "This device could not be reached.", "the error push set the error message");
-    assert.equal(reloadAnchorIn(root), null, "the error render carries no reload action");
+    assert.ok(reloadAnchorIn(root) === null, "the error render carries no reload action");
   });
 
   test("P26: a delivered push after a trip returns the device's whole presentation - its status and its message together", (t) => {
@@ -2026,7 +2035,7 @@ describe("statusPanel - the link-lost watchdog", () => {
 
     assert.equal(valueFor(root, "Status"), "Unreachable", "the error label returns with the link-lost state retired");
     assert.equal(messageText(root), "This device could not be reached.", "and its message returns alongside it");
-    assert.equal(reloadAnchorIn(root), null, "the reload action goes with the link-lost state");
+    assert.ok(reloadAnchorIn(root) === null, "the reload action goes with the link-lost state");
     assert.equal(valueFor(root, "Door"), "Open", "and the row push's own value applies");
   });
 
@@ -2121,8 +2130,8 @@ describe("statusPanel - the link-lost watchdog", () => {
     // An error render after the trip carries NO reload action line: the marker gates the button, not the message string.
     fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 1, "unreachable"));
     assert.equal(valueFor(root, "Status"), "Unreachable", "the error push rendered the error copy");
-    assert.equal(reloadAnchorIn(root), null, "the error render omits the reload action");
-    assert.equal(reloadLineIn(root), null, "the error render omits the reload action line entirely");
+    assert.ok(reloadAnchorIn(root) === null, "the error render omits the reload action");
+    assert.ok(reloadLineIn(root) === null, "the error render omits the reload action line entirely");
   });
 
   test("P30: a zero or negative link-lost timeout falls back to the default deadline, not an instant trip", (t) => {
@@ -2562,7 +2571,7 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
     // A hello proves the relay and the adapter alive, so the whole lost-link presentation goes - both halves of it. The Status cell returns to the connecting
     // placeholder rather than to a connected label: the relay is proven, the device's own state is not, and the re-elicited pushes are what will say more.
     assert.equal(messageText(root), null, "the lost-link message is cleared");
-    assert.equal(reloadAnchorIn(root), null, "and its reload action with it");
+    assert.ok(reloadAnchorIn(root) === null, "and its reload action with it");
     assert.equal(valueFor(root, "Status"), "Connecting...", "the Status cell returns to the connecting placeholder rather than staying stuck on the link-lost label");
 
     assert.deepEqual(seenByCallback, ["Connecting..."], "onServerHello fired exactly once, AFTER the local restore had completed");
@@ -2658,7 +2667,7 @@ describe("statusPanel - a fresh server hello retires a lost-link presentation", 
 
     assert.equal(valueFor(root, "Status"), "Connecting...", "the later selection renders its own connecting placeholder, not a stale link-lost label");
     assert.equal(messageText(root), null, "and carries no lingering lost-link message");
-    assert.equal(reloadAnchorIn(root), null, "and no lingering reload action");
+    assert.ok(reloadAnchorIn(root) === null, "and no lingering reload action");
   });
 
   test("B-HELLO: a hello with nothing tripped is inert - it touches neither the Status cell nor the panel", (t) => {

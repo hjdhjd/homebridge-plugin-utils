@@ -193,7 +193,10 @@ const flush = async () => {
 // The options array the host last had written to it - what a plugin's own Save would put on disk.
 const lastWritten = (fake) => fake.observed.updatedConfigs.at(-1)?.[0]?.options;
 
-// Expand a category so its rows materialize under the lazy-rendering contract, and hand back the option's own checkbox.
+/** Expand a category so its rows materialize under the lazy-rendering contract, and hand back the option's own checkbox.
+ *
+ * @returns {Element | null} The option's checkbox once its category is expanded, or null when the option carries no row in the table.
+ */
 const optionRow = (skeleton, category, option) => {
 
   skeleton.configTable.querySelector("details[data-category='" + category + "'] summary").click();
@@ -620,7 +623,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     await flush();
 
     assert.deepEqual(result, { kind: "committed" });
-    assert.equal(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), null, "the removed controller is gone from the sidebar");
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']") === null, "the removed controller is gone from the sidebar");
     assert.equal(page.skeleton.devicesContainer.querySelectorAll(".nav-link").length, 0, "and its device list went with it");
 
     releaseDevices();
@@ -1284,7 +1287,7 @@ describe("webUiFeatureOptions - the teardown's own edges", () => {
     await reshown;
     await flush();
 
-    assert.equal(page.skeleton.pageFeatureOptions.querySelector(".progress"), null, "no boot affordance: no cycle was minted");
+    assert.ok(page.skeleton.pageFeatureOptions.querySelector(".progress") === null, "no boot affordance: no cycle was minted");
     assert.equal(page.skeleton.sidebar.style.display, "", "and the teardown that ran inside it hid no region of the copy that took the window");
     assert.deepEqual(page.orchestrator.editedConfig[0].options, edited, "and the prior store still answers, where a fresh one would report the saved options");
   });

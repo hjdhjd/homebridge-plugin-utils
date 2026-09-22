@@ -11,4 +11,6 @@
 !package.json
 
 # Exclude these.
+build/**/*.test.mjs
+build/**/test-*.mjs
 dist/**/*.d.ts.map

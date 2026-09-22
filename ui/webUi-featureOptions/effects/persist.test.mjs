@@ -597,6 +597,23 @@ describe("registerPersistEffect - model-load boundary", () => {
     assert.equal(store.state.status.kind, "connection-error", "pre-condition: the status has left loading with no model ever having arrived");
     assert.equal(updates.length, 0, "the refusal keys on the model, not on the status");
   });
+
+  test("flush() on a store the refusal left dirty starts its own drain and refuses identically", async () => {
+
+    const { flush, store, updates } = await setup({ configuredOptions: ["Enable.Motion.Detect"], loaded: false });
+
+    store.dispatch({ type: "options:reset" });
+
+    // Yield a macrotask so the drain the dispatch started reaches its `finally` and clears `inFlight` before flush() runs as a separate statement. That is
+    // the one state in which flush() finds a dirty store with nothing in flight and starts a drain of its own, which the refusal then turns away again.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(updates.length, 0, "precondition: the refusal wrote nothing and left the store dirty");
+
+    await flush();
+
+    assert.equal(updates.length, 0, "flush()'s own drain refuses identically, so still nothing reaches the host");
+  });
 });
 
 describe("registerPersistEffect - a reset with nothing configured", () => {

@@ -859,7 +859,7 @@ describe("webUiFeatureOptions - the boot window", () => {
     await showPromise;
     await flush();
 
-    assert.equal(bootAffordanceIn(), null, "the success reveal takes the frame back from the affordance");
+    assert.ok(bootAffordanceIn() === null, "the success reveal takes the frame back from the affordance");
     assert.equal(skeleton.sidebar.style.display, "", "and the revealed page is what stands in its place");
 
     orchestrator.cleanup();
@@ -904,7 +904,7 @@ describe("webUiFeatureOptions - the boot window", () => {
     await flush();
 
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "precondition: the reported failure rendered the connection-error view");
-    assert.equal(bootAffordanceIn(), null, "the error view owns the frame it took, so no progress treatment keeps running underneath it");
+    assert.ok(bootAffordanceIn() === null, "the error view owns the frame it took, so no progress treatment keeps running underneath it");
 
     orchestrator.cleanup();
   });
@@ -923,7 +923,7 @@ describe("webUiFeatureOptions - the boot window", () => {
     await flush();
 
     assert.match(skeleton.headerInfo.textContent, /Please configure a controller/, "precondition: the empty list rendered the no-controllers helper");
-    assert.equal(bootAffordanceIn(), null, "the helper is a terminal state too - a page that is waiting for nothing must not say it is loading");
+    assert.ok(bootAffordanceIn() === null, "the helper is a terminal state too - a page that is waiting for nothing must not say it is loading");
 
     orchestrator.cleanup();
   });
@@ -951,7 +951,7 @@ describe("webUiFeatureOptions - the boot window", () => {
     await showPromise;
     await flush();
 
-    assert.equal(bootAffordanceIn(), null, "the reduced reveal takes the frame back from the affordance");
+    assert.ok(bootAffordanceIn() === null, "the reduced reveal takes the frame back from the affordance");
     assert.ok(isRegionVisible("optionsContainer"), "and the reduced region set is what stands in its place");
 
     orchestrator.cleanup();
@@ -971,7 +971,7 @@ describe("webUiFeatureOptions - the boot window", () => {
 
     orchestrator.cleanup();
 
-    assert.equal(bootAffordanceIn(), null, "the abort retires the affordance with everything else the cycle owns, with no terminal state ever reached");
+    assert.ok(bootAffordanceIn() === null, "the abort retires the affordance with everything else the cycle owns, with no terminal state ever reached");
 
     // Release the held fetch so the abandoned boot settles rather than leaving a pending promise behind.
     gate.resolve();
@@ -979,7 +979,7 @@ describe("webUiFeatureOptions - the boot window", () => {
     await showPromise;
     await flush();
 
-    assert.equal(bootAffordanceIn(), null, "and the settled boot puts nothing back on the page it no longer owns");
+    assert.ok(bootAffordanceIn() === null, "and the settled boot puts nothing back on the page it no longer owns");
   });
 
   test("a plugin-declared region hides for the boot window, returns with the page, and is never cleared", async () => {
@@ -1086,7 +1086,7 @@ describe("webUiFeatureOptions - the boot window", () => {
     await live;
     await flush();
 
-    assert.equal(bootAffordanceIn(), null, "and the live cycle's own reveal is what finally takes the frame");
+    assert.ok(bootAffordanceIn() === null, "and the live cycle's own reveal is what finally takes the frame");
 
     orchestrator.cleanup();
   });
@@ -4484,7 +4484,10 @@ describe("webUiFeatureOptions - onListEntriesRemoved removal hook", () => {
     return { fake, homebridgeInstall, orchestrator, skeleton };
   };
 
-  // The row's list editor, and the click that takes one entry out of it - the same gesture the options view's own rows drive.
+  /** The row's list editor, and the click that takes one entry out of it - the same gesture the options view's own rows drive.
+   *
+   * @returns {Element | null} The named option's value-editor cell, or null when the option carries no row in the table.
+   */
   const listEditor = (skeleton, option) => skeleton.configTable.querySelector("[id='row-Motion." + option + "'] .fo-option-value");
 
   test("a chip removal announces the one entry that left, ahead of the edit notification", async () => {
@@ -6384,7 +6387,7 @@ describe("webUiFeatureOptions.catalog", () => {
 
     assert.match(skeleton.headerInfo.textContent, /Unable to load the feature options\./, "the features site's own failure copy renders");
     assert.match(skeleton.headerInfo.textContent, /Received a malformed response from the plugin option catalog\./, "carrying the shape check's own message");
-    assert.equal(skeleton.configTable.querySelector("details[data-category]"), null, "and no empty options table renders in its place");
+    assert.ok(skeleton.configTable.querySelector("details[data-category]") === null, "and no empty options table renders in its place");
 
     orchestrator.cleanup();
   });

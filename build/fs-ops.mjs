@@ -6,6 +6,7 @@
  *
  * Subcommands:
  *
+ *   audit-package          refuse a package that would carry a file git does not track under a source root the package ships, or a test file of any shape.
  *   build-ui               mkdir dist/ui and copy shippable ui/*.mjs (excluding test-only files) into it (invoked by the `build-ui` npm script).
  *   clean <paths...>       rm -rf each path, silently ignoring missing entries; errors if no paths are supplied (invoked by `clean`).
  *   finalize               ready the emitted dist/ for shipping and local consumption: copy the browser-runtime modules into dist/ui and mark every declared bin
@@ -13,9 +14,12 @@
  *   publish-docs           promote the staged TypeDoc output into docs/ page by page, prune every generated page the run did not produce, and remove the staging
  *                          directory (invoked by `build-docs` after typedoc).
  */
+import { DIST_ROOT, PLUGIN_OUTPUT, PLUGIN_SOURCE, SRC_ROOT, UI_OUTPUT, UI_SOURCE } from "./build-paths.mjs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { chmod, cp, mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { BROWSER_MODULES } from "./browser-modules.mjs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 // The published documentation tree, where every generated page lands beside the hand-authored files the publish preserves.
 const DOCS_ROOT = "docs";
@@ -33,22 +37,56 @@ async function clean(paths) {
   await Promise.all(paths.map((path) => rm(path, { force: true, recursive: true })));
 }
 
+// The name segments that mark a file as test-only: a suite, its shared data, and its shared code. A segment rather than a whole suffix, so one rule answers for
+// every script extension the family writes rather than one entry per extension crossed with per segment.
+const TEST_ONLY_SEGMENTS = [ ".fixtures", ".helpers", ".test" ];
+
+// The script extensions a test-only name can end in, longest first so a four-character extension is matched before the three-character one it ends with: ".cts"
+// and ".mts" both end in ".ts", and matching the shorter one would leave a stray character on the stem and miss the segment behind it.
+const SCRIPT_EXTENSIONS = [ ".cjs", ".cts", ".mjs", ".mts", ".js", ".ts" ];
+
+/* Answer whether a file name is test-only: the build copies none of these into dist/ui, and the package ships none of them at all.
+ *
+ * Two shapes count. A name beginning "test-" is test infrastructure rather than a suite - the module-resolution loader and the lint plugin's own harness are the
+ * two the tree carries - and a name whose stem ends in one of the test-only segments is a suite or the data and code a suite shares. The stem is what is read
+ * rather than the whole name, so the rule holds for every script extension rather than for the one extension a given caller happens to meet.
+ *
+ * @param name - A file's base name, without its directory.
+ *
+ * @returns `true` when the name is test-only.
+ */
+function isTestOnlyName(name) {
+
+  if(name.startsWith("test-")) {
+
+    return true;
+  }
+
+  const extension = SCRIPT_EXTENSIONS.find((candidate) => name.endsWith(candidate));
+
+  if(extension === undefined) {
+
+    return false;
+  }
+
+  const stem = name.slice(0, -extension.length);
+
+  return TEST_ONLY_SEGMENTS.some((segment) => stem.endsWith(segment));
+}
+
 // Ensure dist/ui exists and copy the browser-side UI assets into it. Runs during the clean and build-ui phases, before tsc emits the compiled browser modules,
 // so the directory has to exist up front and the browser-modules copy step runs separately after tsc. We filter to shippable artifacts by excluding the
-// test-only file shapes: `*.test.mjs` (suite files), `*.fixtures.mjs` (shared test data), `*.helpers.mjs` (shared test code), and `test-*.mjs` (test infrastructure,
-// currently the `registerHooks` module-resolution loader). Suffix matches are centralized in `TEST_ONLY_SUFFIXES` so adding a new test-file shape is a one-line edit
-// rather than a chain of `&& !entry.endsWith(...)` clauses. The resulting dist/ui/ contains only the browser runtime files consumers execute.
+// test-only file shapes, which `isTestOnlyName` decides for this step and for the package audit alike. The resulting dist/ui/ contains only the browser runtime
+// files consumers execute.
 //
 // The copy is recursive so the directory structure under `ui/` (the `webUi-featureOptions/`, `webUi-featureOptions/effects/`, `webUi-featureOptions/views/`
 // subdirectories) is preserved as-is in `dist/ui/`. The filter is consulted per-entry: directories always pass through (returning `true` lets `cp` walk into them);
 // files are kept only when they match the shippable shape.
-const TEST_ONLY_SUFFIXES = [ ".fixtures.mjs", ".helpers.mjs", ".test.mjs" ];
-
 async function buildUi() {
 
-  await mkdir("dist/ui", { recursive: true });
+  await mkdir(UI_OUTPUT, { recursive: true });
 
-  await cp("ui", "dist/ui", {
+  await cp(UI_SOURCE, UI_OUTPUT, {
 
     filter: async (src) => {
 
@@ -61,12 +99,8 @@ async function buildUi() {
 
       const name = basename(src);
 
-      if(!name.endsWith(".mjs") || name.startsWith("test-")) {
-
-        return false;
-      }
-
-      return !TEST_ONLY_SUFFIXES.some((suffix) => name.endsWith(suffix));
+      // Only the browser runtime ships, so the extension is asked first and the shared rule answers the rest.
+      return name.endsWith(".mjs") && !isTestOnlyName(name);
     },
     recursive: true
   });
@@ -82,8 +116,8 @@ async function copyBrowserModules() {
 
   await Promise.all(BROWSER_MODULES.flatMap((name) => [
 
-    cp(join("dist", name + ".js"), join("dist/ui", name + ".js")),
-    cp(join("dist", name + ".js.map"), join("dist/ui", name + ".js.map"))
+    cp(join(DIST_ROOT, name + ".js"), join(UI_OUTPUT, name + ".js")),
+    cp(join(DIST_ROOT, name + ".js.map"), join(UI_OUTPUT, name + ".js.map"))
   ]));
 }
 
@@ -108,6 +142,176 @@ async function makeBinExecutable() {
 async function finalize() {
 
   await Promise.all([ copyBrowserModules(), makeBinExecutable() ]);
+}
+
+/* Which output extensions one input extension produces. This is the only part of the tracing the audit owns outright, because it is the only part the build does
+ * not state somewhere else: `declaration`, `declarationMap`, and `sourceMap` in the shared base decide that one module answers for a runtime file, a declaration,
+ * and a source map, and the module family its extension puts it in decides what those three are called. The `.d.ts.map` a module also emits is absent because the
+ * ignore file excludes it from the package, so it is never a path this traces.
+ */
+const TSC_OUTPUT_SUFFIXES = {
+
+  ".cts": [ ".cjs", ".cjs.map", ".d.cts" ],
+  ".mts": [ ".d.mts", ".mjs", ".mjs.map" ],
+  ".ts": [ ".d.ts", ".js", ".js.map" ]
+};
+
+/* How a packaged path traces back to the file it came from. A path outside the compiled tree is its own source; a path inside it is something the build produced,
+ * and each route below is one statement about what the build actually does, in the order they are tried: the filled subtrees first, since they are written by
+ * steps of their own and would otherwise read as ordinary compiler output one directory deeper.
+ *
+ * Every directory and every roster here is read from where the build declares it - the shared path constants, and `BROWSER_MODULES` itself for the one route that
+ * needs to know which modules the browser copy carries - so the table cannot drift from the build by restating something the build already says. What it adds is
+ * only the direction: the build maps a source to an output, and this maps an output back to its source.
+ *
+ * A subtree owns every path beneath it, which is what the grouping below is for. Once a path is under a directory some step fills, only that step's routes may
+ * answer for it, and a shape none of them names is a path this table does not explain - never something a broader route downstream is allowed to guess at. Both
+ * filled subtrees need that: a file under the webUI output that is not a browser module, and a file under the lint plugin's output that is not a declaration,
+ * would each otherwise resolve to a plausible-looking TypeScript source one or two directories down that nobody ever wrote.
+ */
+const DIST_SOURCE_ROUTES = [
+
+  { prefix: UI_OUTPUT + "/", routes: [
+
+    { source: (stem) => UI_SOURCE + "/" + stem + ".mjs", suffixes: [".mjs"] },
+    { source: (stem) => (BROWSER_MODULES.includes(stem) ? (SRC_ROOT + "/" + stem + ".ts") : null), suffixes: [ ".js", ".js.map" ] }
+  ] },
+  { prefix: PLUGIN_OUTPUT + "/", routes: [{ source: (stem) => PLUGIN_SOURCE + "/" + stem + ".mjs", suffixes: [".d.mts"] }] },
+  { prefix: DIST_ROOT + "/", routes: Object.entries(TSC_OUTPUT_SUFFIXES).map(([ extension, suffixes ]) => ({
+
+    source: (stem) => SRC_ROOT + "/" + stem + extension, suffixes })) }
+];
+
+// Run a child process and answer its captured output. The readings below are the file's only child processes, and every one of them is read-only.
+const run = promisify(execFile);
+
+/* Name the file a packaged path came from, or `null` when nothing here explains it. A path outside the compiled tree is its own source, since nothing built it.
+ *
+ * @param path - A path as the pack listing spells it, relative to the package root.
+ *
+ * @returns The source path, or `null` for a path no route explains.
+ */
+function packagedSource(path) {
+
+  if(!path.startsWith(DIST_ROOT + "/")) {
+
+    return path;
+  }
+
+  /* The first subtree whose prefix claims the path owns it outright, and the table's last entry is the compiled root itself, so a path already known to be under
+   * that root always finds one. What it does not always find is a route for its own shape, and that is the case worth being strict about: a file under a filled
+   * subtree whose suffix none of that subtree's routes names is a path this table does not explain, so it answers nothing rather than falling through to a
+   * broader route that would happily name a source nobody wrote.
+   */
+  const subtree = DIST_SOURCE_ROUTES.find((candidate) => path.startsWith(candidate.prefix));
+
+  for(const route of subtree.routes) {
+
+    const suffix = route.suffixes.find((candidate) => path.endsWith(candidate));
+
+    if(suffix !== undefined) {
+
+      return route.source(path.slice(subtree.prefix.length, -suffix.length));
+    }
+  }
+
+  return null;
+}
+
+/* Take one of the audit's two readings under a single guard, refusing rather than unwinding when anything about it goes wrong. Spawning the tool, parsing what it
+ * wrote, and reaching into the shape it was expected to have all happen inside `read`, so all three share one failure path and one sentence: there is no second,
+ * separately reachable branch for a malformed answer that no test would ever reach. Both readings are read-only, and both need something the environment supplies
+ * rather than something this file controls - a tool on the path, and a git checkout to be standing in - which is what the named subject reports.
+ *
+ * Each reading gives the child process its working directory explicitly, and both give the same one, because each resolves its subject from where the process
+ * stands rather than from anything passed to it: `npm pack` finds the nearest package.json from the current directory and ignores `--prefix` for the purpose
+ * entirely, and git resolves its repository the same way. Naming the directory at both call sites is what keeps them from ever reading different trees, and it
+ * is the reason no caller should reach for a flag instead.
+ *
+ * @param subject - What the reading is, named in the refusal so a reader learns which one failed and which tool owed the answer.
+ * @param read    - Takes the reading: spawns, parses, and shapes it.
+ *
+ * @returns Whatever `read` answered with.
+ */
+async function readOrRefuse(subject, read) {
+
+  try {
+
+    return await read();
+  } catch {
+
+    process.stderr.write("Unable to audit the package: could not read " + subject + ".\n");
+    process.exit(1);
+  }
+}
+
+/* Refuse a package that would carry a file whose source git does not track, or a test-only file of any shape.
+ *
+ * The pack listing is the subject, because it is the file set npm would actually upload - ignore rules and allowlist already applied - rather than a second model
+ * of them, and every one of its paths is traced back to the file it came from and that source required to be tracked. Asking git which files it does not track
+ * would answer a different and weaker question: with an ignore file present npm never reads the git ignore rules at all, so a gitignored module under the source
+ * root still compiles into the output and ships, a gitignored file under the webUI root is still copied and ships, and anything gitignored under a directory the
+ * allowlist admits ships verbatim. Tracing what ships catches all of those; asking git for untracked files catches none of them, and asking it for ignored files
+ * instead would refuse a publish over a stray editor artifact npm was never going to pack.
+ *
+ * A path no route explains fails the audit rather than passing. That is deliberate and it is the whole reason the table is worth having: a build that grows a new
+ * route refuses to publish until the table is taught about it, which is the safe direction for a check whose job is to say what is in the package.
+ *
+ * A reading that cannot be taken is a refusal too, not a crash. The audit runs at the tail of a publish, where an uncaught rejection's stack trace would bury the
+ * one sentence a reader needs, so a missing tool, a directory that is no checkout, and output that does not parse or does not carry the shape this expects all
+ * end in the same purpose-built refusal every other verb in this file uses. Each reading is spawned, parsed, and shaped inside ONE guarded step that names it,
+ * so there is no separately reachable failure branch to leave untested: whatever goes wrong with a reading, the same sentence reports it and the same test row
+ * exercises the path. It can only happen in a broken environment - the build runs from a checkout everywhere it runs, and the manifest declares no `prepare` and
+ * no `postinstall`, so nothing runs a build from an installed package - but "it should not happen" is not a reason to answer it badly.
+ */
+async function auditPackage() {
+
+  const shipped = await readOrRefuse("the package listing from npm", async () => {
+
+    const { stdout } = await run("npm", [ "pack", "--dry-run", "--ignore-scripts", "--json" ], { cwd: process.cwd() });
+
+    return JSON.parse(stdout)[0].files.map((file) => file.path);
+  });
+
+  const tracked = await readOrRefuse("the tracked-file listing from git", async () => {
+
+    const { stdout } = await run("git", [ "ls-files", "-z" ], { cwd: process.cwd() });
+
+    return new Set(stdout.split("\0").filter((path) => path.length > 0));
+  });
+
+  const strays = [];
+
+  for(const path of shipped) {
+
+    const source = packagedSource(path);
+
+    if(source === null) {
+
+      strays.push(path + " (no build route explains this path)");
+
+      continue;
+    }
+
+    if(!tracked.has(source)) {
+
+      strays.push((source === path) ? (path + " (git does not track it)") : (path + " (built from " + source + ", which git does not track)"));
+    }
+  }
+
+  if(strays.length) {
+
+    process.stderr.write("These files would ship without a tracked source: " + strays.join(", ") + ".\n");
+    process.exit(1);
+  }
+
+  const tests = shipped.filter((path) => isTestOnlyName(basename(path)));
+
+  if(tests.length) {
+
+    process.stderr.write("These test-only files would ship in the package: " + tests.join(", ") + ".\n");
+    process.exit(1);
+  }
 }
 
 /* Publish the staged TypeDoc output into docs/. The generator writes into DOCS_STAGING rather than the published tree, so docs/ carries a complete result right up
@@ -185,6 +389,13 @@ const [ command, ...args ] = process.argv.slice(2);
 
 switch(command) {
 
+  case "audit-package": {
+
+    await auditPackage();
+
+    break;
+  }
+
   case "build-ui": {
 
     await buildUi();
@@ -221,7 +432,7 @@ switch(command) {
 
   default: {
 
-    process.stderr.write("Usage: fs-ops.mjs {build-ui | clean <paths...> | finalize | publish-docs}\n");
+    process.stderr.write("Usage: fs-ops.mjs {audit-package | build-ui | clean <paths...> | finalize | publish-docs}\n");
     process.exit(1);
   }
 }

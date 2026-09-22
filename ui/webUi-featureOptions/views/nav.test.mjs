@@ -700,7 +700,10 @@ describe("mountNavView - click dispatch", () => {
 
 describe("mountNavView - the heading refresh action", () => {
 
-  // The action docks on the mode's primary list heading, so each mode's assertions read it off the container that heading belongs to.
+  /** The action docks on the mode's primary list heading, so each mode's assertions read it off the container that heading belongs to.
+   *
+   * @returns {Element | null} The heading's action button, or null when the container's primary heading docks no action.
+   */
   const actionIn = (root) => root.querySelector("h6.nav-header button.fo-action");
 
   test("docks on the controllers heading in controller-based mode, carrying the label as its accessible name", () => {
@@ -716,7 +719,7 @@ describe("mountNavView - the heading refresh action", () => {
     assert.equal(button.type, "button", "the control submits nothing");
     assert.equal(button.classList.contains("btn-xs"), true, "it takes its geometry from the shared extra-small button class");
     assert.equal(button.classList.contains("ms-auto"), true, "and anchors to the heading's trailing edge, which is what makes wrapping impossible at any width");
-    assert.equal(actionIn(rootDevices), null, "and the devices heading carries none, since it is not the primary list in this mode");
+    assert.ok(actionIn(rootDevices) === null, "and the devices heading carries none, since it is not the primary list in this mode");
   });
 
   test("the glyph is drawn at text scale in the current color and hidden from the accessibility tree", () => {
@@ -748,7 +751,7 @@ describe("mountNavView - the heading refresh action", () => {
     const { rootControllers, rootDevices } = setup({ devices: DEVICES, mode: "device-only", refresh: { onRefresh: () => {} } });
 
     assert.ok(actionIn(rootDevices), "the top-level devices heading is the primary list where there are no controllers");
-    assert.equal(actionIn(rootControllers), null, "and the controllers container heads nothing in this mode");
+    assert.ok(actionIn(rootControllers) === null, "and the controllers container heads nothing in this mode");
   });
 
   test("a fully-grouped device-only list has no heading to dock on, so no action renders", () => {
@@ -760,7 +763,7 @@ describe("mountNavView - the heading refresh action", () => {
     const { rootDevices } = setup({ devices: grouped, mode: "device-only", refresh: { onRefresh: () => {} } });
 
     assert.ok(rootDevices.querySelector("h6.nav-header"), "precondition: the group heading rendered");
-    assert.equal(actionIn(rootDevices), null, "but no action docked, because the heading it docks on is the top-level one");
+    assert.ok(actionIn(rootDevices) === null, "but no action docked, because the heading it docks on is the top-level one");
   });
 
   test("a docked heading is a flex row, so the action's placement is the layout's business rather than the label's length", () => {
@@ -885,6 +888,7 @@ describe("mountNavView - the heading refresh action", () => {
 
 describe("mountNavView - the Global Options row", () => {
 
+  /** @returns {Element | null} The Global Options row, or null when the container renders none. */
   const globalIn = (root) => root.querySelector("[data-navigation='global']");
 
   test("renders as a navigable row rather than a heading, wearing no header costume", () => {

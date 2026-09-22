@@ -143,10 +143,13 @@ describe("mountOptionsView - lazy row materialization", () => {
 
 describe("mountOptionsView - open-category row materialization", () => {
 
-  // Leave a category in the state a lost toggle leaves behind: open, holding no rows, with nothing still owing it the event that would ordinarily build them.
-  // Detaching before the open is what makes the construction faithful rather than contrived - a toggle fired on a detached element reaches that element's own
-  // listeners and never the table's delegated one, which is exactly what a render pass does when it detaches a subtree between a programmatic open and the toggle
-  // task the browser has queued behind it. Re-attaching fires nothing of its own, so the category comes back to the table open and empty.
+  /** Leave a category in the state a lost toggle leaves behind: open, holding no rows, with nothing still owing it the event that would ordinarily build them.
+   * Detaching before the open is what makes the construction faithful rather than contrived - a toggle fired on a detached element reaches that element's own
+   * listeners and never the table's delegated one, which is exactly what a render pass does when it detaches a subtree between a programmatic open and the toggle
+   * task the browser has queued behind it. Re-attaching fires nothing of its own, so the category comes back to the table open and empty.
+   *
+   * @returns {Element | null} The poisoned category, or null when the table carries no category by that name.
+   */
   const poisonCategory = (configTable, name) => {
 
     const details = configTable.querySelector("details[data-category='" + name + "']");
@@ -1004,8 +1007,11 @@ describe("mountOptionsView - controller-scope cache invalidation", () => {
       seq: store.state.devicesRequest.seq, type: "devices:loaded" });
   };
 
-  // Navigate to a scope and expand its category, which is what materializes the view's rows. Hands back the category element, whose identity on a later visit is
-  // how a cache restore is told from a fresh build.
+  /** Navigate to a scope and expand its category, which is what materializes the view's rows. Hands back the category element, whose identity on a later visit is
+   * how a cache restore is told from a fresh build.
+   *
+   * @returns {Element | null} The Camera category after the visit, or null when the table carries no such category.
+   */
   const visit = (configTable, store, scope) => {
 
     store.dispatch({ scope, type: "scope:changed" });
@@ -1090,7 +1096,10 @@ describe("mountOptionsView - in-flight device fetch", () => {
     return harness;
   };
 
-  // Expand a category and hand back its element. Categories render collapsed, so this is how a row comes to exist at all on a first visit to a view.
+  /** Expand a category and hand back its element. Categories render collapsed, so this is how a row comes to exist at all on a first visit to a view.
+   *
+   * @returns {Element | null} The expanded category, or null when the table carries no category by that name.
+   */
   const expandCategory = (configTable, name) => {
 
     const details = configTable.querySelector("details[data-category='" + name + "']");
@@ -1311,7 +1320,10 @@ describe("mountOptionsView - in-flight device fetch", () => {
  */
 describe("mountOptionsView - a coordinated configuration write", () => {
 
-  // Expand Motion and hand back the row checkbox the assertions operate on. Categories render collapsed, so this is how a row comes to exist at all.
+  /** Expand Motion and hand back the row checkbox the assertions operate on. Categories render collapsed, so this is how a row comes to exist at all.
+   *
+   * @returns {Element | null} The Motion.Detect checkbox, or null when the Motion category carries no such row.
+   */
   const expandMotion = (configTable) => {
 
     const motion = configTable.querySelector("details[data-category='Motion']");
@@ -1587,6 +1599,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
     store.dispatch({ controllerId, devices, emptyMessage, error, seq: store.state.devicesRequest.seq, type: "devices:loaded" });
   };
 
+  /** @returns {Element | null} The devices notice, or null when the table renders an option list instead. */
   const notice = (configTable) => configTable.querySelector(".fo-devices-notice");
 
   test("renders the plugin's message in place of the option table", () => {
@@ -1685,7 +1698,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
     // The controller reports devices again. The cached table is what comes back.
     clickController(store, { controllerId: CONTROLLER_A, devices: [DEVICE_A] });
 
-    assert.equal(notice(configTable), null, "the notice is gone");
+    assert.ok(notice(configTable) === null, "the notice is gone");
     assert.ok(configTable.querySelector("details[data-category='Motion']") === motion, "the very element cached before the notice is the one that returns");
   });
 
@@ -1700,7 +1713,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
     store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
     clickController(store, { controllerId: CONTROLLER_B, devices: [DEVICE_A] });
 
-    assert.equal(notice(configTable), null, "no notice DOM came back out of the cache");
+    assert.ok(notice(configTable) === null, "no notice DOM came back out of the cache");
     assert.notEqual(configTable.querySelectorAll("details[data-category]").length, 0, "a real table is what the view holds");
   });
 
@@ -1784,6 +1797,7 @@ const pickerSetup = ({ configuredOptions = [], controllers = [], devices = [], m
   return { abort: () => controller.abort(), configTable, store };
 };
 
+/** @returns {Element | null} The named picker option's value-editor cell, or null when the option carries no row. */
 const pickerControl = (configTable, optionName) => configTable.querySelector("[id='row-Pick." + optionName + "'] .fo-option-value");
 
 // The controller's own row, which the picker catalog's validator names. A controller view needs it in the landed list to have a scoping identity, and therefore an
@@ -2083,6 +2097,7 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
  */
 describe("mountOptionsView - the list editor", () => {
 
+  /** @returns {Element | null} The list editor's value cell for Pick.Plates, or null when the row does not exist. */
   const editorControl = (configTable) => configTable.querySelector("[id='row-Pick.Plates'] .fo-option-value");
 
   const typeInto = (control, text, key = "Enter") => {

@@ -89,6 +89,15 @@ describe("initialState", () => {
     assert.notEqual(a, b, "different top-level references");
     assert.notEqual(a.filter, b.filter, "nested objects are also fresh");
   });
+
+  test("the placeholder catalog's validators are permissive except isController, which excludes every device", () => {
+
+    const { validators } = initialState().catalog;
+
+    assert.equal(validators.isController({}), false, "nothing is a controller before a model names one");
+    assert.equal(validators.validOption(undefined, {}), true, "every option is admitted while the real catalog is still absent");
+    assert.equal(validators.validOptionCategory(undefined, {}), true, "and so is every category, so a speculative read hides nothing");
+  });
 });
 
 describe("reducer - model:loaded", () => {

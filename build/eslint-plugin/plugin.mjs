@@ -6,6 +6,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import ruleBlankAfterOpenBrace from "./rules/blank-line-after-open-brace.mjs";
 import ruleCommentStyle from "./rules/comment-style.mjs";
 import ruleEnforceNodeProtocol from "./rules/enforce-node-protocol.mjs";
+import ruleNoDomNodeEquality from "./rules/no-dom-node-equality.mjs";
 import ruleNoNumericSeparators from "./rules/no-numeric-separators.mjs";
 import ruleParenComparisonsInLogical from "./rules/paren-comparisons-in-logical.mjs";
 import ruleSplitTypeImports from "./rules/split-type-imports.mjs";
@@ -39,6 +40,7 @@ const plugin = {
     "blank-line-after-open-brace": ruleBlankAfterOpenBrace,
     "comment-style": ruleCommentStyle,
     "enforce-node-protocol": ruleEnforceNodeProtocol,
+    "no-dom-node-equality": ruleNoDomNodeEquality,
     "no-numeric-separators": ruleNoNumericSeparators,
     "paren-comparisons-in-logical": ruleParenComparisonsInLogical,
     "split-type-imports": ruleSplitTypeImports

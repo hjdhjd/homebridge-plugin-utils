@@ -532,7 +532,7 @@ describe("boot monitor behavior", () => {
     assert.ok(text.includes("Stage: manifest"), "the stage line names the failing stage");
     assert.ok(text.includes("Error: <img src=x>"), "the error line carries the raw message");
     assert.match(text, /Browser: \S/, "the browser line carries the user agent");
-    assert.equal(details?.querySelector("img"), null, "the untrusted error text is assigned via textContent, never parsed as markup");
+    assert.ok(details?.querySelector("img") === null, "the untrusted error text is assigned via textContent, never parsed as markup");
   });
 });
 

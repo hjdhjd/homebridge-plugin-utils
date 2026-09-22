@@ -117,7 +117,7 @@ describe("optionRow - basic structure", () => {
     assert.equal(checkbox?.id, "Motion.Detect");
     assert.equal(label?.getAttribute("for"), "Motion.Detect");
     assert.equal(label?.textContent, "Enable motion detection.");
-    assert.equal(valueInput, null, "boolean options have no value input");
+    assert.ok(valueInput === null, "boolean options have no value input");
 
     // A boolean row uses the same uniform shape as a value row: checkbox + content cell. The cell holds just the label.
     const content = row.querySelector(".fo-option-content");

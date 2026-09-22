@@ -29,7 +29,7 @@
  * @module
  */
 import type { MdnsBrowserEvent, MdnsBrowserFactory, MdnsBrowserOptions, MdnsService } from "./browser.ts";
-import { formatErrorMessage, superviseStream } from "../util.ts";
+import { formatErrorMessage, repeatDemotedLog, superviseStream } from "../util.ts";
 import { AsyncQueue } from "../async-queue.ts";
 import type { Nullable } from "../util.ts";
 import { dnsNameKey } from "./message.ts";
@@ -98,11 +98,17 @@ export interface MdnsDiscovery<T> extends AsyncIterable<MdnsDiscoveryEvent<T>>, 
  * @example
  *
  * ```ts
- * import { discoverServices } from "homebridge-plugin-utils";
+ * import { dialAddress, discoverServices } from "homebridge-plugin-utils";
  *
  * await using discovery = discoverServices({
  *
- *   classify: (service) => { const mac = txtEntries(service.txt).get("mac"); return mac ? { address: service.addresses[0], mac } : null; },
+ *   classify: (service) => {
+ *
+ *     const mac = txtEntries(service.txt).get("mac");
+ *     const address = dialAddress(service.addresses);
+ *
+ *     return mac && address ? { address, mac } : null;
+ *   },
  *   log: this.log,
  *   serviceType: "_esphomelib._tcp.local",
  *   signal: this.signal
@@ -122,6 +128,11 @@ export function discoverServices<T>(options: DiscoverServicesOptions<T>): MdnsDi
   const { log, serviceType } = browserOptions;
   const devices = new Map<string, T>();
   const queue = new AsyncQueue<MdnsDiscoveryEvent<T>>();
+
+  // The repeat memory for the consumer's own classification faults, one episode per discovery. A classification that fails the same way fails on every service
+  // transition the browser derives, so the rendered reason is the tag: the first failure is reported in full and the ones after it replay at debug.
+  const classifyFailures = repeatDemotedLog(log);
+
   let open = true;
 
   // Hand the consumer's loop one event, while it still has a loop to hand it to.
@@ -135,8 +146,10 @@ export function discoverServices<T>(options: DiscoverServicesOptions<T>): MdnsDi
     queue.push(event);
   };
 
-  // A `classify` belongs to the consumer and may do anything, including throw. A throw is that service's answer - no device - and is reported once here rather
-  // than being allowed to unwind into the browser, where it would land in the middle of a caching pass.
+  /* A `classify` belongs to the consumer and may do anything, including throw. A throw is that service's answer - no device - and is reported here rather than
+   * being allowed to unwind into the browser, where it would land in the middle of a caching pass. The attempt wraps the report rather than the call, so a
+   * classification that answers costs nothing, and a classification that keeps failing the same way says so once rather than once per transition.
+   */
   const guardedClassify = (service: MdnsService): Nullable<T> => {
 
     try {
@@ -144,7 +157,14 @@ export function discoverServices<T>(options: DiscoverServicesOptions<T>): MdnsDi
       return classify(service);
     } catch(error: unknown) {
 
-      log.error("Classifying the mDNS service %s failed and it is treated as no device: %s.", service.instance, formatErrorMessage(error));
+      classifyFailures.attempt((attemptLog): string => {
+
+        const reason = formatErrorMessage(error);
+
+        attemptLog.error("Classifying the mDNS service %s failed and it is treated as no device: %s.", service.instance, reason);
+
+        return reason;
+      }, (reason) => reason);
 
       return null;
     }

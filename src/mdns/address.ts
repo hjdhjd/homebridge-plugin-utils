@@ -76,9 +76,9 @@ function lowest(candidates: readonly string[]): string | undefined {
  * moved. Ranking the set is what keeps the answer stable across that reordering: unique-local leads because it is the range a site assigns itself and so
  * survives an ISP prefix rotation, and within one class the lowest string wins, a comparison whose only job is to give one answer for one set.
  *
- * While a host's address is changing, the browser's own hold can advertise the outgoing address and the incoming one together until the outgoing record's
- * hold ends: for that window this function can answer with either one, and the next derivation corrects it once the hold expires. Nothing here promises an
- * order between the two, and nothing here names how long the window lasts.
+ * While a host's address is changing, the browser reports only its live addresses once a replacement exists: the outgoing address leaves the reported
+ * set the instant the incoming one is cached, and this function sees the incoming address alone. The outgoing address surfaces here only when it is
+ * the host's last address of either family - nothing live to report - for the second its own hold keeps it reachable.
  *
  * A zoned candidate is dropped before anything else classifies it: a link-local address means nothing without the link it was heard on, and the zone a
  * browser stamps onto one is this function's signal that the address is of that kind.
@@ -114,8 +114,10 @@ export function dialAddress(addresses: readonly string[]): Nullable<string> {
  * `addresses` is read exactly as advertised, zoned entries included, because an address a consumer would never dial is still the service saying it answers
  * there: the comparison here is against the full advertised list, never against {@link dialAddress}'s filtered, ranked view of it.
  *
- * One case this test cannot distinguish: the held address's own record lapsing while the connection stays otherwise healthy. The advertisement alone reads
- * that the same way as the device having moved to a different address, so the connection is reopened once either way.
+ * One case this test still cannot distinguish: a lone held address's own hold ending, versus the device having moved off it entirely - both read as
+ * gone from the advertisement the same way, so the connection is reopened once either way. That case is the only one where a held address stays
+ * advertised at all: once a live address of either family exists for the host, the outgoing address drops from the advertisement at once, and this
+ * test reads false for it immediately, rather than after any grace window.
  *
  * @param addresses - The service's currently advertised addresses.
  * @param address   - The address a held connection was opened at.

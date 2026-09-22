@@ -12,12 +12,15 @@ A plugin that speaks MQTT registers subscriptions and publishes state, and what 
 double that answers it: a [TestMqttClient](#testmqttclient) recording which subscriptions were registered, on which topics, carrying which signals, what was published, and how
 a refused publish was handled, with drivers that let a test deliver a message or run a registered getter or setter by hand.
 
-The double records, it does not simulate a broker. There is no connection, no topic prefixing (a topic is recorded as the caller's tail, verbatim), and nothing on
+The double records, it does not simulate a broker. There is no connection, no topic prefixing (a topic is recorded as the caller's tail, verbatim), no last will
+(a will is published by the broker, and there is none behind this double to publish one), and nothing on
 the wire...those are the real client's own contract, covered by the library's suite against a real broker, and a plugin's suite needs the plugin's side of the
 interface rather than the transport's. What the double does mirror is the client's observable behavior, because that is what a consumer's code branches on: the
 composed-signal check every publish opens with, the connection state a publish is refused on when it reads false, the pre-aborted early return that registers
 nothing, the release of a registration when its per-subscription signal aborts, the change gate a publish asking for `ifChanged` is answered by and the
-session-bound memory behind it, and the post-abort no-op posture of every method. The guarded path routes through
+session-bound memory behind it, the connect registrations the client notifies on every session it establishes - driven here by the lever's false-to-true edge,
+which is the double's session restored - the retained availability statement that same edge records ahead of those registrations, and the post-abort no-op posture
+of every method. The guarded path routes through
 the client's own [routeGuardedPublishFailure](mqtt-publish.md#routeguardedpublishfailure), so a cancellation, an offline refusal, and a genuine failure reach
 the same lines here that they reach on the client.
 
@@ -117,7 +120,13 @@ aborts, whatever the lever itself holds, which is the composition the client mak
 Setting it to `false` stands in for a broker the client holds no session with: every [TestMqttClient.publish](#publish) is then refused with
 [MqttOfflineError](mqtt-publish.md#mqttofflineerror) and counted, which is the outage a consumer's own code has to survive. Set it back to `true` to resume recording. Moving the lever
 from `false` to `true` is a session restored and clears the change-gated memory, exactly as the client's connect clears its own; a write that leaves the lever
-where it was is not a session event and leaves the memory standing.
+where it was is not a session event and leaves the memory standing. That same edge runs every registration [TestMqttClient.onConnect](#onconnect) holds, which is
+how a scenario drives a consumer's restatement of held state without a broker.
+
+The edge is also where the double states its availability, as the client's connect does: a retained `online` on the availability tail, recorded ahead of those
+registrations. A fresh double records nothing of the kind, and the asymmetry with the client is deliberate rather than an omission - the client's first connect
+is a session established, while a fresh double is a session already held, with no edge to cross - so a scenario that wants the statement drives the lever from
+`false` to `true`. Recording one at construction would shift every index-based assertion a consumer's own suite already holds.
 
 ###### Returns
 
@@ -273,6 +282,34 @@ has aborted the call returns quietly.
 
 [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
 
+##### onConnect()
+
+```ts
+onConnect(handler, init?): void;
+```
+
+Record a connect registration, mirroring [MqttClient.onConnect](mqttClient.md#onconnect): an aborted double or a pre-aborted per-registration
+signal registers nothing, a supplied signal releases the registration when it - or the double - aborts, and registering the same function twice is one
+registration.
+
+Moving [TestMqttClient.connected](#connected) from `false` to `true` is what makes a registration fire, since that edge is the double's session restored. The
+registrations run after the memory clear and after the lever has taken its value, so a handler reading `connected` sees `true` and a publish it issues is
+admitted, exactly as one is on the client. A write that leaves the lever where it stood, and a write to `false`, invoke nothing.
+
+A property write cannot be awaited, so a scenario whose handler is asynchronous awaits a turn after the write - the shipped `settle` helper - before it asserts
+what the handler did.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `handler` | [`MqttConnectHandler`](mqttClient.md#mqttconnecthandler) | The callback to record. See [MqttConnectHandler](mqttClient.md#mqttconnecthandler). |
+| `init` | [`MqttSubscribeInit`](mqttClient.md#mqttsubscribeinit) | Optional per-registration options. See [MqttSubscribeInit](mqttClient.md#mqttsubscribeinit). |
+
+###### Returns
+
+`void`
+
 ##### publish()
 
 ```ts
@@ -355,7 +392,8 @@ and the client cannot classify the same outcome differently. Each outcome resolv
 own signal, or by a rejection carrying either cancellation shape reaches the aborted line at debug; a publish refused through
 [TestMqttClient.connected](#connected) reaches the dropped line at debug; anything else is a genuine failure and lands on the error line. The router owns the
 reasoning behind that order. Every line names the topic tail, since the double expands nothing, and a change-gated publish the memory suppresses reaches no
-line at all, since nothing was attempted.
+line at all, since nothing was attempted. A failure that keeps answering the same tag is reported once and replayed at debug until the tag changes or a
+session is restored, which is the client's own cadence rather than a behavior of the double's own.
 
 ###### Parameters
 
@@ -480,10 +518,11 @@ One recorded publish, as the caller issued it.
 
 #### Properties
 
-| Property | Type | Description |
-| ------ | ------ | ------ |
-| <a id="payload"></a> `payload` | `string` \| `Buffer`\<`ArrayBufferLike`\> | The payload passed to the publish, unchanged - a `Buffer` stays a `Buffer` and a string stays a string. |
-| <a id="topic"></a> `topic` | `string` | The topic tail passed to the publish. The double expands nothing, so this is what the caller wrote. |
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="payload"></a> `payload` | `readonly` | `string` \| `Buffer`\<`ArrayBufferLike`\> | The payload passed to the publish, unchanged - a `Buffer` stays a `Buffer` and a string stays a string. |
+| <a id="retain"></a> `retain` | `readonly` | `boolean` | The retention the caller asked for, and `false` when the init named none, so the flag reads the same way whether or not it was spelled. |
+| <a id="topic"></a> `topic` | `readonly` | `string` | The topic tail passed to the publish. The double expands nothing, so this is what the caller wrote. |
 
 ***
 

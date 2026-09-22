@@ -13,6 +13,10 @@
  *   leaving the memory as it was, the lever's false-to-true transition clearing it where a re-assert does not, and a suppressed call saying nothing at all.
  * - Connection state: `connected` true on a fresh double, a publish refused and counted while it is false, the refusal answering ahead of the arbitrary refusal
  *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts.
+ * - The connect notification: the lever's false-to-true edge invoking every registration once and in order, after the memory clear and with the session reading
+ *   live; a write that is not that edge invoking nothing; a registration joining a session already held waiting for the edge after it; the releases - a signal, a
+ *   pre-aborted signal, the abort - leaving the edge nothing to invoke; a faulting handler reaching the sentence the client logs while the registration beside it
+ *   runs; a never-settling handler holding nothing back; the same function twice counting once; and a handler that releases a sibling or registers another mid-pass.
  * - The publish hold: a held publish recording only at release, behind the publish that preceded the hold; the double aborting, the refusal lever arming, and the
  *   connection dropping during a hold each answering the held publish at release, with the guarded form of the teardown reaching the debug line alone; a publish
  *   refused at issue never parking and the release freeing nothing; two holds each freeing their own gate's publishes; and the get driver's republish parking too.
@@ -32,14 +36,20 @@
  *   the same tail, while a brace-free tail passes every verb untouched; and the abort and empty-id guards answering ahead of the refusal, so a torn-down double
  *   and an empty id stay no-ops rather than reaching it.
  */
-import { assertNoUnhandledRejections, capturingLog, expectAt, settle } from "./testing/index.ts";
+import { MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC } from "./mqtt-topics.ts";
+import { MqttOfflineError, guardedPublishReason } from "./mqtt-publish.ts";
+import { assertNoUnhandledRejections, capturingLog, errnoError, expectAt, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
 import { HbpuAbortError } from "./util.ts";
-import { MqttOfflineError } from "./mqtt-publish.ts";
 import { TestMqttClient } from "./mqtt-client-double.ts";
 import assert from "node:assert/strict";
 import { format } from "node:util";
+
+// The availability statement the lever's false-to-true edge records, in the shape `published` captures it. Declared once because every row that crosses that edge
+// asserts exactly this entry, and a row spelling it out for itself could disagree with the double and still pass. The tail is bare, since the double prefixes
+// nothing.
+const AVAILABILITY_RECORD = { payload: MQTT_AVAILABILITY_ONLINE, retain: true, topic: MQTT_AVAILABILITY_TOPIC };
 
 // Render every captured line at `level` the way the logger itself would, so a scenario asserts on the finished sentence rather than on the format string and its
 // arguments separately.
@@ -58,7 +68,8 @@ describe("TestMqttClient - publish", () => {
     await mqtt.publish("device1/status", "on");
     await mqtt.publish("device1/snapshot", snapshot);
 
-    assert.deepEqual(mqtt.published, [ { payload: "on", topic: "device1/status" }, { payload: snapshot, topic: "device1/snapshot" } ]);
+    assert.deepEqual(mqtt.published, [ { payload: "on", retain: false, topic: "device1/status" },
+      { payload: snapshot, retain: false, topic: "device1/snapshot" } ]);
     assert.equal(mqtt.rejectedPublishes, 0);
   });
 
@@ -79,7 +90,7 @@ describe("TestMqttClient - publish", () => {
 
     await mqtt.publish("device1/status", "on");
 
-    assert.deepEqual(mqtt.published, [{ payload: "on", topic: "device1/status" }]);
+    assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: "device1/status" }]);
     assert.equal(mqtt.rejectedPublishes, 1);
   });
 
@@ -122,7 +133,7 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(mqtt.published, [{ payload: "on", topic: "device1/status" }]);
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: "device1/status" }]);
       assert.deepEqual(log.entries, []);
     });
   });
@@ -237,6 +248,65 @@ describe("TestMqttClient - publishGuarded", () => {
       assert.deepEqual(linesAt(log, "error"), []);
     });
   });
+
+  test("a repeated failure answering the same reason is reported once and replayed at debug, and a changed reason reports in full", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      mqtt.publishRejection = new Error("broker refused the message");
+      mqtt.publishGuarded("device1/status", "on");
+
+      await settle();
+
+      mqtt.publishGuarded("device1/status", "on");
+
+      await settle();
+
+      mqtt.publishRejection = new Error("broker refused the credentials");
+      mqtt.publishGuarded("device1/status", "on");
+
+      await settle();
+
+      // The consumer's own test sees what a consumer's log would see: the fault once, its repeat at debug, and a fault that reads differently in full again.
+      assert.deepEqual(linesAt(log, "error"), [ "Unable to publish to the MQTT topic device1/status: broker refused the message.",
+        "Unable to publish to the MQTT topic device1/status: broker refused the credentials." ]);
+      assert.deepEqual(linesAt(log, "debug"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
+      assert.equal(mqtt.rejectedPublishes, 3);
+    });
+  });
+
+  test("the double weighs a repeat by the same shared derivation the client does, code arm included", async () => {
+
+    /* The double exists to answer a consumer's test the way the client answers the wire, so what counts as "the same failure" has to be one answer rather than two.
+     * Both call the shared derivation, and this row drives its code arm through the double: two rejections carrying one transport code are one reason however their
+     * messages differ, which a rendered-message tag would have read as two.
+     */
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      assert.equal(guardedPublishReason(errnoError("write EPIPE", "EPIPE")), "EPIPE", "the shared derivation reads the transport code");
+
+      mqtt.publishRejection = errnoError("write EPIPE", "EPIPE");
+      mqtt.publishGuarded("device1/status", "on");
+
+      await settle();
+
+      mqtt.publishRejection = errnoError("write EPIPE to a different topic", "EPIPE");
+      mqtt.publishGuarded("device2/status", "on");
+
+      await settle();
+
+      assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic device1/status: write EPIPE."],
+        "one transport code is one reason, so only the first rejection reaches error level");
+      assert.deepEqual(linesAt(log, "debug"), ["Unable to publish to the MQTT topic device2/status: write EPIPE to a different topic."],
+        "the repeat under the same code is replayed at debug, naming its own topic");
+    });
+  });
 });
 
 describe("TestMqttClient - the change gate", () => {
@@ -261,7 +331,7 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
       await settle();
 
-      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "off", topic: TOPIC } ]);
+      assert.deepEqual(mqtt.published, [ { payload: "on", retain: false, topic: TOPIC }, { payload: "off", retain: false, topic: TOPIC } ]);
       assert.equal(mqtt.rejectedPublishes, 0, "suppressing a publish is not refusing it");
 
       // A publish that does not ask for the gate neither reads the memory nor writes it, so it can neither arm nor disarm the gated call after it.
@@ -270,7 +340,8 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
       await settle();
 
-      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "off", topic: TOPIC }, { payload: "on", topic: TOPIC } ]);
+      assert.deepEqual(mqtt.published, [ { payload: "on", retain: false, topic: TOPIC }, { payload: "off", retain: false, topic: TOPIC },
+        { payload: "on", retain: false, topic: TOPIC } ]);
     });
   });
 
@@ -320,7 +391,8 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
       await settle();
 
-      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "the refusal wrote nothing, so the retry of the same payload must record");
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "the refusal wrote nothing, so the retry of the same payload must record");
     });
   });
 
@@ -339,13 +411,14 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
       await settle();
 
-      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "a lever write that moves nothing is not a session event");
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }], "a lever write that moves nothing is not a session event");
 
       mqtt.connected = false;
 
       await mqtt.publish(TOPIC, "on", { ifChanged: true });
 
-      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "an unchanged payload is answered by the gate, ahead of the offline refusal");
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "an unchanged payload is answered by the gate, ahead of the offline refusal");
       assert.equal(mqtt.rejectedPublishes, 0, "a publish the gate answered was never offered to the admissions");
 
       await assert.rejects(mqtt.publish(TOPIC, "off", { ifChanged: true }), MqttOfflineError);
@@ -356,7 +429,10 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
       await settle();
 
-      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "on", topic: TOPIC } ],
+      // The edge that restored the session falls between the two recordings, since it states the double's availability before the handler-free restatement after
+      // it, which is the position the client's own connect puts it in.
+      assert.deepEqual(mqtt.published,
+        [ { payload: "on", retain: false, topic: TOPIC }, AVAILABILITY_RECORD, { payload: "on", retain: false, topic: TOPIC } ],
         "a session restored begins with nothing remembered, so the current value records again");
     });
   });
@@ -389,7 +465,8 @@ describe("TestMqttClient - the change gate", () => {
       await settle();
 
       assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
-      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }], "a torn-down double records nothing, whatever the memory holds");
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "a torn-down double records nothing, whatever the memory holds");
     });
   });
 
@@ -410,7 +487,7 @@ describe("TestMqttClient - the change gate", () => {
       release();
       await settle();
 
-      assert.deepEqual(mqtt.published, [ { payload: "on", topic: TOPIC }, { payload: "on", topic: TOPIC } ],
+      assert.deepEqual(mqtt.published, [ { payload: "on", retain: false, topic: TOPIC }, { payload: "on", retain: false, topic: TOPIC } ],
         "the memory takes a payload only once the publish is recorded, so neither parked call could suppress the other");
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
@@ -433,7 +510,7 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
       await settle();
 
-      assert.deepEqual(mqtt.published, [{ payload: "on", topic: TOPIC }]);
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }]);
       assert.equal(mqtt.rejectedPublishes, 0);
       assert.deepEqual(log.entries, [], "nothing was attempted, so there is nothing to report at any level");
     });
@@ -453,7 +530,7 @@ describe("TestMqttClient - connection state", () => {
 
       mqtt.connected = false;
 
-      await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error instanceof MqttOfflineError);
+      await assert.rejects(mqtt.publish("device1/status", "on"), MqttOfflineError);
 
       assert.deepEqual(mqtt.published, [], "a refused publish records nothing");
       assert.equal(mqtt.rejectedPublishes, 1);
@@ -461,7 +538,7 @@ describe("TestMqttClient - connection state", () => {
       // The client reads its session state before anything else, so the double does too: with both refusals armed the offline one is what a caller sees.
       mqtt.publishRejection = new Error("broker refused the message");
 
-      await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error instanceof MqttOfflineError);
+      await assert.rejects(mqtt.publish("device1/status", "on"), MqttOfflineError);
 
       assert.equal(mqtt.rejectedPublishes, 2);
 
@@ -477,7 +554,9 @@ describe("TestMqttClient - connection state", () => {
 
       await mqtt.publish("device1/status", "on");
 
-      assert.deepEqual(mqtt.published, [{ payload: "on", topic: "device1/status" }], "a session restored records again");
+      // The lever's return to true is a session restored, so the double's own availability statement is recorded ahead of the publish this row then issues.
+      assert.deepEqual(mqtt.published, [ AVAILABILITY_RECORD, { payload: "on", retain: false, topic: "device1/status" } ],
+        "a session restored records again");
     });
   });
 
@@ -508,6 +587,302 @@ describe("TestMqttClient - connection state", () => {
   });
 });
 
+describe("TestMqttClient - connect notification", () => {
+
+  /* The lever's false-to-true edge is the double's session restored, and it is what a scenario moves to make a consumer restate its held state. The rows here hold
+   * the edge to the client's own contract: which registrations it invokes, in what order, what they read while they run, and what a faulting one does to the
+   * registrations beside it. A property write cannot be awaited, so every row that asserts on an asynchronous handler's effect awaits a turn first.
+   */
+  test("the lever's false-to-true edge invokes every registration once, in order, with the session live and the memory already cleared", async () => {
+
+    const mqtt = new TestMqttClient();
+    const order: number[] = [];
+    const readings: boolean[] = [];
+
+    // The payload a consumer published change-gated before the outage. The memory holds it, so the handler's restatement below can only be recorded a second time
+    // if the edge cleared the memory ahead of the handler.
+    await mqtt.publish("device1/status", "on", { ifChanged: true });
+
+    mqtt.onConnect(() => {
+
+      order.push(1);
+      readings.push(mqtt.connected);
+      mqtt.publishGuarded("device1/status", "on", { ifChanged: true });
+    });
+
+    mqtt.onConnect(() => { order.push(2); });
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(order, [ 1, 2 ], "the registrations must be invoked in registration order");
+    assert.deepEqual(readings, [true], "a handler must find the session reading live, so a publish it issues is admitted");
+    // The edge records the double's availability before it invokes the registrations, so the statement sits between the payload published ahead of the outage and
+    // the handler's restatement after it.
+    assert.deepEqual(mqtt.published,
+      [ { payload: "on", retain: false, topic: "device1/status" }, AVAILABILITY_RECORD, { payload: "on", retain: false, topic: "device1/status" } ],
+      "the change-gated restatement must be recorded again, which it can only be if the edge cleared the memory ahead of the handler");
+    assert.equal(mqtt.rejectedPublishes, 0, "a publish issued from a handler must not be refused");
+  });
+
+  test("a write that is not that edge invokes nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    let connects = 0;
+
+    mqtt.onConnect(() => { connects++; });
+
+    // A fresh double already holds a session, so this write leaves the lever where it stood.
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.equal(connects, 0, "re-asserting a session the double already holds is not a session event");
+
+    mqtt.connected = false;
+
+    await settle();
+
+    assert.equal(connects, 0, "losing the session must invoke nothing");
+
+    mqtt.connected = false;
+
+    await settle();
+
+    assert.equal(connects, 0, "re-asserting a session the double does not hold must invoke nothing");
+  });
+
+  test("registering on a double that already holds a session invokes nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    let connects = 0;
+
+    mqtt.onConnect(() => { connects++; });
+
+    await settle();
+
+    assert.equal(connects, 0, "a registration joining a live session must wait for the edge that restores one");
+  });
+
+  test("a released registration, a pre-aborted signal, and an aborted double each leave the edge nothing to invoke", async () => {
+
+    const mqtt = new TestMqttClient();
+    const releasing = new AbortController();
+    const preAborting = new AbortController();
+    const counts = { late: 0, plain: 0, preAborted: 0, released: 0 };
+
+    preAborting.abort(new HbpuAbortError("shutdown"));
+
+    mqtt.onConnect(() => { counts.released++; }, { signal: releasing.signal });
+    mqtt.onConnect(() => { counts.plain++; });
+    mqtt.onConnect(() => { counts.preAborted++; }, { signal: preAborting.signal });
+
+    releasing.abort(new HbpuAbortError("shutdown"));
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(counts, { late: 0, plain: 1, preAborted: 0, released: 0 },
+      "the released and the pre-aborted registrations must be invoked by nothing, while the sibling beside them is invoked once");
+
+    /* Aborting releases every registration the double holds, which the edge after it is what observes: the plain registration carried no signal of its own, so
+     * nothing but the abort's own clear stands between it and a second invocation, and its count holding at one is that clear. A registration offered after the
+     * abort is refused outright, as every other verb on this class refuses one.
+     */
+    mqtt.abort();
+    mqtt.onConnect(() => { counts.late++; });
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(counts, { late: 0, plain: 1, preAborted: 0, released: 0 },
+      "an aborted double must hold no registration for the edge to invoke, and must take none after the fact");
+  });
+
+  test("a throwing handler and a rejecting one each reach the sentence the client logs, and the registration between them still runs", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const log = capturingLog();
+      const mqtt = new TestMqttClient({ log });
+
+      let recorded = 0;
+
+      mqtt.onConnect(() => { throw new Error("connect-handler-boom"); });
+      mqtt.onConnect(() => { recorded++; });
+      mqtt.onConnect(async () => { throw new Error("connect-handler-rejection"); });
+
+      mqtt.connected = false;
+      mqtt.connected = true;
+
+      await settle();
+
+      assert.equal(recorded, 1, "the registration between the two faulting ones must still run");
+
+      const failures = linesAt(log, "error");
+
+      assert.equal(failures.length, 2, "each faulting handler must leave exactly one failure line, observed: " + failures.join(" | "));
+      assert.ok(failures.every((line) => line.startsWith("The MQTT connect handler failed: ")),
+        "both failures must read as the sentence the client logs, observed: " + failures.join(" | "));
+      assert.ok(failures.some((line) => line.includes("connect-handler-boom")), "the throw must carry its own message onto the line");
+      assert.ok(failures.some((line) => line.includes("connect-handler-rejection")), "the rejection must carry its own message onto the line");
+    });
+  });
+
+  test("a handler whose promise never settles does not hold back the one after it", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    let recorded = 0;
+
+    mqtt.onConnect((): Promise<void> => new Promise<void>(() => { /* This promise is deliberately left pending. */ }));
+    mqtt.onConnect(() => { recorded++; });
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.equal(recorded, 1, "a registration must not wait on the one before it to settle");
+  });
+
+  test("registering the same function twice is one registration", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    let connects = 0;
+
+    const handler = (): void => {
+
+      connects++;
+    };
+
+    mqtt.onConnect(handler);
+    mqtt.onConnect(handler);
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.equal(connects, 1, "the same function registered twice must be invoked once per edge");
+  });
+
+  test("a handler that releases a sibling or registers another mid-pass does not destabilize the pass it is in", async () => {
+
+    const mqtt = new TestMqttClient();
+    const releasing = new AbortController();
+    const counts = { first: 0, late: 0, second: 0, third: 0 };
+
+    mqtt.onConnect(() => {
+
+      counts.first++;
+      releasing.abort(new HbpuAbortError("replaced"));
+      mqtt.onConnect(() => { counts.late++; });
+    });
+
+    mqtt.onConnect(() => { counts.second++; }, { signal: releasing.signal });
+    mqtt.onConnect(() => { counts.third++; });
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(counts, { first: 1, late: 0, second: 1, third: 1 },
+      "the pass must invoke the registrations it snapshotted - the released sibling among them - and leave the one registered mid-pass for the edge after it");
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(counts, { first: 2, late: 1, second: 1, third: 2 },
+      "the edge after it must invoke the registration the first handler made and leave the released sibling behind");
+  });
+});
+
+describe("TestMqttClient - availability", () => {
+
+  /* The double's half of the availability contract: what a fresh double has recorded, what the lever's false-to-true edge records and where among a consumer's own
+   * publishes it lands, which lever writes record nothing at all, and the retention every entry carries. The double models no will, because a will is the broker's
+   * to publish and there is no broker here.
+   */
+  test("a fresh double has published nothing, so there is no statement at construction", async () => {
+
+    // The asymmetry with the client, asserted rather than assumed: the client's first connect is a session established and states availability, while a fresh
+    // double is a session already held, with no edge to cross. A birth entry here would shift every index-based assertion a consumer's own suite holds.
+    const mqtt = new TestMqttClient();
+
+    await settle();
+
+    assert.deepEqual(mqtt.published, [], "a fresh double must record nothing until a scenario drives the lever");
+  });
+
+  test("the lever's false-to-true edge records exactly one retained statement, ahead of what a registration publishes", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    mqtt.onConnect(() => mqtt.publishGuarded("device1/status", "on"));
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    // The order is the row: a consumer's registration restating its devices' availability must record behind the double's own statement, which is where the
+    // client's connect puts it on the wire.
+    assert.deepEqual(mqtt.published, [ AVAILABILITY_RECORD, { payload: "on", retain: false, topic: "device1/status" } ],
+      "the edge must record the statement once, retained, on the bare tail, ahead of anything a registration publishes");
+  });
+
+  test("a write that leaves the lever where it was, and a write to false, record nothing", async () => {
+
+    // The edge is the session event, not the reading of it, so only a crossing records. Each write is settled on its own so a later one cannot mask an entry an
+    // earlier one should never have made.
+    const mqtt = new TestMqttClient();
+
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(mqtt.published, [], "a write to true on a double that already reads true is not a session event");
+
+    mqtt.connected = false;
+
+    await settle();
+
+    assert.deepEqual(mqtt.published, [], "a write to false is a session lost, which states nothing");
+
+    mqtt.connected = false;
+
+    await settle();
+
+    assert.deepEqual(mqtt.published, [], "a repeated write to false is not a session event either");
+  });
+
+  test("records the retention a caller asked for, and false when the caller asked for nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    mqtt.publishGuarded("t", "p", { retain: true });
+    mqtt.publishGuarded("t", "q");
+
+    await settle();
+
+    assert.deepEqual(mqtt.published, [ { payload: "p", retain: true, topic: "t" }, { payload: "q", retain: false, topic: "t" } ],
+      "the record must carry what the caller asked for, and the default must read false rather than absent");
+  });
+});
+
 describe("TestMqttClient - the publish hold", () => {
 
   test("a held publish records only at release, behind the publish that preceded the hold", async () => {
@@ -521,12 +896,13 @@ describe("TestMqttClient - the publish hold", () => {
 
     await settle();
 
-    assert.deepEqual(mqtt.published, [{ payload: "before", topic: "device1/status" }], "a parked publish records nothing while it waits");
+    assert.deepEqual(mqtt.published, [{ payload: "before", retain: false, topic: "device1/status" }], "a parked publish records nothing while it waits");
 
     release();
     await parked;
 
-    assert.deepEqual(mqtt.published, [ { payload: "before", topic: "device1/status" }, { payload: "held", topic: "device1/status" } ]);
+    assert.deepEqual(mqtt.published, [ { payload: "before", retain: false, topic: "device1/status" },
+      { payload: "held", retain: false, topic: "device1/status" } ]);
     assert.equal(mqtt.rejectedPublishes, 0, "parking a publish is not refusing it");
   });
 
@@ -604,7 +980,7 @@ describe("TestMqttClient - the publish hold", () => {
     mqtt.connected = false;
     release();
 
-    await assert.rejects(parked, (error: unknown) => error instanceof MqttOfflineError);
+    await assert.rejects(parked, MqttOfflineError);
 
     assert.equal(mqtt.rejectedPublishes, 1);
     assert.deepEqual(mqtt.published, []);
@@ -639,7 +1015,7 @@ describe("TestMqttClient - the publish hold", () => {
 
     const release = mqtt.holdPublishes();
 
-    await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error instanceof MqttOfflineError);
+    await assert.rejects(mqtt.publish("device1/status", "on"), MqttOfflineError);
 
     assert.equal(mqtt.rejectedPublishes, 1);
 
@@ -665,20 +1041,23 @@ describe("TestMqttClient - the publish hold", () => {
     releaseFirst();
     await first;
 
-    assert.deepEqual(mqtt.published, [{ payload: "1", topic: "device1/first" }], "the first release frees the publish parked on its own gate alone");
+    assert.deepEqual(mqtt.published, [{ payload: "1", retain: false, topic: "device1/first" }],
+      "the first release frees the publish parked on its own gate alone");
 
     // The second hold is still the active one, so a publish issued after the first release parks rather than recording - the ownership guard the release makes.
     const third = mqtt.publish("device1/third", "3");
 
     await settle();
 
-    assert.deepEqual(mqtt.published, [{ payload: "1", topic: "device1/first" }], "the first release did not stand the second hold down");
+    assert.deepEqual(mqtt.published, [{ payload: "1", retain: false, topic: "device1/first" }],
+      "the first release did not stand the second hold down");
 
     releaseSecond();
     await Promise.all([ second, third ]);
 
     assert.deepEqual(mqtt.published,
-      [ { payload: "1", topic: "device1/first" }, { payload: "2", topic: "device1/second" }, { payload: "3", topic: "device1/third" } ]);
+      [ { payload: "1", retain: false, topic: "device1/first" }, { payload: "2", retain: false, topic: "device1/second" },
+        { payload: "3", retain: false, topic: "device1/third" } ]);
   });
 
   test("the get driver's republish parks with everything else and lands at release", async () => {
@@ -697,7 +1076,7 @@ describe("TestMqttClient - the publish hold", () => {
     release();
 
     assert.equal(await invoked, "42");
-    assert.deepEqual(mqtt.published, [{ payload: "42", topic: "device1/status" }]);
+    assert.deepEqual(mqtt.published, [{ payload: "42", retain: false, topic: "device1/status" }]);
   });
 });
 
@@ -712,8 +1091,10 @@ describe("TestMqttClient - publishedTo", () => {
     await mqtt.publish("device1/status/detail", "verbose");
     await mqtt.publish("device2/power/status", "off");
 
-    assert.deepEqual(mqtt.publishedTo("status"), [ { payload: "on", topic: "device1/power/status" }, { payload: "off", topic: "device2/power/status" } ]);
-    assert.deepEqual(mqtt.publishedTo("device1/power/status"), [{ payload: "on", topic: "device1/power/status" }], "a whole topic is a suffix of itself");
+    assert.deepEqual(mqtt.publishedTo("status"), [ { payload: "on", retain: false, topic: "device1/power/status" },
+      { payload: "off", retain: false, topic: "device2/power/status" } ]);
+    assert.deepEqual(mqtt.publishedTo("device1/power/status"), [{ payload: "on", retain: false, topic: "device1/power/status" }],
+      "a whole topic is a suffix of itself");
   });
 
   test("answers an empty array when no recorded topic ends with the suffix", async () => {
@@ -986,7 +1367,7 @@ describe("TestMqttClient - drivers", () => {
     mqtt.subscribeGet("device1/power", "Power", () => "on");
 
     assert.equal(await mqtt.invokeGet("device1/power/get"), "on");
-    assert.deepEqual(mqtt.published, [{ payload: "on", topic: "device1/power" }]);
+    assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: "device1/power" }]);
   });
 
   test("invokeGet counts a refused republish and still answers the getter's value", async () => {

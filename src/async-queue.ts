@@ -20,7 +20,7 @@
  *
  * @module
  */
-import { onAbort } from "./util.ts";
+import { assertPositiveInteger, onAbort } from "./util.ts";
 
 /**
  * Construction options for {@link AsyncQueue}.
@@ -106,9 +106,9 @@ export class AsyncQueue<T> {
 
     // A mark that is not a positive integer describes no bound at all - a zero or a negative one is a queue that can never hold anything, and a fractional one is a
     // ceiling no integer depth ever reaches exactly. Refusing it here fails where the caller wrote it, rather than as a queue that quietly misbehaves later.
-    if((highWaterMark !== undefined) && (!Number.isInteger(highWaterMark) || (highWaterMark < 1))) {
+    if(highWaterMark !== undefined) {
 
-      throw new TypeError("AsyncQueue: `highWaterMark` must be a positive integer.");
+      assertPositiveInteger(highWaterMark, { optionName: "highWaterMark", owner: "AsyncQueue" });
     }
 
     this.#highWaterMark = highWaterMark;

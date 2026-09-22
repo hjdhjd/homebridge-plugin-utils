@@ -205,7 +205,8 @@ export interface ApiDispatcherOptions {
  *
  * @param options - See {@link ApiDispatcherOptions}.
  *
- * @returns The pool options, whose `connect` entry always carries the connect timeout and adds the relaxed TLS check only when one was asked for.
+ * @returns The pool options, whose `connect` entry always carries the connect timeout and adds the caller's certificate setting whenever they stated one, in
+ *          whichever direction they stated it.
  *
  * @category Utilities
  */
@@ -220,8 +221,11 @@ export function apiPoolOptions(options: ApiDispatcherOptions): Pool.Options {
      */
     clientTtl: (options.clientTtl === undefined) ? 60000 : options.clientTtl,
 
-    // The connect entry always carries the timeout. The transport validates certificates by default, so the relaxed check joins it only when a caller asks for it.
-    connect: { ...((options.rejectUnauthorized === false) ? { rejectUnauthorized: false } : {}), timeout: options.connectTimeout ?? DEFAULT_CONNECT_TIMEOUT },
+    /* The connect entry always carries the timeout. The certificate setting joins it exactly when the caller stated one, in whichever direction they stated it - so a
+     * caller asking for verification gets a dial that requires it, and one saying nothing leaves the question where the platform answers it.
+     */
+    connect: { ...((options.rejectUnauthorized === undefined) ? {} : { rejectUnauthorized: options.rejectUnauthorized }),
+      timeout: options.connectTimeout ?? DEFAULT_CONNECT_TIMEOUT },
     connections: options.connections ?? 1
   };
 }

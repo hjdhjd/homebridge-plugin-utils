@@ -253,6 +253,90 @@ export type MqttTopicCatalog<TDevice extends string = string, V extends Readonly
   MqttTopicEntries<TDevice> & { readonly [MQTT_DEVICE_COLUMN]?: MqttTopicDeviceColumn<V> };
 
 /**
+ * One of the two words an availability statement carries as its payload: the writer cannot reach what the statement speaks for.
+ *
+ * It is a named constant for the reason {@link MQTT_AVAILABILITY_TOPIC} is - the word is a wire protocol at a boundary, so a subscriber comparing a payload against
+ * the constant cannot typo it, and a publisher spells the same word the reader tests for. The vocabulary is these two words and no third: every source of
+ * availability in this family is a boolean composed from reachability flags, so a word for "not known" would have no producer and would document a state the rail
+ * cannot reach.
+ *
+ * @category Utilities
+ */
+export const MQTT_AVAILABILITY_OFFLINE = "offline";
+
+/**
+ * The other of the two words an availability statement carries as its payload: the writer can reach what the statement speaks for.
+ *
+ * Named for the reason its counterpart is, and read the same way. A consumer publishing a device's availability spells the word through this constant rather than
+ * retyping it, which is what keeps a plugin's own statement and its devices' statements speaking the same vocabulary.
+ *
+ * @category Utilities
+ */
+export const MQTT_AVAILABILITY_ONLINE = "online";
+
+/**
+ * The topic tail an availability statement is published on, the same word at both scopes: `<prefix>/availability` carries the plugin's own statement, and this tail
+ * under a device identity carries that device's.
+ *
+ * It is a named constant because the word is a wire protocol at a boundary. A consumer that compares an incoming topic against the constant cannot typo the word,
+ * and a reader taking a topic apart works from the same statement the writer composed it from.
+ *
+ * @category Utilities
+ */
+export const MQTT_AVAILABILITY_TOPIC = "availability";
+
+/**
+ * The payload an availability statement carries: one of the two words the vocabulary declares.
+ *
+ * A consumer types the variable it hands its publish call as this, so a value that is neither word fails to compile rather than reaching the broker as a word no
+ * subscriber knows how to read.
+ *
+ * @category Utilities
+ */
+export type MqttAvailabilityPayload = typeof MQTT_AVAILABILITY_OFFLINE | typeof MQTT_AVAILABILITY_ONLINE;
+
+/**
+ * The per-device availability entry a plugin spreads into its own catalog, so every plugin in the family states a device's reachability on the same tail, in the
+ * same words, and with the same message text in its document.
+ *
+ * The library declares the vocabulary and ships the entry; the plugin owns the policy. Which devices are reachable, when that changes, and when to publish belong
+ * to the plugin, because the plugin is what has a reachability model. The library derives no device's reachability and publishes no device's statement itself. What
+ * it does publish is the plugin-level statement on `<prefix>/availability`, which {@link mqttClient!MqttClient | MqttClient} owns end to end, and the two compose:
+ * a device is reachable only when both statements read {@link MQTT_AVAILABILITY_ONLINE}.
+ *
+ * Two constraints a consumer meets the moment it spreads this entry, both of them the catalog's own rules rather than anything special to availability. A catalog
+ * declaring a device column constrains every entry through {@link MqttTopicEntriesWithDevices}, so the spread carries a `devices` list of its own and the renderer
+ * refuses an entry without one. And a catalog groups all of its entries or none of them, so a consumer whose catalog groups carries its own `group` on the spread
+ * as well; the entry ships group-less because the library cannot know a consumer's headings, and a group-less entry spread into a grouped catalog makes the
+ * renderer refuse the mismatch. The entry declares no `publishDevices` narrowing: every device that carries the topic publishes it, and a narrowing that credits
+ * fewer than the listed kinds makes the renderer refuse the entry outright.
+ *
+ * @example
+ *
+ * ```ts
+ * import { mqttAvailabilityEntry, mqttTopicCatalog } from "homebridge-plugin-utils";
+ *
+ * export const mqttTopics = mqttTopicCatalog({
+ *
+ *   availability: { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ], group: "Status" },
+ *   lock: { devices: ["camera"], group: "Door", label: "lock", publish: "`true` when locked.", topic: "lock" }
+ * }, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+ *
+ * export const flatTopics = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "`true` when locked.", topic: "lock" } });
+ * ```
+ *
+ * @category Utilities
+ */
+export const mqttAvailabilityEntry = {
+
+  label: "availability",
+  publish: "`" + MQTT_AVAILABILITY_ONLINE + "` when the plugin can reach the device, `" + MQTT_AVAILABILITY_OFFLINE + "` when it cannot. Retained, so a " +
+    "subscriber attaching later reads the last statement. A device is available only when this topic and the plugin-level `" + MQTT_AVAILABILITY_TOPIC +
+    "` topic both read `" + MQTT_AVAILABILITY_ONLINE + "`.",
+  topic: MQTT_AVAILABILITY_TOPIC
+} as const satisfies MqttTopicEntry;
+
+/**
  * The placeholder names a topic carries, in order of appearance, and an empty list for a plain tail. A name repeated in the topic is listed once per appearance.
  *
  * The renderer reads this to build the markup a parameterized topic cell shows; a consumer rarely needs it, since the parameter record's own keys are what a call

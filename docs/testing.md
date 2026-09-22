@@ -10,8 +10,9 @@ Every piece of shipped test-support surface the library offers, reachable at one
 
 The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
 support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
-finders, the unhandled-rejection assertion, the shared poll-with-deadline, and the macrotask yield with the two `TestClock` walks built on it - the runtime-floor
-guard machinery in `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
+finders, the unhandled-rejection assertion, the shared poll-with-deadline and the turn-budgeted poll beside it, the macrotask yield with the two `TestClock` walks
+built on it, and the real-socket family that reserves a port and binds and stops a loopback server - the runtime-floor guard machinery in `runtime-floor.ts` beside
+this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
 
 The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
 `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
@@ -215,6 +216,56 @@ assert.equal(steps, 2);
 
 ***
 
+### errnoError()
+
+```ts
+function errnoError<T>(
+   message, 
+   code, 
+   cause?
+): Error & {
+  code: T;
+};
+```
+
+Build the errno-shaped error the platform and undici raise when a connection fails: an `Error` carrying a `code` beside its message, optionally over a cause.
+
+Every suite driving a transport or filesystem failure needs one of these, and hand-building it is an `Object.assign` and a conditional that say nothing about the
+failure being modelled...through this factory a site says only which failure it means. The `code` is loosely typed on purpose: the platform's own `DOMException`
+carries a numeric one, and a classifier with a branch that steps over a non-string code needs a fixture able to carry it. A cause is attached through `Error`'s
+own options bag, so the whole chain stays walkable by the library's own cause descent - and when no cause is given none is installed at all, because an own
+`cause` property valued `undefined` would send that descent one link further than the error actually goes.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` *extends* `string` \| `number` | The code's own type, carried through to the result so a caller reads back exactly what it named rather than a widened union. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `message` | `string` | The message the error carries. |
+| `code` | `T` | The code to carry, either an errno string or the platform's legacy numeric form. |
+| `cause?` | `unknown` | An optional cause, attached through `Error`'s options bag. Omitting it leaves the result with no `cause` property at all. |
+
+#### Returns
+
+`Error` & \{
+  `code`: `T`;
+\}
+
+An `Error` carrying `code` as a `readonly` property typed `T`.
+
+#### Example
+
+```ts
+proc.stdin.emit("error", errnoError("write EPIPE", "EPIPE"));
+```
+
+***
+
 ### expectAt()
 
 ```ts
@@ -288,6 +339,90 @@ compose, and it is exported on its own so a harness that wants the rendered line
 `string`
 
 The entry's message with its params interpolated.
+
+***
+
+### freePort()
+
+```ts
+function freePort(): Promise<number>;
+```
+
+Answer a TCP port nothing on this machine is holding, asked of the kernel the way an ephemeral bind asks for one and released again before the caller sees it.
+
+An arm needs this when its subject takes a port as configuration rather than choosing one: the port has to be named in a setting before the listener exists, and a
+hard-coded number collides the moment two files run at once. The kernel's own choice is the answer that cannot, so a throwaway server binds at port 0, the helper
+reads back what it was given, and the server closes. The close is awaited rather than fired and forgotten, which is what shuts the release-versus-rebind window a
+naive implementation carries...by the time the number comes back, the handle behind it is already gone.
+
+The bind takes the wildcard address rather than the loopback one, because the wildcard is what the caller's own listener will bind - `HttpListener` names no host
+either - and a loopback-only reservation would answer a port that is free on one interface and held on the one the caller is about to take.
+
+The port is free when it is answered rather than reserved for the caller: another process can take it in the gap before the caller's own bind. That is the price of
+naming a port before binding it, and it is why a consuming arm keeps its own release in `t.after` rather than leaning on this helper for a lifetime. An arm that
+needs a port HELD rather than named wants an occupy-and-hold helper instead, which is a different shape: that one keeps its socket.
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`number`\>
+
+A port the kernel chose and has released.
+
+#### Example
+
+```ts
+const port = await freePort();
+const listener = new HttpListener({ label: "test listener", log, port });
+
+t.after(async () => await listener[Symbol.asyncDispose]());
+
+await listener.start();
+
+assert.equal(listener.boundPort, port, "the listener must take exactly the port the setting named");
+```
+
+***
+
+### listenOnLoopback()
+
+```ts
+function listenOnLoopback(server, port?): Promise<number>;
+```
+
+Bind `server` to the loopback interface at `port` and answer the port the kernel assigned, resolving once the socket is listening.
+
+This is the acquisition half of the loopback pair, and it is bind-only: it drains nothing and closes nothing, so the caller keeps the server's lifetime and hands
+it to [stopListening](#stoplistening) when the arm is done. A bind that fails reaches the caller as this promise's rejection carrying the kernel's own error, because the
+waiter settles on the emitter's `"error"` event as readily as on `"listening"` - which is what a hand-rolled bind with no error listener loses, since an
+unhandled `"error"` on a server is thrown as an uncaught exception that ends the whole file rather than the one arm.
+
+#### Parameters
+
+| Parameter | Type | Default value | Description |
+| ------ | ------ | ------ | ------ |
+| `server` | `Server` | `undefined` | The server to bind. Both a `node:http` server and a plain `net.Server` satisfy the type structurally. |
+| `port` | `number` | `0` | The port to bind. Defaults to `0`, which asks the kernel for a free one - what an arm wants when it needs some port and no collision with a file running beside it. A caller names a port instead when the fixture has to come back on the address a client is already reconnecting to. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`number`\>
+
+The port the kernel assigned, which is `port` itself whenever the caller named one.
+
+#### Throws
+
+The kernel's own error when the bind fails, `EADDRINUSE` above all.
+
+#### Example
+
+```ts
+const server = createServer(handler);
+const port = await listenOnLoopback(server);
+
+t.after(async () => await stopListening(server));
+
+const response = await request("http://127.0.0.1:" + port.toString());
+```
 
 ***
 
@@ -369,6 +504,52 @@ assert.ok(loggedAt(log.entries, "warn", "30"));
 
 ***
 
+### present()
+
+```ts
+function present<T>(value, description): NonNullable<T>;
+```
+
+Return `value`, asserting it is neither `undefined` nor `null`. Narrows the result to `NonNullable<T>` so a test body uses the value without a cast and without a
+non-null assertion.
+
+The failure message is as much the point as the narrowing is. A lookup that found nothing otherwise surfaces as a bare `TypeError` on the next property read, or
+as a `deepEqual` against `undefined` that names neither what was being looked for nor where...this names the lookup and renders what arrived instead. The
+narrowing falls out of `assert.ok`'s `asserts` typing applied to the compound condition, the same mechanism [expectAt](#expectat) relies on, so the body needs no cast.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` | The value's type. Assumes a `T` that is meaningfully nullable; a `T` that already excludes `undefined` and `null` leaves the assertion unreachable and the call redundant. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `value` | `T` | The value to assert on. |
+| `description` | `string` | What the caller was looking for, in the grammar of "expected _____". Required rather than defaulted, because a failing index has positional context a default descriptor can lean on and a bare nullable has none, so a default would produce a sentence that names nothing. |
+
+#### Returns
+
+`NonNullable`\<`T`\>
+
+`value`, narrowed to `NonNullable<T>`.
+
+#### Throws
+
+`AssertionError` when `value` is `undefined` or `null`.
+
+#### Example
+
+```ts
+const entry = present(log.entries.find((candidate) => candidate.level === "warn"), "a warning about the stale segment");
+
+assert.match(entry.message, /segment/);
+```
+
+***
+
 ### settle()
 
 ```ts
@@ -403,6 +584,46 @@ assert.equal(attempts.length, 2);
 
 ***
 
+### settleUntil()
+
+```ts
+function settleUntil(predicate, options): Promise<void>;
+```
+
+Resolve as soon as `predicate()` reads `true`, yielding one macrotask turn between attempts, and throw when the turn budget is spent with the predicate still
+false.
+
+This sits between the two helpers it is built from. [waitUntil](#waituntil) budgets real time and sleeps between attempts, which is what a state the kernel settles asks
+for - a datagram delivered, a connection established. [settle](#settle) crosses a fixed number of turns whether or not anything changed. This one budgets macrotask
+TURNS and yields between attempts, for a state the process settles on its own queue: a handshake whose steps each schedule the next, a cascade whose depth the
+caller would otherwise have to write down and keep right. The budget is a ceiling that fails loudly naming the state that never arrived rather than a measurement
+of how long anything takes...stated in turns it costs nothing on a fast run, and it still ends a run that would otherwise spin.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `predicate` | () => `boolean` | The condition to read. Called before the first yield, so a state that already holds costs no turn at all. |
+| `options` | \{ `description`: `string`; `turns?`: `number`; \} | Wait options. |
+| `options.description` | `string` | What the wait is for, in the grammar of "waiting for _____". It is the whole of the failure message, so name the state rather than the assertion. |
+| `options.turns?` | `number` | The most macrotask turns to cross. Defaults to 100. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+
+#### Throws
+
+`Error` when the budget is spent with the predicate still false.
+
+#### Example
+
+```ts
+await settleUntil(() => broker.sessions.length === 2, { description: "both clients to finish their CONNACK handshakes" });
+```
+
+***
+
 ### silentLog()
 
 ```ts
@@ -428,6 +649,44 @@ A logger whose methods are all no-ops.
 import { silentLog } from "homebridge-plugin-utils/testing";
 
 const client = new MqttClient({ brokerUrl: "mqtt://localhost", log: silentLog(), topicPrefix: "test" });
+```
+
+***
+
+### stopListening()
+
+```ts
+function stopListening(server): Promise<void>;
+```
+
+Close `server` and resolve once its handle is released.
+
+The release waits on every in-flight connection ending, so an arm still holding live sockets destroys them itself before calling this...otherwise the wait lasts
+as long as the slowest peer. A server that is already closed, or that never listened at all, RESOLVES rather than failing: that is the postcondition this helper
+exists to reach, reported back. It is what lets an arm release a server by hand mid-body and still let its `await using` scope dispose it, where the scope's
+second call finds nothing left to do. Every other close failure REJECTS carrying the kernel's own error, so a dispose still reports a real one.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `server` | `Server` | The server to close. Both a `node:http` server and a plain `net.Server` satisfy the type structurally. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+
+#### Throws
+
+The kernel's own error for any close failure other than a server that was not running.
+
+#### Example
+
+```ts
+const server = createServer(handler);
+
+await listenOnLoopback(server);
+await stopListening(server);
 ```
 
 ***
@@ -472,6 +731,12 @@ await waitUntil(() => receiver.received.length >= 1, { description: "the forward
 
 ## Other
 
+### Assert
+
+Re-exports [Assert](testing/type-assertions.md#assert)
+
+***
+
 ### assertRuntimeFloorCompat
 
 Re-exports [assertRuntimeFloorCompat](testing/runtime-floor.md#assertruntimefloorcompat)
@@ -481,6 +746,18 @@ Re-exports [assertRuntimeFloorCompat](testing/runtime-floor.md#assertruntimefloo
 ### composeSunsetCleanup
 
 Re-exports [composeSunsetCleanup](testing/runtime-floor.md#composesunsetcleanup)
+
+***
+
+### Equal
+
+Re-exports [Equal](testing/type-assertions.md#equal)
+
+***
+
+### Extends
+
+Re-exports [Extends](testing/type-assertions.md#extends)
 
 ***
 
@@ -577,6 +854,12 @@ Re-exports [makeTxtStrings](mdns/message-builders.md#maketxtstrings)
 ### MdnsServiceFixture
 
 Re-exports [MdnsServiceFixture](mdns/message-builders.md#mdnsservicefixture)
+
+***
+
+### MutuallyAssignable
+
+Re-exports [MutuallyAssignable](testing/type-assertions.md#mutuallyassignable)
 
 ***
 

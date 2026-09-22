@@ -3,14 +3,19 @@
  * logclient/socket.test.ts: Unit tests for the LogSocket state machine - handshake, ping/pong, stdout routing, reconnect, watchdog liveness, CONNECT_ERROR, teardown.
  */
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
-import { LogSocket, reconnectBackoff } from "./socket.ts";
-import { capturingLog, settle, silentLog } from "../testing/index.ts";
+import { LogSocket, reconnectBackoff, webSocketFactory } from "./socket.ts";
+import { UPGRADE_PEER_LINE, startUpgradePeer } from "./upgrade-peer.helpers.ts";
+import { capturingLog, freePort, logCount, settle, silentLog, waitUntil } from "../testing/index.ts";
 import { describe, test } from "node:test";
+import { Agent } from "undici";
 import type { LogSocketInit } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
 import type { TestWebSocket } from "./socket-double.ts";
 import { TestWebSocketFactory } from "./socket-double.ts";
 import assert from "node:assert/strict";
+import { classifyTransportError } from "../transport-error.ts";
+import { createOwnedConnector } from "../owned-connector.ts";
+import { recordTeardownOrder } from "./socket-teardown.helpers.ts";
 
 // The Engine.IO open handshake frame advertising a ping cadence. The socket reads `pingInterval`/`pingTimeout` to size its liveness watchdog.
 const OPEN_FRAME = "0{\"sid\":\"s1\",\"pingInterval\":25000,\"pingTimeout\":20000}";
@@ -289,6 +294,78 @@ describe("LogSocket - reconnect", () => {
     await factory.socketCreated(1);
 
     assert.equal(factory.sockets.length, 2, "a transient connect error must be retried with exactly one fresh WebSocket");
+  });
+});
+
+describe("LogSocket - connect-failure reporting", () => {
+
+  // A WebSocket error event carrying the errno the classifier reads off the cause chain, which is what decides the tag a repeat is weighed against.
+  function dialError(code: string, message: string): { readonly error: Error } {
+
+    return { error: Object.assign(new Error(message), { code }) };
+  }
+
+  test("reports the first failure of a kind at warn, an unchanged repeat at debug, a changed kind at warn again, and the recovery at info", async () => {
+
+    const factory = new TestWebSocketFactory();
+    const log = capturingLog();
+
+    await using socket = new LogSocket(makeInit(factory, { log }));
+
+    /* Drive four attempts: the same refusal twice, a different errno third, and a completed handshake fourth. `socketCreated(n)` resolves only once the retry has
+     * constructed that attempt's socket, so it is the attempt boundary itself rather than a delay long enough to hope for one.
+     */
+    (await factory.socketCreated(0)).emitError(dialError("ECONNREFUSED", "connect ECONNREFUSED 127.0.0.1:8581"));
+    (await factory.socketCreated(1)).emitError(dialError("ECONNREFUSED", "connect ECONNREFUSED 127.0.0.1:8581"));
+    (await factory.socketCreated(2)).emitError(dialError("ENOTFOUND", "getaddrinfo ENOTFOUND homebridge.local"));
+
+    await completeHandshake(await factory.socketCreated(3));
+
+    assert.deepEqual(log.entries.map((entry) => entry.level), [ "warn", "debug", "warn", "info" ],
+      "an unchanged repeat must be demoted to debug, a changed reason reported in full again, and the recovery announced");
+
+    // The two reported failures must be the two DIFFERENT dials, not the same line twice: the demoted one is the repeat, so the full-level pair carries the two errnos.
+    const reported = log.entries.filter((entry) => entry.level !== "info").map((entry) => entry.params.join(" "));
+
+    assert.equal(reported.filter((text) => text.includes("ECONNREFUSED")).length, 2, "both refusals must name the errno they failed with");
+    assert.equal(reported.filter((text) => text.includes("ENOTFOUND")).length, 1, "the changed reason must name its own errno rather than replaying the previous one");
+  });
+
+  test("writes no failure line for an attempt the socket's own abort ended", async () => {
+
+    const factory = new TestWebSocketFactory();
+    const log = capturingLog();
+    const socket = new LogSocket(makeInit(factory, { log }));
+
+    // Wait for the attempt to be genuinely in flight before ending it, so the row is asserting silence about an attempt that existed rather than one never started.
+    await factory.socketCreated(0);
+
+    socket.abort();
+
+    await socket[Symbol.asyncDispose]();
+
+    assert.deepEqual(log.entries, [], "a teardown the consumer asked for is not a failure and must write nothing at any level");
+  });
+
+  test("a permanent authentication failure is reported once, by the terminal error line alone", async () => {
+
+    const factory = new TestWebSocketFactory();
+    const log = capturingLog();
+    const { LogAuthError } = await import("./auth.ts");
+
+    const socket = new LogSocket(makeInit(factory, { log, tokenProvider: async () => {
+
+      throw new LogAuthError("bad credentials", { kind: "permanent" });
+    } }));
+
+    await settle(3);
+
+    // `shouldRetry` vetoes the permanent failure, so the loop stops and states its verdict once. A warn line here would be the same event said twice.
+    assert.deepEqual(log.entries.map((entry) => entry.level), ["error"],
+      "a vetoed credential failure must be stated once, by the loop's terminal error rather than by an attempt's warning");
+    assert.equal(logCount(log.entries, "warn", "Unable to connect"), 0, "a failure the loop will not retry must not be reported as one it is about to");
+
+    await socket[Symbol.asyncDispose]();
   });
 });
 
@@ -756,6 +833,35 @@ describe("LogSocket - teardown and abort", () => {
 
     await socket[Symbol.asyncDispose]();
   });
+
+  test("teardown destroys the dispatcher, closes the socket, then releases the connector", async () => {
+
+    const recorder = recordTeardownOrder();
+
+    const socket = new LogSocket(makeInit(recorder.webSockets, { ownedDialFactory: recorder.ownedDialFactory }));
+
+    await settle();
+
+    const ws0 = recorder.webSockets.sockets[0];
+
+    assert.ok(ws0 !== undefined);
+
+    // Reach the streaming phase before aborting. A connected session's teardown converges on the session's own close, which runs the three operations exactly once,
+    // where an attempt cut before the handshake completes reaches them down two paths and records the sequence twice.
+    await completeHandshake(ws0);
+
+    socket.abort();
+    await settle(2);
+
+    /* The order is the contract. The dispatcher's destroy runs in the same stack as the close, so a socket the close aborts finds the transport already destroyed
+     * when its own close event is processed and the transport has nothing left to re-dial. Nothing else in the suite can see this: the connector crosses no boundary
+     * a row can otherwise reach, and a connection count cannot tell a same-stack swap of the two calls from the order below.
+     */
+    assert.deepEqual(recorder.calls, [ "agent.destroy", "ws.close", "connector.release" ],
+      "teardown must destroy the dispatcher, close the socket, then release the connector, in that order");
+
+    await socket[Symbol.asyncDispose]();
+  });
 });
 
 describe("LogSocket - bounded stdout queue", () => {
@@ -863,5 +969,170 @@ describe("LogSocket - pre-aborted construction", () => {
     }
 
     assert.deepEqual(lines, [], "stdout on a pre-aborted socket must terminate immediately");
+  });
+});
+
+/* The rows that reach the real thing. Every block above drives a double, which never touches the network - so nothing in them exercises the production factory, the
+ * dial it is handed, or the teardown a peer actually observes. These six do, against a port nothing listens on and against a real WebSocket peer in its two shapes.
+ */
+describe("LogSocket - the production dial", () => {
+
+  // The init every row here builds on: the real production factory (no `webSocketFactory` override) and a backoff long enough that exactly one attempt runs.
+  function dialInit(port: number, overrides: Partial<LogSocketInit> = {}): LogSocketInit {
+
+    return {
+
+      backoff: () => 60000,
+      host: "127.0.0.1",
+      log: silentLog(),
+      port,
+      refreshable: true,
+      tokenProvider: async () => "raw.jwt",
+      ...overrides
+    };
+  }
+
+  test("the connector holds the dial's errno where the WebSocket's own error event does not", async (t) => {
+
+    const port = await freePort();
+    const connector = createOwnedConnector({ allowH2: false });
+    const agent = new Agent({ allowH2: false, connect: connector.connect, pipelining: 0 });
+
+    t.after(async (): Promise<void> => {
+
+      connector.release();
+
+      await agent.destroy();
+    });
+
+    const ws = webSocketFactory("ws://127.0.0.1:" + port.toString() + "/", { dispatcher: agent });
+    const event = await new Promise<unknown>((resolve) => ws.addEventListener("error", resolve));
+    const reported: unknown = ((typeof event === "object") && (event !== null) && ("error" in event)) ? event.error : undefined;
+
+    /* The event's own error is PRESENT for a refused dial and renders empty, so the reading is that it names no code - never that the field is absent. Both halves go
+     * through the classifier, which walks the cause chain, so the comparison is between the same question asked of two values.
+     */
+    assert.equal(classifyTransportError(reported).code, undefined, "the WebSocket's own error event must name no code at all");
+    assert.equal(classifyTransportError(connector.lastDialFailure).code, "ECONNREFUSED", "the connector must still hold the errno the dial failed with");
+  });
+
+  test("a refused dial names its errno in the attempt's warn line", async (t) => {
+
+    const port = await freePort();
+    const log = capturingLog();
+    const socket = new LogSocket(dialInit(port, { log }));
+
+    t.after(async (): Promise<void> => {
+
+      socket.abort();
+
+      await socket[Symbol.asyncDispose]();
+    });
+
+    // The errno is what the commit recovers, so that is what the row reads; the rest of the line carries the port, which varies per run.
+    await waitUntil(() => logCount(log.entries, "warn", "ECONNREFUSED") >= 1,
+      { description: "the failed attempt's own warn line to name the dial's errno", timeoutMs: 5000 });
+  });
+
+  test("a line the peer sends after the handshake reaches the consumer through the production dial", async (t) => {
+
+    const peer = await startUpgradePeer();
+    const socket = new LogSocket(dialInit(peer.port));
+
+    t.after(async (): Promise<void> => {
+
+      socket.abort();
+
+      await socket[Symbol.asyncDispose]();
+      await peer.stop();
+    });
+
+    const first = await (async (): Promise<string | undefined> => {
+
+      for await (const line of socket.stdout()) {
+
+        return line;
+      }
+
+      return undefined;
+    })();
+
+    assert.equal(first, UPGRADE_PEER_LINE, "a line the peer sent after the handshake must reach the consumer over the owned dial");
+  });
+
+  test("teardown as the peer sees it", async (t) => {
+
+    const peer = await startUpgradePeer();
+    const socket = new LogSocket(dialInit(peer.port));
+
+    t.after(async (): Promise<void> => await peer.stop());
+
+    const first = await (async (): Promise<string | undefined> => {
+
+      for await (const line of socket.stdout()) {
+
+        return line;
+      }
+
+      return undefined;
+    })();
+
+    assert.equal(first, UPGRADE_PEER_LINE);
+
+    socket.abort();
+
+    await socket[Symbol.asyncDispose]();
+
+    /* Wait on the peer's own ending edge before reading what it saw. Teardown is synchronous on this side, and the dispose resolving says nothing about when the FIN
+     * reached the peer's event loop, so a read taken straight after it can run before the peer has recorded its end at all.
+     */
+    await peer.connection(0).ended;
+
+    assert.deepEqual(peer.closeCodes(), [1000], "the peer must receive the orderly close code");
+    assert.deepEqual(peer.observed(), [ "close-frame", "end-event" ], "the peer must see the close frame first and then its own socket end");
+  });
+
+  test("an aborted dial writes no failure line", async (t) => {
+
+    const peer = await startUpgradePeer("neverUpgrades");
+    const log = capturingLog();
+    const socket = new LogSocket(dialInit(peer.port, { log }));
+
+    t.after(async (): Promise<void> => await peer.stop());
+
+    /* Wait for the peer's own accept before aborting. The connect phase awaits the token provider before it constructs anything, so an abort landing early ends the
+     * attempt before a dial exists - and the row would then be asserting silence about an attempt that never reached the network.
+     */
+    await peer.connection(0).accepted;
+
+    socket.abort();
+
+    await socket[Symbol.asyncDispose]();
+
+    assert.equal(log.entries.filter((entry) => entry.message.includes("Unable to connect")).length, 0,
+      "an orderly teardown is not a failure and must write no line at any level");
+    assert.equal(log.entries.length, 0, "an aborted dial must leave the log untouched at every level");
+    assert.equal(peer.accepted(), 1, "the abort must have landed on a dial the peer had actually accepted");
+  });
+
+  test("an attempt cut mid-handshake makes exactly one connection", async (t) => {
+
+    const peer = await startUpgradePeer("neverUpgrades");
+    const socket = new LogSocket(dialInit(peer.port));
+
+    t.after(async (): Promise<void> => await peer.stop());
+
+    await peer.connection(0).accepted;
+
+    socket.abort();
+
+    await socket[Symbol.asyncDispose]();
+
+    /* Give the count a chance to be wrong before reading it. A second socket would be dialed on a later tick, so reading in the same turn that aborted would pass
+     * whether or not the teardown left the transport a request to retry.
+     */
+    await settle(5);
+
+    assert.equal(peer.accepted(), 1, "an attempt cut mid-handshake must leave the transport nothing to re-dial");
   });
 });

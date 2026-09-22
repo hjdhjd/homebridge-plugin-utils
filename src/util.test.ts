@@ -2,14 +2,15 @@
  *
  * util.test.ts: Unit tests for the primitives exported by util.ts - HbpuAbortError, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, hasErrorCode, causeChain,
  * onAbort, waitWithSignal, sameEntries, membershipDelta, the signal-aware retry(), the takeLast() ring buffer, composeSignals, superviseLoop, superviseStream,
- * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, consoleLog, and the string/number helpers (formatBps, formatBytes, formatMs, formatSeconds,
- * formatPercent, formatErrorMessage, formatUrlHost, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName, validateName).
+ * loopFaultReporter, guardedDispatch, Watchdog, prefixedLog, debugGatedLog, repeatDemotedLog, consoleLog, and the string/number helpers (formatBps, formatBytes,
+ * formatMs, formatSeconds, formatPercent, formatErrorMessage, formatUrlHost, defaultRetryBackoff, exponentialBackoff, runWithAbort, toStartCase, sanitizeName,
+ * validateName), and the numeric option guards assertPositiveInteger and assertPositiveFinite.
  */
-import { HbpuAbortError, Watchdog, causeChain, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff, exponentialBackoff, formatBps, formatBytes,
-  formatErrorMessage, formatMs, formatPercent, formatSeconds, formatUrlHost, guardedDispatch, hasErrorCode, isHbpuAbortError, isHbpuAbortReason,
-  isTimeoutReason, loopFaultReporter, membershipDelta, onAbort, prefixedLog, retry, runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream,
-  takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
-import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, expectAt, formatLogEntry, settle } from "./testing/index.ts";
+import { HbpuAbortError, Watchdog, assertPositiveFinite, assertPositiveInteger, causeChain, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff,
+  exponentialBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds, formatUrlHost, guardedDispatch, hasErrorCode,
+  isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, membershipDelta, onAbort, prefixedLog, repeatDemotedLog, retry, runWithAbort,
+  sameEntries, sanitizeName, superviseLoop, superviseStream, takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
+import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, errnoError, expectAt, formatLogEntry, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { RetryBackoff } from "./util.ts";
 import { TestClock } from "./clock-double.ts";
@@ -186,7 +187,7 @@ describe("hasErrorCode", () => {
 
   test("returns true for an Error carrying the code, and narrows it", () => {
 
-    const error: unknown = Object.assign(new Error("address already in use"), { code: "EADDRINUSE" });
+    const error: unknown = errnoError("address already in use", "EADDRINUSE");
 
     assert.equal(hasErrorCode(error, "EADDRINUSE"), true);
 
@@ -205,7 +206,7 @@ describe("hasErrorCode", () => {
 
   test("returns false for an Error carrying a different code", () => {
 
-    assert.equal(hasErrorCode(Object.assign(new Error("no such file"), { code: "ENOENT" }), "EADDRINUSE"), false);
+    assert.equal(hasErrorCode(errnoError("no such file", "ENOENT"), "EADDRINUSE"), false);
   });
 
   test("returns false for an Error carrying no code at all", () => {
@@ -902,9 +903,31 @@ describe("retry", () => {
       calls++;
 
       return "unreachable";
-    }, { attempts: 0 }), /attempts.*>= 1/);
+    }, { attempts: 0 }), /attempts.*must be a positive integer/);
 
     assert.equal(calls, 0);
+  });
+
+  test("rejects a fractional or non-positive attempts count with the shared refusal, and accepts one", async () => {
+
+    // The budget is a count of attempts, so a fraction is a budget no attempt number ever lands on. A caller that wants an unbounded run asks for it with the
+    // documented `Infinity` sentinel rather than with a fractional or zero count, which is the case the count check is excluded for.
+    let calls = 0;
+
+    await assert.rejects(retry(async () => "unreachable", { attempts: 1.5 }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "retry: `attempts` must be a positive integer."),
+      "a fractional attempt budget is refused in the library's own words");
+    await assert.rejects(retry(async () => "unreachable", { attempts: 0 }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "retry: `attempts` must be a positive integer."),
+      "a zero attempt budget is refused in the same words");
+
+    assert.equal(await retry(async () => {
+
+      calls++;
+
+      return "once";
+    }, { attempts: 1 }), "once", "a budget of one is the smallest count the loop can honor");
+    assert.equal(calls, 1, "a budget of one runs the operation exactly once");
   });
 
   test("honors a pre-aborted signal without invoking the operation", async () => {
@@ -2390,6 +2413,331 @@ describe("debugGatedLog", () => {
   });
 });
 
+describe("repeatDemotedLog", () => {
+
+  test("holds a first failure's error and warn lines until the attempt ends, then releases them at their own levels in written order", () => {
+
+    // An attempt classifies itself through its own return value, so nothing a callee writes can reach the base logger while `run` is still on the stack. Once it has
+    // returned, the held lines go out at the levels they were written at, in the order they were written, message and parameters untouched.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+
+    failures.attempt((attemptLog) => {
+
+      attemptLog.error("Unable to reach %s.", "10.0.0.5");
+      attemptLog.warn("Retrying in %d seconds.", 30);
+
+      assert.equal(base.entries.length, 0, "an open attempt must hold its error and warn lines rather than writing them");
+    }, () => "timeout");
+
+    assert.equal(base.entries.length, 2, "a first failure must release exactly the lines it wrote, once each");
+
+    const failure = expectAt(base.entries, 0, "the released error entry");
+    const notice = expectAt(base.entries, 1, "the released warn entry");
+
+    assert.equal(failure.level, "error");
+    assert.equal(failure.message, "Unable to reach %s.");
+    assert.deepEqual(failure.params, ["10.0.0.5"]);
+    assert.equal(notice.level, "warn");
+    assert.equal(notice.message, "Retrying in %d seconds.");
+    assert.deepEqual(notice.params, [30]);
+  });
+
+  test("replays an unchanged repeat through the base debug level, message and parameters verbatim", () => {
+
+    // The second attempt fails for the reason the first one did, so its report repeats something the user has already been told...it goes out at debug, where it
+    // stays available to anyone reading the log at that level without being shown again.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+
+    for(const attemptNumber of [ 1, 2 ]) {
+
+      failures.attempt((attemptLog) => attemptLog.error("Unable to reach %s on attempt %d.", "10.0.0.5", attemptNumber), () => "timeout");
+    }
+
+    const first = expectAt(base.entries, 0, "the first failure's entry");
+    const repeat = expectAt(base.entries, 1, "the repeat's entry");
+
+    assert.equal(first.level, "error", "the first report of a reason must go out in full");
+    assert.equal(repeat.level, "debug", "a failure repeating the remembered reason must be replayed at debug");
+    assert.equal(repeat.message, "Unable to reach %s on attempt %d.");
+    assert.deepEqual(repeat.params, [ "10.0.0.5", 2 ]);
+  });
+
+  test("a changed reason reports in full again, even directly after a run of demoted repeats", () => {
+
+    // Every attempt here writes the identical message and varies only its reason, which is what separates a correct adapter from one keyed on the message text or
+    // one deciding at the `error` call: the third attempt reports a different fault and must be shown, not buried under the run of repeats before it.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+
+    for(const reason of [ "timeout", "timeout", "encryption-invalid" ]) {
+
+      failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => reason);
+    }
+
+    assert.deepEqual(base.entries.map((entry) => entry.level), [ "error", "debug", "error" ],
+      "a repeat must be demoted and a changed reason must report in full, however long the run of repeats before it");
+  });
+
+  test("a non-failure releases its lines at their own levels and clears the remembered reason", () => {
+
+    // A success in between ends the episode: the failure after it reports that fault for the first time again rather than repeating the one before the success. The
+    // successful attempt's own warn line is untouched by the classification and goes out at warn.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+
+    failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+    failures.attempt((attemptLog) => attemptLog.warn("Connected after a degraded handshake."), () => undefined);
+    failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+    assert.deepEqual(base.entries.map((entry) => entry.level), [ "error", "warn", "error" ],
+      "a non-failure must release its own lines at their levels and clear the memory, so the failure after it reports in full");
+  });
+
+  test("debug and info reach the base logger while the attempt is still open", () => {
+
+    // Progress is worth showing as it happens, so neither level waits for the classification. Asserting from inside `run` is what proves they were not merely
+    // released alongside everything else once the attempt ended.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+
+    failures.attempt((attemptLog) => {
+
+      attemptLog.debug("Opening the socket.");
+      attemptLog.info("Handshake started.");
+
+      assert.deepEqual(base.entries.map((entry) => entry.level), [ "debug", "info" ], "debug and info must reach the base logger before `run` returns");
+    }, () => undefined);
+  });
+
+  test("a synchronous run yields a synchronous attempt returning the same value by identity", () => {
+
+    // Nothing in the adapter may turn a synchronous attempt into an asynchronous one: the caller gets its own object back rather than a promise of it, and the held
+    // line has already been replayed on the line after `attempt` returns. There is no `await` anywhere in this row, which is the point of it.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+    const answer = { ok: false, reason: "timeout" };
+
+    const outcome = failures.attempt((attemptLog) => {
+
+      attemptLog.error("The connection could not be established.");
+
+      return answer;
+    }, (result) => result.ok ? undefined : result.reason);
+
+    assert.equal(outcome, answer, "a synchronous attempt must return exactly the value `run` produced");
+    assert.equal(outcome instanceof Promise, false, "a synchronous attempt must not hand back a promise");
+    assert.equal(expectAt(base.entries, 0, "the released entry").level, "error", "a synchronous attempt must replay its lines before returning");
+  });
+
+  test("an asynchronous run holds its lines until the promise settles, and the attempt fulfills with the same value", async () => {
+
+    // The classification is unavailable until the attempt's promise settles, so the hold has to outlive `run` returning. Asserting while the deferred promise is
+    // still pending is what catches an adapter that replays as soon as `run` hands back its promise.
+    await assertNoUnhandledRejections(async () => {
+
+      const base = capturingLog();
+      const failures = repeatDemotedLog(base);
+      const deferred: PromiseWithResolvers<{ ok: boolean; reason: string }> = Promise.withResolvers();
+
+      const pending = failures.attempt(async (attemptLog) => {
+
+        attemptLog.error("The connection could not be established.");
+
+        return deferred.promise;
+      }, (result) => result.ok ? undefined : result.reason);
+
+      assert.equal(base.entries.length, 0, "an attempt whose promise is still pending must hold its error line");
+
+      const answer = { ok: false, reason: "timeout" };
+
+      deferred.resolve(answer);
+
+      assert.equal(await pending, answer, "an asynchronous attempt must fulfill with exactly the value `run` produced");
+      assert.equal(base.entries.length, 1, "a settled attempt must release its held error line exactly once");
+      assert.equal(expectAt(base.entries, 0, "the released entry").level, "error", "a first failure must be released at its own level");
+    });
+  });
+
+  test("a synchronous throw releases at own levels, rethrows the same error, and leaves the remembered reason untouched", () => {
+
+    // A throw is not a classified outcome. Its own line still has to be shown, and the episode must neither advance nor reset around it, so the attempt after the
+    // throw is still a repeat of the one before it and arrives at debug.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+    const boom = new Error("the transport collapsed mid-handshake");
+
+    failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+    assert.throws(() => failures.attempt((attemptLog) => {
+
+      attemptLog.error("The transport collapsed.");
+
+      throw boom;
+    }, () => "timeout"), (error: unknown) => error === boom, "a throw inside `run` must propagate unchanged");
+
+    failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+    assert.equal(base.entries.length, 3, "each attempt must release exactly the one line it wrote");
+    assert.deepEqual(base.entries.map((entry) => entry.level), [ "error", "error", "debug" ],
+      "a throw must release at its own level and leave the remembered reason alone, so the attempt after it is still a repeat");
+  });
+
+  test("a rejection releases at own levels, rejects with the same error, and leaves the remembered reason untouched", async () => {
+
+    // The asynchronous end mirrors the synchronous one exactly: a rejection is no more a classification than a throw is, so the lines go out in full and the memory
+    // stands across it.
+    await assertNoUnhandledRejections(async () => {
+
+      const base = capturingLog();
+      const failures = repeatDemotedLog(base);
+      const boom = new Error("the transport collapsed mid-handshake");
+
+      failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+      await assert.rejects(failures.attempt(async (attemptLog) => {
+
+        attemptLog.error("The transport collapsed.");
+
+        throw boom;
+      }, () => "timeout"), (error: unknown) => error === boom, "a rejection from `run` must propagate unchanged");
+
+      failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+      assert.equal(base.entries.length, 3, "each attempt must release exactly the one line it wrote");
+      assert.deepEqual(base.entries.map((entry) => entry.level), [ "error", "error", "debug" ],
+        "a rejection must release at its own level and leave the remembered reason alone, so the attempt after it is still a repeat");
+    });
+  });
+
+  test("a throwing classifier releases at own levels, propagates the error, and leaves the remembered reason untouched", () => {
+
+    // `reasonOf` runs before anything is released, so a throw from it leaves the attempt unclassified, handled exactly as a throw from `run` is...down to the
+    // memory standing untouched across it.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+    const boom = new Error("the outcome could not be classified");
+
+    failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+    assert.throws(() => failures.attempt((attemptLog) => attemptLog.error("The classifier is about to fault."), () => { throw boom; }),
+      (error: unknown) => error === boom, "a throw from `reasonOf` must propagate unchanged");
+
+    failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+    assert.deepEqual(base.entries.map((entry) => entry.level), [ "error", "error", "debug" ],
+      "a throwing classifier must release at its own level and leave the remembered reason alone");
+  });
+
+  test("an error or warn written after the attempt ended reaches the base logger immediately, at its own level", () => {
+
+    // A callee that kept the logger past the attempt it was handed for must still be heard. No replay is coming to carry such a line, so it goes straight to the
+    // base logger at the level it was written at, and it must go exactly once.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+
+    const leaked = failures.attempt((attemptLog) => {
+
+      attemptLog.error("The connection could not be established.");
+
+      return attemptLog;
+    }, () => "timeout");
+
+    assert.equal(base.entries.length, 1, "the attempt must have released exactly the line it wrote");
+
+    leaked.error("A late fault surfaced.");
+    leaked.warn("A late warning surfaced.");
+
+    assert.equal(base.entries.length, 3, "each line written after the attempt ended must reach the base logger exactly once");
+    assert.deepEqual(base.entries.slice(1).map((entry) => entry.level), [ "error", "warn" ], "a late line must arrive at the level it was written at");
+  });
+
+  test("adapters remember their reasons independently", () => {
+
+    // The memory belongs to the adapter rather than to the base logger, so two adapters writing to one sink never demote each other's first report.
+    const base = capturingLog();
+    const first = repeatDemotedLog(base);
+    const second = repeatDemotedLog(base);
+
+    first.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+    second.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+    assert.deepEqual(base.entries.map((entry) => entry.level), [ "error", "error" ],
+      "a second adapter must report its own first failure in full, whatever another adapter has remembered");
+  });
+
+  test("composes over prefixedLog, so a demoted replay carries the prefix", () => {
+
+    // The adapter hands every line to whatever logger it was built over, on the replay as much as on the live path, so the prefix reaches a demoted repeat exactly
+    // as it reaches a full report.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(prefixedLog(base, () => "Front Door"));
+
+    for(const attemptNumber of [ 1, 2 ]) {
+
+      failures.attempt((attemptLog) => attemptLog.error("Attempt %d could not connect.", attemptNumber), () => "timeout");
+    }
+
+    const repeat = expectAt(base.entries, 1, "the demoted repeat");
+
+    assert.equal(repeat.level, "debug", "a repeat must be replayed at debug through the composed logger");
+    assert.equal(repeat.message, "Front Door: Attempt %d could not connect.", "the replay must carry the prefix the composed logger applies");
+    assert.deepEqual(repeat.params, [2]);
+  });
+
+  test("the reason type constrains the classifier, and an attempt answers with run's own type", async () => {
+
+    // Enforced by `npm run typecheck` rather than at runtime: a misspelled tag must fail to compile, a synchronous attempt's result must be assignable to its own
+    // non-promise type with no `await`, and an asynchronous one's must be assignable to the promise type `run` returned. Every call here passes both arrows
+    // unannotated and no explicit type argument, which is the shape a consumer writes...a call that inferred `unknown` would redden the two assignments below.
+    type Reason = "timeout" | "refused";
+
+    const base = capturingLog();
+    const failures = repeatDemotedLog<Reason>(base);
+    const syncAnswer = { ok: false };
+    const asyncAnswer = { ok: true };
+
+    // @ts-expect-error - "timeuot" is not a member of Reason, so a classifier answering with it must fail to compile.
+    failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeuot");
+
+    const synchronous: { ok: boolean } = failures.attempt((attemptLog) => {
+
+      attemptLog.debug("Classifying a synchronous attempt.");
+
+      return syncAnswer;
+    }, (result) => result.ok ? undefined : "timeout");
+
+    const asynchronous: Promise<{ ok: boolean }> = failures.attempt(async (attemptLog) => {
+
+      attemptLog.debug("Classifying an asynchronous attempt.");
+
+      return asyncAnswer;
+    }, (result) => result.ok ? undefined : "refused");
+
+    assert.equal(synchronous.ok, false, "a synchronous attempt must answer with the value `run` returned, with no promise in between");
+    assert.equal((await asynchronous).ok, true, "an asynchronous attempt must fulfill with the value `run` produced");
+  });
+
+  test("held lines are replayed after the same attempt's live lines, in written order", () => {
+
+    // The accepted cost of holding: within one attempt the live info and debug lines arrive first and the failure report last, however they were interleaved when
+    // they were written.
+    const base = capturingLog();
+    const failures = repeatDemotedLog(base);
+
+    failures.attempt((attemptLog) => {
+
+      attemptLog.info("Opening the socket.");
+      attemptLog.error("The connection could not be established.");
+      attemptLog.info("Backing off before the next attempt.");
+    }, () => "timeout");
+
+    assert.deepEqual(base.entries.map((entry) => entry.level), [ "info", "info", "error" ],
+      "the live lines must arrive in written order, with the held report released after them");
+  });
+});
+
 describe("formatBps", () => {
 
   test("returns bits per second for sub-1000 values", () => {
@@ -3228,5 +3576,75 @@ describe("sanitizeName", () => {
 
     assert.equal(validateName(cleaned), true);
     assert.equal(cleaned, "Living Room Lamp.");
+  });
+});
+
+describe("assertPositiveInteger", () => {
+
+  test("accepts a positive integer", () => {
+
+    assert.doesNotThrow(() => assertPositiveInteger(1, { optionName: "capacity", owner: "RateBudget" }),
+      "the smallest positive integer is a value every bounded option accepts");
+    assert.doesNotThrow(() => assertPositiveInteger(4096, { optionName: "stdoutHighWater", owner: "LogSocket" }),
+      "a large whole count is a value every bounded option accepts");
+  });
+
+  test("refuses a fractional value, naming the owner and the option", () => {
+
+    assert.throws(() => assertPositiveInteger(1.5, { optionName: "capacity", owner: "RateBudget" }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "RateBudget: `capacity` must be a positive integer."),
+      "a fractional count is a ceiling no integer depth reaches exactly, and the refusal names where the value was written");
+  });
+
+  test("refuses a value that is not a number at all", () => {
+
+    assert.throws(() => assertPositiveInteger(Number.NaN, { optionName: "highWaterMark", owner: "AsyncQueue" }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "AsyncQueue: `highWaterMark` must be a positive integer."),
+      "NaN describes no bound at all");
+    assert.throws(() => assertPositiveInteger(Number.POSITIVE_INFINITY, { optionName: "highWaterMark", owner: "AsyncQueue" }), TypeError,
+      "an infinite count describes no bound at all");
+  });
+
+  test("refuses zero and a negative count", () => {
+
+    assert.throws(() => assertPositiveInteger(0, { optionName: "stdoutHighWater", owner: "LogSocket" }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "LogSocket: `stdoutHighWater` must be a positive integer."),
+      "a bound of zero is a queue that could never hold anything");
+    assert.throws(() => assertPositiveInteger(-1, { optionName: "stdoutHighWater", owner: "LogSocket" }), TypeError,
+      "a negative bound describes no ceiling at all");
+  });
+});
+
+describe("assertPositiveFinite", () => {
+
+  test("accepts a positive, finite quantity", () => {
+
+    assert.doesNotThrow(() => assertPositiveFinite(1000, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }),
+      "a whole duration is a value every measured option accepts");
+    assert.doesNotThrow(() => assertPositiveFinite(0.5, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }),
+      "a fractional quantity is fine where the unit is continuous");
+  });
+
+  test("refuses NaN, naming the owner, the option, and the unit", () => {
+
+    assert.throws(() => assertPositiveFinite(Number.NaN, { optionName: "bodyLimit", owner: "HttpListener", unit: "bytes" }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "HttpListener: `bodyLimit` must be a positive, finite number of bytes."),
+      "NaN is no quantity at all, and the refusal names the unit the option is measured in");
+  });
+
+  test("refuses an infinite value, naming the owner, the option, and the unit", () => {
+
+    assert.throws(() => assertPositiveFinite(Number.POSITIVE_INFINITY, { optionName: "warmupMs", owner: "MdnsBrowser", unit: "milliseconds" }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "MdnsBrowser: `warmupMs` must be a positive, finite number of milliseconds."),
+      "an unbounded warmup is a settle that never comes");
+  });
+
+  test("refuses zero and a negative quantity", () => {
+
+    assert.throws(() => assertPositiveFinite(0, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }),
+      (error: unknown) => (error instanceof TypeError) && (error.message === "RateBudget: `window` must be a positive, finite number of milliseconds."),
+      "a window of zero occupies no slot for any span of time");
+    assert.throws(() => assertPositiveFinite(-5, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }), TypeError,
+      "a negative duration runs backwards");
   });
 });

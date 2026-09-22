@@ -18,6 +18,17 @@
  * an outage and nothing replays after it, and {@link MqttClient.connected} answers the same question a consumer can ask for itself before it publishes. See
  * {@link MqttConfig.reconnectInterval} for the setting that leaves automatic reconnection disabled entirely.
  *
+ * Because nothing replays, a consumer holding state a subscriber may have missed during the outage - a door's position, a lock's state - restates it for itself.
+ * {@link MqttClient.onConnect} registers a handler the client runs on every session it establishes, the first one included. The client owns detecting the connect and
+ * delivering the notification; which topics carry state worth restating, and which carry momentary events that must never be replayed, is the consumer's call.
+ *
+ * The client also states its own availability on the rail, which it owns end to end. On every session it establishes it publishes a retained `online` on
+ * `<prefix>/availability`, ahead of those connect registrations, and it hands the broker a last will carrying a retained `offline` on the same topic, so the broker
+ * itself answers for a plugin that stopped without saying so. For what the two words mean at the device scope, and the entry a plugin spreads into its own catalog
+ * to say it there, see {@link mqtt-topics!mqttAvailabilityEntry | mqttAvailabilityEntry}. One consequence a consumer composing the two scopes has to know: the
+ * client keeps one identity across reconnects, so a reconnect that arrives while the broker still holds the previous connection takes that session over and the
+ * previous connection's will goes out, which means a retained `offline` can outlive a live plugin until its next connect replaces it.
+ *
  * For a state topic a plugin re-derives on a schedule, the `ifChanged` option on {@link MqttPublishInit} publishes only when the payload moved, remembering per
  * topic what the broker last acknowledged for the life of a session.
  *
@@ -29,10 +40,11 @@
  * @module
  */
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptions } from "./featureOptions.ts";
-import { HbpuAbortError, composeSignals, formatErrorMessage, markHandled, onAbort, runWithAbort, waitWithSignal } from "./util.ts";
-import type { HomebridgePluginLogging, Nullable } from "./util.ts";
-import { MqttLastPayloads, MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
-import { assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
+import { HbpuAbortError, composeSignals, formatErrorMessage, guardedDispatch, markHandled, onAbort, repeatDemotedLog, runWithAbort, waitWithSignal } from "./util.ts";
+import type { HomebridgePluginLogging, Nullable, RepeatDemotedLog } from "./util.ts";
+import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic,
+  mqttTopic } from "./mqtt-topics.ts";
+import { MqttLastPayloads, MqttOfflineError, guardedPublishReason, routeGuardedPublishFailure } from "./mqtt-publish.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
 import { connect } from "mqtt";
 import util from "node:util";
@@ -41,10 +53,18 @@ import util from "node:util";
 // back without hammering it with reconnect attempts, while still recovering well within the timescale a user would notice as "the plugin is broken."
 const MQTT_DEFAULT_RECONNECT_INTERVAL = 60;
 
+// The tag a transport error carrying no code at all is weighed by, so every such error reads as one reason rather than as no reason. mqtt.js keeps emitting the
+// same uncoded error for as long as its cause holds, and a tag of its own is what lets that repeat replay at debug the way a coded one does.
+const MQTT_UNCODED_BROKER_ERROR = "uncoded";
+
 // Module-scope success sentinel for `subscribeSet` handler invocations. `runWithAbort` returns `null` when its composed signal fires, so we use a sentinel to
 // distinguish "user setter ran to completion" from "the invocation was cancelled." Hoisted once at module load rather than allocated per message, and declared as
 // `unique symbol` so the typed comparison below keeps its narrowing precision.
 const SUBSCRIBE_SET_OK: unique symbol = Symbol("mqtt:subscribeSet:ok");
+
+// The tag a cancelled set handler is weighed by. A cancellation carries no error to render, so it needs a tag of its own: a setter cancelled on every message
+// reports once and replays at debug, while a setter that starts throwing instead answers a different tag and reports in full again.
+const MQTT_SET_CANCELLED = "set cancelled";
 
 /**
  * A handler for raw MQTT messages delivered on a subscribed topic.
@@ -54,6 +74,16 @@ const SUBSCRIBE_SET_OK: unique symbol = Symbol("mqtt:subscribeSet:ok");
  * @category Utilities
  */
 export type MqttHandler = (payload: Buffer) => Promise<void> | void;
+
+/**
+ * A handler invoked by {@link MqttClient.onConnect} each time the client establishes a session with the broker.
+ *
+ * It takes no argument because a first connect and a reconnect are the same event here: mqtt.js does not tell the two apart, and a consumer restating held state has
+ * the same work to do either way. Returning a promise is supported, and the client does not await it, so one handler's pace never sets another's.
+ *
+ * @category Utilities
+ */
+export type MqttConnectHandler = () => Promise<void> | void;
 
 /**
  * A handler invoked by {@link MqttClient.subscribeGet} when a "true" message arrives on the `/get` topic. Returns the current value as a string that will be published
@@ -395,6 +425,41 @@ export function routeMqttBrokerError(error: NodeJS.ErrnoException, log: Homebrid
 }
 
 /**
+ * Name the reason a broker error is weighed against the next by. Pure function: no class state, no mqtt.js handles, no closure over a live client, tested directly
+ * against synthetic errors the way {@link routeMqttBrokerError} and {@link logGetterPublishOutcome} are.
+ *
+ * The code is read rather than the rendered message, because a transport failure repeating is the same failure however its text varies, and it is read defensively
+ * because mqtt.js carries two error shapes: an errno-bearing `Error` from the socket, whose code is a string, and its own `ErrorWithReasonCode` for a protocol-level
+ * refusal, whose code is a number. A numeric code answers its own decimal text, so two different refusal reasons stay two different tags, and an error carrying no
+ * code at all answers one fixed tag rather than none.
+ *
+ * This agrees with what the routed line says by construction: a string code is exactly what the router's switch names a case for, and a numeric or absent code
+ * falls to its default branch, where the whole error is inspected into the message. Same outcomes, read the same way, in both places.
+ *
+ * @param error - The error event payload from the underlying mqtt.js client.
+ *
+ * @returns The tag this error is weighed by.
+ *
+ * @category Utilities
+ */
+export function brokerErrorReason(error: Error): string {
+
+  const code = ("code" in error) ? error.code : undefined;
+
+  if(typeof code === "string") {
+
+    return code;
+  }
+
+  if(typeof code === "number") {
+
+    return code.toString();
+  }
+
+  return MQTT_UNCODED_BROKER_ERROR;
+}
+
+/**
  * Outcome of a getter-driven response publish issued by {@link MqttClient.subscribeGet}. Discriminated union: `ok: true` after a successful publish, `ok: false` with
  * the captured error after a failure. Passed to {@link logGetterPublishOutcome} so the routing logic between the success and failure log lines is testable in
  * isolation against synthetic outcomes - the same architectural pattern {@link routeMqttBrokerError} uses for transport-error log routing.
@@ -489,11 +554,13 @@ export function redactKnownBrokerUrl(text: string, brokerUrl: string): string {
 }
 
 /**
- * Per-subscription options accepted by {@link MqttClient.subscribe}, {@link MqttClient.subscribeGet}, and {@link MqttClient.subscribeSet}.
+ * Per-subscription options accepted by {@link MqttClient.subscribe}, {@link MqttClient.subscribeGet}, {@link MqttClient.subscribeSet}, and
+ * {@link MqttClient.onConnect}.
  *
  * @property signal - Optional {@link AbortSignal}. When it aborts, the specific handler is removed and (if it was the last handler on the topic) the underlying MQTT
  *                    subscription is dropped. Composes with the connection-level signal: a client-level abort removes every handler regardless of per-subscription
- *                    state.
+ *                    state. On {@link MqttClient.onConnect} what the signal releases is the connect registration alone - no broker subscription stands behind one,
+ *                    so nothing reaches the wire when it aborts.
  *
  * @category Utilities
  */
@@ -524,6 +591,8 @@ export interface MqttSubscribeSetInit {
  * @property ifChanged - Optional. When `true`, the publish goes out only when `payload` differs from the last payload this client delivered on `topic` through a
  *                       publish that also asked for it, and otherwise resolves at once with nothing sent. For a state topic whose value a plugin re-derives on a
  *                       schedule, never for an event. The memory's rules are stated on {@link MqttClient.publish}.
+ * @property retain    - Optional. When `true`, the broker keeps this payload as the topic's last retained message and hands it to every subscriber that attaches
+ *                       afterwards, which makes the publish a standing statement rather than an event a late listener misses. Defaults to `false`.
  * @property signal    - Optional {@link AbortSignal}. When it aborts before the broker acknowledges the publish, the returned promise rejects with `signal.reason`.
  *                       Composes with the connection-level signal.
  *
@@ -532,6 +601,7 @@ export interface MqttSubscribeSetInit {
 export interface MqttPublishInit {
 
   ifChanged?: boolean;
+  retain?: boolean;
   signal?: AbortSignal;
 }
 
@@ -550,6 +620,9 @@ export interface MqttPublishInit {
  *
  * mqtt.subscribe("device1/status", (payload) => log.info("Status: %s.", payload.toString()), { signal: feature.signal });
  *
+ * // Restate held state on every session the client establishes, since a publish is never queued across an outage.
+ * mqtt.onConnect(() => mqtt.publishGuarded("device1/status", device.status, { ifChanged: true }), { signal: feature.signal });
+ *
  * // Abort-aware publish.
  * await mqtt.publish("device1/status", "on");
  * ```
@@ -563,11 +636,30 @@ export class MqttClient implements AsyncDisposable {
    */
   public readonly signal: AbortSignal;
 
+  // The repeat memory for the broker's own transport errors. mqtt.js re-emits its error on every reconnect attempt, so an outage that holds for hours would
+  // otherwise write one identical line per interval: the errno code is the tag, so the first report of a code goes out in full and the ones after it replay at
+  // debug until the code changes or a session is established.
+  readonly #brokerFailures: RepeatDemotedLog;
+
   readonly #brokerUrl: string;
+
+  // The connect registrations, held in a `Set` so that registering the same function twice is one registration - the rule `subscribe` keeps per topic - and so that
+  // iteration answers in registration order, which is the order the connect listener invokes them in.
+  readonly #connectHandlers: Set<MqttConnectHandler>;
+
+  // The repeat memory for faults the consumer's own callbacks raise: a message handler that throws, a setter that throws or is cancelled, and a getter whose
+  // response publish fails. A consumer callback carries no taxonomy of its own, so the rendered reason is the tag.
+  readonly #consumerFailures: RepeatDemotedLog;
+
   readonly #controller: AbortController;
   readonly #lastPayloads: MqttLastPayloads;
   readonly #log: HomebridgePluginLogging;
   readonly #mqtt: MqttJsClient;
+
+  // The repeat memory for guarded publishes. A broker that refuses every publish for one reason - a permission it will not grant, a payload it will not take -
+  // reports that reason once and replays the rest at debug, and a session established clears it so the next outage reports in full.
+  readonly #publishFailures: RepeatDemotedLog;
+
   readonly #reconnectInterval: number;
   readonly #subscriptions: Map<string, Set<MqttHandler>>;
   readonly #topicPrefix: string;
@@ -592,10 +684,14 @@ export class MqttClient implements AsyncDisposable {
    */
   public constructor(config: MqttConfig, init: MqttClientInit = {}) {
 
+    this.#brokerFailures = repeatDemotedLog(config.log);
     this.#brokerUrl = config.brokerUrl;
+    this.#connectHandlers = new Set();
+    this.#consumerFailures = repeatDemotedLog(config.log);
     this.#isConnected = false;
     this.#lastPayloads = new MqttLastPayloads();
     this.#log = config.log;
+    this.#publishFailures = repeatDemotedLog(config.log);
     this.#reconnectInterval = config.reconnectInterval ?? MQTT_DEFAULT_RECONNECT_INTERVAL;
     this.#subscriptions = new Map();
     this.#topicPrefix = config.topicPrefix;
@@ -613,7 +709,15 @@ export class MqttClient implements AsyncDisposable {
       // certificate-chain verification would break those common self-signed setups and force users to hand-wire a CA bundle, so we accept the broker's certificate as
       // presented. The trust boundary here is the user's own network and their own broker, not a public endpoint, which makes this the correct posture rather than a
       // weakening of transport security.
-      this.#mqtt = connect(this.#brokerUrl, { reconnectPeriod: this.#reconnectInterval * 1000, rejectUnauthorized: false });
+      //
+      // The will is what the broker publishes on this client's behalf once the connection drops without a DISCONNECT, which is how a subscriber learns that a
+      // plugin stopped rather than merely went quiet. It is registered here and nowhere else, and no reconnect path re-registers it: mqtt.js keeps the will among
+      // its stored options and copies it into every CONNECT packet it builds, so each session arms it again from this one declaration. This client always provokes
+      // it, because `abort()` tears down through `end(true)`, which destroys the socket with no DISCONNECT sent. It is retained for the same reason the connect
+      // statement is - a subscriber attaching during the outage still reads it - and `#topicPrefix` is assigned ahead of this line, which is what lets the will's
+      // full topic compose inline here.
+      this.#mqtt = connect(this.#brokerUrl, { reconnectPeriod: this.#reconnectInterval * 1000, rejectUnauthorized: false,
+        will: { payload: MQTT_AVAILABILITY_OFFLINE, qos: 0, retain: true, topic: this.#expandTopic(MQTT_AVAILABILITY_TOPIC) } });
     } catch(error) {
 
       throw new Error("MqttClient: connection setup failed.", { cause: error });
@@ -702,7 +806,10 @@ export class MqttClient implements AsyncDisposable {
     // mqtt.js's callback shape to a Promise on the same primitive every other wrap in HBPU uses.
     const { promise: ackPromise, resolve, reject }: PromiseWithResolvers<void> = Promise.withResolvers();
 
-    this.#mqtt.publish(full, payload, (error) => {
+    // Retention is the one option this call carries to the wire, and it answers a different question from the change-gated memory above it. The memory asks whether
+    // this client already delivered these bytes on this topic during this session; retention governs what the broker keeps on the topic for a subscriber that
+    // attaches afterwards. Neither consults the other, so every combination of the two reads exactly as a caller spelled it.
+    this.#mqtt.publish(full, payload, { retain: init.retain ?? false }, (error) => {
 
       if(error) {
 
@@ -749,11 +856,19 @@ export class MqttClient implements AsyncDisposable {
     // wire path: `publish` performs its own expansion and behaves identically whether or not anything else wanted the expanded form.
     const full = this.#expandTopic(topic);
 
-    // `markHandled` guards the guard. The `.catch` already keeps a rejected publish from floating; marking the derived promise observed covers the remaining case
-    // where the handler itself throws - a logger that faults would otherwise turn a reported failure into an unhandled rejection.
+    /* `markHandled` guards the guard. The `.catch` already keeps a rejected publish from floating; marking the derived promise observed covers the remaining case
+     * where the handler itself throws - a logger that faults would otherwise turn a reported failure into an unhandled rejection. The attempt wraps the report
+     * rather than the publish, so a publish that goes out costs nothing at all, and {@link routeGuardedPublishFailure} keeps every word of the classification: it
+     * is handed the attempt's logger and decides, exactly as it does for any other caller, which of its three lines this outcome earns.
+     *
+     * The tag is read off the rejection rather than off that decision, because only the error line is ever held: a cancellation's and an outage's debug lines
+     * reach the log live whatever the attempt settles with, so a tag that covers every rejection alike costs them nothing. {@link guardedPublishReason} owns how
+     * that tag is derived, and the shipped double calls the same function, which is what keeps the two from disagreeing about what counts as the same failure.
+     */
     void markHandled(this.publish(topic, payload, init).catch((error: unknown) => {
 
-      routeGuardedPublishFailure({ clientSignal: this.signal, error, log: this.#log, publishSignal: init.signal, topic: full });
+      this.#publishFailures.attempt((attemptLog) => routeGuardedPublishFailure({ clientSignal: this.signal, error, log: attemptLog, publishSignal: init.signal,
+        topic: full }), () => guardedPublishReason(error));
     }));
   }
 
@@ -832,12 +947,25 @@ export class MqttClient implements AsyncDisposable {
         return;
       }
 
-      // Sequence both log lines through {@link logGetterPublishOutcome} so the routing between success and failure is expressible as a pure function and testable in
-      // isolation. The publish promise settles exactly once - either `.then` (success) or `.catch` (failure) runs - and each path forwards its outcome through the
-      // single routing point, keeping the log surface honest about what actually happened on the wire.
+      /* Sequence both log lines through {@link logGetterPublishOutcome} so the routing between success and failure is expressible as a pure function and testable in
+       * isolation. The publish promise settles exactly once - either `.then` (success) or `.catch` (failure) runs - and each path forwards its outcome through the
+       * single routing point, keeping the log surface honest about what actually happened on the wire. Only the failure reports through an attempt: the success
+       * line is progress rather than a fault, and routing it through the memory the whole consumer family shares would clear what another callback's fault is
+       * weighed against.
+       */
       void this.publish(topic, getValue())
         .then(() => logGetterPublishOutcome(this.#log, type, { ok: true }))
-        .catch((error: unknown) => logGetterPublishOutcome(this.#log, type, { error, ok: false }));
+        .catch((error: unknown) => {
+
+          this.#consumerFailures.attempt((attemptLog): string => {
+
+            const reason = formatErrorMessage(error);
+
+            logGetterPublishOutcome(attemptLog, type, { error, ok: false });
+
+            return reason;
+          }, (reason) => reason);
+        });
     }, init);
   }
 
@@ -877,7 +1005,12 @@ export class MqttClient implements AsyncDisposable {
 
         if(result !== SUBSCRIBE_SET_OK) {
 
-          this.#log.warn("MQTT: set handler for %s was cancelled before completion.", type);
+          this.#consumerFailures.attempt((attemptLog): string => {
+
+            attemptLog.warn("MQTT: set handler for %s was cancelled before completion.", type);
+
+            return MQTT_SET_CANCELLED;
+          }, (reason) => reason);
 
           return;
         }
@@ -885,7 +1018,14 @@ export class MqttClient implements AsyncDisposable {
         this.#log.info("MQTT: set message received for %s: %s.", type, value);
       } catch(error) {
 
-        this.#log.error("MQTT: error setting %s to %s: %s.", type, value, formatErrorMessage(error));
+        this.#consumerFailures.attempt((attemptLog): string => {
+
+          const reason = formatErrorMessage(error);
+
+          attemptLog.error("MQTT: error setting %s to %s: %s.", type, value, reason);
+
+          return reason;
+        }, (reason) => reason);
       }
     }, init);
   }
@@ -921,6 +1061,45 @@ export class MqttClient implements AsyncDisposable {
 
     this.#subscriptions.delete(full);
     this.#mqtt.unsubscribe(full);
+  }
+
+  /**
+   * Register `handler` to run each time the client establishes a session with the broker, the first session included, so a consumer holding state a subscriber may
+   * have missed can restate it. The client owns detecting the connect and delivering the notification; what is worth restating is the consumer's policy - state
+   * belongs here, a momentary event never does, since a replayed event is the event happening a second time.
+   *
+   * A handler runs once the change-gated memory has been cleared and while {@link MqttClient.connected} reads `true`, so a publish issued from inside it is admitted
+   * and a change-gated publish of an unchanged payload goes out again: a subscriber that missed the change while the broker was away hears the current value.
+   *
+   * Handlers run in registration order, and none is awaited before the next is invoked, so a slow handler holds nothing back. A throw or a rejection from one is
+   * logged as `"The MQTT connect handler failed: ..."` and disturbs neither the connection nor the handlers around it. Registering the same function twice is one
+   * registration, as it is on a topic.
+   *
+   * Registering while a session is already held invokes nothing until the connect after it...the notification answers the future, while
+   * {@link MqttClient.connected} answers the present for a consumer that wants to act on the session it is already holding.
+   *
+   * @param handler - Callback invoked on each connect to the broker. See {@link MqttConnectHandler}.
+   * @param init    - Optional per-registration options. See {@link MqttSubscribeInit}.
+   */
+  public onConnect(handler: MqttConnectHandler, init: MqttSubscribeInit = {}): void {
+
+    // Ignore registrations that cannot produce any effect: the client is already dead, or the caller handed us a pre-aborted signal. This repeats `subscribe`'s guard
+    // rather than sharing one, because the two methods hold different collections - a map of sets keyed by topic there, a single set here - and a helper that
+    // abstracted over the collection would cost more to read than the three lines it saved.
+    if(this.signal.aborted || init.signal?.aborted) {
+
+      return;
+    }
+
+    this.#connectHandlers.add(handler);
+
+    // Per-registration cleanup, composed as `subscribe` composes its own: attaching the listener to the composed signal rather than to the caller's is what releases
+    // the registration on a client-level abort even when the caller never aborts their own controller, so the closure cannot keep the handler referenced past the
+    // connection's lifetime.
+    if(init.signal) {
+
+      onAbort(composeSignals(this.signal, init.signal), () => this.#connectHandlers.delete(handler));
+    }
   }
 
   /**
@@ -985,9 +1164,37 @@ export class MqttClient implements AsyncDisposable {
       this.#lastPayloads.clear();
       this.#isConnected = true;
 
+      /* A session established is the outage over, so both transport-scoped memories start again from nothing: the next broker error and the next publish failure
+       * each report in full however the outage before them ended. An attempt answering no tag is how an adapter is told an episode closed, and it writes nothing
+       * of its own. The consumer memory is left alone, because a callback that faults is the consumer's own defect and a new session says nothing about it.
+       */
+      this.#brokerFailures.attempt(() => undefined, () => undefined);
+      this.#publishFailures.attempt(() => undefined, () => undefined);
+
       // Every surface in this module that prints the broker URL routes through the shared redactor, so a configured credential never reaches the log stream. Keeping
       // that rule in one exported function - rather than at each call site - is what lets the connected log and the construction-failure log stay in agreement.
       this.#log.info("MQTT Broker: Connected to %s (topic: %s).", redactBrokerUrl(this.#brokerUrl), this.#topicPrefix);
+
+      // The plugin's own availability statement goes out ahead of the registrations below, and the order is the point: a consumer's connect handler restating its
+      // devices' availability must find this statement already on the wire, so no subscriber ever reads a device `online` under a plugin that has said nothing.
+      // The guarded form is what keeps this synchronous listener from floating a promise, matching what the class already offers a consumer for the same reason.
+      // It asks for no change gate - one statement per session either way, and the clear above has just emptied the memory a gate would read - and it is retained
+      // so that a subscriber attaching mid-session reads it without waiting for the one after.
+      this.publishGuarded(MQTT_AVAILABILITY_TOPIC, MQTT_AVAILABILITY_ONLINE, { retain: true });
+
+      /* Notify the connect registrations last, once the memory above has been cleared and while mqtt.js already reads connected - it sets its own flag before it
+       * emits this event - so a handler that publishes is admitted and a change-gated publish of an unchanged payload goes out.
+       *
+       * The snapshot is what keeps the pass stable against a handler that registers another handler or releases a sibling while the pass is running: the set may
+       * move underneath, and which handlers this connect invokes is settled before the first one runs. Isolation goes through `guardedDispatch` rather than through
+       * the inline try/catch the message dispatch uses, because a connect is rare where a message is hot - the promise per handler costs nothing at this cadence -
+       * and because the shipped double imports the same primitive by value, so the two cannot drift on how a faulting handler is caught or on the sentence that
+       * reports it.
+       */
+      for(const handler of [...this.#connectHandlers]) {
+
+        guardedDispatch({ handler: async (): Promise<void> => { await handler(); }, label: "MQTT connect", log: this.#log });
+      }
     });
 
     client.on("close", () => {
@@ -1022,7 +1229,14 @@ export class MqttClient implements AsyncDisposable {
       // connection or skip its siblings.
       const logHandlerError = (err: unknown): void => {
 
-        this.#log.error("MQTT: handler for %s threw: %s.", topic, formatErrorMessage(err));
+        this.#consumerFailures.attempt((attemptLog): string => {
+
+          const reason = formatErrorMessage(err);
+
+          attemptLog.error("MQTT: handler for %s threw: %s.", topic, reason);
+
+          return reason;
+        }, (reason) => reason);
       };
 
       for(const handler of [...handlers]) {
@@ -1044,10 +1258,14 @@ export class MqttClient implements AsyncDisposable {
 
     client.on("error", (error: Error) => {
 
-      // Forward the event to the pure {@link routeMqttBrokerError} router, which selects the right log line for each known errno code (and the default branch for
-      // unknown codes). mqtt.js's own reconnect policy stays in control of the transport for every error, so this callback is a thin adapter from the mqtt.js event
-      // surface to the routing function and holds no side effect of its own - `abort()` is the only way the client ends.
-      routeMqttBrokerError(error, this.#log, this.#reconnectInterval);
+      /* Forward the event to the pure {@link routeMqttBrokerError} router, which selects the right log line for each known errno code (and the default branch for
+       * unknown codes). mqtt.js's own reconnect policy stays in control of the transport for every error, so this callback is a thin adapter from the mqtt.js event
+       * surface to the routing function and holds no side effect of its own - `abort()` is the only way the client ends.
+       *
+       * The attempt is what makes an outage report once rather than once per reconnect: the code the router already branches on is the tag, so a broker that stays
+       * refused replays at debug while one that starts failing differently reports in full again.
+       */
+      this.#brokerFailures.attempt((attemptLog) => routeMqttBrokerError(error, attemptLog, this.#reconnectInterval), () => brokerErrorReason(error));
     });
   }
 
@@ -1084,9 +1302,11 @@ export class MqttClient implements AsyncDisposable {
   // unambiguously done, and the underlying library's reconnect logic exits permanently. The `#mqtt` reference is not nulled: callers never reach `#mqtt` accesses
   // when the signal is aborted (every public method short-circuits on `signal.aborted`), and keeping the reference preserves the `readonly #mqtt: MqttJsClient`
   // guarantee that lets TypeScript drop every non-null assertion in the live paths. The change-gated memory goes with the subscriptions, which is hygiene rather
-  // than behavior: every publish from here on rejects at the abort check before the gate could read it.
+  // than behavior: every publish from here on rejects at the abort check before the gate could read it. The connect registrations go the same way, and for the same
+  // reason - `end(true)` leaves no connect to notify them of - which also drops the client's reference to whatever each closure held.
   #teardown(): void {
 
+    this.#connectHandlers.clear();
     this.#subscriptions.clear();
     this.#lastPayloads.clear();
     this.#mqtt.end(true);

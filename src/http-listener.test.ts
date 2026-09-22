@@ -9,13 +9,14 @@
  */
 import { HTTP_LISTENER_ANY_PATH, HttpListener } from "./http-listener.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
-import { assertNoUnhandledRejections, capturingLog, expectAt, logCount, loggedAt, settle, waitUntil } from "./testing/index.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, logCount, loggedAt, settle, stopListening, waitUntil } from "./testing/index.ts";
 import { createServer, request as httpRequest } from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
+import { once } from "node:events";
 import test from "node:test";
 
 // The label every arm constructs its listener with, so an assertion that a line names the listener has one string to look for.
@@ -33,8 +34,11 @@ const RETRY_MS = 250;
 async function holdTcpPort(): Promise<AsyncDisposable & { port: number }> {
 
   const blocker = createServer();
+  const listening = once(blocker, "listening");
 
-  await new Promise<void>((resolve) => void blocker.listen(0, () => resolve()));
+  blocker.listen(0);
+
+  await listening;
 
   const address = blocker.address();
 
@@ -44,7 +48,7 @@ async function holdTcpPort(): Promise<AsyncDisposable & { port: number }> {
 
     async [Symbol.asyncDispose](): Promise<void> {
 
-      await new Promise<void>((resolve) => void blocker.close(() => resolve()));
+      await stopListening(blocker);
     }
   };
 }
@@ -688,4 +692,35 @@ test("an option that cannot produce a working listener is refused at constructio
   assert.throws(() => new HttpListener({ label: LABEL, log, port: 70000 }), (error: unknown) => (error instanceof TypeError) && error.message.includes("port"));
   assert.throws(() => new HttpListener({ label: LABEL, log, port: 1.5 }), (error: unknown) => (error instanceof TypeError) && error.message.includes("port"));
   assert.throws(() => new HttpListener({ label: "", log, port: 0 }), (error: unknown) => (error instanceof TypeError) && error.message.includes("label"));
+});
+
+test("a route that keeps failing is reported once, replayed at debug, and reported again when it fails differently", async () => {
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  const port = listener.boundPort;
+
+  let served = 0;
+
+  using faulty = listener.route("/fault", () => {
+
+    served++;
+
+    throw new Error((served < 3) ? "handler fell over" : "handler fell over differently");
+  }, { methods: ["POST"] });
+
+  assert.equal((await request({ body: "{}", path: "/fault", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/fault", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/fault", port })).status, 500);
+
+  // A sender retrying against a broken route learns the fault once; the repeat is the same fact and belongs at debug. A fault that reads differently is a different
+  // fault, so it is reported in full again.
+  assert.equal(logCount(log.entries, "error", "handler fell over."), 1, "the unchanged repeat must not reach error level a second time");
+  assert.equal(logCount(log.entries, "debug", "handler fell over."), 1, "the unchanged repeat is replayed at debug");
+  assert.equal(logCount(log.entries, "error", "handler fell over differently"), 1, "a fault that differs from the one before it is reported in full");
+  assert.ok(loggedAt(log.entries, "error", LABEL), "every report names the listener by its label");
 });

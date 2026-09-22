@@ -6,6 +6,7 @@ import type { HblogConfigFile, HblogConnectionFlags, HblogEnv } from "./config.t
 import { describe, test } from "node:test";
 import { loadConfigFile, resolveConfigPath, resolveConnection } from "./config.ts";
 import assert from "node:assert/strict";
+import { errnoError } from "../testing/index.ts";
 
 // Build a `readFile` test double returning a caller-supplied text, or rejecting with an ENOENT-shaped error to model a missing file. The recorded paths let a test
 // assert which path the loader read.
@@ -19,11 +20,7 @@ function fakeReadFile(result: string | { code: string }): { paths: string[]; rea
 
     if(typeof result !== "string") {
 
-      const error = new Error("ENOENT") as Error & { code: string };
-
-      error.code = result.code;
-
-      throw error;
+      throw errnoError("ENOENT", result.code);
     }
 
     return result;

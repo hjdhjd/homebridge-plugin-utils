@@ -10,12 +10,15 @@
  * double that answers it: a {@link TestMqttClient} recording which subscriptions were registered, on which topics, carrying which signals, what was published, and how
  * a refused publish was handled, with drivers that let a test deliver a message or run a registered getter or setter by hand.
  *
- * The double records, it does not simulate a broker. There is no connection, no topic prefixing (a topic is recorded as the caller's tail, verbatim), and nothing on
+ * The double records, it does not simulate a broker. There is no connection, no topic prefixing (a topic is recorded as the caller's tail, verbatim), no last will
+ * (a will is published by the broker, and there is none behind this double to publish one), and nothing on
  * the wire...those are the real client's own contract, covered by the library's suite against a real broker, and a plugin's suite needs the plugin's side of the
  * interface rather than the transport's. What the double does mirror is the client's observable behavior, because that is what a consumer's code branches on: the
  * composed-signal check every publish opens with, the connection state a publish is refused on when it reads false, the pre-aborted early return that registers
  * nothing, the release of a registration when its per-subscription signal aborts, the change gate a publish asking for `ifChanged` is answered by and the
- * session-bound memory behind it, and the post-abort no-op posture of every method. The guarded path routes through
+ * session-bound memory behind it, the connect registrations the client notifies on every session it establishes - driven here by the lever's false-to-true edge,
+ * which is the double's session restored - the retained availability statement that same edge records ahead of those registrations, and the post-abort no-op posture
+ * of every method. The guarded path routes through
  * the client's own {@link mqtt-publish!routeGuardedPublishFailure | routeGuardedPublishFailure}, so a cancellation, an offline refusal, and a genuine failure reach
  * the same lines here that they reach on the client.
  *
@@ -24,11 +27,11 @@
  *
  * @module
  */
-import { HbpuAbortError, composeSignals, markHandled, noOpLog, onAbort } from "./util.ts";
-import type { HomebridgePluginLogging, Nullable } from "./util.ts";
-import { MQTT_GET_SUFFIX, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
-import type { MqttGetHandler, MqttHandler, MqttPublishInit, MqttSetHandler, MqttSubscribeInit, MqttSubscribeSetInit } from "./mqttClient.ts";
-import { MqttLastPayloads, MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
+import { HbpuAbortError, composeSignals, guardedDispatch, markHandled, noOpLog, onAbort, repeatDemotedLog } from "./util.ts";
+import type { HomebridgePluginLogging, Nullable, RepeatDemotedLog } from "./util.ts";
+import { MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, MQTT_GET_SUFFIX, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
+import type { MqttConnectHandler, MqttGetHandler, MqttHandler, MqttPublishInit, MqttSetHandler, MqttSubscribeInit, MqttSubscribeSetInit } from "./mqttClient.ts";
+import { MqttLastPayloads, MqttOfflineError, guardedPublishReason, routeGuardedPublishFailure } from "./mqtt-publish.ts";
 
 /**
  * One recorded subscription registration.
@@ -55,14 +58,16 @@ export interface TestMqttSubscription {
  * One recorded publish, as the caller issued it.
  *
  * @property payload - The payload passed to the publish, unchanged - a `Buffer` stays a `Buffer` and a string stays a string.
+ * @property retain  - The retention the caller asked for, and `false` when the init named none, so the flag reads the same way whether or not it was spelled.
  * @property topic   - The topic tail passed to the publish. The double expands nothing, so this is what the caller wrote.
  *
  * @category Testing
  */
 export interface TestMqttPublish {
 
-  payload: Buffer | string;
-  topic: string;
+  readonly payload: Buffer | string;
+  readonly retain: boolean;
+  readonly topic: string;
 }
 
 /**
@@ -133,6 +138,10 @@ export class TestMqttClient implements AsyncDisposable {
   // The controller whose signal is this double's lifetime. Owned privately so `abort()` is the only way to fire it, exactly as the client owns its own.
   readonly #controller = new AbortController();
 
+  // The connect registrations the lever's false-to-true edge invokes, mirroring the set the client's connect listener reads. A `Set` keeps the client's rules: the
+  // same function registered twice is one registration, and iteration answers in registration order.
+  readonly #connectHandlers = new Set<MqttConnectHandler>();
+
   // Backing state for the connection lever. A test writes it; the getter composes it with the lifetime signal, as the client composes mqtt.js's flag with its own.
   #connected = true;
 
@@ -146,6 +155,10 @@ export class TestMqttClient implements AsyncDisposable {
   // Where the guarded publish path reports.
   readonly #log: HomebridgePluginLogging;
 
+  // The repeat memory for guarded publishes, mirroring the client's: a rejection that keeps answering the same tag is reported once and replayed at debug, and a
+  // session restored clears it, where the client's own is cleared on connect.
+  readonly #publishFailures: RepeatDemotedLog;
+
   /**
    * Construct a recording double.
    *
@@ -156,15 +169,18 @@ export class TestMqttClient implements AsyncDisposable {
   public constructor(options: { log?: HomebridgePluginLogging } = {}) {
 
     this.#log = options.log ?? noOpLog;
+    this.#publishFailures = repeatDemotedLog(this.#log);
     this.signal = this.#controller.signal;
 
     // The client's teardown clears its whole subscription map on abort, independent of the per-subscription release listeners, so a client-level abort also releases
     // the registrations that never carried a signal of their own. Clearing in place preserves the array identity a test may already be holding. Only the live
     // registrations go: the publish and unsubscribe records are history, and a test reads them after teardown to assert what the consumer did on its way out. The
-    // change-gated memory goes with them, since the client's own teardown clears its memory alongside its subscription map.
+    // change-gated memory goes with them, since the client's own teardown clears its memory alongside its subscription map, and the connect registrations go with
+    // both, since the client's teardown clears its own.
     onAbort(this.signal, () => {
 
       this.subscriptions.length = 0;
+      this.#connectHandlers.clear();
       this.#lastPayloads.clear();
     });
   }
@@ -222,7 +238,7 @@ export class TestMqttClient implements AsyncDisposable {
       this.#admit(composed);
     }
 
-    this.published.push({ payload, topic });
+    this.published.push({ payload, retain: init.retain ?? false, topic });
 
     // The memory takes the payload once the publish is recorded, which for a held publish is at release - the client's acknowledgement, mirrored - so a
     // refused or parked publish leaves it as it was.
@@ -241,7 +257,8 @@ export class TestMqttClient implements AsyncDisposable {
    * own signal, or by a rejection carrying either cancellation shape reaches the aborted line at debug; a publish refused through
    * {@link TestMqttClient.connected} reaches the dropped line at debug; anything else is a genuine failure and lands on the error line. The router owns the
    * reasoning behind that order. Every line names the topic tail, since the double expands nothing, and a change-gated publish the memory suppresses reaches no
-   * line at all, since nothing was attempted.
+   * line at all, since nothing was attempted. A failure that keeps answering the same tag is reported once and replayed at debug until the tag changes or a
+   * session is restored, which is the client's own cadence rather than a behavior of the double's own.
    *
    * @param topic   - The relative topic (tail) to publish to.
    * @param payload - The payload to publish.
@@ -249,11 +266,14 @@ export class TestMqttClient implements AsyncDisposable {
    */
   public publishGuarded(topic: string, payload: Buffer | string, init: MqttPublishInit = {}): void {
 
-    // `markHandled` covers the case the `.catch` cannot: a logger that itself throws would turn a reported failure into an unhandled rejection. The client guards its
-    // own guarded path the same way.
+    /* `markHandled` covers the case the `.catch` cannot: a logger that itself throws would turn a reported failure into an unhandled rejection. The client guards
+     * its own guarded path the same way, and demotes a repeat the same way too: the attempt wraps the report rather than the publish, and the tag comes from the
+     * shared {@link mqtt-publish!guardedPublishReason | guardedPublishReason} the client calls, so a consumer's test cannot see one demote where the other reports.
+     */
     void markHandled(this.publish(topic, payload, init).catch((error: unknown) => {
 
-      routeGuardedPublishFailure({ clientSignal: this.signal, error, log: this.#log, publishSignal: init.signal, topic });
+      this.#publishFailures.attempt((attemptLog) => routeGuardedPublishFailure({ clientSignal: this.signal, error, log: attemptLog, publishSignal: init.signal,
+        topic }), () => guardedPublishReason(error));
     }));
   }
 
@@ -384,6 +404,39 @@ export class TestMqttClient implements AsyncDisposable {
   }
 
   /**
+   * Record a connect registration, mirroring {@link mqttClient!MqttClient.onConnect | MqttClient.onConnect}: an aborted double or a pre-aborted per-registration
+   * signal registers nothing, a supplied signal releases the registration when it - or the double - aborts, and registering the same function twice is one
+   * registration.
+   *
+   * Moving {@link TestMqttClient.connected} from `false` to `true` is what makes a registration fire, since that edge is the double's session restored. The
+   * registrations run after the memory clear and after the lever has taken its value, so a handler reading `connected` sees `true` and a publish it issues is
+   * admitted, exactly as one is on the client. A write that leaves the lever where it stood, and a write to `false`, invoke nothing.
+   *
+   * A property write cannot be awaited, so a scenario whose handler is asynchronous awaits a turn after the write - the shipped `settle` helper - before it asserts
+   * what the handler did.
+   *
+   * @param handler - The callback to record. See {@link mqttClient!MqttConnectHandler | MqttConnectHandler}.
+   * @param init    - Optional per-registration options. See {@link MqttSubscribeInit}.
+   */
+  public onConnect(handler: MqttConnectHandler, init: MqttSubscribeInit = {}): void {
+
+    // The client's registration-time guards, which `#register` keeps for the subscribe family: nothing is held that can never be invoked.
+    if(this.signal.aborted || init.signal?.aborted) {
+
+      return;
+    }
+
+    this.#connectHandlers.add(handler);
+
+    // The release the client composes, composed the same way: attaching to the composed signal rather than to the caller's is what makes a double-level teardown
+    // release the registration too.
+    if(init.signal) {
+
+      onAbort(composeSignals(this.signal, init.signal), () => this.#connectHandlers.delete(handler));
+    }
+  }
+
+  /**
    * Abort the double, mirroring {@link mqttClient!MqttClient.abort | MqttClient.abort}: it defaults to `HbpuAbortError("shutdown")` when no reason is supplied, and
    * explicit reasons pass through unchanged. Safe to call more than once. Afterwards every publish, subscribe, and unsubscribe call is a no-op, and a driver
    * invocation takes the same quiet posture rather than reporting a miss, since teardown released every registration it could have matched.
@@ -425,7 +478,13 @@ export class TestMqttClient implements AsyncDisposable {
    * Setting it to `false` stands in for a broker the client holds no session with: every {@link TestMqttClient.publish} is then refused with
    * {@link MqttOfflineError} and counted, which is the outage a consumer's own code has to survive. Set it back to `true` to resume recording. Moving the lever
    * from `false` to `true` is a session restored and clears the change-gated memory, exactly as the client's connect clears its own; a write that leaves the lever
-   * where it was is not a session event and leaves the memory standing.
+   * where it was is not a session event and leaves the memory standing. That same edge runs every registration {@link TestMqttClient.onConnect} holds, which is
+   * how a scenario drives a consumer's restatement of held state without a broker.
+   *
+   * The edge is also where the double states its availability, as the client's connect does: a retained `online` on the availability tail, recorded ahead of those
+   * registrations. A fresh double records nothing of the kind, and the asymmetry with the client is deliberate rather than an omission - the client's first connect
+   * is a session established, while a fresh double is a session already held, with no edge to cross - so a scenario that wants the statement drives the lever from
+   * `false` to `true`. Recording one at construction would shift every index-based assertion a consumer's own suite already holds.
    */
   public get connected(): boolean {
 
@@ -435,13 +494,37 @@ export class TestMqttClient implements AsyncDisposable {
   public set connected(value: boolean) {
 
     // The lever moving from false to true is a session restored, which begins with nothing remembered, as the client's does on every connect. A write that leaves
-    // the lever where it was is not a session event, since the client's connect fires once per session rather than on every reading of it.
-    if(value && !this.#connected) {
-
-      this.#lastPayloads.clear();
-    }
+    // the lever where it was is not a session event, since the client's connect fires once per session rather than on every reading of it. The edge is read ahead of
+    // the write that follows it, which is what leaves one reading of it for the memory clear and the registrations below to share.
+    const restored = value && !this.#connected;
 
     this.#connected = value;
+
+    if(!restored) {
+
+      return;
+    }
+
+    this.#lastPayloads.clear();
+
+    // A session restored is the outage over, so the publish memory starts again from nothing, where the client's own is cleared on every connect. An attempt
+    // answering no tag is how an adapter is told an episode closed, and it writes nothing of its own.
+    this.#publishFailures.attempt(() => undefined, () => undefined);
+
+    // The availability statement is recorded ahead of the registrations below, which is where the client's connect puts it, so a consumer's handler restating its
+    // devices' availability records behind the plugin's own statement here exactly as it lands behind it on the wire. The tail is bare, since the double prefixes
+    // nothing, and the guarded form is what keeps this setter synchronous - the client's own choice at the same point.
+    this.publishGuarded(MQTT_AVAILABILITY_TOPIC, MQTT_AVAILABILITY_ONLINE, { retain: true });
+
+    /* The registrations run after the write above, so a handler reading `connected` is told `true` and a publish it issues is admitted - the order the client keeps,
+     * where mqtt.js sets its own flag before it emits the connect - and after the memory clear, so a change-gated publish of an unchanged payload is recorded again.
+     * The snapshot answers a handler that registers another or releases a sibling while the pass runs, and the isolation is the client's own `guardedDispatch`,
+     * imported by value here as it is there, so a faulting handler is caught alike on both and reported in one sentence neither one can drift from.
+     */
+    for(const handler of [...this.#connectHandlers]) {
+
+      guardedDispatch({ handler: async (): Promise<void> => { await handler(); }, label: "MQTT connect", log: this.#log });
+    }
   }
 
   /**

@@ -85,12 +85,14 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [mqtt-topics](mqtt-topics.md) | The MQTT topic vocabulary every other MQTT module and every consumer reads: the device-scoped composer both `unsubscribe` verbs spell the `(id, topic)` tuple through, the get and set children the client subscribes on, and the catalog a plugin declares its whole topic surface in. |
 | [mqtt-topics-docs](mqtt-topics-docs.md) | A shared documentation renderer for the [MqttTopicCatalog](mqtt-topics.md#mqtttopiccatalog) a plugin declares its topic surface in. |
 | [mqttClient](mqttClient.md) | AsyncDisposable MQTT client whose connection lifetime is a composed [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). |
+| [owned-connector](owned-connector.md) | The connector a library hands undici, so the sockets a dispatcher dials are held by the library rather than only by the pool. |
 | [polyfills](polyfills.md) | The explicit-resource-management floor bridge: a side-effect module that installs `AsyncDisposableStack`, `DisposableStack`, and `SuppressedError` as globals on any runtime that does not already ship them. |
 | [rate-budget](rate-budget.md) | A sliding-window rate budget: at most `capacity` grants inside any trailing `window` milliseconds. |
 | [service](service.md) | Homebridge service helper utilities. |
 | [suppressed-error](suppressed-error.md) | A drop-in implementation of the TC39 Explicit Resource Management `SuppressedError`. |
 | [testing](testing.md) | Every piece of shipped test-support surface the library offers, reachable at one entry point. |
 | [testing/runtime-floor](testing/runtime-floor.md) | The shared machinery behind an engines-keyed conformance guard. |
+| [testing/type-assertions](testing/type-assertions.md) | The type-level assertion helpers a suite states an exact-type claim with. |
 | [timer-registry](timer-registry.md) | A lifetime-bounded registry of callback timers. |
 | [transport-error](transport-error.md) | One kind-tagged reading of whatever a transport threw. |
 | [util](util.md) | TypeScript Utilities. |

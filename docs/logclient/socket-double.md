@@ -552,7 +552,7 @@ Construct a WebSocket-factory double.
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="create-1"></a> `create` | `readonly` | [`WebSocketFactory`](socket.md#websocketfactory-1) | `undefined` | The [WebSocketFactory](socket.md#websocketfactory-1) function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` dependency-inversion boundary without losing `this`. **Param** **url** The connect URL. |
+| <a id="create-1"></a> `create` | `readonly` | (`url`) => [`WebSocketLike`](socket.md#websocketlike) | `undefined` | The [WebSocketFactory](socket.md#websocketfactory-1) function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` dependency-inversion boundary without losing `this`. |
 | <a id="sockets"></a> `sockets` | `readonly` | [`TestWebSocket`](#testwebsocket)[] | `[]` | - |
 | <a id="urls"></a> `urls` | `readonly` | `string`[] | `[]` | - |
 

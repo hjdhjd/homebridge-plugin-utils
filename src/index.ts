@@ -20,6 +20,7 @@ export * from "./mqtt-publish.ts";
 export * from "./mqtt-topics.ts";
 export * from "./mqtt-topics-docs.ts";
 export * from "./mqttClient.ts";
+export * from "./owned-connector.ts";
 export * from "./rate-budget.ts";
 export * from "./service.ts";
 export * from "./timer-registry.ts";

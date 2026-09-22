@@ -256,6 +256,64 @@ function example(log: HomebridgePluginLogging) {
 
 ***
 
+### MeasuredOptionGuardContext
+
+The naming context for an option that carries a unit: an [OptionGuardContext](#optionguardcontext) plus the noun the quantity is measured in. An interface extending that one
+rather than an intersection written at the parameter, so the generated documentation renders it as a type of its own that a consumer can link to.
+
+#### Extends
+
+- [`OptionGuardContext`](#optionguardcontext)
+
+#### Properties
+
+| Property | Modifier | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ | ------ |
+| <a id="optionname"></a> `optionName` | `readonly` | `string` | The option's own name, quoted in the message so it matches what the caller wrote. | [`OptionGuardContext`](#optionguardcontext).[`optionName`](#optionname-1) |
+| <a id="owner"></a> `owner` | `readonly` | `string` | What the option belongs to, spelled as a consumer knows it - a class name for a constructor option, a function name for a call option. It opens the message. | [`OptionGuardContext`](#optionguardcontext).[`owner`](#owner-1) |
+| <a id="unit"></a> `unit` | `readonly` | `string` | The plural noun the quantity is measured in, such as `milliseconds` or `bytes`. It closes the message. | - |
+
+***
+
+### OptionGuardContext
+
+The naming context a refusal message is composed from: what owns the option - a class or a function - and what the option is called. The guards below take it
+as one object rather than as consecutive string parameters, because adjacent string parameters swap silently - no compile error - and produce a message that
+names the wrong thing, where a key labels each string where it is written.
+
+#### Extended by
+
+- [`MeasuredOptionGuardContext`](#measuredoptionguardcontext)
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="optionname-1"></a> `optionName` | `readonly` | `string` | The option's own name, quoted in the message so it matches what the caller wrote. |
+| <a id="owner-1"></a> `owner` | `readonly` | `string` | What the option belongs to, spelled as a consumer knows it - a class name for a constructor option, a function name for a call option. It opens the message. |
+
+***
+
+### RepeatDemotedLog
+
+A scope that runs one retry attempt at a time under a logger holding the attempt's error and warn lines, releasing them once the attempt's outcome is known. Built
+by [repeatDemotedLog](#repeatdemotedlog-1), which documents the behavior and the reasoning behind it. A consumer that keeps the adapter in a field spells its type with this
+interface.
+
+#### Type Parameters
+
+| Type Parameter | Default type | Description |
+| ------ | ------ | ------ |
+| `Reason` *extends* `string` | `string` | The caller's failure-reason tags, as [repeatDemotedLog](#repeatdemotedlog-1) describes them. |
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="attempt"></a> `attempt` | `readonly` | \<`T`\>(`run`, `reasonOf`) => `T` | Run one attempt under a logger that holds its error and warn lines, and release them once `reasonOf` has classified what the attempt answered. The two callbacks are positional rather than an options object because argument order is inference order: TypeScript reads `T` from `run`'s return type, and a classifier whose parameter type depends on `T` collapses to `unknown` if it is contextually typed before `run` has been read, so `run` comes first and a caller writing both arrows unannotated still infers. Positional callbacks follow the shape `subscribe(topic, handler, init)` uses on the MQTT client. |
+
+***
+
 ### RetryOptions
 
 Options accepted by [retry](#retry).
@@ -264,7 +322,7 @@ Options accepted by [retry](#retry).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="attempts"></a> `attempts?` | `number` | Total number of attempts, including the first. Must be >= 1. Defaults to 3. Values less than 1 throw synchronously (rejected promise) at the top of `retry()`. Pass `Infinity` for unbounded attempts - the loop then terminates only on success, an abort, or a `shouldRetry` veto, never on an exhausted budget. |
+| <a id="attempts"></a> `attempts?` | `number` | Total number of attempts, including the first. A positive integer, or `Infinity` for unbounded attempts, in which case the loop terminates only on success, an abort, or a `shouldRetry` veto and never on an exhausted budget. Defaults to 3. Any other value throws synchronously (rejected promise) at the top of `retry()`. |
 | <a id="backoff"></a> `backoff?` | [`RetryBackoff`](#retrybackoff) | Backoff policy, invoked with the attempt number (1-indexed) about to be run. The returned value is the delay in milliseconds before running that attempt. See [RetryBackoff](#retrybackoff) for the attempt-numbering convention. Defaults to [defaultRetryBackoff](#defaultretrybackoff) (exponential with a 30-second ceiling); build a curve with a different seed or ceiling through [exponentialBackoff](#exponentialbackoff). |
 | <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | Optional time source for the between-attempt backoff waits. Defaults to [systemClock](clock.md#systemclock), whose `delay` IS the platform `node:timers/promises` `setTimeout`, so the default path is that same platform call with one indirection in front of it and no behavior change. Supplying a controllable clock (`TestClock`) puts the backoff schedule on virtual time, so a test asserts what the policy actually waited instead of waiting it out in real seconds. |
 | <a id="shouldretry"></a> `shouldRetry?` | (`error`, `attemptNumber`) => `boolean` | Optional predicate consulted after an attempt throws and attempts remain. Receives the rejected error and the 1-indexed number of the attempt that just failed; return `false` to stop immediately and rethrow that error (no backoff wait, no further attempts), or `true` to retry per the backoff policy. When omitted, every error is retried until `attempts` is exhausted - the existing behavior, unchanged. This is the mechanism that lets a caller retry some failures and fail fast on others (e.g. retry network faults but give up on an authentication error) without owning the attempt loop itself. |
@@ -593,6 +651,87 @@ A shippable no-op [HomebridgePluginLogging](#homebridgepluginlogging): every met
 stateless and side-effect-free, so one shared instance is safe to reuse everywhere - which keeps the omitted-logger path allocation-free. This is the SSOT no-op
 logger: callers that need a CONCRETE logger but want no output default to it (e.g. a subsystem whose lower layer requires a non-optional logger), and the test-only
 `silentLog` helper derives from it rather than re-declaring the empty sink.
+
+***
+
+### assertPositiveFinite()
+
+```ts
+function assertPositiveFinite(value, context): void;
+```
+
+Refuse a numeric option that is not a positive, finite quantity of the unit it is measured in, in the words this library's own boundaries use for the same
+refusal.
+
+A wait, a byte ceiling, or any other measured quantity that is zero, negative, infinite, or not a number at all describes no workable setting. The unit is a
+required field rather than a fixed word because the quantities differ - a wait is milliseconds, a body limit is bytes - and a refusal naming the wrong unit sends
+the caller looking in the wrong place.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `value` | `number` | The value the caller supplied. |
+| `context` | [`MeasuredOptionGuardContext`](#measuredoptionguardcontext) | The owner, option, and unit the message names. See [MeasuredOptionGuardContext](#measuredoptionguardcontext). |
+
+#### Returns
+
+`void`
+
+#### Throws
+
+`TypeError` if `value` is not finite, or is zero or negative.
+
+#### Example
+
+```ts
+// A constructor checking the option bag it was handed, each option in the unit it is measured in.
+assertPositiveFinite(window, { optionName: "window", owner: "RateBudget", unit: "milliseconds" });
+assertPositiveFinite(bodyLimit, { optionName: "bodyLimit", owner: "HttpListener", unit: "bytes" });
+```
+
+Throws: `` RateBudget: `window` must be a positive, finite number of milliseconds. ``
+
+***
+
+### assertPositiveInteger()
+
+```ts
+function assertPositiveInteger(value, context): void;
+```
+
+Refuse a numeric option that is not a positive integer, in the words this library's own boundaries use for the same refusal.
+
+A count, a depth, or a high-water mark that is fractional, zero, negative, or not a number at all describes no bound any code can honor. The check belongs at the
+boundary the caller wrote the value at rather than several layers down where the consequence surfaces, and the message opens with the owner and quotes the option
+so a misconfiguration reads as one.
+
+A caller whose option accepts an unbounded sentinel alongside its counts excludes that sentinel before calling, since a sentinel is not a count and this guard
+has no way to tell one from a mistake.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `value` | `number` | The value the caller supplied. |
+| `context` | [`OptionGuardContext`](#optionguardcontext) | The owner and option the message names. See [OptionGuardContext](#optionguardcontext). |
+
+#### Returns
+
+`void`
+
+#### Throws
+
+`TypeError` if `value` is not an integer, or is below one.
+
+#### Example
+
+```ts
+// A constructor checking the option bag it was handed.
+assertPositiveInteger(capacity, { optionName: "capacity", owner: "RateBudget" });
+```
+
+Throws: `` RateBudget: `capacity` must be a positive integer. ``
 
 ***
 
@@ -1349,6 +1488,68 @@ A [HomebridgePluginLogging](#homebridgepluginlogging) whose levels route to the 
 const log = prefixedLog(platformLog, () => this.name);
 
 log.info("Connected to %s.", address);
+```
+
+***
+
+### repeatDemotedLog()
+
+```ts
+function repeatDemotedLog<Reason>(base): RepeatDemotedLog<Reason>;
+```
+
+Derive a repeat-demoting attempt scope from a base logger. A retry loop that runs each attempt through the adapter's `attempt` reports a failure in full the first
+time, replays an unchanged repeat at debug, and reports in full again the moment the reason changes or an attempt succeeds in between. A user reading the log sees
+the fault once rather than once per interval, and every attempt is still there for anyone reading at debug.
+
+The lines are held rather than weighed as they are written, because the code that writes them cannot know yet how the attempt will be classified: a callee deep in
+the attempt reports the fault through the logger it was handed, and the classification is the return value of the very call that is still running. An adapter that
+decided at the `error` call could only compare against the previous attempt's reason, which demotes precisely the line that matters most - the first report of a
+reason that differs from the run before it.
+
+`attempt` owns the whole lifetime of the hold, so there is no separate release to forget and no way to strand an error line: a returned value, a fulfilled promise,
+a throw, a rejection, and a throwing `reasonOf` each release the held lines before the attempt is done with. A throw releases them at their own levels and leaves
+the remembered reason exactly as it was, since a fault the caller never got to classify neither advances nor resets the episode. A callee that kept the logger and
+writes after the attempt has ended passes straight through to `base`, because no replay is coming to carry that line.
+
+Error and warn are the held levels: a failure report is one of those, while info and debug are progress a user wants as it happens. The consequence is that a held
+line lands after whatever info and debug the same attempt wrote live, so within one attempt the live lines come first and the failure report last. Parameters are
+handed to the sink by reference and untouched, so formatting still happens exactly once, at the sink.
+
+The reason is the caller's own tag rather than the message text, so a message may carry varying detail - an address, an attempt count, an elapsed time - without
+ever defeating the comparison. An adapter serves one attempt at a time: attempts that overlap on a single adapter share its one remembered reason, and the last to
+settle is what the attempt after them is weighed against. Only a native promise answered by `run` is awaited...any other return value, a thenable included, is a
+synchronous result, and a synchronous attempt stays fully synchronous, with its lines replayed by the time `attempt` returns. A caller opening a separate episode
+builds a separate adapter, which starts out remembering nothing.
+
+Compose with [prefixedLog](#prefixedlog) and [debugGatedLog](#debuggatedlog) by handing the composed logger in as `base`, so a demoted line meets the debug gate like any other debug
+line and carries the same prefix its full-level report would have carried.
+
+#### Type Parameters
+
+| Type Parameter | Default type | Description |
+| ------ | ------ | ------ |
+| `Reason` *extends* `string` | `string` | The caller's failure-reason tags. A string-literal union gives compile-time checking of every tag `reasonOf` can answer with; the default is `string`, since nothing at runtime carries a reason for one to be inferred from. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `base` | [`Logger`](#logger) | The logger that receives the live lines, the full-level failure reports, and the demoted replays. |
+
+#### Returns
+
+[`RepeatDemotedLog`](#repeatdemotedlog)\<`Reason`\>
+
+A [RepeatDemotedLog](#repeatdemotedlog) that remembers one reason across the attempts run through it.
+
+#### Example
+
+```ts
+const failures = repeatDemotedLog<"refused" | "timeout">(log);
+
+// Every pass through the retry loop reports its failure in full the first time and at debug for as long as the reason holds.
+const outcome = await failures.attempt((attemptLog) => dial(attemptLog), (result) => result.ok ? undefined : result.reason);
 ```
 
 ***

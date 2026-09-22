@@ -22,7 +22,7 @@
  */
 export type { LogClientCredentials, LogLevel, LogQuantity, LogRecord, TailRequest } from "./types.ts";
 export type { HomebridgeLogClientOptions, LogStream } from "./client.ts";
-export type { LogSocketFactory, LogSocketInit, LogSocketLike, TokenProvider, WebSocketFactory, WebSocketLike } from "./socket.ts";
+export type { LogSocketFactory, LogSocketInit, LogSocketLike, TokenProvider, WebSocketDialInit, WebSocketFactory, WebSocketLike } from "./socket.ts";
 export type { AcquireTokenOptions, LogAuthErrorKind, LogAuthErrorOptions } from "./auth.ts";
 export type { DownloadLogOptions } from "./rest.ts";
 export type { LogFilterCriteria } from "./filter.ts";

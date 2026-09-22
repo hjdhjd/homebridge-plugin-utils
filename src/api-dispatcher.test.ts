@@ -10,11 +10,10 @@
  */
 import { API_RETRY_STATUS_CODES, apiPoolOptions, apiRetryOptions, createApiDispatcher, headerStampInterceptor } from "./api-dispatcher.ts";
 import { describe, test } from "node:test";
-import type { AddressInfo } from "node:net";
+import { expectAt, listenOnLoopback, stopListening } from "./testing/index.ts";
 import type { Dispatcher } from "undici";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { expectAt } from "./testing/index.ts";
 import { request } from "undici";
 
 // The user-agent every wire phase supplies and then looks for on the far end.
@@ -56,17 +55,15 @@ async function startServer(script: readonly number[]): Promise<TestServer> {
     firstHit.resolve();
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = await listenOnLoopback(server);
 
   return {
 
     agents,
-    close: async (): Promise<void> => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: async (): Promise<void> => stopListening(server),
     firstHit: firstHit.promise,
     hits: (): number => agents.length,
-
-    // The listening callback above has already fired, so the address is the bound socket's. Same read the MQTT test helpers make.
-    origin: "http://127.0.0.1:" + String((server.address() as AddressInfo).port)
+    origin: "http://127.0.0.1:" + port.toString()
   };
 }
 
@@ -77,13 +74,15 @@ describe("the API pool derivation", () => {
     assert.deepEqual(apiPoolOptions(BASE_OPTIONS), { allowH2: true, clientTtl: 60000, connect: { timeout: 5000 }, connections: 1 });
   });
 
-  test("relaxes the certificate check only when asked, and only then", () => {
+  test("carries a spelled-out certificate setting either way, and leaves the platform's own default in place when nothing is said", () => {
+
+    assert.deepEqual(apiPoolOptions(BASE_OPTIONS), { allowH2: true, clientTtl: 60000, connect: { timeout: 5000 }, connections: 1 });
 
     assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, rejectUnauthorized: false }),
       { allowH2: true, clientTtl: 60000, connect: { rejectUnauthorized: false, timeout: 5000 }, connections: 1 });
 
     assert.deepEqual(apiPoolOptions({ ...BASE_OPTIONS, rejectUnauthorized: true }),
-      { allowH2: true, clientTtl: 60000, connect: { timeout: 5000 }, connections: 1 });
+      { allowH2: true, clientTtl: 60000, connect: { rejectUnauthorized: true, timeout: 5000 }, connections: 1 });
   });
 
   test("carries each construction option through verbatim", () => {

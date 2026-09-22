@@ -29,10 +29,11 @@
  *
  * @module
  */
-import { HbpuAbortError, composeSignals, formatErrorMessage, formatMs, guardedDispatch, hasErrorCode, markHandled, onAbort, retry, superviseLoop } from "./util.ts";
+import { HbpuAbortError, assertPositiveFinite, composeSignals, formatErrorMessage, formatMs, guardedDispatch, hasErrorCode, markHandled, onAbort,
+  repeatDemotedLog, retry, superviseLoop } from "./util.ts";
+import type { HomebridgePluginLogging, RepeatDemotedLog } from "./util.ts";
 import type { IncomingHttpHeaders, IncomingMessage, OutgoingHttpHeaders, Server, ServerResponse } from "node:http";
 import type { Clock } from "./clock.ts";
-import type { HomebridgePluginLogging } from "./util.ts";
 import { createServer } from "node:http";
 import { once } from "node:events";
 
@@ -195,16 +196,6 @@ function describePath(path: HttpListenerPath): string {
   return (typeof path === "string") ? path : "every path";
 }
 
-// Refuse an option whose value cannot produce a working listener, naming the option in the refusal so a misconfiguration reads as one rather than as an unexplained
-// failure later. `retry()` applies the same library-boundary check to its own `attempts`.
-function assertPositive(value: number, option: string): void {
-
-  if(!Number.isFinite(value) || (value <= 0)) {
-
-    throw new TypeError("HttpListener: `" + option + "` must be a positive finite number.");
-  }
-}
-
 /**
  * A signal-scoped HTTP listener: one `http.Server` whose lifetime is an {@link AbortSignal}, with routes registered by handle, a bounded raw-body read, a bind retry
  * that composes over the library's own `retry()` on an injected {@link Clock}, and a disposal that has released the port by the time it resolves.
@@ -266,6 +257,10 @@ export class HttpListener implements AsyncDisposable {
   // Held as a field so `#teardown` can reject it, which is what settles `ready` for a lifetime that ends before a bind ever succeeds.
   readonly #readyResolvers: PromiseWithResolvers<void>;
 
+  // The repeat memory for faults the routes raise. A route that fails on every request would otherwise write one line per request, which is a sender's retry loop
+  // filling the log with one fact: the rendered reason is the tag, so the first failure is reported in full and the ones after it replay at debug.
+  readonly #routeFailures: RepeatDemotedLog;
+
   // The registered routes, keyed by exact path or by the catch-all sentinel.
   readonly #routes = new Map<HttpListenerPath, HttpListenerRoute>();
 
@@ -279,8 +274,8 @@ export class HttpListener implements AsyncDisposable {
    *
    * @param options - The listener's inputs. See {@link HttpListenerOptions}.
    *
-   * @throws {TypeError} If `label` is empty, or `bodyLimit` or `retryMs` is not a positive finite number, or `port` is not an integer from 0 to 65535. Each refusal
-   * names the option, so a misconfiguration is diagnosable where it was made.
+   * @throws {TypeError} If `label` is empty, or `bodyLimit` is not a positive, finite number of bytes, or `retryMs` is not a positive, finite number of
+   * milliseconds, or `port` is not an integer from 0 to 65535. Each refusal names the option, so a misconfiguration is diagnosable where it was made.
    */
   public constructor(options: HttpListenerOptions) {
 
@@ -291,8 +286,8 @@ export class HttpListener implements AsyncDisposable {
       throw new TypeError("HttpListener: `label` must name the listener.");
     }
 
-    assertPositive(bodyLimit, "bodyLimit");
-    assertPositive(retryMs, "retryMs");
+    assertPositiveFinite(bodyLimit, { optionName: "bodyLimit", owner: "HttpListener", unit: "bytes" });
+    assertPositiveFinite(retryMs, { optionName: "retryMs", owner: "HttpListener", unit: "milliseconds" });
 
     /* The port is checked here rather than left to `listen()` because an out-of-range port is the one thing that makes `listen()` throw synchronously, and a
      * synchronous throw inside the bind task would leave the `listening` wait registered a line above it with nobody to settle it. Refusing the port at construction
@@ -309,6 +304,7 @@ export class HttpListener implements AsyncDisposable {
     this.#log = log;
     this.#port = port;
     this.#retryMs = retryMs;
+    this.#routeFailures = repeatDemotedLog(log);
 
     this.#controller = new AbortController();
     this.signal = composeSignals(signal, this.#controller.signal);
@@ -515,9 +511,18 @@ export class HttpListener implements AsyncDisposable {
     } catch(error: unknown) {
 
       /* A fault inside one route is that route's alone. The sender is told the request failed rather than that it was refused, because those mean different things
-       * to whatever is retrying on the other end.
+       * to whatever is retrying on the other end. The attempt wraps the report rather than the call, so a route that answers costs nothing: the rendered reason is
+       * the tag, and a route failing the same way on every request is reported once and replayed at debug until the reason changes.
        */
-      this.#log.error("The %s handler for %s failed: %s.", this.#label, describePath(key), formatErrorMessage(error));
+      this.#routeFailures.attempt((attemptLog): string => {
+
+        const reason = formatErrorMessage(error);
+
+        attemptLog.error("The %s handler for %s failed: %s.", this.#label, describePath(key), reason);
+
+        return reason;
+      }, (reason) => reason);
+
       response.writeHead(500).end();
 
       return;

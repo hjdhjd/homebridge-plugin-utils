@@ -14,8 +14,14 @@ row. Projecting both tables from the catalog the call sites already read makes e
 
 One call renders both sections, because one traversal validates the catalog and emits the rows either section takes. Each section is a fragment for a marked
 region of its own - [MQTT\_PUBLISHED\_DOC\_BEGIN](#mqtt_published_doc_begin) and [MQTT\_SUBSCRIBED\_DOC\_BEGIN](#mqtt_subscribed_doc_begin) name them - rather than one region spanning both, so a plugin keeps its
-H3 headings, their lead sentences, and every hand-written section around and between the two tables. A section the catalog declares no rows for renders as an
-empty fragment: a publish-only plugin's subscribed region carries no table, and the plugin writes no heading above a region it declares nothing for.
+H3 headings, their lead sentences, and every hand-written section around and between the two tables. The published fragment always opens with the plugin
+availability block, because the library's own client publishes that topic for every plugin and no plugin can opt out, so a catalog declaring no published rows
+yields that block and nothing else. The subscribed fragment is the catalog's entirely: a publish-only plugin's subscribed region carries no table, and the plugin
+writes no heading above a region it declares nothing for.
+
+That block is the one row this module emits from its own knowledge rather than from the catalog. Its words come from the same constants the client publishes, so
+the statement a plugin's document makes and the statement on the wire cannot drift. A plugin's per-device availability rows are a separate matter and come from
+the catalog like every other row, through the shipped [mqttAvailabilityEntry](mqtt-topics.md#mqttavailabilityentry) a plugin spreads into it.
 
 What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when it
 declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. A row credits the kinds its verb's narrowing
@@ -98,8 +104,9 @@ build rather than a plugin's startup. Every message names the offending entry by
 
 Rows are ordered as the topic tree reads - a topic before every topic that extends it, siblings in plain order, and a topic's own get and set rows before the rows
 of the topics beneath it - grouped when the catalog declares groups, and given a device column when the catalog declares one, with each entry's labels joined in
-the order the vocabulary declares them. A row's device cell names the kinds its verb's narrowing lists, or the entry's whole list when the verb declares none. A
-section the catalog has no rows for is an empty string.
+the order the vocabulary declares them. A row's device cell names the kinds its verb's narrowing lists, or the entry's whole list when the verb declares none. The
+published fragment carries the plugin availability block whatever the catalog declares, while the subscribed fragment is an empty string when the catalog
+declares no rows for it.
 
 #### Parameters
 

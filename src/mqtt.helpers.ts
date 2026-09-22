@@ -24,11 +24,11 @@
  *
  * @module
  */
-import type { AddressInfo, Server } from "node:net";
 import type { CapturingLog, TestLogEntry } from "./testing/index.ts";
-import { formatLogEntry, waitUntil } from "./testing/index.ts";
+import { formatLogEntry, listenOnLoopback, stopListening, waitUntil } from "./testing/index.ts";
 import { Aedes } from "aedes";
 import type { MqttClient } from "./mqttClient.ts";
+import type { Server } from "node:net";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import { format } from "node:util";
@@ -90,18 +90,7 @@ export async function startTestBroker(options: { port?: number } = {}): Promise<
 
   // Bind on the loopback interface, at the port the caller named or - by default - at `0`, which lets the kernel pick an unused one and avoids cross-file collisions
   // when test runners parallelize. We resolve only after `listen` reports success so the `url` field below is guaranteed to reflect a bound port.
-  await new Promise<void>((resolve, reject) => {
-
-    server.once("error", reject);
-    server.listen(options.port ?? 0, "127.0.0.1", () => {
-
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
-
-  // The cast is safe because the server above is bound to a host and port rather than a Unix-socket path, so address() always answers an AddressInfo here.
-  const port = (server.address() as AddressInfo).port;
+  const port = await listenOnLoopback(server, options.port);
 
   return {
 
@@ -113,18 +102,21 @@ export async function startTestBroker(options: { port?: number } = {}): Promise<
       // close the underlying TCP server so the listening socket is released. Each teardown step runs sequentially rather than in parallel because aedes drives close
       // events on the connections it owns, and those events need the server's IO surface to flush before the server itself is torn down.
       await new Promise<void>((resolve) => aedes.close(() => resolve()));
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await stopListening(server);
     }
   };
 }
 
 /**
- * Recorded entry produced by {@link recordClientPublishes}. Captures the topic and the payload bytes (rendered as a UTF-8 string for ergonomic deepEqual assertions).
+ * Recorded entry produced by {@link recordClientPublishes} and by {@link recordRetainedStoreCompletions}. Captures the topic, the payload bytes (rendered as a UTF-8
+ * string for ergonomic deepEqual assertions), and the packet's retain flag, which is what lets a row tell a statement the broker keeps for a late subscriber apart
+ * from an ordinary event. Every member is written once, when the packet is captured, and never again.
  */
 export interface PublishRecord {
 
-  payload: string;
-  topic: string;
+  readonly payload: string;
+  readonly retain: boolean;
+  readonly topic: string;
 }
 
 /**
@@ -209,33 +201,85 @@ export function recordWireUnsubscribes(broker: TestBroker): string[] {
 }
 
 /**
- * Handle returned by {@link recordClientPublishes}. Bundles the live `entries` array (filtered to client-originated publishes; broker-injected publishes have a null
- * client and are excluded) with `awaitFirst()`, a Promise that resolves on the first observed client publish - the synchronization point most tests use to wait for
- * an outbound publish to round-trip without having to know the trigger event's broker-event sequence.
+ * Handle returned by {@link recordClientPublishes} and by {@link recordRetainedStoreCompletions}. Bundles the live `entries` array (filtered to client-originated,
+ * authorized PUBLISH packets; broker-injected
+ * publishes never reach this instrument at all, since {@link https://github.com/moscajs/aedes | aedes}'s `authorizePublish` hook is invoked only from the wire-level
+ * PUBLISH handler and the will's own teardown path, never from `Aedes.prototype.publish()`'s direct-injection form). A row waits on the entry it means by polling
+ * this array through the shared `waitUntil`, which is what lets it name the publish it is waiting for rather than a position in a sequence.
  *
- * @property awaitFirst - Resolves on the first client-originated publish observed by the broker.
- * @property entries    - Live array of recorded publishes. New entries are appended as client publishes fire on the broker.
+ * @property entries - Live array of recorded publishes, in true packet-arrival order. New entries are appended as client publishes arrive at the broker.
  */
 export interface ClientPublishRecorder {
 
-  awaitFirst: Promise<void>;
   readonly entries: PublishRecord[];
 }
 
 /**
- * Install a `publish` listener on `broker.aedes` that records ONLY client-originated PUBLISH packets, and returns a recorder bundling the live entries with a
- * "first publish observed" Promise. Aedes fires this event for two distinct sources: client publishes (`client` is the originating mqtt.js client) and broker-
- * injected publishes (`client` is null - emitted in response to `broker.aedes.publish(...)` test triggers). Recording only the client-originated stream lets tests
- * assert on outbound publishes from the {@link MqttClient} without conflating them with the broker-side trigger that often precedes them.
+ * Install a hook on `broker.aedes.authorizePublish` that records every authorized, client-originated PUBLISH packet in true packet-arrival order, and returns a
+ * recorder holding the live entries a row waits on.
+ *
+ * `authorizePublish` runs synchronously as `handlePublish` parses each PUBLISH packet off a client's stream (and, separately, as a disconnecting client's own will
+ * is provoked), strictly ahead of aedes's `storeRetained` / `emitPacket` / `callPublished` pipeline. That pipeline's own `"publish"` EventEmitter event fires only
+ * once a packet's pipeline completes, and a retained packet's pipeline takes an extra asynchronous persistence hop
+ * (`node_modules/aedes/aedes.js:277-284`) a non-retained packet's pipeline skips, so that event can fire out of true arrival order whenever a retained and a
+ * non-retained publish race in the same synchronous turn. Recording at `authorizePublish` instead reports the order packets actually reached the broker in, which
+ * is the order every consumer means when it reads `entries` as an ordered record of what a plugin published.
+ *
+ * The hook delegates to whatever `authorizePublish` was already installed (the aedes default, or a row's own override), captured once at call time and invoked with
+ * the broker as receiver, so installing this recorder never changes what the broker authorizes - it observes the same verdict every other consumer of the hook
+ * would have gotten. A packet the delegate rejects is not recorded, which keeps the record to the publishes the broker accepted. That slot holds one function
+ * rather than a list of listeners, so a row wanting a verdict of its own installs it BEFORE calling this and lets the recorder capture it as the delegate;
+ * assigning the slot afterwards replaces the hook and silences the recording.
+ *
+ * One row - "a late subscriber reads the retained statement off the broker" - does not use this function: it needs the guarantee that the retained store is
+ * durably written before it opens a second subscriber, which only the pipeline-completion event can give, and uses {@link recordRetainedStoreCompletions}
+ * instead.
  *
  * @param broker - The handle returned by {@link startTestBroker}.
  *
- * @returns A {@link ClientPublishRecorder} - an entries array plus a Promise that resolves on the first observed client publish.
+ * @returns A {@link ClientPublishRecorder} - an entries array, in arrival order.
  */
 export function recordClientPublishes(broker: TestBroker): ClientPublishRecorder {
 
   const entries: PublishRecord[] = [];
-  const first: PromiseWithResolvers<void> = Promise.withResolvers();
+  const delegate = broker.aedes.authorizePublish;
+
+  broker.aedes.authorizePublish = (client, packet, callback): void => {
+
+    delegate.call(broker.aedes, client, packet, (error?: Error | null) => {
+
+      if(!error && client) {
+
+        // The packet's `payload` field is typed as `Buffer | string` to accommodate locally-constructed publish packets, but a packet arriving through this hook
+        // was parsed off the wire by mqtt-packet, which slices the payload directly out of the incoming byte stream as a Buffer - the string branch never applies
+        // to a client-originated publish.
+        entries.push({ payload: (packet.payload as Buffer).toString(), retain: packet.retain, topic: packet.topic });
+      }
+
+      callback(error);
+    });
+  };
+
+  return { entries };
+}
+
+/**
+ * Install a `publish` listener on `broker.aedes` that records ONLY client-originated PUBLISH packets, in the order aedes's own pipeline completes them rather than
+ * the order they arrived in. It exists for the one row that means "the broker's retained store durably holds this," a guarantee only the
+ * pipeline-completion event gives: aedes runs `storeRetained` and only then emits `"publish"` (`node_modules/aedes/aedes.js:277-284`, `:348-357`), and the retained
+ * replay a late subscriber reads comes out of that same store, so this event firing is proof the store has the entry, where {@link recordClientPublishes}'s arrival
+ * order is not - a subscribe issued on arrival-order timing could still race the store write and find nothing retained.
+ *
+ * Every other row - one that means "what did the plugin publish, and in what order" rather than "has the broker's retained store been written yet" - uses
+ * {@link recordClientPublishes} instead.
+ *
+ * @param broker - The handle returned by {@link startTestBroker}.
+ *
+ * @returns A {@link ClientPublishRecorder} - an entries array, in pipeline-completion order.
+ */
+export function recordRetainedStoreCompletions(broker: TestBroker): ClientPublishRecorder {
+
+  const entries: PublishRecord[] = [];
 
   broker.aedes.on("publish", (packet, aedesClient) => {
 
@@ -244,14 +288,10 @@ export function recordClientPublishes(broker: TestBroker): ClientPublishRecorder
       return;
     }
 
-    // The packet's `payload` field is typed as `Buffer | string` to accommodate locally-constructed publish packets, but a packet arriving through this event was
-    // parsed off the wire by mqtt-packet, which slices the payload directly out of the incoming byte stream as a Buffer - the string branch never applies to a
-    // client-originated publish.
-    entries.push({ payload: (packet.payload as Buffer).toString(), topic: packet.topic });
-    first.resolve();
+    entries.push({ payload: (packet.payload as Buffer).toString(), retain: packet.retain, topic: packet.topic });
   });
 
-  return { awaitFirst: first.promise, entries };
+  return { entries };
 }
 
 /**

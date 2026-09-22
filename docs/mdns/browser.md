@@ -293,7 +293,7 @@ One service instance, as the cache currently resolves it. Every field is what th
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="addresses"></a> `addresses` | `readonly` | readonly `string`[] | Every address of the host, of every family the browser serves, in arrival order and without duplicates, as a consumer connects to it: an IPv6 link-local address carries the zone of the link it was heard on. [dialAddress](address.md#dialaddress) ranks this set into the one address a consumer dials. |
+| <a id="addresses"></a> `addresses` | `readonly` | readonly `string`[] | Every live address of the host, of every family the browser serves, in arrival order and without duplicates, as a consumer connects to it: an IPv6 link-local address carries the zone of the link it was heard on. When the host has no live address - a goodbye or a cache-flush retired it with nothing yet announced to replace it - the addresses a hold still keeps, until each hold ends. [dialAddress](address.md#dialaddress) ranks this set into the one address a consumer dials. |
 | <a id="host"></a> `host` | `readonly` | [`DnsName`](message.md#dnsname) | The host name the SRV record targets. |
 | <a id="instance"></a> `instance` | `readonly` | `string` | The first label of `name`: the free-text instance label RFC 6763 section 4.1.1 defines, which is what a person recognizes the device by. |
 | <a id="name"></a> `name` | `readonly` | [`DnsName`](message.md#dnsname) | The full instance name, which is this service's identity and the key it is held under. |

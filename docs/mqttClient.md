@@ -20,6 +20,17 @@ A publish issued while the client is not connected to the broker rejects at once
 an outage and nothing replays after it, and [MqttClient.connected](#connected) answers the same question a consumer can ask for itself before it publishes. See
 [MqttConfig.reconnectInterval](#reconnectinterval) for the setting that leaves automatic reconnection disabled entirely.
 
+Because nothing replays, a consumer holding state a subscriber may have missed during the outage - a door's position, a lock's state - restates it for itself.
+[MqttClient.onConnect](#onconnect) registers a handler the client runs on every session it establishes, the first one included. The client owns detecting the connect and
+delivering the notification; which topics carry state worth restating, and which carry momentary events that must never be replayed, is the consumer's call.
+
+The client also states its own availability on the rail, which it owns end to end. On every session it establishes it publishes a retained `online` on
+`<prefix>/availability`, ahead of those connect registrations, and it hands the broker a last will carrying a retained `offline` on the same topic, so the broker
+itself answers for a plugin that stopped without saying so. For what the two words mean at the device scope, and the entry a plugin spreads into its own catalog
+to say it there, see [mqttAvailabilityEntry](mqtt-topics.md#mqttavailabilityentry). One consequence a consumer composing the two scopes has to know: the
+client keeps one identity across reconnects, so a reconnect that arrives while the broker still holds the previous connection takes that session over and the
+previous connection's will goes out, which means a retained `offline` can outlive a live plugin until its next connect replaces it.
+
 For a state topic a plugin re-derives on a schedule, the `ifChanged` option on [MqttPublishInit](#mqttpublishinit) publishes only when the payload moved, remembering per
 topic what the broker last acknowledged for the life of a session.
 
@@ -45,6 +56,9 @@ await using mqtt = new MqttClient({ brokerUrl: "mqtt://localhost:1883", log, top
 const feature = new AbortController();
 
 mqtt.subscribe("device1/status", (payload) => log.info("Status: %s.", payload.toString()), { signal: feature.signal });
+
+// Restate held state on every session the client establishes, since a publish is never queued across an outage.
+mqtt.onConnect(() => mqtt.publishGuarded("device1/status", device.status, { ifChanged: true }), { signal: feature.signal });
 
 // Abort-aware publish.
 await mqtt.publish("device1/status", "on");
@@ -166,6 +180,37 @@ Safe to call more than once. After this runs, every subsequent `publish`, `subsc
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `reason?` | `unknown` | Optional abort reason. Typically an [HbpuAbortError](util.md#hbpuaborterror); platform errors also interoperate by convention. |
+
+###### Returns
+
+`void`
+
+##### onConnect()
+
+```ts
+onConnect(handler, init?): void;
+```
+
+Register `handler` to run each time the client establishes a session with the broker, the first session included, so a consumer holding state a subscriber may
+have missed can restate it. The client owns detecting the connect and delivering the notification; what is worth restating is the consumer's policy - state
+belongs here, a momentary event never does, since a replayed event is the event happening a second time.
+
+A handler runs once the change-gated memory has been cleared and while [MqttClient.connected](#connected) reads `true`, so a publish issued from inside it is admitted
+and a change-gated publish of an unchanged payload goes out again: a subscriber that missed the change while the broker was away hears the current value.
+
+Handlers run in registration order, and none is awaited before the next is invoked, so a slow handler holds nothing back. A throw or a rejection from one is
+logged as `"The MQTT connect handler failed: ..."` and disturbs neither the connection nor the handlers around it. Registering the same function twice is one
+registration, as it is on a topic.
+
+Registering while a session is already held invokes nothing until the connect after it...the notification answers the future, while
+[MqttClient.connected](#connected) answers the present for a consumer that wants to act on the session it is already holding.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `handler` | [`MqttConnectHandler`](#mqttconnecthandler) | Callback invoked on each connect to the broker. See [MqttConnectHandler](#mqttconnecthandler). |
+| `init` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-registration options. See [MqttSubscribeInit](#mqttsubscribeinit). |
 
 ###### Returns
 
@@ -404,19 +449,21 @@ Per-publish options accepted by [MqttClient.publish](#publish) and [MqttClient.p
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="ifchanged"></a> `ifChanged?` | `boolean` | Optional. When `true`, the publish goes out only when `payload` differs from the last payload this client delivered on `topic` through a publish that also asked for it, and otherwise resolves at once with nothing sent. For a state topic whose value a plugin re-derives on a schedule, never for an event. The memory's rules are stated on [MqttClient.publish](#publish). |
+| <a id="retain"></a> `retain?` | `boolean` | Optional. When `true`, the broker keeps this payload as the topic's last retained message and hands it to every subscriber that attaches afterwards, which makes the publish a standing statement rather than an event a late listener misses. Defaults to `false`. |
 | <a id="signal-2"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). When it aborts before the broker acknowledges the publish, the returned promise rejects with `signal.reason`. Composes with the connection-level signal. |
 
 ***
 
 ### MqttSubscribeInit
 
-Per-subscription options accepted by [MqttClient.subscribe](#subscribe), [MqttClient.subscribeGet](#subscribeget), and [MqttClient.subscribeSet](#subscribeset).
+Per-subscription options accepted by [MqttClient.subscribe](#subscribe), [MqttClient.subscribeGet](#subscribeget), [MqttClient.subscribeSet](#subscribeset), and
+[MqttClient.onConnect](#onconnect).
 
 #### Properties
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="signal-3"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). When it aborts, the specific handler is removed and (if it was the last handler on the topic) the underlying MQTT subscription is dropped. Composes with the connection-level signal: a client-level abort removes every handler regardless of per-subscription state. |
+| <a id="signal-3"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). When it aborts, the specific handler is removed and (if it was the last handler on the topic) the underlying MQTT subscription is dropped. Composes with the connection-level signal: a client-level abort removes every handler regardless of per-subscription state. On [MqttClient.onConnect](#onconnect) what the signal releases is the connect registration alone - no broker subscription stands behind one, so nothing reaches the wire when it aborts. |
 
 ***
 
@@ -471,6 +518,26 @@ straight through and narrows nothing at the call site.
 | ------ | ------ |
 | `brokerUrl?` | [`Nullable`](util.md#nullable)\<`string`\> |
 | `topicPrefix?` | [`Nullable`](util.md#nullable)\<`string`\> |
+
+***
+
+### MqttConnectHandler
+
+```ts
+type MqttConnectHandler = () => 
+  | Promise<void>
+  | void;
+```
+
+A handler invoked by [MqttClient.onConnect](#onconnect) each time the client establishes a session with the broker.
+
+It takes no argument because a first connect and a reconnect are the same event here: mqtt.js does not tell the two apart, and a consumer restating held state has
+the same work to do either way. Returning a promise is supported, and the client does not await it, so one handler's pace never sets another's.
+
+#### Returns
+
+  \| [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+  \| `void`
 
 ***
 
@@ -552,6 +619,37 @@ Receives three arguments:
 
   \| [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
   \| `void`
+
+***
+
+### brokerErrorReason()
+
+```ts
+function brokerErrorReason(error): string;
+```
+
+Name the reason a broker error is weighed against the next by. Pure function: no class state, no mqtt.js handles, no closure over a live client, tested directly
+against synthetic errors the way [routeMqttBrokerError](#routemqttbrokererror) and [logGetterPublishOutcome](#loggetterpublishoutcome) are.
+
+The code is read rather than the rendered message, because a transport failure repeating is the same failure however its text varies, and it is read defensively
+because mqtt.js carries two error shapes: an errno-bearing `Error` from the socket, whose code is a string, and its own `ErrorWithReasonCode` for a protocol-level
+refusal, whose code is a number. A numeric code answers its own decimal text, so two different refusal reasons stay two different tags, and an error carrying no
+code at all answers one fixed tag rather than none.
+
+This agrees with what the routed line says by construction: a string code is exactly what the router's switch names a case for, and a numeric or absent code
+falls to its default branch, where the whole error is inspected into the message. Same outcomes, read the same way, in both places.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `error` | `Error` | The error event payload from the underlying mqtt.js client. |
+
+#### Returns
+
+`string`
+
+The tag this error is weighed by.
 
 ***
 

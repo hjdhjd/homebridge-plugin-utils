@@ -8,6 +8,7 @@
  * The count is the whole subject here, which is why every scenario drives SEVERAL triggers rather than one. A naive implementation that simply ran the callback on every
  * schedule passes a single-trigger test and fails every one of these; so does one that queued each trigger and drained them in turn.
  */
+import type { Assert, Equal } from "./testing/index.ts";
 import { assertNoUnhandledRejections, capturingLog, expectAt, settle, silentLog } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import { CoalescingTask } from "./coalesce.ts";
@@ -77,8 +78,11 @@ const _requestShapeExercises = (): void => {
   const plain = new CoalescingTask({ label: "plain", log: silentLog(), run: (): Promise<void> => Promise.resolve(), signal: new AbortController().signal });
 
   // The verdict type reaches all the way to what a requester holds, and a task built without one is the void form every fire-and-forget consumer already has.
-  const _verdict: Promise<number> = counted.request();
-  const _nothing: Promise<void> = plain.request();
+  const _verdict = counted.request();
+  const _nothing = plain.request();
+
+  type _VerdictIsExact = Assert<Equal<typeof _verdict, Promise<number>>>;
+  type _NothingIsExact = Assert<Equal<typeof _nothing, Promise<void>>>;
 
   // @ts-expect-error - the verdict is a number, so a requester cannot read it back as a string.
   const _wrong: Promise<string> = counted.request();

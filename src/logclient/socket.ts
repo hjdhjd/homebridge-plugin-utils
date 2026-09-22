@@ -34,14 +34,32 @@
  *
  * @module
  */
+import { Agent, WebSocket } from "undici";
 import { DEFAULT_PORT, JITTER_FRACTION, LOG_NAMESPACE, MARGIN_MS, PTY_COLUMNS, PTY_ROWS, RECONNECT_BASE_MS, RECONNECT_CAP_MS } from "./settings.ts";
-import { HbpuAbortError, Watchdog, composeSignals, exponentialBackoff, formatErrorMessage, onAbort, retry } from "../util.ts";
+import {
+
+  HbpuAbortError,
+  Watchdog,
+  assertPositiveInteger,
+  composeSignals,
+  exponentialBackoff,
+  formatErrorMessage,
+  markHandled,
+  onAbort,
+  repeatDemotedLog,
+  retry
+} from "../util.ts";
+import type { HomebridgePluginLogging, RepeatDemotedLog } from "../util.ts";
 import { LOG_NAMESPACE_PATH, decodeFrame, encodeFrame } from "./frame.ts";
 import { LogAuthError, isPermanentAuthError } from "./auth.ts";
 import { AsyncQueue } from "../async-queue.ts";
 import type { Clock } from "../clock.ts";
-import type { HomebridgePluginLogging } from "../util.ts";
+import type { Dispatcher } from "undici";
 import { LogLineSplitter } from "./parser.ts";
+import type { OwnedConnector } from "../owned-connector.ts";
+import type { TransportFailureKind } from "../transport-error.ts";
+import { classifyTransportError } from "../transport-error.ts";
+import { createOwnedConnector } from "../owned-connector.ts";
 import { socketUrl } from "./endpoints.ts";
 
 // The default high-water mark for the stdout queue: the maximum number of lines buffered between the WebSocket producer and a slow consumer before the oldest lines are
@@ -71,18 +89,33 @@ export interface WebSocketLike {
 }
 
 /**
- * The factory that constructs a {@link WebSocketLike} for a given connect URL.
+ * The subset of the WebSocket constructor's own options this boundary passes through to whatever factory is wired in.
  *
- * The production factory wraps the platform global `WebSocket`; a test substitutes a factory that returns a controllable double, so the whole socket state machine -
- * handshake, ping/pong, reconnect, teardown - is exercised without a real network.
- *
- * @param url - The fully-formed `ws(s)://...` connect URL, already carrying `EIO=4`, the transport selector, and the raw token in its query string.
- *
- * @returns A {@link WebSocketLike} that begins connecting immediately, exactly as the platform `WebSocket` constructor does.
+ * The dispatcher is how a caller decides which sockets the upgrade is dialed over: hand one that dials through a connector you hold, and the socket underneath the
+ * handshake is reachable for the whole of the attempt rather than only through the WebSocket's own events.
  *
  * @category Log Client
  */
-export type WebSocketFactory = (url: string) => WebSocketLike;
+export interface WebSocketDialInit {
+
+  readonly dispatcher: Dispatcher;
+}
+
+/**
+ * The factory that constructs a {@link WebSocketLike} for a given connect URL.
+ *
+ * The production factory wraps undici's own `WebSocket`; a test substitutes a factory that returns a controllable double, so the whole socket state machine -
+ * handshake, ping/pong, reconnect, teardown - is exercised without a real network.
+ *
+ * @param url  - The fully-formed `ws(s)://...` connect URL, already carrying `EIO=4`, the transport selector, and the raw token in its query string.
+ * @param init - The dial options this boundary passes to the constructor. A factory is free to ignore what it does not need, which is what a double that never
+ *               reaches the network does.
+ *
+ * @returns A {@link WebSocketLike} that begins connecting immediately, exactly as the `WebSocket` constructor does.
+ *
+ * @category Log Client
+ */
+export type WebSocketFactory = (url: string, init: WebSocketDialInit) => WebSocketLike;
 
 /**
  * Re-acquire a fresh raw bearer token. Invoked once per connect attempt so a reconnect after a token has expired re-authenticates from the stored credentials. The
@@ -105,16 +138,80 @@ export type TokenProvider = (signal: AbortSignal) => Promise<string>;
 export const WEBSOCKET_OPEN = 1;
 
 /**
- * The production {@link WebSocketFactory}: constructs the platform global `WebSocket`. A consumer holds the factory typed as the {@link WebSocketFactory} abstraction;
- * a test substitutes a double. The platform `WebSocket` begins connecting on construction, which is exactly the factory contract.
+ * The production {@link WebSocketFactory}: constructs undici's own `WebSocket`. A consumer holds the factory typed as the {@link WebSocketFactory} abstraction; a
+ * test substitutes a double. That `WebSocket` begins connecting on construction, which is exactly the factory contract.
  *
- * @param url - The connect URL.
+ * It is the class from the copy of undici this package depends on rather than the one the host's own Node vendors, and the reason is the dispatcher: a dispatcher
+ * object is not interchangeable across copies, so the class that accepts this package's `Agent` is the class from the same copy that `Agent` came from. The platform
+ * global is a different class whose declaration carries no dispatcher option at all.
  *
- * @returns A live platform `WebSocket`, typed as the {@link WebSocketLike} interface.
+ * @param url  - The connect URL.
+ * @param init - The dial options this boundary passes to the constructor.
+ *
+ * @returns A live `WebSocket`, typed as the {@link WebSocketLike} interface.
  *
  * @category Log Client
  */
-export const webSocketFactory: WebSocketFactory = (url: string): WebSocketLike => new WebSocket(url);
+export const webSocketFactory: WebSocketFactory = (url: string, init: WebSocketDialInit): WebSocketLike => new WebSocket(url, init);
+
+/**
+ * The dial one connect attempt owns: the connector holding every socket that attempt's WebSocket is vended, and the dispatcher built over it.
+ *
+ * The two travel as one value because either without the other releases nothing - the dispatcher's destroy reaches the connection it is holding, the connector's
+ * release reaches a socket still in its handshake, and only the pair covers an attempt whichever state its socket is in.
+ *
+ * @category Log Client
+ */
+export interface OwnedDial {
+
+  readonly agent: Agent;
+  readonly connector: OwnedConnector;
+}
+
+/**
+ * The subset of the dial's own options this boundary states, leaving every other question to the factory.
+ *
+ * @category Log Client
+ */
+export interface OwnedDialInit {
+
+  /** Which application protocols the dial offers. A WebSocket upgrade can use neither HTTP/2 nor pipelining, so the socket states `false` and both halves read it. */
+  readonly allowH2: boolean;
+}
+
+/**
+ * The factory that builds the {@link OwnedDial} one connect attempt owns.
+ *
+ * The production factory pairs an owned connector with a dispatcher that dials through it; a test substitutes a factory whose dial records what teardown ran on it,
+ * which is the only way the order of those operations is observable at all - the connector never crosses any other boundary a caller can reach.
+ *
+ * @param init - The dial options this boundary states. See {@link OwnedDialInit}.
+ *
+ * @returns The dispatcher the WebSocket is dialed over, and the connector holding its sockets.
+ *
+ * @category Log Client
+ */
+export type OwnedDialFactory = (init: OwnedDialInit) => OwnedDial;
+
+/**
+ * The production {@link OwnedDialFactory}: an owned connector, and an `Agent` that dials through it.
+ *
+ * The connector is built with the protocol offer and nothing else, and the certificate-verification option is deliberately left unstated. This boundary carries no
+ * such setting, so the dial leaves the question to the platform and whatever the process was started with still decides...which is what lets a user reaching a
+ * Homebridge UI presenting its own certificate relax it the documented way.
+ *
+ * @param init - The dial options this boundary states. See {@link OwnedDialInit}.
+ *
+ * @returns The dispatcher the WebSocket is dialed over, and the connector holding its sockets.
+ *
+ * @category Log Client
+ */
+export const ownedDialFactory: OwnedDialFactory = ({ allowH2 }: OwnedDialInit): OwnedDial => {
+
+  const connector = createOwnedConnector({ allowH2 });
+
+  return { agent: new Agent({ allowH2, connect: connector.connect, pipelining: 0 }), connector };
+};
 
 /**
  * Construction-time options for {@link LogSocket}.
@@ -127,6 +224,8 @@ export const webSocketFactory: WebSocketFactory = (url: string): WebSocketLike =
  *                              applied by the primitives that consume it. A test injects a `TestClock` to drive both without real waits.
  * @property host             - The hostname or IP of the homebridge-config-ui-x server.
  * @property log              - Logger for connection lifecycle and overflow diagnostics.
+ * @property ownedDialFactory - The factory that builds the dial each connect attempt owns. Defaults to {@link ownedDialFactory}. A test substitutes a factory whose
+ *                              dial records the teardown operations run on it, which is what makes their order assertable.
  * @property port             - The TCP port the server listens on. Defaults to `8581`.
  * @property random           - Injectable source of `[0, 1)` randomness for backoff jitter. Defaults to `Math.random`; held fixed in tests for deterministic backoff.
  * @property refreshable      - Whether the credential backing {@link LogSocketInit.tokenProvider} can mint a fresh token on a reconnect. `true` for `password`/`noauth`
@@ -146,6 +245,7 @@ export interface LogSocketInit {
   readonly clock?: Clock;
   readonly host: string;
   readonly log: HomebridgePluginLogging;
+  readonly ownedDialFactory?: OwnedDialFactory;
   readonly port?: number;
   readonly random?: () => number;
   readonly refreshable: boolean;
@@ -192,19 +292,26 @@ export function reconnectBackoff(attempt: number, random: () => number = Math.ra
   return withJitter(reconnectLadder(attempt), random);
 }
 
-// A single connected session: the live WebSocket, the per-session controller whose signal ends the streaming phase, the ping cadence the Engine.IO open handshake
-// advertised (used to size the liveness watchdog), and a one-shot `closed` latch. A composed signal built fresh from the socket's lifetime signal and the controller's
-// own signal governs both the connect-phase and streaming-phase teardown, so a socket-level abort ends the session too; a session-level abort (close, error, watchdog)
-// ends only this session and lets the outer loop reconnect. The `closed` latch makes the WebSocket teardown safe to run twice: both the streaming phase's post-end
-// cleanup and the socket-level teardown can race to close the same session, and the latch ensures the DISCONNECT-and-close sequence runs exactly once rather than twice.
+// A single connected session: the live WebSocket, the dial that vended it, the per-session controller whose signal ends the streaming phase, the ping cadence the
+// Engine.IO open handshake advertised (used to size the liveness watchdog), and a one-shot `closed` latch. A composed signal built fresh from the socket's lifetime
+// signal and the controller's own signal governs both the connect-phase and streaming-phase teardown, so a socket-level abort ends the session too; a session-level
+// abort (close, error, watchdog) ends only this session and lets the outer loop reconnect. The `closed` latch makes the WebSocket teardown safe to run twice: both
+// the streaming phase's post-end cleanup and the socket-level teardown can race to close the same session, and the latch ensures the DISCONNECT-and-close sequence
+// runs exactly once rather than twice.
 interface Session {
 
   closed: boolean;
   readonly controller: AbortController;
+  readonly owned: OwnedDial;
   readonly pingInterval: number;
   readonly pingTimeout: number;
   readonly ws: WebSocketLike;
 }
+
+// What one reported connect attempt answered with: the live session, or the failure that ended it together with the classifier's tag for it. A failure comes back as
+// a value rather than as a throw because the repeat demotion is decided by what the attempt answered...`RepeatDemotedLog#attempt` weighs a returned classification,
+// and a rejection it never gets to classify reports at full level every time.
+type ConnectOutcome = { readonly error: unknown; readonly ok: false; readonly reason: TransportFailureKind } | { readonly ok: true; readonly session: Session };
 
 /**
  * The consumer-facing surface of a live-log socket: the minimal interface a client reads off a {@link LogSocket}. This is the product half of the socket
@@ -309,6 +416,17 @@ export class LogSocket implements LogSocketLike {
 
   readonly #host: string;
   readonly #log: HomebridgePluginLogging;
+
+  // The scope every connect attempt is reported through. A dial that keeps failing the same way states itself once and then replays at debug for as long as the reason
+  // holds, so a server that is down for an hour costs one line rather than one line per backoff interval. It is a field rather than a local because the memory it
+  // carries is the whole reconnect episode: the attempt after this one is weighed against this one, and only a new socket - a new `tail()` call - starts over.
+  readonly #failures: RepeatDemotedLog<TransportFailureKind>;
+
+  // Whether any attempt in this socket's life has reported a failure. The recovery line reads it, so a connection that came up without anyone waiting on it stays
+  // quiet rather than announcing a recovery from nothing.
+  #reportedFailure = false;
+
+  readonly #ownedDialFactory: OwnedDialFactory;
   readonly #port: number;
   readonly #random: () => number;
   readonly #refreshable: boolean;
@@ -343,14 +461,17 @@ export class LogSocket implements LogSocketLike {
 
     // A mark that is not a positive integer describes no bound at all. The socket refuses it in its own words because stdoutHighWater is the option the caller
     // wrote; the queue guards its own option the same way for a caller that builds one directly, so each boundary names what it received.
-    if(!Number.isInteger(stdoutHighWater) || (stdoutHighWater < 1)) {
-
-      throw new TypeError("LogSocket: `stdoutHighWater` must be a positive integer.");
-    }
+    assertPositiveInteger(stdoutHighWater, { optionName: "stdoutHighWater", owner: "LogSocket" });
 
     this.#clock = init.clock;
     this.#host = init.host;
     this.#log = init.log;
+
+    // Out of the alphabetical run deliberately: the adapter wraps the logger the line above assigns, so it is built after that assignment rather than where its own
+    // name would sort.
+    this.#failures = repeatDemotedLog<TransportFailureKind>(this.#log);
+
+    this.#ownedDialFactory = init.ownedDialFactory ?? ownedDialFactory;
     this.#port = init.port ?? DEFAULT_PORT;
     this.#random = init.random ?? Math.random;
     this.#refreshable = init.refreshable;
@@ -473,7 +594,20 @@ export class LogSocket implements LogSocketLike {
         // clients does not stampede the server in lockstep after a shared outage. Because only the connect phase is wrapped, the backoff resets every time this returns -
         // a socket that stayed healthy for hours reconnects briskly rather than at a climbed-up delay.
         // eslint-disable-next-line no-await-in-loop
-        session = await retry((attemptSignal) => this.#connect(attemptSignal), {
+        session = await retry(async (attemptSignal): Promise<Session> => {
+
+          const outcome = await this.#failures.attempt((attemptLog) => this.#attemptConnect(attemptSignal, attemptLog),
+            (result): TransportFailureKind | undefined => result.ok ? undefined : result.reason);
+
+          // The original error goes back to `retry` untouched, so `shouldRetry`'s veto, the backoff curve and the terminal report below all read the real error object
+          // rather than anything the reporting wrapped it in.
+          if(!outcome.ok) {
+
+            throw outcome.error;
+          }
+
+          return outcome.session;
+        }, {
 
           attempts: Infinity,
           backoff: this.#backoff,
@@ -505,10 +639,47 @@ export class LogSocket implements LogSocketLike {
     }
   }
 
-  // Connect phase. Re-acquires a fresh token, opens the WebSocket, awaits the Engine.IO open handshake (capturing its ping cadence), joins the `/log` namespace, and
-  // emits `tail-log`. Resolves with the live session once `tail-log` has been emitted; rejects on any handshake fault (WebSocket error, CONNECT_ERROR, peer close, or
-  // attempt abort), so `retry` governs the backoff. A per-attempt controller composed under the attempt signal ensures a failed attempt's WebSocket and listeners are
-  // torn down before the next attempt opens a new one; on success that same controller becomes the session controller, so the streaming phase shares the teardown path.
+  // One reported connect attempt: runs the connect phase under the logger the adapter handed it, announces a recovery when this socket had reported a failure before,
+  // and answers with a value on both paths. The failure comes back rather than propagating because the adapter decides the demotion from what the attempt ANSWERED,
+  // and a rejection it never classifies would report at full level every time; `#runLoop` re-throws the original error immediately after, so nothing downstream sees a
+  // difference.
+  async #attemptConnect(attemptSignal: AbortSignal, attemptLog: HomebridgePluginLogging): Promise<ConnectOutcome> {
+
+    try {
+
+      const session = await this.#connect(attemptSignal);
+
+      if(this.#reportedFailure) {
+
+        this.#reportedFailure = false;
+        attemptLog.info("Connected to the Homebridge log stream.");
+      }
+
+      return { ok: true, session };
+    } catch(error: unknown) {
+
+      const { kind } = classifyTransportError(error, attemptSignal);
+
+      /* A teardown and a permanent authentication failure are both the loop's to report rather than this method's, so neither is stated twice. The signal `retry` hands
+       * each attempt is the socket's own, so the classifier answers "aborted" for an attempt the consumer ended, and an orderly exit should say nothing at all.
+       * `shouldRetry` vetoes the credential failure, so the loop stops and its terminal error line names it as the verdict it is. Everything else is a failure the loop
+       * is about to retry, which is exactly the report a user waiting on a connection is owed.
+       */
+      if((kind !== "aborted") && !isPermanentAuthError(error)) {
+
+        this.#reportedFailure = true;
+        attemptLog.warn("Unable to connect to the Homebridge log stream: %s. Retrying.", formatErrorMessage(error));
+      }
+
+      return { error, ok: false, reason: kind };
+    }
+  }
+
+  // Connect phase. Re-acquires a fresh token, builds the dial this attempt owns, opens the WebSocket over that dial's dispatcher, awaits the Engine.IO open handshake
+  // (capturing its ping cadence), joins the `/log` namespace, and emits `tail-log`. Resolves with the live session once `tail-log` has been emitted; rejects on any
+  // handshake fault (WebSocket error, CONNECT_ERROR, peer close, or attempt abort), so `retry` governs the backoff. A per-attempt controller composed under the
+  // attempt signal ensures a failed attempt's WebSocket, dial and listeners are torn down before the next attempt opens a new one; on success that same controller
+  // becomes the session controller, so the streaming phase shares the teardown path.
   async #connect(attemptSignal: AbortSignal): Promise<Session> {
 
     const token = await this.#tokenProvider(attemptSignal);
@@ -516,7 +687,18 @@ export class LogSocket implements LogSocketLike {
 
     const controller = new AbortController();
     const composed = composeSignals(attemptSignal, controller.signal);
-    const ws = this.#webSocketFactory(url);
+
+    /* A WebSocket upgrade can use neither HTTP/2 nor pipelining, which is the socket's own reading of its protocol rather than the dial's, so it is stated here and
+     * handed down. Both halves of the dial act on that one fact - the connector's copy decides which protocols the dial offers, the dispatcher's decides what it does
+     * with the connection afterward - and a single binding carried through the factory is what keeps the two from disagreeing.
+     *
+     * The dial belongs to the attempt rather than to the socket, because this loop calls this method an unbounded number of times over one socket's life. A connector
+     * held for the whole of that would accumulate established-socket references across hours of reconnects and would report a dial failure belonging to some older
+     * attempt, so it is built here and released with the socket it vended - the same per-attempt shape the controller above already has.
+     */
+    const allowH2 = false;
+    const owned = this.#ownedDialFactory({ allowH2 });
+    const ws = this.#webSocketFactory(url, { dispatcher: owned.agent });
 
     // Capture the Engine.IO open handshake's ping cadence so the streaming phase can size the liveness watchdog from the server's real cadence rather than a guess.
     let pingInterval = 0;
@@ -526,17 +708,17 @@ export class LogSocket implements LogSocketLike {
     // abort.
     const { promise: connected, resolve, reject }: PromiseWithResolvers<void> = Promise.withResolvers();
 
-    // Tear down this attempt's WebSocket when the composed signal aborts (attempt abort or our own controller abort), and reject the connect promise so a pending
-    // handshake unwinds. The `using` disposer removes the listener when this method's scope exits.
+    // Tear down this attempt's WebSocket and dial when the composed signal aborts (attempt abort or our own controller abort), and reject the connect promise so a
+    // pending handshake unwinds. The `using` disposer removes the listener when this method's scope exits.
     using abortRegistration = onAbort(composed, () => {
 
       reject(composed.reason);
-      this.#closeWebSocket(ws);
+      this.#closeWebSocket(ws, owned);
     });
 
     ws.addEventListener("error", (event: unknown) => {
 
-      reject(new HbpuAbortError("failed", { cause: this.#describeWsError(event) }));
+      reject(new HbpuAbortError("failed", { cause: this.#describeWsError(event, owned.connector.lastDialFailure) }));
     });
 
     ws.addEventListener("close", (event: { readonly code: number }) => {
@@ -614,12 +796,12 @@ export class LogSocket implements LogSocketLike {
       await connected;
     } catch(error: unknown) {
 
-      this.#closeWebSocket(ws);
+      this.#closeWebSocket(ws, owned);
 
       throw error;
     }
 
-    return { closed: false, controller, pingInterval, pingTimeout, ws };
+    return { closed: false, controller, owned, pingInterval, pingTimeout, ws };
   }
 
   // Streaming phase. The session is connected; split `stdout` chunks into lines and route them into the bounded queue, answer pings with pongs and re-arm the liveness
@@ -761,9 +943,21 @@ export class LogSocket implements LogSocketLike {
     }
   }
 
-  // Render a WebSocket `"error"` event for diagnostics. The DOM error event carries no structured detail; a Node `ws` error event may carry an `error` field. We surface
-  // whichever is present, falling back to a generic label, so the abort cause is at least minimally informative.
-  #describeWsError(event: unknown): unknown {
+  /* Render a WebSocket `"error"` event for diagnostics. The attempt's dial failure is read first and it wins outright: an upgrade that fails reports a content-free
+   * error on this event - present, and rendering as the empty string - while the connector that vended the socket still holds the dial's own error with its errno on
+   * it. So the order here is the difference between a reader seeing `ECONNREFUSED` and a reader seeing nothing at all.
+   *
+   * Below that, the error event's own field when it carries one, and a generic label when it does not, so the abort cause is at least minimally informative.
+   *
+   * Only the connect-phase call site passes a dial failure, and the parameter is optional for that reason: a session exists only because its dial already succeeded
+   * and nothing re-dials it, so by the streaming phase the dial is long over and the connector has nothing left to report.
+   */
+  #describeWsError(event: unknown, dialFailure?: Error): unknown {
+
+    if(dialFailure !== undefined) {
+
+      return dialFailure;
+    }
 
     if((typeof event === "object") && (event !== null) && ("error" in event)) {
 
@@ -797,12 +991,34 @@ export class LogSocket implements LogSocketLike {
       }
     }
 
-    this.#closeWebSocket(session.ws);
+    this.#closeWebSocket(session.ws, session.owned);
   }
 
-  // Issue the orderly WebSocket close, swallowing any throw (closing an already-closed or still-connecting socket can throw on some platforms). `close(1000)` is the
-  // normal-closure code; teardown always sends it so the server sees a clean disconnect.
-  #closeWebSocket(ws: WebSocketLike): void {
+  /* End one attempt's WebSocket and the dial that vended it: let the dispatcher go first, issue the orderly `close(1000)` so the peer sees a clean disconnect,
+   * swallow any throw from a socket that is already past closing, then release the connector's own sockets. Every step is safe to reach again, which matters because
+   * more than one path converges here on the same attempt.
+   *
+   * The dispatcher goes first, and that is the one thing a reader cannot recover from the code. Closing a socket that is still in its handshake aborts the request
+   * underneath it in a way the transport treats as retryable, so it dials a second socket through this same connector that nothing will ever release. Destroying the
+   * dispatcher fails that request outright and takes its socket with it, so there is nothing left to retry. An upgrade that completed is unaffected either way:
+   * the transport has already detached that socket, so the close frame is written straight to it and the release is what severs it afterward, rather than waiting on
+   * a peer that is under no obligation to answer.
+   *
+   * What actually forecloses the re-dial is that the destroy is ADJACENT to the close, in the same synchronous stack. The aborted request's socket raises its `close`
+   * event a tick or more later, and the transport consults its own destroyed flag at that moment: a destroy anywhere in this tick has already set that flag, while a
+   * destroy deferred past it lets the re-dial reach the network. Ordering the destroy first is the simplest sufficient way to hold that adjacency, and it is what
+   * keeps a later edit from opening a gap between the two calls rather than a property of "first" on its own.
+   *
+   * The destroy settles later and nothing here waits on it - what matters is that it is CALLED in this stack, because the flag it sets is synchronous. It is
+   * discarded through `markHandled` rather than a bare `void` so a rejection is observed rather than floating.
+   *
+   * Neither the destroy nor the release carries a guard of its own, and that is from the source rather than from optimism: `release()` calls nothing but `destroy()`
+   * on sockets, which marks and schedules rather than throwing, and a dispatcher's destroy resolves even when it has already been destroyed. The `try` stays around
+   * the close alone, where a throw genuinely can come from.
+   */
+  #closeWebSocket(ws: WebSocketLike, owned: OwnedDial): void {
+
+    void markHandled(owned.agent.destroy());
 
     try {
 
@@ -811,6 +1027,8 @@ export class LogSocket implements LogSocketLike {
 
       // Closing a socket that is already closed (or in a state where close throws) is a no-op for our purposes.
     }
+
+    owned.connector.release();
   }
 
   // Single teardown convergence point, fired exactly once when `this.signal` aborts. Closes the live session's WebSocket (sending the namespace DISCONNECT if OPEN, then

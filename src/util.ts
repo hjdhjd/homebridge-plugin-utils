@@ -754,6 +754,191 @@ export function debugGatedLog(base: Logger, isEnabled: () => boolean): Homebridg
   };
 }
 
+/**
+ * A scope that runs one retry attempt at a time under a logger holding the attempt's error and warn lines, releasing them once the attempt's outcome is known. Built
+ * by {@link repeatDemotedLog}, which documents the behavior and the reasoning behind it. A consumer that keeps the adapter in a field spells its type with this
+ * interface.
+ *
+ * @typeParam Reason - The caller's failure-reason tags, as {@link repeatDemotedLog} describes them.
+ *
+ * @category Utilities
+ */
+export interface RepeatDemotedLog<Reason extends string = string> {
+
+  /**
+   * Run one attempt under a logger that holds its error and warn lines, and release them once `reasonOf` has classified what the attempt answered.
+   *
+   * The two callbacks are positional rather than an options object because argument order is inference order: TypeScript reads `T` from `run`'s return type, and a
+   * classifier whose parameter type depends on `T` collapses to `unknown` if it is contextually typed before `run` has been read, so `run` comes first and a caller
+   * writing both arrows unannotated still infers. Positional callbacks follow the shape `subscribe(topic, handler, init)` uses on the MQTT client.
+   *
+   * @typeParam T    - What `run` answers with...a promise of the outcome for an asynchronous attempt, the outcome itself for a synchronous one.
+   * @param run      - The attempt itself, handed the logger it reports through.
+   * @param reasonOf - Classifies what `run` answered: the tag for the reason the attempt failed, or `undefined` when it did not fail.
+   *
+   * @returns Exactly what `run` returned: the value itself for a synchronous attempt, and for an asynchronous one a promise settling with the same value or the
+   *          same error.
+   */
+  readonly attempt: <T>(run: (log: HomebridgePluginLogging) => T, reasonOf: (result: Awaited<T>) => Reason | undefined) => T;
+}
+
+/**
+ * Derive a repeat-demoting attempt scope from a base logger. A retry loop that runs each attempt through the adapter's `attempt` reports a failure in full the first
+ * time, replays an unchanged repeat at debug, and reports in full again the moment the reason changes or an attempt succeeds in between. A user reading the log sees
+ * the fault once rather than once per interval, and every attempt is still there for anyone reading at debug.
+ *
+ * The lines are held rather than weighed as they are written, because the code that writes them cannot know yet how the attempt will be classified: a callee deep in
+ * the attempt reports the fault through the logger it was handed, and the classification is the return value of the very call that is still running. An adapter that
+ * decided at the `error` call could only compare against the previous attempt's reason, which demotes precisely the line that matters most - the first report of a
+ * reason that differs from the run before it.
+ *
+ * `attempt` owns the whole lifetime of the hold, so there is no separate release to forget and no way to strand an error line: a returned value, a fulfilled promise,
+ * a throw, a rejection, and a throwing `reasonOf` each release the held lines before the attempt is done with. A throw releases them at their own levels and leaves
+ * the remembered reason exactly as it was, since a fault the caller never got to classify neither advances nor resets the episode. A callee that kept the logger and
+ * writes after the attempt has ended passes straight through to `base`, because no replay is coming to carry that line.
+ *
+ * Error and warn are the held levels: a failure report is one of those, while info and debug are progress a user wants as it happens. The consequence is that a held
+ * line lands after whatever info and debug the same attempt wrote live, so within one attempt the live lines come first and the failure report last. Parameters are
+ * handed to the sink by reference and untouched, so formatting still happens exactly once, at the sink.
+ *
+ * The reason is the caller's own tag rather than the message text, so a message may carry varying detail - an address, an attempt count, an elapsed time - without
+ * ever defeating the comparison. An adapter serves one attempt at a time: attempts that overlap on a single adapter share its one remembered reason, and the last to
+ * settle is what the attempt after them is weighed against. Only a native promise answered by `run` is awaited...any other return value, a thenable included, is a
+ * synchronous result, and a synchronous attempt stays fully synchronous, with its lines replayed by the time `attempt` returns. A caller opening a separate episode
+ * builds a separate adapter, which starts out remembering nothing.
+ *
+ * Compose with {@link prefixedLog} and {@link debugGatedLog} by handing the composed logger in as `base`, so a demoted line meets the debug gate like any other debug
+ * line and carries the same prefix its full-level report would have carried.
+ *
+ * @typeParam Reason - The caller's failure-reason tags. A string-literal union gives compile-time checking of every tag `reasonOf` can answer with; the default is
+ *                     `string`, since nothing at runtime carries a reason for one to be inferred from.
+ * @param base       - The logger that receives the live lines, the full-level failure reports, and the demoted replays.
+ *
+ * @returns A {@link RepeatDemotedLog} that remembers one reason across the attempts run through it.
+ *
+ * @example
+ *
+ * ```ts
+ * const failures = repeatDemotedLog<"refused" | "timeout">(log);
+ *
+ * // Every pass through the retry loop reports its failure in full the first time and at debug for as long as the reason holds.
+ * const outcome = await failures.attempt((attemptLog) => dial(attemptLog), (result) => result.ok ? undefined : result.reason);
+ * ```
+ *
+ * @category Utilities
+ */
+export function repeatDemotedLog<Reason extends string = string>(base: Logger): RepeatDemotedLog<Reason> {
+
+  // The reason the last classified attempt failed with, or `undefined` when that attempt did not fail. This one variable is the adapter's whole memory, and a fresh
+  // adapter starts out knowing nothing...which is what makes building another adapter the way to open another episode.
+  let lastReason: Reason | undefined;
+
+  // Write one line to `base` at the level named. The call stays in method position so a `Logging` implementation that reads its own `this` keeps working, the same
+  // way the level-per-arrow literals in {@link prefixedLog} and {@link debugGatedLog} do.
+  const write = (level: "debug" | "error" | "warn", message: string, parameters: unknown[]): void => base[level](message, ...parameters);
+
+  return {
+
+    attempt: <T>(run: (log: HomebridgePluginLogging) => T, reasonOf: (result: Awaited<T>) => Reason | undefined): T => {
+
+      const held: { readonly level: "error" | "warn"; readonly message: string; readonly parameters: unknown[] }[] = [];
+
+      let ended = false;
+
+      // Mark the attempt ended and drain the hold in the order the lines were written, at each line's own level or, for a repeat of the remembered reason, at debug.
+      // Every way an attempt can end passes through here, which is what makes a stranded error line unwritable, and ending before the drain is what lets a callee
+      // that kept the logger write straight through from this point on.
+      const release = (demoted: boolean): void => {
+
+        ended = true;
+
+        for(const line of held) {
+
+          write(demoted ? "debug" : line.level, line.message, line.parameters);
+        }
+      };
+
+      // Classify the finished attempt, release its lines against what the last classified attempt failed with, and remember what this one answered. A success
+      // remembers `undefined`, so the next failure of the same kind reports in full again rather than arriving at debug.
+      const settle = (result: Awaited<T>): void => {
+
+        const reason = reasonOf(result);
+
+        release((reason !== undefined) && (reason === lastReason));
+
+        lastReason = reason;
+      };
+
+      // Take an error or warn line into the hold while the attempt is open, and write it straight through once the attempt has ended.
+      const hold = (level: "error" | "warn", message: string, parameters: unknown[]): void => {
+
+        if(ended) {
+
+          write(level, message, parameters);
+
+          return;
+        }
+
+        held.push({ level, message, parameters });
+      };
+
+      // The logger `run` writes through. Debug and info reach `base` live because they report progress rather than failure; error and warn wait for the
+      // classification that decides what level they go out at.
+      const attemptLog: HomebridgePluginLogging = {
+
+        debug: (message: string, ...parameters: unknown[]): void => base.debug(message, ...parameters),
+        error: (message: string, ...parameters: unknown[]): void => hold("error", message, parameters),
+        info: (message: string, ...parameters: unknown[]): void => base.info(message, ...parameters),
+        warn: (message: string, ...parameters: unknown[]): void => hold("warn", message, parameters)
+      };
+
+      let result: T;
+
+      try {
+
+        result = run(attemptLog);
+      } catch(error) {
+
+        release(false);
+
+        throw error;
+      }
+
+      if(result instanceof Promise) {
+
+        /* The assertion back to `T` is sound: `T` is the promise type `run` answered with, and the chained promise fulfills with that same value or rejects with
+         * that same error, so it settles exactly as the promise `run` returned does.
+         */
+        return result.then((value: Awaited<T>): Awaited<T> => {
+
+          settle(value);
+
+          return value;
+        }, (error: unknown): never => {
+
+          release(false);
+
+          throw error;
+        }) as T;
+      }
+
+      try {
+
+        // A synchronous attempt has its settled value in hand, which is what `Awaited<T>` names for a `T` that is not a promise.
+        settle(result as Awaited<T>);
+      } catch(error) {
+
+        // `reasonOf` threw, so the attempt never classified itself and is treated exactly as a throw from `run` is.
+        release(false);
+
+        throw error;
+      }
+
+      return result;
+    }
+  };
+}
+
 // Re-export the magnitude-and-percentage formatters from the browser-safe `formatters.ts` module. `featureOptions.ts` imports them directly from there (so it can
 // ship into `dist/ui/` without dragging in any of util.ts's Node-only imports); util.ts surfaces them here so server-side consumers see the same public API they
 // always did. The single SSOT is `formatters.ts`; this file is just a forwarding re-export.
@@ -1034,8 +1219,8 @@ export function defaultRetryBackoff(attempt: number): number {
 export interface RetryOptions {
 
   /**
-   * Total number of attempts, including the first. Must be >= 1. Defaults to 3. Values less than 1 throw synchronously (rejected promise) at the top of `retry()`. Pass
-   * `Infinity` for unbounded attempts - the loop then terminates only on success, an abort, or a `shouldRetry` veto, never on an exhausted budget.
+   * Total number of attempts, including the first. A positive integer, or `Infinity` for unbounded attempts, in which case the loop terminates only on success, an
+   * abort, or a `shouldRetry` veto and never on an exhausted budget. Defaults to 3. Any other value throws synchronously (rejected promise) at the top of `retry()`.
    */
   attempts?: number;
 
@@ -1104,10 +1289,13 @@ export async function retry<T>(operation: (signal: AbortSignal) => Promise<T>, o
 
   const { attempts = 3, backoff = defaultRetryBackoff, clock = systemClock, shouldRetry, signal } = options;
 
-  // Reject nonsensical attempt counts at the library boundary so the "attempts >= 1" guarantee the loop relies on is enforced rather than latent.
-  if(attempts < 1) {
+  /* Reject nonsensical attempt counts at the library boundary so the "attempts >= 1" guarantee the loop relies on is enforced rather than latent. `Infinity` is
+   * the documented way to ask for an unbounded budget rather than a count of attempts, so it is excluded here on its own terms: the shared guard judges counts,
+   * and a sentinel is not one.
+   */
+  if(attempts !== Number.POSITIVE_INFINITY) {
 
-    throw new Error("retry: `attempts` must be >= 1.");
+    assertPositiveInteger(attempts, { optionName: "attempts", owner: "retry" });
   }
 
   // Honor a pre-aborted caller signal immediately - avoids spawning the first attempt just to tear it down.
@@ -2020,4 +2208,105 @@ export function sanitizeName(name: string): string {
 export function validateName(name: string): boolean {
 
   return VALID_HOMEKIT_NAME.test(name);
+}
+
+/**
+ * The naming context a refusal message is composed from: what owns the option - a class or a function - and what the option is called. The guards below take it
+ * as one object rather than as consecutive string parameters, because adjacent string parameters swap silently - no compile error - and produce a message that
+ * names the wrong thing, where a key labels each string where it is written.
+ *
+ * @category Utilities
+ */
+export interface OptionGuardContext {
+
+  /**
+   * The option's own name, quoted in the message so it matches what the caller wrote.
+   */
+  readonly optionName: string;
+
+  /**
+   * What the option belongs to, spelled as a consumer knows it - a class name for a constructor option, a function name for a call option. It opens the message.
+   */
+  readonly owner: string;
+}
+
+/**
+ * The naming context for an option that carries a unit: an {@link OptionGuardContext} plus the noun the quantity is measured in. An interface extending that one
+ * rather than an intersection written at the parameter, so the generated documentation renders it as a type of its own that a consumer can link to.
+ *
+ * @category Utilities
+ */
+export interface MeasuredOptionGuardContext extends OptionGuardContext {
+
+  /**
+   * The plural noun the quantity is measured in, such as `milliseconds` or `bytes`. It closes the message.
+   */
+  readonly unit: string;
+}
+
+/**
+ * Refuse a numeric option that is not a positive integer, in the words this library's own boundaries use for the same refusal.
+ *
+ * A count, a depth, or a high-water mark that is fractional, zero, negative, or not a number at all describes no bound any code can honor. The check belongs at the
+ * boundary the caller wrote the value at rather than several layers down where the consequence surfaces, and the message opens with the owner and quotes the option
+ * so a misconfiguration reads as one.
+ *
+ * A caller whose option accepts an unbounded sentinel alongside its counts excludes that sentinel before calling, since a sentinel is not a count and this guard
+ * has no way to tell one from a mistake.
+ *
+ * @param value   - The value the caller supplied.
+ * @param context - The owner and option the message names. See {@link OptionGuardContext}.
+ *
+ * @throws `TypeError` if `value` is not an integer, or is below one.
+ *
+ * @example
+ *
+ * ```ts
+ * // A constructor checking the option bag it was handed.
+ * assertPositiveInteger(capacity, { optionName: "capacity", owner: "RateBudget" });
+ * ```
+ *
+ * Throws: `` RateBudget: `capacity` must be a positive integer. ``
+ *
+ * @category Utilities
+ */
+export function assertPositiveInteger(value: number, context: OptionGuardContext): void {
+
+  if(!Number.isInteger(value) || (value < 1)) {
+
+    throw new TypeError(context.owner + ": `" + context.optionName + "` must be a positive integer.");
+  }
+}
+
+/**
+ * Refuse a numeric option that is not a positive, finite quantity of the unit it is measured in, in the words this library's own boundaries use for the same
+ * refusal.
+ *
+ * A wait, a byte ceiling, or any other measured quantity that is zero, negative, infinite, or not a number at all describes no workable setting. The unit is a
+ * required field rather than a fixed word because the quantities differ - a wait is milliseconds, a body limit is bytes - and a refusal naming the wrong unit sends
+ * the caller looking in the wrong place.
+ *
+ * @param value   - The value the caller supplied.
+ * @param context - The owner, option, and unit the message names. See {@link MeasuredOptionGuardContext}.
+ *
+ * @throws `TypeError` if `value` is not finite, or is zero or negative.
+ *
+ * @example
+ *
+ * ```ts
+ * // A constructor checking the option bag it was handed, each option in the unit it is measured in.
+ * assertPositiveFinite(window, { optionName: "window", owner: "RateBudget", unit: "milliseconds" });
+ * assertPositiveFinite(bodyLimit, { optionName: "bodyLimit", owner: "HttpListener", unit: "bytes" });
+ * ```
+ *
+ * Throws: `` RateBudget: `window` must be a positive, finite number of milliseconds. ``
+ *
+ * @category Utilities
+ */
+export function assertPositiveFinite(value: number, context: MeasuredOptionGuardContext): void {
+
+  if(!Number.isFinite(value) || (value <= 0)) {
+
+    throw new TypeError(context.owner + ": `" + context.optionName + "` must be a positive, finite number of " + context.unit + ".");
+  }
 }

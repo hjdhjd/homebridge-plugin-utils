@@ -788,7 +788,7 @@ describe("MdnsBrowser - cache", () => {
     assert.equal(rescued.browser.services.size, 1);
   });
 
-  test("B18: a flushed record retires what the cache held under its name and type, a second later and in one step", async () => {
+  test("B18: a flushed record retires what the cache held under its name and type at once, and its later deletion is silent", async () => {
 
     const rig = await makeBrowser();
 
@@ -798,16 +798,18 @@ describe("MdnsBrowser - cache", () => {
     rig.clock.advance(1500);
     deliver(rig.socket, [makeARecord({ address: "192.0.2.52", flush: true, name: [ "gdo", "local" ], ttl: 120 })]);
 
-    // RFC 6762 section 10.2: the flushed record is added at once and the older ones are held rather than dropped where they stand.
-    assert.deepEqual(onlyService(rig).addresses, [ "192.0.2.50", "192.0.2.51", "192.0.2.52" ]);
+    // RFC 6762 section 10.2: the flushed record replaces what it superseded in the reported set at once; the superseded records are held internally for a
+    // rescue's second rather than reported as though they were still current.
+    assert.deepEqual(onlyService(rig).addresses, ["192.0.2.52"]);
     assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated" ]);
 
     rig.clock.advance(999);
     assert.equal(rig.events.length, 3);
 
-    // Both held records share a deadline, so they leave in one step and the consumer is told once.
+    // The held records' shared deadline still fires at the full second and deletes them from the cache, but the derivation already excluded them from the
+    // reported set at the flush, so their deletion changes nothing the consumer is told.
     rig.clock.advance(1);
-    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated", "updated" ]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated" ]);
     assert.deepEqual(onlyService(rig).addresses, ["192.0.2.52"]);
   });
 
@@ -826,6 +828,127 @@ describe("MdnsBrowser - cache", () => {
     rig.clock.advance(2000);
     assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated" ]);
     assert.deepEqual(onlyService(rig).addresses, [ "192.0.2.50", "192.0.2.51", "192.0.2.52" ]);
+  });
+
+  test("B36: a goodbye on a service's only address keeps it found for the hold, then loses it unrescued", async () => {
+
+    const rig = await makeBrowser();
+
+    rig.clock.advance(100);
+    deliver(rig.socket, advertisementAged());
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.50", name: [ "gdo", "local" ], ttl: 0 })]);
+
+    // The held address stands in for the empty live list, so the goodbye itself changes nothing the consumer is told.
+    assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
+    assert.deepEqual(onlyService(rig).addresses, ["192.0.2.50"]);
+
+    rig.clock.advance(999);
+    assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
+
+    // The held address's own deadline empties both buckets, and the service goes lost exactly as it would have before this address ever carried a hold.
+    rig.clock.advance(1);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "lost" ]);
+    assert.equal(rig.browser.services.size, 0);
+  });
+
+  test("B37: a goodbye followed by a distinct address in a later packet is one updated, not two", async () => {
+
+    const rig = await makeBrowser();
+
+    rig.clock.advance(100);
+    deliver(rig.socket, advertisementAged());
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.50", name: [ "gdo", "local" ], ttl: 0 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
+
+    // The new address is live from the moment it is cached, so the derivation switches straight from the held fallback to the live list in this one pass.
+    rig.clock.advance(500);
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.53", name: [ "gdo", "local" ], ttl: 120 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated" ]);
+    assert.deepEqual(onlyService(rig).addresses, ["192.0.2.53"]);
+
+    // The superseded address's own hold still expires here, but the live list already reported this shape, so nothing further is told.
+    rig.clock.advance(1000);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated" ]);
+  });
+
+  test("B38: an address aging past its last maintenance checkpoint on its own stays reported once something re-derives the service", async () => {
+
+    const rig = await makeBrowser();
+
+    rig.clock.advance(100);
+    deliver(rig.socket, advertisementAged());
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.53", name: [ "gdo", "local" ], ttl: 10 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated" ]);
+
+    // The short-lived address ages through every maintenance checkpoint on its own, reaching the same checkpoint value a hold jumps straight to, well
+    // before its own ttl expires.
+    rig.clock.advance(9700);
+
+    // A third, unrelated address forces a fresh derivation while the aged address sits at that checkpoint: the held field, not the checkpoint value, is
+    // what the derivation reads, so the aged address stays beside the other two rather than reading as though a hold had claimed it.
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.54", name: [ "gdo", "local" ], ttl: 120 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated" ]);
+    assert.deepEqual(onlyService(rig).addresses, [ "192.0.2.50", "192.0.2.53", "192.0.2.54" ]);
+
+    // Its own ttl, not the checkpoint it merely passed through, is what finally expires it.
+    rig.clock.advance(300);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated", "updated" ]);
+    assert.deepEqual(onlyService(rig).addresses, [ "192.0.2.50", "192.0.2.54" ]);
+  });
+
+  test("B39: a rescued address is cleared of its hold, and a later live address does not eclipse it", async () => {
+
+    const rig = await makeBrowser();
+
+    rig.clock.advance(100);
+    deliver(rig.socket, advertisementAged());
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.50", name: [ "gdo", "local" ], ttl: 0 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
+
+    // The same address re-announced inside the hold window rescues it through the same reset every ordinary arrival runs, clearing the hold along with it.
+    rig.clock.advance(500);
+    deliver(rig.socket, advertisementAged());
+    assert.deepEqual(rig.events.map((event) => event.kind), ["found"]);
+    assert.deepEqual(onlyService(rig).addresses, ["192.0.2.50"]);
+
+    // A second, distinct address now arrives live. Had the rescue left the first address held, this fresh address alone would eclipse it in the live
+    // list; the rescued address is reported beside it instead.
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.51", name: [ "gdo", "local" ], ttl: 120 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated" ]);
+    assert.deepEqual(onlyService(rig).addresses, [ "192.0.2.50", "192.0.2.51" ]);
+  });
+
+  test("B40: successive supersession events accumulate more than one held address at once, and each hold's own expiry narrows the reported set in turn", async () => {
+
+    const rig = await makeBrowser();
+
+    rig.clock.advance(100);
+    deliver(rig.socket, advertisementAged());
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.51", name: [ "gdo", "local" ], ttl: 120 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated" ]);
+
+    // The flush holds both prior addresses at once (expiresAt 2600) and the live bucket carries only the fresh one.
+    rig.clock.advance(1500);
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.52", flush: true, name: [ "gdo", "local" ], ttl: 120 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated" ]);
+    assert.deepEqual(onlyService(rig).addresses, ["192.0.2.52"]);
+
+    // A goodbye for the newest address, before the flush's own hold ends, empties the live bucket entirely. The held bucket now carries every address the
+    // host has advertised in this window at once, and the fallback reports that whole set rather than the single most recent one.
+    rig.clock.advance(100);
+    deliver(rig.socket, [makeARecord({ address: "192.0.2.52", name: [ "gdo", "local" ], ttl: 0 })]);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated", "updated" ]);
+    assert.deepEqual(onlyService(rig).addresses, [ "192.0.2.50", "192.0.2.51", "192.0.2.52" ]);
+
+    // The flush-held pair shares one deadline and leaves together, narrowing the reported set by both addresses in a single updated.
+    rig.clock.advance(900);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated", "updated", "updated" ]);
+    assert.deepEqual(onlyService(rig).addresses, ["192.0.2.52"]);
+
+    // The last held address's own deadline empties both buckets, and the service reads lost exactly as it would for a single address with no rescue.
+    rig.clock.advance(100);
+    assert.deepEqual(rig.events.map((event) => event.kind), [ "found", "updated", "updated", "updated", "updated", "lost" ]);
+    assert.equal(rig.browser.services.size, 0);
   });
 
   test("B20: a record is asked for again at each checkpoint of its lifetime, spread as asked, and is deleted at the end of it", async () => {
@@ -1508,7 +1631,13 @@ describe("MdnsBrowser - lifecycle", () => {
       }
 
       assert.deepEqual(rig.sockets.map((socket) => socket.closed), [true], "every socket the browser held is closed");
-      await assert.rejects(settled, (error: unknown) => (error instanceof HbpuAbortError) && (error.name === "shutdown"));
+      await assert.rejects(settled, (error: unknown) => {
+
+        assert.ok(error instanceof HbpuAbortError, "the wait ends with the library's abort error");
+        assert.equal(error.name, "shutdown", "the shutdown reason is what ended the wait");
+
+        return true;
+      });
     });
   });
 });

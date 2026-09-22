@@ -32,6 +32,21 @@
  */
 import { causeChain, isTimeoutReason } from "./util.ts";
 
+/* The verdicts the platform's certificate verification can return, each spelled as Node spells it on the error's `code`: the OpenSSL X509 verification family Node
+ * maps by name, together with the hostname check Node runs itself.
+ *
+ * Neighbors from that same table are left out on purpose. `OUT_OF_MEM` is the verifier running out of room rather than a verdict about the certificate, so a
+ * failure carrying it tells a user nothing that installing a certificate would fix. `CERT_DIR`, `CERT_FILE`, `CERT_STORE`, `CERT_ALTNAME_FORMAT`,
+ * `UNABLE_TO_CHECK_GENERATOR`, and `UNABLE_TO_PIPE` are not verification verdicts at all - they are store locations and unrelated failures that share the
+ * library's naming.
+ */
+const CERTIFICATE_VERIFICATION_CODES: ReadonlySet<string> = new Set([ "CERT_CHAIN_TOO_LONG", "CERT_HAS_EXPIRED", "CERT_NOT_YET_VALID", "CERT_REJECTED",
+  "CERT_REVOKED", "CERT_SIGNATURE_FAILURE", "CERT_UNTRUSTED", "CRL_HAS_EXPIRED", "CRL_NOT_YET_VALID", "CRL_SIGNATURE_FAILURE", "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID", "ERROR_IN_CERT_NOT_AFTER_FIELD", "ERROR_IN_CERT_NOT_BEFORE_FIELD", "ERROR_IN_CRL_LAST_UPDATE_FIELD",
+  "ERROR_IN_CRL_NEXT_UPDATE_FIELD", "HOSTNAME_MISMATCH", "INVALID_CA", "INVALID_PURPOSE", "PATH_LENGTH_EXCEEDED", "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY", "UNABLE_TO_DECRYPT_CERT_SIGNATURE", "UNABLE_TO_DECRYPT_CRL_SIGNATURE", "UNABLE_TO_GET_CRL",
+  "UNABLE_TO_GET_ISSUER_CERT", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "UNABLE_TO_VERIFY_LEAF_SIGNATURE" ]);
+
 // Everything one descent of a `cause` chain collects, and the whole of what the classification reads afterwards.
 interface CauseWalk {
 
@@ -88,6 +103,8 @@ function walkCauses(error: unknown): CauseWalk {
  *
  * - `"aborted"` - the lifetime signal passed to the classifier had already aborted, so this is a teardown rather than a fault. Produced by that signal alone, whatever
  *   shape the rejection itself took.
+ * - `"certificate"` - the peer's certificate did not pass the platform's verification. Produced by the platform's own certificate verdict codes, which are read as a
+ *   family rather than one name at a time.
  * - `"connect-timeout"` - the connection attempt timed out before a request was ever written. Produced by `UND_ERR_CONNECT_TIMEOUT`.
  * - `"destroyed"` - the request was dispatched against a pool that has been torn down. Produced by `UND_ERR_DESTROYED`, which is how a request in flight when its
  *   dispatcher is destroyed settles.
@@ -101,7 +118,7 @@ function walkCauses(error: unknown): CauseWalk {
  *
  * @category Utilities
  */
-export type TransportFailureKind = "aborted" | "connect-timeout" | "destroyed" | "dns" | "refused" | "reset" | "retries-exhausted" | "timeout" | "transport";
+export type TransportFailureKind = TransportFailure["kind"];
 
 /**
  * A classified transport failure: `kind` is the taxonomy answer, `cause` is the thrown value verbatim, and `code` is the transport or errno code the cause chain
@@ -120,7 +137,7 @@ export type TransportFailure = {
 
   readonly cause: unknown;
   readonly code: string;
-  readonly kind: "connect-timeout" | "destroyed" | "dns" | "refused" | "reset" | "retries-exhausted";
+  readonly kind: "certificate" | "connect-timeout" | "destroyed" | "dns" | "refused" | "reset" | "retries-exhausted";
 } | {
 
   readonly cause: unknown;
@@ -242,10 +259,19 @@ export function classifyTransportError(error: unknown, signal?: AbortSignal): Tr
 
       return { cause: error, code: walk.code, kind: "dns" };
 
-    // A real failure with nothing recognizable on it. Any code the chain did carry is carried through regardless, because a code nobody has a kind for is still
-    // the most useful thing a caller can put in a log line.
+    /* A code that matched no name above is worth one more question: whether it is one of the platform's certificate verdicts. Those are a family rather than a
+     * handful of names, so they are held as a set the map consults here...spelling them out as `case` labels would state the family in the wrong place, and would
+     * make every addition to it an edit of this `switch`.
+     */
     default:
 
+      if((walk.code !== undefined) && CERTIFICATE_VERIFICATION_CODES.has(walk.code)) {
+
+        return { cause: error, code: walk.code, kind: "certificate" };
+      }
+
+      // A real failure with nothing recognizable on it. Any code the chain did carry is carried through regardless, because a code nobody has a kind for is still
+      // the most useful thing a caller can put in a log line.
       return { cause: error, code: walk.code, kind: "transport" };
   }
 }

@@ -173,7 +173,7 @@ describe("BackpressureWriter - write semantics", () => {
 
     // Matching by type rather than by message text keeps the assertion stable across error-message phrasing changes and gives consumers a consistent `instanceof`
     // contract to rely on in their own recovery code.
-    await assert.rejects(writer.write(Buffer.from("nope")), (error: unknown) => error instanceof BackpressureClosedStreamError);
+    await assert.rejects(writer.write(Buffer.from("nope")), BackpressureClosedStreamError);
   });
 
   test("rejects with signal.reason when the writer is already aborted", async () => {
@@ -202,7 +202,7 @@ describe("BackpressureWriter - highWaterMark", () => {
     // must overflow the configured ceiling.
     await delay(5);
 
-    await assert.rejects(writer.write(Buffer.from("c")), (error: unknown) => error instanceof BackpressureOverflowError);
+    await assert.rejects(writer.write(Buffer.from("c")), BackpressureOverflowError);
 
     // Abort-clean shutdown: the blocked drain wait rejects with `signal.reason`, both pending writes reject through the regular paths, and nothing leaks into the
     // next test. Verifying the reason (not just "rejected with something") keeps the test honest about which abort path actually fired.

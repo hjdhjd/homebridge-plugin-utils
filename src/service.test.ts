@@ -9,6 +9,7 @@
  * the thing we want to exercise.
  */
 import * as hap from "@homebridge/hap-nodejs";
+import type { Assert, Equal } from "./testing/index.ts";
 import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
 import type { PresenceReading, PresenceTransition, ValidCharacteristicOptions } from "./service.ts";
 import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic, updateServices,
@@ -224,14 +225,21 @@ const _readerShapeExercises = (): void => {
   const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
 
   // A reader of each primitive HomeKit carries is accepted, and each answers a reader of its own type back rather than a widened one.
-  const _number: () => number = wrap((): number => 42);
-  const _string: () => string = wrap((): string => "Stopped");
-  const _boolean: () => boolean = wrap((): boolean => true);
+  const _number = wrap((): number => 42);
+  const _string = wrap((): string => "Stopped");
+  const _boolean = wrap((): boolean => true);
+
+  type _NumberIsExact = Assert<Equal<typeof _number, () => number>>;
+  type _StringIsExact = Assert<Equal<typeof _string, () => string>>;
+  type _BooleanIsExact = Assert<Equal<typeof _boolean, () => boolean>>;
 
   // HAP's own get handler may answer null, so a reader that does is accepted here too. Each line exercises the bound from a different end: one reader narrowed to
   // a single nullable primitive, and one answering the whole HAP value union the bound itself names.
-  const _nullable: () => number | null = wrap((): number | null => null);
-  const _value: () => Nullable<CharacteristicValue> = wrap((): Nullable<CharacteristicValue> => null);
+  const _nullable = wrap((): number | null => null);
+  const _value = wrap((): Nullable<CharacteristicValue> => null);
+
+  type _NullableIsExact = Assert<Equal<typeof _nullable, () => number | null>>;
+  type _ValueIsExact = Assert<Equal<typeof _value, () => Nullable<CharacteristicValue>>>;
 
   // @ts-expect-error - a symbol is not a CharacteristicValue, so a reader answering one is not a characteristic reader.
   const _symbol = wrap((): symbol => Symbol("not a characteristic value"));

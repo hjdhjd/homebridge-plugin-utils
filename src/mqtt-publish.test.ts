@@ -1,18 +1,19 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * mqtt-publish.test.ts: Unit tests for the MQTT publish-outcome vocabulary - the offline refusal, the pure guarded-publish failure router, and the per-topic memory
- * a change-gated publish is weighed against.
+ * mqtt-publish.test.ts: Unit tests for the MQTT publish-outcome vocabulary - the offline refusal, the pure guarded-publish failure router, the derivation that names
+ * the reason a repeat is weighed by, and the per-topic memory a change-gated publish is weighed against.
  *
  * The router's rows drive the pure function directly with a capturing log, so what they assert is the classification itself rather than any one caller's route to it;
- * the client's guarded publish over a real broker stays in the client's own suite. The memory's rows drive the class directly for the same reason: what they state is
- * the comparison and the keeping rule themselves, while the client's and the double's suites state how each one reaches them.
+ * the client's guarded publish over a real broker stays in the client's own suite. The reason derivation's rows do the same with synthetic rejections, which is what
+ * lets every shape a publish can reject with be stated rather than only the shapes a broker can be talked into producing. The memory's rows drive the class directly
+ * for the same reason: what they state is the comparison and the keeping rule themselves, while the client's and the double's suites state how each one reaches them.
  */
-import { MqttLastPayloads, MqttOfflineError, routeGuardedPublishFailure } from "./mqtt-publish.ts";
+import { MqttLastPayloads, MqttOfflineError, guardedPublishReason, routeGuardedPublishFailure } from "./mqtt-publish.ts";
+import { capturingLog, errnoError } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
 import { HbpuAbortError } from "./util.ts";
 import assert from "node:assert/strict";
-import { capturingLog } from "./testing/index.ts";
 import { firstRendered } from "./mqtt.helpers.ts";
 
 describe("routeGuardedPublishFailure - pure function", () => {
@@ -122,6 +123,41 @@ describe("routeGuardedPublishFailure - pure function", () => {
 
     assert.equal(firstRendered(log), "Unable to publish to the MQTT topic test/device1/status: broker refused the message.");
     assert.deepEqual(log.entries.map((entry) => entry.level), ["error"]);
+  });
+});
+
+describe("guardedPublishReason - pure function", () => {
+
+  // The derivation sits beside the router because both callers of the router call it too, and it is asserted against synthetic rejections rather than driven through
+  // a client: a publish can reject with anything at all, and only a direct read states every shape rather than the ones a broker can be provoked into producing.
+  test("the transport's own code is the tag wherever the rejection carries one", () => {
+
+    // A broker refusing for one reason refuses every topic for it, so the code and not the topic is what a repeat is weighed by.
+    assert.equal(guardedPublishReason(errnoError("write EPIPE", "EPIPE")), "EPIPE");
+  });
+
+  test("a rejection carrying no code answers its rendered message", () => {
+
+    assert.equal(guardedPublishReason(new Error("broker refused the message")), "broker refused the message");
+  });
+
+  test("a numeric code is not a tag of its own here, so the rendered message answers instead", () => {
+
+    // The guarded path reads a string code alone: anything else is rendered, which keeps one expression answering for every rejection shape a publish can carry.
+    assert.equal(guardedPublishReason(errnoError("refused with a numeric code", 135)), "refused with a numeric code");
+  });
+
+  test("a non-Error rejection is rendered rather than refused a tag", () => {
+
+    // A publish can reject with any value at all, and every one of them has to answer something an adapter can compare.
+    assert.equal(guardedPublishReason("string-shaped failure"), "string-shaped failure");
+  });
+
+  test("an unchanged reason answers an equal tag, and a changed one does not", () => {
+
+    // This is the whole of what the demotion rests on: equality of the derived tag, not identity of the rejection.
+    assert.equal(guardedPublishReason(new Error("broker refused the message")), guardedPublishReason(new Error("broker refused the message")));
+    assert.notEqual(guardedPublishReason(new Error("broker refused the message")), guardedPublishReason(new Error("broker refused the credentials")));
   });
 });
 

@@ -76,8 +76,8 @@ Construct and start a listener. Binding begins immediately and is retried while 
 
 ###### Throws
 
-If `label` is empty, or `bodyLimit` or `retryMs` is not a positive finite number, or `port` is not an integer from 0 to 65535. Each refusal
-names the option, so a misconfiguration is diagnosable where it was made.
+If `label` is empty, or `bodyLimit` is not a positive, finite number of bytes, or `retryMs` is not a positive, finite number of
+milliseconds, or `port` is not an integer from 0 to 65535. Each refusal names the option, so a misconfiguration is diagnosable where it was made.
 
 #### Properties
 

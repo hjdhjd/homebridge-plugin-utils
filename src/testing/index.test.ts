@@ -1,15 +1,20 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, silentLog, capturingLog, formatLogEntry, loggedAt, logCount,
- * assertNoUnhandledRejections, waitUntil, settle, advanceThroughSchedule, drainClock. Helpers earn the same enumerated-criteria coverage as production code per the
- * testing convention - every branch, every error path, every async outcome - because a bug in a shared helper cascades into every test that consumes it.
+ * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, present, silentLog, capturingLog, formatLogEntry, loggedAt,
+ * logCount, assertNoUnhandledRejections, waitUntil, settle, settleUntil, advanceThroughSchedule, drainClock, freePort, listenOnLoopback, stopListening, errnoError.
+ * Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every error path, every async outcome - because a
+ * bug in a shared helper cascades into every test that consumes it.
  */
 import type { CapturingLog, TestLogEntry } from "./index.ts";
-import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, drainClock, expectAt, formatLogEntry, logCount, loggedAt, settle, silentLog,
-  waitUntil } from "./index.ts";
+import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, drainClock, errnoError, expectAt, formatLogEntry, freePort, listenOnLoopback, logCount,
+  loggedAt, present, settle, settleUntil, silentLog, stopListening, waitUntil } from "./index.ts";
+import { createConnection, createServer } from "node:net";
 import { describe, test } from "node:test";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
+import { causeChain } from "../util.ts";
+import { classifyTransportError } from "../transport-error.ts";
+import { once } from "node:events";
 
 describe("expectAt", () => {
 
@@ -47,6 +52,42 @@ describe("expectAt", () => {
     const items: readonly string[] = ["alpha"];
 
     assert.equal(expectAt(items, 0, "alpha slot"), "alpha", "readonly arrays must narrow through expectAt the same as mutable ones");
+  });
+});
+
+describe("present", () => {
+
+  test("returns the value when it is present", () => {
+
+    // A truthiness check would wrongly reject every one of these, which is why the assertion compares against undefined and null rather than reading the value's
+    // own truth.
+    assert.equal(present(0, "a zero count"), 0, "zero is present and must come back unchanged");
+    assert.equal(present("", "an empty label"), "", "the empty string is present and must come back unchanged");
+    assert.equal(present(false, "a disabled flag"), false, "false is present and must come back unchanged");
+  });
+
+  test("throws an AssertionError naming the description and the value for null and for undefined", () => {
+
+    assert.throws(() => present(undefined, "a missing record"), { message: "expected a missing record, got undefined", name: "AssertionError" },
+      "an undefined value must throw naming the lookup and rendering what arrived");
+    assert.throws(() => present(null, "a missing record"), { message: "expected a missing record, got null", name: "AssertionError" },
+      "a null value must throw naming the lookup and rendering what arrived");
+  });
+
+  test("narrows the result to its present type", () => {
+
+    const source: string | undefined = "alpha";
+    const narrowed: string = present(source, "the alpha entry");
+
+    assert.equal(narrowed.length, 5, "the result must be usable as a string with no cast and no non-null assertion");
+  });
+
+  test("returns a present object unchanged", () => {
+
+    const subject = { a: 1 };
+
+    // Reference identity rather than deep equality is what proves the helper hands the value straight back instead of reconstructing it.
+    assert.equal(present(subject, "an object"), subject, "a present object must come back as the same reference");
   });
 });
 
@@ -375,6 +416,125 @@ describe("settle", () => {
   });
 });
 
+describe("settleUntil", () => {
+
+  test("answers on the first read when the predicate already holds", async () => {
+
+    let reads = 0;
+    let crossed = false;
+
+    setImmediate(() => {
+
+      crossed = true;
+    });
+
+    await settleUntil(() => {
+
+      reads++;
+
+      return true;
+    }, { description: "a condition that already holds" });
+
+    assert.equal(reads, 1, "a predicate that already holds must be read once and no more");
+    assert.equal(crossed, false, "an immediate queued before the call must not have run, which is what proves no turn was crossed");
+  });
+
+  test("keeps yielding until the predicate turns true", async () => {
+
+    let reads = 0;
+
+    await settleUntil(() => {
+
+      reads++;
+
+      return reads === 3;
+    }, { description: "a condition that turns true on the third read" });
+
+    assert.equal(reads, 3, "the helper must keep yielding and re-reading until the predicate answers true");
+  });
+
+  test("crosses one macrotask turn between attempts", async () => {
+
+    // A chain whose steps each schedule the next advances by exactly one link per macrotask boundary, so a budget of one turn per step fits only a helper that
+    // yields one turn per attempt. A body that yielded nothing would spend the budget with the chain still mid-flight and throw instead.
+    let step = 0;
+
+    const advance = (): void => {
+
+      step++;
+
+      if(step < 3) {
+
+        setImmediate(advance);
+      }
+    };
+
+    setImmediate(advance);
+
+    await settleUntil(() => step === 3, { description: "a three-step chain to run to its end", turns: 3 });
+
+    assert.equal(step, 3, "a three-link chain must run out inside a budget of three turns, which one turn per attempt reaches exactly");
+  });
+
+  test("throws naming the description and the turn budget when the predicate never holds", async () => {
+
+    await assert.rejects(settleUntil(() => false, { description: "a condition that never holds", turns: 3 }),
+      { message: "settleUntil: a condition that never holds did not hold within 3 macrotask turns." },
+      "the failure must name the state that never arrived and the budget it was given");
+  });
+
+  test("spends exactly the turn budget before it throws", async () => {
+
+    let reads = 0;
+
+    await assert.rejects(settleUntil(() => {
+
+      reads++;
+
+      return false;
+    }, { description: "a condition that never holds", turns: 3 }), { name: "Error" }, "a predicate that never holds must end in the budget's own failure");
+
+    /* The predicate is read once before each of the three yields and once more on the turn that throws, so a count of four is exactly three yields crossed. The row
+     * above cannot make this claim: its message is built from the `turns` option rather than from anything measured, so it reads the same whether the throw came
+     * after three yields or four. This is what tells the specified body apart from one whose budget check reads `turn === (turns + 1)`.
+     */
+    assert.equal(reads, 4, "the budget must be spent on exactly three yields, which fails an off-by-one budget check");
+  });
+
+  test("spends no real time", async () => {
+
+    let yielded = 0;
+    let polled = 0;
+
+    const yieldStarted = Date.now();
+
+    await settleUntil(() => {
+
+      yielded++;
+
+      return yielded === 11;
+    }, { description: "a condition that turns true on the eleventh read" });
+
+    const yieldCost = Date.now() - yieldStarted;
+    const pollStarted = Date.now();
+
+    await waitUntil(() => {
+
+      polled++;
+
+      return polled === 11;
+    }, { description: "a condition that turns true on the eleventh read" });
+
+    const pollCost = Date.now() - pollStarted;
+
+    /* The same ten attempts, driven both ways under the same load. `waitUntil` sleeps a 5 ms poll before each retry and so cannot finish inside 50 ms; this helper
+     * only yields, so it pays scheduler overhead and nothing else. Comparing the two rather than testing against a written-down millisecond budget is what keeps
+     * the row honest on a loaded runner, where an absolute threshold measures the machine instead of the helper.
+     */
+    assert.ok(yieldCost < pollCost, "yielding macrotask turns must cost less real time than sleeping a poll interval between the same attempts");
+  });
+});
+
 describe("advanceThroughSchedule", () => {
 
   test("releases a chain of waits one step at a time", async () => {
@@ -515,5 +675,240 @@ describe("drainClock", () => {
     assert.equal(steps, 1, "the leading yield must let a late registration reach the clock before the drain asks for a deadline");
     assert.equal(finished, true, "the drain must leave the body finished");
     assert.equal(clock.pending, 0, "the drain must end with nothing pending");
+  });
+});
+
+describe("freePort", () => {
+
+  test("answers a port the kernel chose", async () => {
+
+    const port = await freePort();
+
+    assert.ok(port > 0, "the answer must be a real port rather than the zero that asked the kernel for one");
+    assert.ok(port <= 65535, "a TCP port cannot exceed the 16-bit range the protocol gives it");
+  });
+
+  test("releases the port before it answers, so the caller can bind it immediately", async () => {
+
+    const port = await freePort();
+    const server = createServer();
+    const listening = once(server, "listening");
+
+    // The single attempt is the assertion. A probe that retried would let a late release pass as an on-time one, and a bind that found the port still held would
+    // reject this wait rather than resolving it.
+    server.listen(port);
+
+    await listening;
+
+    const address = server.address();
+
+    assert.ok((address !== null) && (typeof address === "object"), "the rebound server must report the address it took");
+
+    const bound = address.port;
+    const closed = once(server, "close");
+
+    server.close();
+
+    await closed;
+
+    assert.equal(bound, port, "the answered port must bind on the first attempt, which is what proves the helper released its own handle before answering");
+  });
+
+  test("answers a different port on a second call while the first is still held", async () => {
+
+    const first = await freePort();
+    const holder = createServer();
+    const listening = once(holder, "listening");
+
+    holder.listen(first);
+
+    await listening;
+
+    const second = await freePort();
+    const closed = once(holder, "close");
+
+    holder.close();
+
+    await closed;
+
+    assert.notEqual(second, first, "a second call must not answer a port the caller is already holding, which fails an implementation that reuses one socket");
+  });
+});
+
+describe("listenOnLoopback and stopListening", () => {
+
+  test("binds a server to a kernel-assigned loopback port and answers it", async () => {
+
+    const server = createServer((socket) => socket.end("served"));
+    const port = await listenOnLoopback(server);
+
+    assert.ok(port > 0, "the kernel must have assigned a real port");
+
+    const socket = createConnection(port, "127.0.0.1");
+    const served = await new Promise<Buffer>((resolve) => void socket.once("data", (chunk: Buffer) => resolve(chunk)));
+
+    socket.destroy();
+
+    await stopListening(server);
+
+    assert.equal(String(served), "served", "a real connection to the answered port must reach the handler the server was built with");
+  });
+
+  test("binds the loopback interface rather than the wildcard address", async () => {
+
+    const server = createServer();
+
+    await listenOnLoopback(server);
+
+    const address = server.address();
+
+    assert.ok((address !== null) && (typeof address === "object"), "the bound server must report an address object");
+    assert.equal(address.address, "127.0.0.1", "the bind must name the loopback interface rather than the wildcard address a port reservation takes");
+
+    await stopListening(server);
+  });
+
+  test("rejects carrying the kernel's error when the port cannot be bound", async () => {
+
+    const holder = createServer();
+    const port = await listenOnLoopback(holder);
+    const contender = createServer();
+
+    /* What this proves is the failure PATH - that a bind failure reaches the caller as the returned promise's rejection rather than as a hang or an unhandled
+     * "error" event - and nothing more. It makes no claim about the order the listeners were attached in: `once` settles on "error" whichever order they went on.
+     */
+    await assert.rejects(listenOnLoopback(contender, port), { code: "EADDRINUSE" });
+
+    await stopListening(holder);
+  });
+
+  test("asks the kernel for a free port when none is named", async () => {
+
+    const first = createServer();
+    const second = createServer();
+    const firstPort = await listenOnLoopback(first);
+    const secondPort = await listenOnLoopback(second);
+
+    assert.ok(firstPort > 0, "a defaulted call must answer a real port");
+    assert.ok(secondPort > 0, "a second defaulted call must answer a real port");
+    assert.notEqual(firstPort, secondPort, "two defaulted calls must not collide, which is what asking the kernel buys over a written-down number");
+
+    await stopListening(first);
+    await stopListening(second);
+  });
+
+  test("binds the port the caller names", async () => {
+
+    const first = createServer();
+    const named = await listenOnLoopback(first);
+
+    await stopListening(first);
+
+    const fresh = createServer();
+    const rebound = await listenOnLoopback(fresh, named);
+
+    // This is the case a fixture coming back on the address a client is already reconnecting to needs, and the row that would redden if the parameter were dropped.
+    assert.equal(rebound, named, "a caller-named port must be the port that gets bound");
+
+    await stopListening(fresh);
+  });
+
+  test("releases the handle, so the port rebinds in a single attempt", async () => {
+
+    const server = createServer();
+    const port = await listenOnLoopback(server);
+
+    await stopListening(server);
+
+    // The single attempt is the assertion: a rebind that needed a poll would mean the handle outlived the close this helper already resolved.
+    const rebound = createServer();
+    const reboundPort = await listenOnLoopback(rebound, port);
+
+    assert.equal(reboundPort, port, "the released port must rebind on the first attempt, which proves the close resolved only once the handle was gone");
+
+    await stopListening(rebound);
+  });
+
+  test("resolves for a server that never listened", async () => {
+
+    // Node reports this close through the callback as an Error whose code is ERR_SERVER_NOT_RUNNING, and the helper reads that as its postcondition already met
+    // rather than as a failure.
+    await assert.doesNotReject(stopListening(createServer()), "closing a server that never listened must resolve rather than throwing");
+  });
+
+  test("resolves a second time after a close", async () => {
+
+    const server = createServer();
+
+    await listenOnLoopback(server);
+    await stopListening(server);
+
+    // This is the contract the HTTP listener suite's blocker depends on: an arm that frees a port by hand mid-body still lets its `await using` scope dispose the
+    // same server, and the scope's own call has to find nothing left to do.
+    await assert.doesNotReject(stopListening(server), "a second close must resolve, which is what keeps a scope disposal after a hand release a no-op");
+  });
+});
+
+/* Compile-time exercises for the two clauses of the factory's signature that have no runtime footprint. These never run - the arrow is never called - and the gate
+ * that reads them is `npx tsc --noEmit`, where each `@ts-expect-error` is consumed by the diagnostic its comment names and an unconsumed one reports TS2578.
+ */
+const _errnoErrorShapeExercises = (): void => {
+
+  const stringCoded = errnoError("write EPIPE", "EPIPE");
+
+  /* Writing back the SAME literal the error already carries is what isolates the modifier. A different literal is rejected by the code's own literal type whether
+   * or not `readonly` is there, so a row written that way keeps compiling after the modifier is dropped and proves nothing about it.
+   */
+  // @ts-expect-error - the return type declares `code` readonly, so even a write of the value it already holds does not compile.
+  stringCoded.code = "EPIPE";
+
+  // A string code yields a type the platform's own errno shape admits, which is what a consumer declaring its listeners over NodeJS.ErrnoException needs.
+  const _asErrno: NodeJS.ErrnoException = errnoError("write EPIPE", "EPIPE");
+
+  // @ts-expect-error - a numeric code yields `Error & { readonly code: 20 }`, which the platform's errno shape does not admit, because its own code is a string.
+  const _numericAsErrno: NodeJS.ErrnoException = errnoError("legacy", 20);
+};
+
+describe("errnoError", () => {
+
+  test("builds an error carrying the message and the code", () => {
+
+    const error = errnoError("write EPIPE", "EPIPE");
+
+    assert.ok(error instanceof Error, "the result must be a real Error rather than a plain object wearing the shape");
+    assert.equal(error.message, "write EPIPE", "the message must be the one the caller named");
+    assert.equal(error.code, "EPIPE", "the code must be the one the caller named");
+  });
+
+  test("accepts the platform's numeric code as well as an errno string", () => {
+
+    // The platform's own DOMException carries a numeric code, and the transport classifier has a branch that steps over one, so a fixture has to be able to carry it.
+    const numeric = errnoError("legacy", 20);
+
+    assert.equal(numeric.code, 20, "a numeric code must be carried through unchanged");
+  });
+
+  test("carries no cause property at all when none was given", () => {
+
+    /* The library's cause descent ends on `"cause" in link` rather than on a value check, so an own `cause` valued undefined would send it one link further than
+     * the error actually goes. This row is what holds the conditional construction in place, and it is the one a rewrite to an unbranched `{ cause }` breaks.
+     */
+    assert.equal("cause" in errnoError("no cause here", "ENOENT"), false, "omitting the cause must leave no cause property on the result at all");
+  });
+
+  test("attaches a cause through the Error options bag when one was given", () => {
+
+    const root = errnoError("innermost", "ECONNREFUSED");
+    const wrapper = errnoError("outer", "EPIPE", root);
+
+    assert.equal(wrapper.cause, root, "the cause must be the exact value the caller handed in");
+    assert.deepEqual([...causeChain(wrapper)], [ wrapper, root ], "the whole chain must be walkable by the library's own descent");
+  });
+
+  test("produces an error the transport classifier reads the code off", () => {
+
+    // The integration the factory exists for: a fixture it built has to classify exactly as the hand-rolled shape it replaces did.
+    assert.equal(classifyTransportError(errnoError("name not resolved", "ENOTFOUND")).kind, "dns",
+      "the classifier must read the factory's code and answer the kind that code maps to");
   });
 });

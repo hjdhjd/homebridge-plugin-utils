@@ -251,6 +251,7 @@ Construction-time options for [LogSocket](#logsocket).
 | <a id="clock"></a> `clock?` | `readonly` | [`Clock`](../clock.md#clock) | Optional time source for the session liveness window and the reconnect backoff waits. Passed through unresolved, so `systemClock` is applied by the primitives that consume it. A test injects a `TestClock` to drive both without real waits. |
 | <a id="host"></a> `host` | `readonly` | `string` | The hostname or IP of the homebridge-config-ui-x server. |
 | <a id="log"></a> `log` | `readonly` | [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) | Logger for connection lifecycle and overflow diagnostics. |
+| <a id="owneddialfactory"></a> `ownedDialFactory?` | `readonly` | [`OwnedDialFactory`](#owneddialfactory-1) | The factory that builds the dial each connect attempt owns. Defaults to [ownedDialFactory](#owneddialfactory-2). A test substitutes a factory whose dial records the teardown operations run on it, which is what makes their order assertable. |
 | <a id="port"></a> `port?` | `readonly` | `number` | The TCP port the server listens on. Defaults to `8581`. |
 | <a id="random"></a> `random?` | `readonly` | () => `number` | Injectable source of `[0, 1)` randomness for backoff jitter. Defaults to `Math.random`; held fixed in tests for deterministic backoff. |
 | <a id="refreshable"></a> `refreshable` | `readonly` | `boolean` | Whether the credential backing [LogSocketInit.tokenProvider](#tokenprovider) can mint a fresh token on a reconnect. `true` for `password`/`noauth` credentials (each connect re-authenticates), `false` for a static `token`. When `false`, a handshake/namespace auth rejection is raised as a permanent [LogAuthError](auth.md#logautherror) so the connect-phase retry veto makes it terminal rather than retrying a token that cannot be refreshed. |
@@ -314,6 +315,49 @@ The bounded push-to-pull stream of raw log lines the server streams over the log
 `AsyncGenerator`\<`string`\>
 
 An async generator yielding raw log lines in stream order.
+
+***
+
+### OwnedDial
+
+The dial one connect attempt owns: the connector holding every socket that attempt's WebSocket is vended, and the dispatcher built over it.
+
+The two travel as one value because either without the other releases nothing - the dispatcher's destroy reaches the connection it is holding, the connector's
+release reaches a socket still in its handshake, and only the pair covers an attempt whichever state its socket is in.
+
+#### Properties
+
+| Property | Modifier | Type |
+| ------ | ------ | ------ |
+| <a id="agent"></a> `agent` | `readonly` | `Agent` |
+| <a id="connector"></a> `connector` | `readonly` | [`OwnedConnector`](../owned-connector.md#ownedconnector) |
+
+***
+
+### OwnedDialInit
+
+The subset of the dial's own options this boundary states, leaving every other question to the factory.
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="allowh2"></a> `allowH2` | `readonly` | `boolean` | Which application protocols the dial offers. A WebSocket upgrade can use neither HTTP/2 nor pipelining, so the socket states `false` and both halves read it. |
+
+***
+
+### WebSocketDialInit
+
+The subset of the WebSocket constructor's own options this boundary passes through to whatever factory is wired in.
+
+The dispatcher is how a caller decides which sockets the upgrade is dialed over: hand one that dials through a connector you hold, and the socket underneath the
+handshake is reachable for the whole of the attempt rather than only through the WebSocket's own events.
+
+#### Properties
+
+| Property | Modifier | Type |
+| ------ | ------ | ------ |
+| <a id="dispatcher"></a> `dispatcher` | `readonly` | `Dispatcher` |
 
 ***
 
@@ -438,6 +482,31 @@ send(data): void;
 
 ***
 
+### OwnedDialFactory
+
+```ts
+type OwnedDialFactory = (init) => OwnedDial;
+```
+
+The factory that builds the [OwnedDial](#owneddial) one connect attempt owns.
+
+The production factory pairs an owned connector with a dispatcher that dials through it; a test substitutes a factory whose dial records what teardown ran on it,
+which is the only way the order of those operations is observable at all - the connector never crosses any other boundary a caller can reach.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | [`OwnedDialInit`](#owneddialinit) | The dial options this boundary states. See [OwnedDialInit](#owneddialinit). |
+
+#### Returns
+
+[`OwnedDial`](#owneddial)
+
+The dispatcher the WebSocket is dialed over, and the connector holding its sockets.
+
+***
+
 ### TokenProvider
 
 ```ts
@@ -464,12 +533,12 @@ A promise resolving to the raw bearer token (the bare JWT, no `Bearer` prefix).
 ### WebSocketFactory
 
 ```ts
-type WebSocketFactory = (url) => WebSocketLike;
+type WebSocketFactory = (url, init) => WebSocketLike;
 ```
 
 The factory that constructs a [WebSocketLike](#websocketlike) for a given connect URL.
 
-The production factory wraps the platform global `WebSocket`; a test substitutes a factory that returns a controllable double, so the whole socket state machine -
+The production factory wraps undici's own `WebSocket`; a test substitutes a factory that returns a controllable double, so the whole socket state machine -
 handshake, ping/pong, reconnect, teardown - is exercised without a real network.
 
 #### Parameters
@@ -477,12 +546,13 @@ handshake, ping/pong, reconnect, teardown - is exercised without a real network.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `url` | `string` | The fully-formed `ws(s)://...` connect URL, already carrying `EIO=4`, the transport selector, and the raw token in its query string. |
+| `init` | [`WebSocketDialInit`](#websocketdialinit) | The dial options this boundary passes to the constructor. A factory is free to ignore what it does not need, which is what a double that never reaches the network does. |
 
 #### Returns
 
 [`WebSocketLike`](#websocketlike)
 
-A [WebSocketLike](#websocketlike) that begins connecting immediately, exactly as the platform `WebSocket` constructor does.
+A [WebSocketLike](#websocketlike) that begins connecting immediately, exactly as the `WebSocket` constructor does.
 
 ***
 
@@ -495,6 +565,30 @@ const logSocketFactory: LogSocketFactory;
 The production [LogSocketFactory](#logsocketfactory): builds the concrete WebSocket-backed [LogSocket](#logsocket). A client holds the factory typed as the [LogSocketFactory](#logsocketfactory)
 abstraction; a test substitutes a fake factory. `create` is exactly the [LogSocket](#logsocket) constructor call, so wiring construction through this factory is
 behavior-neutral.
+
+***
+
+### ownedDialFactory
+
+```ts
+const ownedDialFactory: OwnedDialFactory;
+```
+
+The production [OwnedDialFactory](#owneddialfactory-1): an owned connector, and an `Agent` that dials through it.
+
+The connector is built with the protocol offer and nothing else, and the certificate-verification option is deliberately left unstated. This boundary carries no
+such setting, so the dial leaves the question to the platform and whatever the process was started with still decides...which is what lets a user reaching a
+Homebridge UI presenting its own certificate relax it the documented way.
+
+#### Param
+
+**init**
+
+The dial options this boundary states. See [OwnedDialInit](#owneddialinit).
+
+#### Returns
+
+The dispatcher the WebSocket is dialed over, and the connector holding its sockets.
 
 ***
 
@@ -515,8 +609,12 @@ interface does not have to carry the static constant and teardown can gate on it
 const webSocketFactory: WebSocketFactory;
 ```
 
-The production [WebSocketFactory](#websocketfactory-1): constructs the platform global `WebSocket`. A consumer holds the factory typed as the [WebSocketFactory](#websocketfactory-1) abstraction;
-a test substitutes a double. The platform `WebSocket` begins connecting on construction, which is exactly the factory contract.
+The production [WebSocketFactory](#websocketfactory-1): constructs undici's own `WebSocket`. A consumer holds the factory typed as the [WebSocketFactory](#websocketfactory-1) abstraction; a
+test substitutes a double. That `WebSocket` begins connecting on construction, which is exactly the factory contract.
+
+It is the class from the copy of undici this package depends on rather than the one the host's own Node vendors, and the reason is the dispatcher: a dispatcher
+object is not interchangeable across copies, so the class that accepts this package's `Agent` is the class from the same copy that `Agent` came from. The platform
+global is a different class whose declaration carries no dispatcher option at all.
 
 #### Param
 
@@ -524,9 +622,15 @@ a test substitutes a double. The platform `WebSocket` begins connecting on const
 
 The connect URL.
 
+#### Param
+
+**init**
+
+The dial options this boundary passes to the constructor.
+
 #### Returns
 
-A live platform `WebSocket`, typed as the [WebSocketLike](#websocketlike) interface.
+A live `WebSocket`, typed as the [WebSocketLike](#websocketlike) interface.
 
 ***
 

@@ -5,6 +5,7 @@
  */
 import type { CapturingLog, TestLogEntry } from "../testing/index.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
+import { capturingLog, errnoError } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
@@ -12,7 +13,6 @@ import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessExitInfo } from "./process.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
-import { capturingLog } from "../testing/index.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";
@@ -659,7 +659,7 @@ describe("FfmpegProcess - stdin error handling", () => {
     await proc.ready;
 
     // FFmpeg's stdin closing after the child exits is the canonical EPIPE source in production. The handler treats EPIPE as expected and never logs.
-    proc.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    proc.stdin.emit("error", errnoError("write EPIPE", "EPIPE"));
 
     proc.abort();
     await proc.exited;

@@ -69,7 +69,7 @@
 import { DNS_TYPE_A, DNS_TYPE_AAAA, DNS_TYPE_PTR, DNS_TYPE_SRV, DNS_TYPE_TXT, buildMdnsQuery, dnsNameKey, dnsNamesEqual, dnsRecordType, formatDnsName,
   isServiceTypeName, parseDnsMessage, parseDnsName } from "./message.ts";
 import type { DnsName, DnsQuestion, DnsRecord, DnsRecordKind, DnsSrvRecord, DnsTxtRecord } from "./message.ts";
-import { HbpuAbortError, composeSignals, exponentialBackoff, formatErrorMessage, membershipDelta, onAbort, sameEntries } from "../util.ts";
+import { HbpuAbortError, assertPositiveFinite, composeSignals, exponentialBackoff, formatErrorMessage, membershipDelta, onAbort, sameEntries } from "../util.ts";
 import type { HomebridgePluginLogging, Nullable } from "../util.ts";
 import { isLinkLocal, zoneOf } from "./address.ts";
 import type { Clock } from "../clock.ts";
@@ -245,9 +245,11 @@ export type MdnsInterfaceSource = () => NodeJS.Dict<NetworkInterfaceInfo[]>;
 /**
  * One service instance, as the cache currently resolves it. Every field is what the most recent records said.
  *
- * @property addresses - Every address of the host, of every family the browser serves, in arrival order and without duplicates, as a consumer connects to it: an
- *                       IPv6 link-local address carries the zone of the link it was heard on. {@link mdns/address!dialAddress | dialAddress} ranks this set
- *                       into the one address a consumer dials.
+ * @property addresses - Every live address of the host, of every family the browser serves, in arrival order and without duplicates, as a consumer
+ *                       connects to it: an IPv6 link-local address carries the zone of the link it was heard on. When the host has no live
+ *                       address - a goodbye or a cache-flush retired it with nothing yet announced to replace it - the addresses a hold
+ *                       still keeps, until each hold ends. {@link mdns/address!dialAddress | dialAddress} ranks this set into the one address
+ *                       a consumer dials.
  * @property host      - The host name the SRV record targets.
  * @property instance  - The first label of `name`: the free-text instance label RFC 6763 section 4.1.1 defines, which is what a person recognizes the device by.
  * @property name      - The full instance name, which is this service's identity and the key it is held under.
@@ -397,13 +399,15 @@ interface TimelineEntry {
   readonly task: TimelineTask;
 }
 
-// One cached record and the maintenance state that belongs to it: when it arrived, how long it lives, which checkpoint comes next, and the generation its
-// current heap entry carries.
+// One cached record and the maintenance state that belongs to it: when it arrived, how long it lives, which checkpoint comes next, the generation its
+// current heap entry carries, and whether it is being held for the second a goodbye or a cache-flush's supersession earns it rather than aging on its own -
+// checkpoint reaches its own last value either way, so held is the field that tells the two apart.
 interface CacheEntry {
 
   checkpoint: number;
   expiresAt: number;
   generation: number;
+  held: boolean;
   receivedAt: number;
   record: DnsRecord;
   ttlMs: number;
@@ -719,10 +723,7 @@ export class MdnsBrowser implements MdnsBrowserLike {
       throw new TypeError("MdnsBrowser: `ceilingMs` must be a finite number of milliseconds, and at least " + MDNS_QUERY_SEED_MS.toString() + ".");
     }
 
-    if(!Number.isFinite(warmupMs) || (warmupMs <= 0)) {
-
-      throw new TypeError("MdnsBrowser: `warmupMs` must be a positive, finite number of milliseconds.");
-    }
+    assertPositiveFinite(warmupMs, { optionName: "warmupMs", owner: "MdnsBrowser", unit: "milliseconds" });
 
     // The tuple type refuses an empty list at compile time; a repetition is the one shape it cannot refuse, and a second socket of a family would join the same
     // group on the same links and cache the same records twice.
@@ -1362,10 +1363,11 @@ export class MdnsBrowser implements MdnsBrowserLike {
     }
 
     const ttlMs = record.ttl * 1000;
-    const entry: CacheEntry = existing ?? { checkpoint: 0, expiresAt: 0, generation: 0, receivedAt: 0, record, ttlMs };
+    const entry: CacheEntry = existing ?? { checkpoint: 0, expiresAt: 0, generation: 0, held: false, receivedAt: 0, record, ttlMs };
 
     entry.checkpoint = 0;
     entry.expiresAt = now + ttlMs;
+    entry.held = false;
     entry.receivedAt = now;
     entry.record = copyRecord(record);
     entry.ttlMs = ttlMs;
@@ -1402,6 +1404,7 @@ export class MdnsBrowser implements MdnsBrowserLike {
 
     entry.checkpoint = MDNS_MAINTENANCE_CHECKPOINTS.length;
     entry.expiresAt = now + MDNS_HOLD_MS;
+    entry.held = true;
     this.#reschedule(key, entry, entry.expiresAt);
   }
 
@@ -1684,18 +1687,32 @@ export class MdnsBrowser implements MdnsBrowserLike {
     }
 
     const host = dnsNameKey(srv.target);
-    const addresses: string[] = [];
+    const live: string[] = [];
+    const held: string[] = [];
 
+    /* A held address is one a goodbye or a cache-flush retired within the last second and the cache still carries it in case a later packet in the same
+     * announcement rescues it. Collecting it into a bucket of its own rather than omitting it outright is what keeps the host's one-second grace while
+     * it has no live address: the held bucket stands in for the live one, reporting every address the host has held rather than an empty set. Successive
+     * supersession events before an earlier hold expires can leave more than one address held at once, and the fallback reports every one of them until
+     * each hold ends, not only the most recent. The fallback reads the whole host rather than one family at a time, because a live address of either
+     * family already keeps the service resolved, and a held address of the other family has nothing left to protect once that happens.
+     */
     for(const entry of this.#cache.values()) {
 
       // Any address kind answers here: the caching pass admits only the families this browser serves, so what the cache holds for a host is already exactly the
-      // set of addresses a consumer may connect to, and the order is the order they arrived in.
-      if(((entry.record.kind === "a") || (entry.record.kind === "aaaa")) && (dnsNameKey(entry.record.name) === host) &&
-        !addresses.includes(entry.record.address)) {
+      // set of addresses a consumer may connect to, and the order within each bucket is the order they arrived in.
+      if(((entry.record.kind === "a") || (entry.record.kind === "aaaa")) && (dnsNameKey(entry.record.name) === host)) {
 
-        addresses.push(entry.record.address);
+        const bucket = entry.held ? held : live;
+
+        if(!bucket.includes(entry.record.address)) {
+
+          bucket.push(entry.record.address);
+        }
       }
     }
+
+    const addresses = (live.length > 0) ? live : held;
 
     if(addresses.length === 0) {
 

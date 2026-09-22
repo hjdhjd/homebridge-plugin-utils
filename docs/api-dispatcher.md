@@ -89,7 +89,8 @@ the vetted base rather than from nothing.
 
 `Options`
 
-The pool options, whose `connect` entry always carries the connect timeout and adds the relaxed TLS check only when one was asked for.
+The pool options, whose `connect` entry always carries the connect timeout and adds the caller's certificate setting whenever they stated one, in
+         whichever direction they stated it.
 
 ***
 

@@ -7,13 +7,32 @@
  * markup and the widths measured on it, the sort, the vocabulary-order join, the omitted empty group, the empty section beside it, the column-separator escape,
  * per-verb device narrowing, every refusal the renderer owns, and the marked regions the renderer's output splices into a real document.
  */
-import { MQTT_DEVICE_COLUMN, mqttTopicCatalog } from "./mqtt-topics.ts";
+import { MQTT_DEVICE_COLUMN, mqttAvailabilityEntry, mqttTopicCatalog } from "./mqtt-topics.ts";
 import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END,
   renderMqttTopicsReference } from "./mqtt-topics-docs.ts";
 import { describe, test } from "node:test";
 import type { MqttTopicCatalog } from "./mqtt-topics.ts";
 import assert from "node:assert/strict";
 import { spliceMarkedRegion } from "./doc-markdown.ts";
+
+/* The plugin availability block, transcribed by hand exactly as a reader meets it at the head of every published fragment. It is deliberately NOT composed from the
+ * renderer's own constants and not derived from the renderer's own assembly: an oracle built out of the thing it checks agrees with it by construction and can
+ * never fail. The other fixtures in this file earn their independence by tracing to a real shipped document, and this one earns it the same way, by being written
+ * out rather than computed. Every fixture below opens with these lines and every row that asks about the block reads them, so the text is transcribed once.
+ */
+const AVAILABILITY_BLOCK_LINES = [
+
+  "**Plugin availability.** The plugin publishes this topic for itself, directly under its configured topic prefix rather than under a device identity.",
+  "",
+  "| Topic           | Message Published",
+  "|-----------------|----------------------------------",
+  "| `availability`  | `online` while the plugin holds a broker session, `offline` by the broker's last will when the plugin exits or its connection drops. " +
+    "Retained either way.",
+  ""
+];
+
+// The same block as one string, for the rows that ask whether a fragment carries it, how many times, and where.
+const AVAILABILITY_BLOCK = AVAILABILITY_BLOCK_LINES.join("\n");
 
 // The three headings the Access document groups its topics under, named once because every worked-example entry and both expected fragments spell them.
 const DOOR = "Door and Lock Topics";
@@ -69,6 +88,7 @@ const WORKED_CATALOG = mqttTopicCatalog({
 
 const WORKED_PUBLISHED = [
 
+  ...AVAILABILITY_BLOCK_LINES,
   "#### Door and Lock Topics",
   "",
   "| Topic       | Access Device Type                                                        | Message Published",
@@ -138,6 +158,7 @@ const FLAT_CATALOG = mqttTopicCatalog({
 
 const FLAT_PUBLISHED = [
 
+  ...AVAILABILITY_BLOCK_LINES,
   "| Topic     | Message Published",
   "|-----------|----------------------------------",
   "| `door`    | `open`, `closed`, `opening`, or `closing`.",
@@ -168,6 +189,7 @@ const PARAMETERIZED_CATALOG = mqttTopicCatalog({
 
 const PARAMETERIZED_PUBLISHED = [
 
+  ...AVAILABILITY_BLOCK_LINES,
   "| Topic                                             | Message Published",
   "|---------------------------------------------------|----------------------------------",
   "| <CODE>motion/smart/<I>object</I></CODE>           | `true` when the named object class is detected.",
@@ -187,6 +209,7 @@ const PARAMETERIZED_SUBSCRIBED = [
 
 const ESCAPED_PUBLISHED = [
 
+  ...AVAILABILITY_BLOCK_LINES,
   "| Topic     | Device Type  | Message Published",
   "|-----------|--------------|----------------------------------",
   "| `choice`  | Hub \\| Gate  | Either `on` \\| `off`, whichever applies.",
@@ -195,6 +218,7 @@ const ESCAPED_PUBLISHED = [
 
 const VOCABULARY_ORDER_PUBLISHED = [
 
+  ...AVAILABILITY_BLOCK_LINES,
   "| Topic   | Protect Device Type  | Message Published",
   "|---------|----------------------|----------------------------------",
   "| `lock`  | Camera, Sensor       | The lock state.",
@@ -203,6 +227,7 @@ const VOCABULARY_ORDER_PUBLISHED = [
 
 const NARROWED_PUBLISHED = [
 
+  ...AVAILABILITY_BLOCK_LINES,
   "| Topic           | Protect Device Type  | Message Published",
   "|-----------------|----------------------|----------------------------------",
   "| `ambientlight`  | Camera, Sensor       | The ambient light level, in lux.",
@@ -219,6 +244,7 @@ const NARROWED_SUBSCRIBED = [
 
 const EMPTY_GROUP_PUBLISHED = [
 
+  ...AVAILABILITY_BLOCK_LINES,
   "#### Door",
   "",
   "| Topic   | Message Published",
@@ -269,8 +295,11 @@ describe("renderMqttTopicsReference - the worked example (the contract)", () => 
     const reference = renderMqttTopicsReference(WORKED_CATALOG);
     const topics = (section: string): string[] => section.split("\n").filter((line) => line.startsWith("| `")).map((line) => line.split("`")[1] ?? "");
 
+    // The plugin availability topic leads the published enumeration because the renderer emits its block ahead of every catalog row, and it belongs to the plugin
+    // rather than to any entry the catalog declares.
     assert.deepEqual(topics(reference.published),
-      [ "doorbell", "dps", "lock", "rel", "ren", "rex", "unlock", "sidedoor/dps", "sidedoor/lock", "sidedoor/unlock", "telemetry" ]);
+      [ ...topics(AVAILABILITY_BLOCK), "doorbell", "dps", "lock", "rel", "ren", "rex", "unlock", "sidedoor/dps", "sidedoor/lock", "sidedoor/unlock",
+        "telemetry" ]);
     assert.deepEqual(topics(reference.subscribed),
       [ "doorbell/get", "dps/get", "lock/get", "lock/set", "sidedoor/dps/get", "sidedoor/lock/get", "sidedoor/lock/set" ]);
   });
@@ -337,12 +366,15 @@ describe("renderMqttTopicsReference - ordering and joining", () => {
       third: { label: "third", publish: "Declared third, printed second.", topic: "light" }
     });
 
+    // Every index into a published fragment counts from the end of the plugin availability block, which the renderer emits ahead of the catalog's own table. The
+    // offset is read off the block constant rather than written out, so a change to the block's shape moves these reads with it.
     const lines = renderMqttTopicsReference(catalog).published.split("\n");
+    const firstRow = AVAILABILITY_BLOCK_LINES.length + 2;
 
-    assert.ok(lines[2]?.startsWith("| `alpha`"), "the tree's first topic leads, observed: " + String(lines[2]));
-    assert.ok(lines[3]?.startsWith("| `light`"), "a parent sorts ahead of its own child topic, observed: " + String(lines[3]));
-    assert.ok(lines[4]?.startsWith("| `light/brightness`"), "the child follows its parent, observed: " + String(lines[4]));
-    assert.ok(lines[5]?.startsWith("| `zulu`"), "the tree's last topic trails, observed: " + String(lines[5]));
+    assert.ok(lines[firstRow]?.startsWith("| `alpha`"), "the tree's first topic leads, observed: " + String(lines[firstRow]));
+    assert.ok(lines[firstRow + 1]?.startsWith("| `light`"), "a parent sorts ahead of its own child topic, observed: " + String(lines[firstRow + 1]));
+    assert.ok(lines[firstRow + 2]?.startsWith("| `light/brightness`"), "the child follows its parent, observed: " + String(lines[firstRow + 2]));
+    assert.ok(lines[firstRow + 3]?.startsWith("| `zulu`"), "the tree's last topic trails, observed: " + String(lines[firstRow + 3]));
   });
 
   test("lists a topic's own get and set rows before the rows of the topics beneath it, and a hyphenated sibling after its base", () => {
@@ -370,7 +402,10 @@ describe("renderMqttTopicsReference - ordering and joining", () => {
     assert.ok(lines[6]?.startsWith("| `light/brightness/get`"), "the topic beneath it follows both, observed: " + String(lines[6]));
     assert.ok(lines[7]?.startsWith("| `light/brightness/set`"), "and its set row trails, observed: " + String(lines[7]));
     assert.ok(lines[8]?.startsWith("| `light-external/get`"), "a hyphenated sibling of a topic with children trails all of its rows, observed: " + String(lines[8]));
-    assert.equal(reference.published, "", "a catalog whose entries declare no publish text renders no published section at all");
+    // A catalog whose entries declare no publish text contributes no table of its own, and what remains is the plugin availability block: the library's own client
+    // publishes that topic for every plugin, so the published fragment is never empty however little the catalog declares.
+    assert.equal(reference.published, AVAILABILITY_BLOCK + "\n",
+      "a catalog whose entries declare no publish text renders the plugin availability block and no catalog table");
   });
 
   test("joins device labels in the vocabulary's declared order, not the entry's", () => {
@@ -405,8 +440,10 @@ describe("renderMqttTopicsReference - ordering and joining", () => {
       second: { label: "second", publish: "Declared second.", topic: "lock" }
     })).published.split("\n");
 
-    assert.ok(lines[2]?.endsWith("Declared first."), "the first declaration keeps its place, observed: " + String(lines[2]));
-    assert.ok(lines[3]?.endsWith("Declared second."), "and the second follows it, observed: " + String(lines[3]));
+    const firstRow = AVAILABILITY_BLOCK_LINES.length + 2;
+
+    assert.ok(lines[firstRow]?.endsWith("Declared first."), "the first declaration keeps its place, observed: " + String(lines[firstRow]));
+    assert.ok(lines[firstRow + 1]?.endsWith("Declared second."), "and the second follows it, observed: " + String(lines[firstRow + 1]));
   });
 
   test("omits an empty group from the section it has no rows in", () => {
@@ -454,9 +491,96 @@ describe("renderMqttTopicsReference - per-verb device narrowing", () => {
     const reference = renderMqttTopicsReference(catalog);
     const deviceCell = (line: string): string => (line.split("|")[2] ?? "").trim();
 
-    assert.equal(deviceCell(reference.published.split("\n")[2] ?? ""), "A, B", "the published row credits its own narrowing, in the vocabulary's order");
+    assert.equal(deviceCell(reference.published.split("\n")[AVAILABILITY_BLOCK_LINES.length + 2] ?? ""), "A, B",
+      "the published row credits its own narrowing, in the vocabulary's order");
     assert.equal(deviceCell(reference.subscribed.split("\n")[2] ?? ""), "B", "the get row credits its own narrowing alone");
     assert.equal(deviceCell(reference.subscribed.split("\n")[3] ?? ""), "C", "and the set row credits its own");
+  });
+});
+
+describe("renderMqttTopicsReference - the plugin availability row", () => {
+
+  /* The one row the renderer emits from its own knowledge rather than from a catalog, and the per-device row a consumer's own catalog contributes beside it. The
+   * block is checked against the hand-transcribed constant at the head of this file, which is what keeps the oracle independent of the renderer's own assembly.
+   */
+  test("renders the plugin-level block for a catalog declaring a device column", () => {
+
+    const catalog = mqttTopicCatalog({
+
+      lock: { devices: ["camera"], label: "lock", publish: "`true` when locked.", topic: "lock" }
+    }, { heading: "Device Type", vocabulary: { camera: "Camera" } });
+
+    assert.ok(renderMqttTopicsReference(catalog).published.startsWith(AVAILABILITY_BLOCK),
+      "a column-bearing catalog's published fragment must open with the plugin availability block, topic cell and message cell alike");
+  });
+
+  test("renders the plugin-level block for a catalog declaring no column", () => {
+
+    // The block is the same in both shapes, because the plugin publishes the topic whatever its catalog declares and no plugin can opt out of it.
+    const catalog = mqttTopicCatalog({ lock: { label: "lock", publish: "`true` when locked.", topic: "lock" } });
+
+    assert.ok(renderMqttTopicsReference(catalog).published.startsWith(AVAILABILITY_BLOCK),
+      "a catalog declaring no column must carry the same block, with the same two cells");
+  });
+
+  test("renders the shipped entry's own per-device row, with its message text and a device cell drawn from the vocabulary", () => {
+
+    const catalog = mqttTopicCatalog({
+
+      availability: { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ] }
+    }, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    // The last matching row is the catalog's, since the block's own row leads the fragment.
+    const row = renderMqttTopicsReference(catalog).published.split("\n").filter((line) => line.startsWith("| `availability`")).at(-1) ?? "";
+
+    assert.ok(row.includes("Camera, Sensor"), "the device cell joins the entry's kinds in the vocabulary's declared order, observed: " + row);
+    assert.ok(row.includes(mqttAvailabilityEntry.publish),
+      "the row prints the entry's own message text, which is where a per-device row's payload words come from");
+  });
+
+  test("keeps the plugin-level row and a consumer's per-device row distinct, in distinct parts of the fragment", () => {
+
+    // Both rows print the same topic cell, because the renderer prints an entry's tail rather than an identity-composed topic. What tells them apart is which part
+    // of the fragment each sits in, and the device cell only the catalog's row carries.
+    const catalog = mqttTopicCatalog({
+
+      availability: { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ] },
+      lock: { devices: ["camera"], label: "lock", publish: "`true` when locked.", topic: "lock" }
+    }, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    const fragment = renderMqttTopicsReference(catalog).published;
+
+    assert.ok(fragment.startsWith(AVAILABILITY_BLOCK), "the plugin-level block must open the fragment");
+
+    const catalogPart = fragment.slice(AVAILABILITY_BLOCK.length);
+    const availabilityRows = (part: string): string[] => part.split("\n").filter((line) => line.startsWith("| `availability`"));
+
+    assert.equal(availabilityRows(AVAILABILITY_BLOCK).length, 1, "the block carries the plugin-level row and only it");
+    assert.equal(availabilityRows(catalogPart).length, 1, "the catalog's own table carries the per-device row and only it");
+    assert.equal(availabilityRows(AVAILABILITY_BLOCK)[0]?.split("|").length, 3, "the plugin-level row carries a topic cell and a message cell and no device cell");
+    assert.equal(availabilityRows(catalogPart)[0]?.split("|").length, 4, "the per-device row carries the device cell the plugin-level row does not");
+  });
+
+  test("renders a grouped catalog's spread entry under its own group, with the block present once and ahead of every heading", () => {
+
+    /* The shipped entry ships group-less, so a consumer whose catalog groups its entries has to give it one on the spread. This is the row that proves such a
+     * consumer can use the entry at all: every other worked example pairs it with an ungrouped sibling.
+     */
+    const grouped = mqttTopicCatalog({
+
+      availability: { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ], group: "Status" },
+      lock: { devices: ["camera"], group: "Door", label: "lock", publish: "`true` when locked.", topic: "lock" }
+    }, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    const fragment = renderMqttTopicsReference(grouped).published;
+    const sections = fragment.split("#### ");
+
+    // Counted rather than merely found, so a block the grouped path emitted once per group would redden here.
+    assert.equal(fragment.split(AVAILABILITY_BLOCK).length - 1, 1, "the block must be emitted exactly once, however the catalog groups its entries");
+    assert.ok(fragment.startsWith(AVAILABILITY_BLOCK), "the block must precede every group heading");
+    assert.ok(sections[1]?.startsWith("Status"), "the group the consumer gave the spread entry heads the first table, observed: " + String(sections[1]));
+    assert.ok(sections[1]?.includes("| `availability`"), "the entry's own row sits under that heading");
+    assert.ok(sections[2]?.startsWith("Door"), "the sibling's group follows it, observed: " + String(sections[2]));
   });
 });
 

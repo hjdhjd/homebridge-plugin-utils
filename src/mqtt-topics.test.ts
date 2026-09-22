@@ -8,9 +8,11 @@
  * placeholder contract lives in `_catalogShapeExercises`, which never runs and is owned by the typecheck gate alone; the runtime half is driven here through topics
  * typed `string`, which is the widened form a plugin reaches by declaring its catalog through plain constants.
  */
-import { MQTT_DEVICE_COLUMN, MQTT_GET_SUFFIX, MQTT_SET_SUFFIX, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic, mqttTopicCatalog,
-  mqttTopicPlaceholders, resolveMqttTopic } from "./mqtt-topics.ts";
+import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, MQTT_DEVICE_COLUMN, MQTT_GET_SUFFIX, MQTT_SET_SUFFIX,
+  assertResolvedMqttTopic, mqttAvailabilityEntry, mqttGetTopic, mqttSetTopic, mqttTopic, mqttTopicCatalog, mqttTopicPlaceholders,
+  resolveMqttTopic } from "./mqtt-topics.ts";
 import { describe, test } from "node:test";
+import type { MqttAvailabilityPayload } from "./mqtt-topics.ts";
 import assert from "node:assert/strict";
 
 // Hand a topic back typed `string` rather than as its own literal: the widened form a plugin reaches by declaring its catalog through plain constants, where the
@@ -113,6 +115,47 @@ const _catalogShapeExercises = (): void => {
   const plainMotionGroup = { smartMotion: { label: "smart motion", publish: "The smart detection event.", topic: "motion/smart/{object}" } };
   const fromPlainGroups = mqttTopicCatalog({ ...plainDoorGroup, ...plainMotionGroup });
   const _widenedUnresolved = mqttTopic(id, fromPlainGroups.smartMotion.topic);
+
+  // The payload union admits the two words the vocabulary declares, which is what a consumer typing its own publish argument leans on.
+  const _payload: MqttAvailabilityPayload = MQTT_AVAILABILITY_ONLINE;
+
+  // @ts-expect-error - "unknown" is not a word the availability vocabulary declares.
+  const _unknownPayload: MqttAvailabilityPayload = "unknown";
+
+  /* The three shapes a consumer spreads the shipped entry into, each keeping the tail's literal type: a catalog declaring a device column, the same catalog
+   * grouping its entries, and a catalog declaring neither. Each tail is annotated with the exported constant's own type rather than a retyped word, which
+   * states the expectation without restating the vocabulary and still fails if the entry ever stopped carrying its literal, since the right-hand side would
+   * widen while the annotation would not.
+   */
+  const _availabilityWithColumn = mqttTopicCatalog({
+
+    availability: { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ] },
+    lock: { devices: ["camera"], label: "lock", publish: "The lock state.", topic: "lock" }
+  }, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+  const _availabilityGrouped = mqttTopicCatalog({
+
+    availability: { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ], group: "Status" },
+    lock: { devices: ["camera"], group: "Door", label: "lock", publish: "The lock state.", topic: "lock" }
+  }, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+  const _availabilityNoColumn = mqttTopicCatalog({ availability: mqttAvailabilityEntry,
+    lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
+
+  const _availabilityColumnKept: typeof MQTT_AVAILABILITY_TOPIC = _availabilityWithColumn.availability.topic;
+  const _availabilityGroupedKept: typeof MQTT_AVAILABILITY_TOPIC = _availabilityGrouped.availability.topic;
+  const _availabilityNoColumnKept: typeof MQTT_AVAILABILITY_TOPIC = _availabilityNoColumn.availability.topic;
+
+  // The shipped entry carries its own `as const`, so the tail keeps its literal type wherever a consumer assembles it from.
+  const fromShippedEntry = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
+  const _shippedKept: typeof MQTT_AVAILABILITY_TOPIC = fromShippedEntry.availability.topic;
+
+  // The same entry hand-authored without `as const` widens every tail to `string`, which is what silences the guard.
+  const plainAvailabilityGroup = { availability: { label: "availability", publish: "The availability statement.", topic: "availability" } };
+  const fromPlainAvailability = mqttTopicCatalog({ ...plainAvailabilityGroup, lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
+
+  // @ts-expect-error - a plain constant widened the tail to `string`, so the literal is gone.
+  const _plainAvailabilityLost: typeof MQTT_AVAILABILITY_TOPIC = fromPlainAvailability.availability.topic;
 };
 
 describe("mqttTopic - device-scoped topic composition", () => {
@@ -147,6 +190,45 @@ describe("MQTT_GET_SUFFIX and MQTT_SET_SUFFIX - the child suffix vocabulary", ()
 
     assert.equal(MQTT_GET_SUFFIX, "/get", "the get suffix is the wire text every get registration ends in");
     assert.equal(MQTT_SET_SUFFIX, "/set", "the set suffix is the wire text every set registration ends in");
+  });
+});
+
+describe("the availability vocabulary and the shipped entry", () => {
+
+  test("names the tail and the two payload words, and ships an entry whose label, tail, and message text state them", () => {
+
+    // The one row in this file that types the words by hand. Every other reader composes from the constants, so this is where a change to the wire vocabulary
+    // has to be stated, and it is what stands between a renamed constant and a silent protocol break at every consumer.
+    assert.equal(MQTT_AVAILABILITY_TOPIC, "availability", "the tail is the wire text a subscriber matches an availability statement on");
+    assert.equal(MQTT_AVAILABILITY_ONLINE, "online", "the reachable word is the wire text a subscriber compares an availability payload against");
+    assert.equal(MQTT_AVAILABILITY_OFFLINE, "offline", "the unreachable word is the wire text a subscriber compares an availability payload against");
+
+    // The entry's own fields, read directly rather than through a catalog round trip. The builder hands its entries back as declared, so a wrong label or a
+    // garbled message survives a spread perfectly and only a direct read catches it. The message is asserted by containment, so rewording the sentence is not a
+    // test change while a lost word still reddens.
+    assert.equal(mqttAvailabilityEntry.label, "availability", "the label is what a consumer's availability verbs log under");
+    assert.equal(mqttAvailabilityEntry.topic, "availability", "the entry's tail is the same word the plugin-level statement is published on");
+    assert.ok(mqttAvailabilityEntry.publish.includes(MQTT_AVAILABILITY_ONLINE), "the message text must name the word a reachable device publishes");
+    assert.ok(mqttAvailabilityEntry.publish.includes(MQTT_AVAILABILITY_OFFLINE), "the message text must name the word an unreachable device publishes");
+    assert.ok(mqttAvailabilityEntry.publish.includes("Retained"), "the message text must tell a subscriber that the statement is retained");
+  });
+
+  test("spreads into a catalog declaring a device column and into one declaring none, carrying every field through", () => {
+
+    const withColumn = mqttTopicCatalog({
+
+      availability: { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ] },
+      lock: { devices: ["camera"], label: "lock", publish: "The lock state.", topic: "lock" }
+    }, { heading: "Device Type", vocabulary: { camera: "Camera", sensor: "Sensor" } });
+
+    const noColumn = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
+
+    // The device list is the consumer's own, because a column-bearing catalog constrains every entry to carry one. The entry ships without it, so the spread is
+    // where it joins, and that is the shape a consuming plugin copies out of the entry's documented example.
+    assert.deepEqual(withColumn.availability, { ...mqttAvailabilityEntry, devices: [ "camera", "sensor" ] },
+      "a spread into a column-bearing catalog must carry every declared field through, alongside the device list the column requires");
+    assert.deepEqual(noColumn.availability, mqttAvailabilityEntry,
+      "the entry named as-is in a catalog declaring no column must carry every declared field through unchanged");
   });
 });
 

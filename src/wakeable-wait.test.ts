@@ -251,7 +251,7 @@ describe("WakeableWait - misuse and a clock that faults", () => {
       const pause = new WakeableWait({ clock });
       const first = pause.wait(60000);
 
-      await assert.rejects(() => pause.wait(1), (error: unknown) => (error instanceof Error) && (error.message === "WakeableWait: a wait is already in progress."));
+      await assert.rejects(() => pause.wait(1), { message: "WakeableWait: a wait is already in progress." });
 
       clock.advance(60000);
 

@@ -179,6 +179,41 @@ describe("discoverServices - projection", () => {
 
     assert.equal((await iterator.next()).done, true);
   });
+
+  test("S15: a classification that keeps failing the same way is reported once and replayed at debug", async () => {
+
+    const log = capturingLog();
+    const factory = new TestMdnsBrowserFactory();
+
+    let classified = 0;
+
+    const devices = discoverServices<TestDevice>({
+
+      browserFactory: factory,
+      classify: (): Nullable<TestDevice> => {
+
+        classified++;
+
+        throw new Error((classified < 3) ? "the plugin's own defect" : "a different defect");
+      },
+      log,
+      serviceType: SERVICE_TYPE,
+      signal: new AbortController().signal
+    });
+    const browser = expectAt(factory.createCalls, 0, "the browser").browser;
+
+    // Every transition runs the classification again, so a consumer whose classification is broken would otherwise be told about it once per transition. The third
+    // fault reads differently, which is a different fault rather than the same one repeating.
+    browser.found(service({ instance: "First" }));
+    browser.found(service({ instance: "Second" }));
+    browser.found(service({ instance: "Third" }));
+
+    assert.equal(logCount(log.entries, "error", "the plugin's own defect"), 1, "the unchanged repeat must not reach error level a second time");
+    assert.equal(logCount(log.entries, "debug", "the plugin's own defect"), 1, "the unchanged repeat is replayed at debug");
+    assert.equal(logCount(log.entries, "error", "a different defect"), 1, "a fault that differs from the one before it is reported in full");
+    assert.equal(devices.devices.size, 0);
+    devices.abort();
+  });
 });
 
 describe("discoverServices - lifetime", () => {

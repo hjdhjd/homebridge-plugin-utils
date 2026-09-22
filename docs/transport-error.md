@@ -39,7 +39,8 @@ type TransportFailure =
   | {
   cause: unknown;
   code: string;
-  kind:   | "connect-timeout"
+  kind:   | "certificate"
+     | "connect-timeout"
      | "destroyed"
      | "dns"
      | "refused"
@@ -85,16 +86,7 @@ one place that owns the taxonomy, so a kind that joins the coded arm reaches eve
 ### TransportFailureKind
 
 ```ts
-type TransportFailureKind = 
-  | "aborted"
-  | "connect-timeout"
-  | "destroyed"
-  | "dns"
-  | "refused"
-  | "reset"
-  | "retries-exhausted"
-  | "timeout"
-  | "transport";
+type TransportFailureKind = TransportFailure["kind"];
 ```
 
 The kinds of transport failure [classifyTransportError](#classifytransporterror) tells apart.
@@ -105,6 +97,8 @@ What each kind means, and which observed shapes produce it:
 
 - `"aborted"` - the lifetime signal passed to the classifier had already aborted, so this is a teardown rather than a fault. Produced by that signal alone, whatever
   shape the rejection itself took.
+- `"certificate"` - the peer's certificate did not pass the platform's verification. Produced by the platform's own certificate verdict codes, which are read as a
+  family rather than one name at a time.
 - `"connect-timeout"` - the connection attempt timed out before a request was ever written. Produced by `UND_ERR_CONNECT_TIMEOUT`.
 - `"destroyed"` - the request was dispatched against a pool that has been torn down. Produced by `UND_ERR_DESTROYED`, which is how a request in flight when its
   dispatcher is destroyed settles.

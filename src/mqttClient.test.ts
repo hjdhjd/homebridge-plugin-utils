@@ -9,18 +9,21 @@
  * pure {@link routeMqttBrokerError} helper, mirroring how `parseFfmpegCodecs` is tested directly with fixture strings while the spawn-end-to-end path is covered by
  * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
  */
+import type { Assert, CapturingLog, Equal } from "./testing/index.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
 import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
-import { MqttClient, createMqttClient, logGetterPublishOutcome, mqttConnectionSettings, mqttFeatureOptions, redactBrokerUrl, redactKnownBrokerUrl,
-  routeMqttBrokerError } from "./mqttClient.ts";
-import { assertNoUnhandledRejections, capturingLog, formatLogEntry, silentLog, waitUntil } from "./testing/index.ts";
-import { awaitClientConnected, awaitConnect, firstRendered, logContains, recordClientPublishes, recordSubscribes, recordWireUnsubscribes,
-  startTestBroker, waitForLog } from "./mqtt.helpers.ts";
+import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC } from "./mqtt-topics.ts";
+import { MqttClient, brokerErrorReason, createMqttClient, logGetterPublishOutcome, mqttConnectionSettings, mqttFeatureOptions, redactBrokerUrl,
+  redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
+import { assertNoUnhandledRejections, capturingLog, errnoError, formatLogEntry, listenOnLoopback, logCount, loggedAt, silentLog, stopListening,
+  waitUntil } from "./testing/index.ts";
+import { awaitClientConnected, awaitConnect, firstRendered, logContains, recordClientPublishes, recordRetainedStoreCompletions, recordSubscribes,
+  recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
-import type { CapturingLog } from "./testing/index.ts";
 import { FeatureOptions } from "./featureOptions.ts";
 import { MqttOfflineError } from "./mqtt-publish.ts";
 import assert from "node:assert/strict";
+import { connect } from "mqtt";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { once } from "node:events";
@@ -34,6 +37,12 @@ const SETTLE_MS = 20;
 // (because `reconnectInterval: 0`) does not retry. The client stays constructed, the connection stays down, and every test flow that does not require a live broker
 // runs deterministically without standing one up.
 const UNREACHABLE_BROKER = "mqtt://127.0.0.1:1";
+
+// The two plugin availability statements, in the shape the broker's recorder captures them: the one every session opens with, and the one the broker's last will
+// produces once the session ends without a DISCONNECT. Declared once because every row that accounts for a statement asserts exactly this entry, and a row spelling
+// it for itself could disagree with the client and still pass. The `"test/"` prefix is `makeClient`'s own, and is the only literal either one carries.
+const AVAILABILITY_ONLINE_RECORD = { payload: MQTT_AVAILABILITY_ONLINE, retain: true, topic: "test/" + MQTT_AVAILABILITY_TOPIC };
+const AVAILABILITY_OFFLINE_RECORD = { payload: MQTT_AVAILABILITY_OFFLINE, retain: true, topic: "test/" + MQTT_AVAILABILITY_TOPIC };
 
 // Construct a test client. The default broker URL is the unreachable test address so tests that do not need broker interaction do not pay broker-startup cost; tests
 // that exercise the wire pass `brokerUrl: broker.url` from a per-test {@link startTestBroker} handle.
@@ -69,14 +78,12 @@ async function startResetServer(): Promise<{ url: string } & AsyncDisposable> {
 
   const server = createServer((socket) => socket.resetAndDestroy());
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-
-  const port = (server.address() as { port: number }).port;
+  const port = await listenOnLoopback(server);
 
   return {
 
     url: "mqtt://127.0.0.1:" + port.toString(),
-    [Symbol.asyncDispose]: async (): Promise<void> => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    [Symbol.asyncDispose]: async (): Promise<void> => stopListening(server)
   };
 }
 
@@ -243,9 +250,12 @@ describe("MqttClient - publishGuarded", () => {
 
       client.publishGuarded("device1/status", "on");
 
-      await publishes.awaitFirst;
+      // Every session opens with the plugin's own availability statement, so the wait names the entry this row is about rather than whichever one the broker sees
+      // first, and the expected array carries both in the order they reached the broker.
+      await waitUntil(() => publishes.entries.some((entry) => entry.topic === "test/device1/status"),
+        { description: "the broker to record the guarded publish", timeoutMs: 5000 });
 
-      assert.deepEqual(publishes.entries, [{ payload: "on", topic: "test/device1/status" }]);
+      assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: "test/device1/status" } ]);
       assert.deepEqual(log.entries.filter((entry) => [ "error", "warn" ].includes(entry.level)), [], "a successful publish must be quiet above debug level");
     });
   });
@@ -263,11 +273,17 @@ describe("MqttClient - publishGuarded", () => {
 
       client.publishGuarded("device1/status", "on");
 
-      await waitForLog(log, (entry) => entry.level === "error");
+      /* The substituted publish rejects for every caller, the client's own availability statement included, so the connect produces a second error line of its own.
+       * The wait counts the lines rather than answering on the first, because this row's publish rejects in a microtask of the same turn as construction while the
+       * availability statement waits on a real CONNACK round trip, which is the order the two lines land in.
+       */
+      await waitUntil(() => (log.entries.filter((entry) => entry.level === "error").length >= 2),
+        { description: "both guarded publish failures to be reported", timeoutMs: 5000 });
 
       const failures = log.entries.filter((entry) => entry.level === "error").map((entry) => formatLogEntry(entry));
 
-      assert.deepEqual(failures, ["Unable to publish to the MQTT topic test/device1/status: broker refused the message."]);
+      assert.deepEqual(failures, [ "Unable to publish to the MQTT topic test/device1/status: broker refused the message.",
+        "Unable to publish to the MQTT topic " + AVAILABILITY_ONLINE_RECORD.topic + ": broker refused the message." ]);
     });
   });
 
@@ -364,6 +380,32 @@ describe("MqttClient - publishGuarded", () => {
       assert.deepEqual(log.entries.filter((entry) => entry.level === "error"), [], "a publish cancelled by teardown must not be reported as a delivery failure");
     });
   });
+
+  test("a publish that keeps failing for the same reason reports once at error and replays at debug, and a session clears the memory", async () => {
+
+    // The substituted publish rejects identically for every caller, so this row drives the whole demotion: the first failure at error, the availability statement's
+    // own failure at error because the session that just opened cleared the memory, and the explicit repeat after it at debug.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = new FailingPublishClient({ brokerUrl: broker.url, log, reconnectInterval: 0, topicPrefix: "test" });
+
+      client.publishGuarded("device1/status", "on");
+
+      await waitUntil(() => (log.entries.filter((entry) => entry.level === "error").length >= 2),
+        { description: "both guarded publish failures to be reported", timeoutMs: 5000 });
+
+      client.publishGuarded("device1/status", "on");
+
+      await waitUntil(() => loggedAt(log.entries, "debug", "Unable to publish to the MQTT topic test/device1/status"),
+        { description: "the repeated failure to be replayed at debug", timeoutMs: 5000 });
+
+      assert.equal(logCount(log.entries, "error", "Unable to publish to the MQTT topic test/device1/status"), 1,
+        "the repeat of an unchanged reason must not reach error level a second time");
+    });
+  });
 });
 
 describe("MqttClient - offline publish posture", () => {
@@ -419,9 +461,14 @@ describe("MqttClient - offline publish posture", () => {
 
     await awaitClientConnected(client);
     await client.publish("device1/status", "on");
-    await publishes.awaitFirst;
 
-    assert.deepEqual(publishes.entries, [{ payload: "on", topic: "test/device1/status" }], "the refused payload must never have reached the broker");
+    // The session that admitted the publish opened with the plugin's availability statement, so the wait names this row's own entry and the expected array opens
+    // with the statement that preceded it.
+    await waitUntil(() => publishes.entries.some((entry) => entry.topic === "test/device1/status"),
+      { description: "the broker to record the delivered publish", timeoutMs: 5000 });
+
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: "test/device1/status" } ],
+      "the refused payload must never have reached the broker");
   });
 
   test("connected reads false the instant the client aborts, ahead of mqtt.js's own close event", async () => {
@@ -496,9 +543,13 @@ describe("MqttClient - offline publish posture", () => {
 
     await awaitClientConnected(client);
     await client.publish("device1/status", "back");
-    await publishes.awaitFirst;
 
-    assert.deepEqual(publishes.entries, [{ payload: "back", topic: "test/device1/status" }], "the publish issued during the outage must not replay on recovery");
+    // The recorder sits on the returning broker, so the session the client re-established states its availability there before this row's publish arrives.
+    await waitUntil(() => publishes.entries.some((entry) => entry.topic === "test/device1/status"),
+      { description: "the returning broker to record the delivered publish", timeoutMs: 5000 });
+
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "back", retain: false, topic: "test/device1/status" } ],
+      "the publish issued during the outage must not replay on recovery");
   });
 });
 
@@ -540,21 +591,22 @@ describe("MqttClient - change-gated publish", () => {
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 1);
+    await awaitDelivered(() => publishes.entries.length, 2);
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
     client.publishGuarded(TOPIC, "off", { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 2);
-    await client.publish(TOPIC, "on");
     await awaitDelivered(() => publishes.entries.length, 3);
+    await client.publish(TOPIC, "on");
+    await awaitDelivered(() => publishes.entries.length, 4);
 
     client.publishGuarded(TOPIC, "off", { ifChanged: true });
 
     await delay(SETTLE_MS);
 
-    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "off", topic: FULL_TOPIC },
-      { payload: "on", topic: FULL_TOPIC } ], "the repeated payload and the payload the memory still holds must never have reached the broker");
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: FULL_TOPIC },
+      { payload: "off", retain: false, topic: FULL_TOPIC },
+      { payload: "on", retain: false, topic: FULL_TOPIC } ], "the repeated payload and the payload the memory still holds must never have reached the broker");
   });
 
   test("weighs a Buffer payload against the bytes that were delivered rather than against the caller's buffer later on", async () => {
@@ -573,16 +625,17 @@ describe("MqttClient - change-gated publish", () => {
 
     client.publishGuarded(TOPIC, scratch, { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 1);
+    await awaitDelivered(() => publishes.entries.length, 2);
 
     scratch.write("no");
 
     client.publishGuarded(TOPIC, Buffer.from("on"), { ifChanged: true });
     client.publishGuarded(TOPIC, Buffer.from("off"), { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 2);
+    await awaitDelivered(() => publishes.entries.length, 3);
 
-    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "off", topic: FULL_TOPIC } ],
+    assert.deepEqual(publishes.entries,
+      [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: FULL_TOPIC }, { payload: "off", retain: false, topic: FULL_TOPIC } ],
       "a fresh buffer carrying the delivered bytes must be suppressed even after the original buffer was rewritten");
   });
 
@@ -598,13 +651,14 @@ describe("MqttClient - change-gated publish", () => {
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 1);
+    await awaitDelivered(() => publishes.entries.length, 2);
 
     client.publishGuarded(TOPIC, Buffer.from("on"), { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 2);
+    await awaitDelivered(() => publishes.entries.length, 3);
 
-    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "on", topic: FULL_TOPIC } ],
+    assert.deepEqual(publishes.entries,
+      [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: FULL_TOPIC }, { payload: "on", retain: false, topic: FULL_TOPIC } ],
       "a Buffer carrying a remembered string's bytes is a different kind of payload and must go out");
   });
 
@@ -623,13 +677,14 @@ describe("MqttClient - change-gated publish", () => {
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 2);
+    await awaitDelivered(() => publishes.entries.length, 3);
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
     await delay(SETTLE_MS);
 
-    assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "on", topic: FULL_TOPIC } ],
+    assert.deepEqual(publishes.entries,
+      [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: FULL_TOPIC }, { payload: "on", retain: false, topic: FULL_TOPIC } ],
       "the third publish had an acknowledged payload to weigh against and must be suppressed");
   });
 
@@ -649,7 +704,7 @@ describe("MqttClient - change-gated publish", () => {
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 1);
+    await awaitDelivered(() => publishes.entries.length, 2);
     await broker[Symbol.asyncDispose]();
     await waitForLog(log, logContains("Connection closed"));
 
@@ -672,9 +727,12 @@ describe("MqttClient - change-gated publish", () => {
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-    await afterOutage.awaitFirst;
+    // The returning session states the plugin's availability before this row's restatement reaches the broker, so the wait names the restatement itself.
+    await waitUntil(() => afterOutage.entries.some((entry) => entry.topic === FULL_TOPIC),
+      { description: "the returning broker to record the restated payload", timeoutMs: 5000 });
 
-    assert.deepEqual(afterOutage.entries, [{ payload: "on", topic: FULL_TOPIC }], "a session begins with nothing remembered, so the current value goes out again");
+    assert.deepEqual(afterOutage.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: FULL_TOPIC } ],
+      "a session begins with nothing remembered, so the current value goes out again");
   });
 
   test("rejects a change-gated publish on an aborted client with the abort reason, and reports the guarded form on the aborted line", async () => {
@@ -728,7 +786,7 @@ describe("MqttClient - change-gated publish", () => {
 
       client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-      await awaitDelivered(() => publishes.entries.length, 1);
+      await awaitDelivered(() => publishes.entries.length, 2);
 
       const perPublish = new AbortController();
 
@@ -739,9 +797,10 @@ describe("MqttClient - change-gated publish", () => {
 
       client.publishGuarded(TOPIC, "off", { ifChanged: true });
 
-      await awaitDelivered(() => publishes.entries.length, 2);
+      await awaitDelivered(() => publishes.entries.length, 3);
 
-      assert.deepEqual(publishes.entries, [ { payload: "on", topic: FULL_TOPIC }, { payload: "off", topic: FULL_TOPIC } ],
+      assert.deepEqual(publishes.entries,
+        [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: FULL_TOPIC }, { payload: "off", retain: false, topic: FULL_TOPIC } ],
         "the cancelled publish must never have reached the broker, and the change after it must still go out");
     });
   });
@@ -760,7 +819,9 @@ describe("MqttClient - change-gated publish", () => {
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
-    await awaitDelivered(() => publishes.entries.length, 1);
+    // The count covers the availability statement as well as this row's own publish. Waiting on one alone would be satisfied by the statement while the row's
+    // publish was still unacknowledged, leaving only the settle below between the row and a race.
+    await awaitDelivered(() => publishes.entries.length, 2);
 
     client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
@@ -770,7 +831,7 @@ describe("MqttClient - change-gated publish", () => {
 
     assert.equal(debugLines.filter((line) => line === "MQTT publish: " + FULL_TOPIC + ".").length, 1,
       "a suppressed publish must leave no trace of its own, observed: " + JSON.stringify(debugLines));
-    assert.deepEqual(publishes.entries, [{ payload: "on", topic: FULL_TOPIC }]);
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: FULL_TOPIC } ]);
   });
 });
 
@@ -1007,6 +1068,100 @@ describe("MqttClient - subscription lifecycle (real broker)", () => {
     // (the entry exists) and the parameter wiring (the topic is the one params[0] carries).
     await waitForLog(log, (entry) => logContains("threw")(entry) && logContains("test/device1/status")(entry));
   });
+
+  test("a handler that keeps throwing is reported once at error, replayed at debug, and reported again when it throws differently", async () => {
+
+    // A handler that faults on every message is the loudest consumer defect the dispatch can meet. The third message changes what the handler throws, which is a
+    // different fault rather than the same one repeating, so it is reported in full again.
+    await using broker = await startTestBroker();
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    await awaitConnect(broker);
+
+    let thrown = 0;
+
+    const subscribeRoundTrip = once(broker.aedes, "subscribe");
+
+    client.subscribe("device1/status", () => {
+
+      thrown++;
+
+      throw new Error((thrown < 3) ? "handler-boom" : "handler-boom-two");
+    });
+
+    await subscribeRoundTrip;
+
+    // Each message is delivered only once the handler has seen the one before it, so every fault reaches the adapter in the order the assertions below read them
+    // rather than racing the delivery after it.
+    const deliverAndSettle = async (message: number): Promise<void> => {
+
+      broker.aedes.publish({ cmd: "publish", dup: false, payload: Buffer.from("on"), qos: 0, retain: false, topic: "test/device1/status" },
+        () => { /* delivered */ });
+
+      return waitUntil(() => (thrown > message), { description: "the handler to see message " + message.toString(), timeoutMs: 5000 });
+    };
+
+    await deliverAndSettle(0);
+    await deliverAndSettle(1);
+    await deliverAndSettle(2);
+
+    await waitForLog(log, logContains("handler-boom-two"));
+
+    assert.equal(logCount(log.entries, "error", "handler-boom-two"), 1, "a fault that differs from the one before it is reported in full");
+    assert.equal(logCount(log.entries, "error", "threw: handler-boom."), 1, "the unchanged repeat must not reach error level a second time");
+    assert.equal(logCount(log.entries, "debug", "threw: handler-boom."), 1, "the unchanged repeat is replayed at debug");
+  });
+
+  test("a getter's successful publish does not clear what another callback's fault is remembered under", async () => {
+
+    /* The consumer memory is one adapter for the whole client, so anything that settles it settles it for every callback. A getter that publishes successfully is
+     * progress rather than a fault and must leave that memory alone: were its success routed through an attempt, this row's second handler fault would report in
+     * full again instead of replaying at debug, and one healthy getter would keep the demotion from ever firing.
+     */
+    await using broker = await startTestBroker();
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    await awaitConnect(broker);
+
+    let thrown = 0;
+
+    const subscribeRoundTrip = once(broker.aedes, "subscribe");
+
+    client.subscribe("device1/status", () => {
+
+      thrown++;
+
+      throw new Error("handler-boom");
+    });
+    client.subscribeGet("device1/reading", "Reading", () => "on");
+
+    await subscribeRoundTrip;
+
+    const deliver = (topic: string, payload: string): void => {
+
+      broker.aedes.publish({ cmd: "publish", dup: false, payload: Buffer.from(payload), qos: 0, retain: false, topic }, () => { /* delivered */ });
+    };
+
+    // The fault, reported in full because nothing precedes it.
+    deliver("test/device1/status", "on");
+    await waitUntil(() => (thrown > 0), { description: "the handler to fault once", timeoutMs: 5000 });
+
+    // A getter publish that succeeds, between the two faults, which must change nothing about what the memory holds.
+    deliver("test/device1/reading/get", "true");
+    await waitForLog(log, (entry) => (entry.level === "info") && logContains("Reading status published")(entry));
+
+    // The same fault again: unchanged reason, no fault in between, so it replays at debug.
+    deliver("test/device1/status", "on");
+    await waitUntil(() => (thrown > 1), { description: "the handler to fault a second time", timeoutMs: 5000 });
+    await waitForLog(log, (entry) => (entry.level === "debug") && logContains("handler-boom")(entry));
+
+    assert.equal(logCount(log.entries, "error", "threw: handler-boom."), 1, "an unrelated success must not restore the fault to full volume");
+    assert.equal(logCount(log.entries, "debug", "threw: handler-boom."), 1, "the repeat is replayed at debug across the intervening success");
+  });
 });
 
 describe("MqttClient - removeHandler edge cases", () => {
@@ -1153,9 +1308,11 @@ describe("MqttClient - subscribeGet", () => {
 
     broker.aedes.publish({ cmd: "publish", dup: false, payload: Buffer.from("true"), qos: 0, retain: false, topic: "test/device1/switch/get" }, () => { /* ack */ });
 
-    await publishes.awaitFirst;
+    // The connect that carried the subscription also carried the plugin's availability statement, so the wait names the getter's own republish.
+    await waitUntil(() => publishes.entries.some((entry) => entry.topic === "test/device1/switch"),
+      { description: "the broker to record the getter's republish", timeoutMs: 5000 });
 
-    assert.deepEqual(publishes.entries, [{ payload: "on", topic: "test/device1/switch" }],
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: false, topic: "test/device1/switch" } ],
       "a \"true\" trigger on /get must publish the getter's result on the parent topic");
   });
 
@@ -1191,7 +1348,8 @@ describe("MqttClient - subscribeGet", () => {
     await delay(SETTLE_MS);
 
     assert.equal(invocations, 0, "getters must only fire on a lowercased \"true\" payload");
-    assert.deepEqual(publishes.entries, [], "no client-originated publish should occur when the trigger value does not match");
+    assert.deepEqual(publishes.entries, [AVAILABILITY_ONLINE_RECORD],
+      "the session's own availability statement must be the only client-originated publish when the trigger value does not match");
   });
 
   test("case-insensitive trigger: \"TRUE\" and mixed-case variants fire the getter", async () => {
@@ -1248,6 +1406,39 @@ describe("MqttClient - subscribeGet", () => {
     broker.aedes.publish({ cmd: "publish", dup: false, payload: Buffer.from("true"), qos: 0, retain: false, topic: "test/device1/switch/get" }, () => { /* ack */ });
 
     await waitForLog(log, (entry) => (entry.level === "info") && logContains("status published")(entry));
+  });
+
+  test("a getter response publish that keeps failing is reported once at error and replayed at debug", async () => {
+
+    // The substituted publish is what makes the failure branch reachable at all: at QoS 0 a real broker answers the publish callback on socket write, so nothing a
+    // broker does can fail a getter's own response publish.
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = new FailingPublishClient({ brokerUrl: broker.url, log, reconnectInterval: 0, topicPrefix: "test" });
+
+      await awaitClientConnected(client);
+
+      const subscribeRoundTrip = once(broker.aedes, "subscribe");
+
+      client.subscribeGet("device1/status", "Switch", () => "on");
+
+      await subscribeRoundTrip;
+
+      for(let message = 0; message < 2; message++) {
+
+        broker.aedes.publish({ cmd: "publish", dup: false, payload: Buffer.from("true"), qos: 0, retain: false, topic: "test/device1/status/get" },
+          () => { /* ack */ });
+      }
+
+      await waitUntil(() => loggedAt(log.entries, "debug", "failed to publish Switch status"),
+        { description: "the repeated getter failure to be replayed at debug", timeoutMs: 5000 });
+
+      assert.equal(logCount(log.entries, "error", "failed to publish Switch status"), 1,
+        "the repeat of an unchanged reason must not reach error level a second time");
+    });
   });
 });
 
@@ -1330,6 +1521,45 @@ describe("MqttClient - subscribeSet log policy", () => {
     // null, and the wrapper logs the warn entry. waitForLog polls until that entry appears - the chain settles in ~30ms typically; the 1000ms default ceiling is a
     // comfortable margin for slow CI runners.
     await waitForLog(log, (entry) => (entry.level === "warn") && logContains("was cancelled before completion")(entry));
+  });
+
+  test("a setter that keeps throwing the same error is reported once at error and replayed at debug", async () => {
+
+    await using broker = await startTestBroker();
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    await awaitConnect(broker);
+
+    let calls = 0;
+
+    const subscribeRoundTrip = once(broker.aedes, "subscribe");
+
+    client.subscribeSet("device1/switch", "Switch", () => {
+
+      calls++;
+
+      throw new Error("device rejected update");
+    });
+
+    await subscribeRoundTrip;
+
+    // The second message is delivered only once the setter has seen the first, so the repeat is weighed against a fault the adapter has already classified.
+    const deliverAndSettle = async (message: number): Promise<void> => {
+
+      broker.aedes.publish({ cmd: "publish", dup: false, payload: Buffer.from("on"), qos: 0, retain: false, topic: "test/device1/switch/set" },
+        () => { /* ack */ });
+
+      return waitUntil(() => (calls > message), { description: "the setter to see message " + message.toString(), timeoutMs: 5000 });
+    };
+
+    await deliverAndSettle(0);
+    await deliverAndSettle(1);
+
+    await waitForLog(log, (entry) => (entry.level === "debug") && logContains("error setting")(entry));
+
+    assert.equal(logCount(log.entries, "error", "error setting"), 1, "the unchanged repeat must not reach error level a second time");
   });
 });
 
@@ -1581,6 +1811,25 @@ describe("MqttClient - transport error handler (real network)", () => {
 
     await waitForLog(log, (entry) => !seen.has(entry) && isHostnameLine(entry));
   });
+
+  test("a broker that keeps refusing reports the refusal once at error and replays it at debug", async () => {
+
+    // mqtt.js retries on the configured cadence and emits the same ECONNREFUSED every time, which is the outage this adapter exists to quiet: the first report is
+    // the one a reader acts on, and every one after it is the same fact at debug.
+    const log = capturingLog();
+    const isRefusedLine = logContains("Connection refused");
+
+    await using client = makeClient({ brokerUrl: UNREACHABLE_BROKER, log, reconnectInterval: 1 });
+
+    await waitForLog(log, (entry) => (entry.level === "error") && isRefusedLine(entry));
+
+    const seen = new Set(log.entries);
+
+    await waitForLog(log, (entry) => !seen.has(entry) && isRefusedLine(entry));
+
+    assert.equal(logCount(log.entries, "error", "Connection refused"), 1, "only the first refusal of an unbroken run is reported at error level");
+    assert.ok(loggedAt(log.entries, "debug", "Connection refused"), "the repeat must be replayed at debug, message and parameters verbatim");
+  });
 });
 
 describe("routeMqttBrokerError - pure function", () => {
@@ -1589,16 +1838,9 @@ describe("routeMqttBrokerError - pure function", () => {
   // the routing logic itself - including the `default` branch, which has no natural real-network analogue (no transport error in node:net produces an error without
   // an errno code). The function takes a synthetic error and emits one log line; tests assert against the captured log entries.
 
-  function syntheticError(code?: string, message = "synthetic"): NodeJS.ErrnoException {
+  function syntheticError(code?: string, message = "synthetic"): Error & { readonly code?: string } {
 
-    const error: NodeJS.ErrnoException = new Error(message);
-
-    if(code !== undefined) {
-
-      error.code = code;
-    }
-
-    return error;
+    return (code === undefined) ? new Error(message) : errnoError(message, code);
   }
 
   test("ECONNREFUSED logs \"Connection refused\" with the retry cadence", () => {
@@ -1749,6 +1991,36 @@ describe("logGetterPublishOutcome - pure function", () => {
   });
 });
 
+describe("brokerErrorReason - pure function", () => {
+
+  // Each arm is asserted against a synthetic error rather than driven through the client, because mqtt.js emits only one of these shapes on demand: a real broken
+  // endpoint produces a string errno, while a protocol refusal's numeric code and an error carrying no code at all cannot be provoked deterministically. Reading
+  // the derivation directly is what lets every arm be stated, which is the same reason the routers beside it are tested this way.
+  test("a string errno code is the tag, so an outage repeating under one code reads as one reason", () => {
+
+    assert.equal(brokerErrorReason(errnoError("connect ECONNREFUSED 127.0.0.1:1", "ECONNREFUSED")), "ECONNREFUSED");
+    assert.equal(brokerErrorReason(errnoError("read ECONNRESET", "ECONNRESET")), "ECONNRESET");
+  });
+
+  test("a numeric protocol code answers its own decimal text, so two refusal reasons stay two tags", () => {
+
+    // mqtt.js raises `ErrorWithReasonCode` for a protocol-level refusal, whose `code` is a number rather than an errno string.
+    assert.equal(brokerErrorReason(errnoError("Connection refused: Not authorized", 135)), "135");
+    assert.notEqual(brokerErrorReason(errnoError("Connection refused: Bad User Name or Password", 134)),
+      brokerErrorReason(errnoError("Connection refused: Not authorized", 135)));
+  });
+
+  test("an error carrying no code answers one fixed tag rather than none", () => {
+
+    // A reason of `undefined` would tell the adapter the episode closed, which is the opposite of what an uncoded error that keeps repeating means.
+    const reason = brokerErrorReason(new Error("the transport gave up"));
+
+    assert.equal(typeof reason, "string");
+    assert.ok(reason.length > 0, "an uncoded error must still answer a tag, so its repeat can be demoted like a coded one");
+    assert.equal(brokerErrorReason(new Error("a different message, still uncoded")), reason, "every uncoded error reads as the same one reason");
+  });
+});
+
 describe("MqttClient - connect / close edge flag", () => {
 
   test("close without a prior connect is silent (no disconnect spam during initial retry loop)", async () => {
@@ -1813,6 +2085,444 @@ describe("MqttClient - connect / close edge flag", () => {
   });
 });
 
+describe("MqttClient - connect notification", () => {
+
+  /* The notification end to end against a real broker: who is invoked and how often, in what order, what the session and the change-gated memory read at the moment
+   * a handler runs, and what a faulting handler does to the registrations beside it.
+   *
+   * Every wait is on an observed event - the client's own session reading, the connect line the listener emits, a counter a handler moved, a publish the broker
+   * recorded - rather than on a sleep. The connect line earns its place for a reason of its own: `awaitClientConnected` answers on mqtt.js's flag, which mqtt.js
+   * sets before it emits the event this listener is bound to, so a row that has to know the listener already ran waits for the line the listener itself writes.
+   */
+  const CONNECT_WAIT_MS = 5000;
+
+  test("a registration made before the first connect is invoked exactly once by it", async () => {
+
+    await using broker = await startTestBroker();
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    let connects = 0;
+
+    client.onConnect(() => { connects++; });
+
+    await awaitClientConnected(client);
+    await waitUntil(() => connects === 1, { description: "the first connect to reach the registration", timeoutMs: CONNECT_WAIT_MS });
+    await delay(SETTLE_MS);
+
+    assert.equal(connects, 1, "the first session must invoke a registration exactly once");
+  });
+
+  test("a session re-established after an outage invokes the registration again, with the session live and the memory already cleared", async () => {
+
+    /* The whole point of the notification, against a real socket: the broker goes away, comes back on the address the client is still reconnecting to, and the
+     * handler restates the state a subscriber missed. The restatement is change-gated on a payload the handler already published before the outage, so it can only
+     * reach the returning broker if the connect cleared the memory before invoking the handler - and it can only be admitted at all if the session reads live by
+     * the time the handler runs.
+     */
+    const log = capturingLog();
+    const broker = await startTestBroker();
+    const port = Number.parseInt(new URL(broker.url).port, 10);
+    const readings: boolean[] = [];
+
+    let connects = 0;
+
+    await using client = makeClient({ brokerUrl: broker.url, log, reconnectInterval: 1 });
+
+    client.onConnect(async () => {
+
+      connects++;
+      readings.push(client.connected);
+
+      await client.publish("device1/status", "held", { ifChanged: true });
+    });
+
+    await awaitClientConnected(client);
+    await waitUntil(() => connects === 1, { description: "the first connect to reach the registration", timeoutMs: CONNECT_WAIT_MS });
+
+    await broker[Symbol.asyncDispose]();
+    await waitForLog(log, logContains("Connection closed"));
+
+    await using returned = await startTestBroker({ port });
+
+    const publishes = recordClientPublishes(returned);
+
+    // The re-established session states the plugin's availability ahead of the registration it then invokes, so the wait names the handler's own restatement
+    // rather than resolving on the statement that precedes it.
+    await waitUntil(() => publishes.entries.some((entry) => entry.topic === "test/device1/status"),
+      { description: "the returning broker to record the handler's restatement", timeoutMs: CONNECT_WAIT_MS });
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, { payload: "held", retain: false, topic: "test/device1/status" } ],
+      "the handler's change-gated restatement must reach the returning broker, which it can only do if the connect cleared the memory ahead of it");
+    assert.equal(connects, 2, "a re-established session must invoke the registration exactly once more");
+    assert.deepEqual(readings, [ true, true ], "a handler must find the session live on every connect, so a publish it issues is admitted");
+  });
+
+  test("registering while a session is already held invokes nothing until the connect after it", async () => {
+
+    await using broker = await startTestBroker();
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    // Both waits are the row: the session reading is what makes the registration below one against a live session, and the connect line is what proves the listener
+    // has already run, so a zero count afterwards is the absence of a replay rather than a connect that has yet to happen.
+    await awaitClientConnected(client);
+    await waitForLog(log, logContains("Connected to"));
+
+    let connects = 0;
+
+    client.onConnect(() => { connects++; });
+
+    await delay(SETTLE_MS);
+
+    assert.equal(connects, 0, "a registration joining a live session must wait for the connect after it rather than replaying the one it joined");
+  });
+
+  test("a registration released before the connect is not invoked by it, and a pre-aborted signal registers nothing", async () => {
+
+    await using broker = await startTestBroker();
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    const releasing = new AbortController();
+    const preAborting = new AbortController();
+    const counts = { plain: 0, preAborted: 0, released: 0 };
+
+    preAborting.abort(new HbpuAbortError("shutdown"));
+
+    client.onConnect(() => { counts.released++; }, { signal: releasing.signal });
+    client.onConnect(() => { counts.plain++; });
+    client.onConnect(() => { counts.preAborted++; }, { signal: preAborting.signal });
+
+    releasing.abort(new HbpuAbortError("shutdown"));
+
+    await awaitClientConnected(client);
+    await waitForLog(log, logContains("Connected to"));
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(counts, { plain: 1, preAborted: 0, released: 0 },
+      "the released and the pre-aborted registrations must be invoked by nothing, while the sibling beside them is invoked once");
+
+    // An aborted client registers nothing and says nothing about it - the no-op posture every other verb on this class takes once the signal has fired.
+    await using aborted = makeClient({ brokerUrl: broker.url });
+
+    aborted.abort();
+
+    assert.doesNotThrow(() => aborted.onConnect(() => { throw new Error("an aborted client must invoke nothing it was handed"); }),
+      "onConnect on an aborted client must be a silent no-op");
+  });
+
+  test("handlers run in registration order, and one whose promise never settles does not hold back the ones after it", async () => {
+
+    await using broker = await startTestBroker();
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    const order: number[] = [];
+
+    client.onConnect((): Promise<void> => {
+
+      order.push(1);
+
+      // A handler that never settles. Awaiting one before invoking the next would leave the two after it unreached and the wait below to time out.
+      return new Promise<void>(() => { /* This promise is deliberately left pending. */ });
+    });
+
+    client.onConnect(() => { order.push(2); });
+    client.onConnect(() => { order.push(3); });
+
+    await waitUntil(() => order.length === 3, { description: "every registration to have been invoked", timeoutMs: CONNECT_WAIT_MS });
+
+    assert.deepEqual(order, [ 1, 2, 3 ], "the registrations must run in registration order, none of them waiting on the one before it");
+  });
+
+  test("a synchronously-throwing handler is logged and the registrations after it still run", async () => {
+
+    await using broker = await startTestBroker();
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    let recorded = 0;
+
+    client.onConnect(() => { throw new Error("connect-handler-boom"); });
+    client.onConnect(() => { recorded++; });
+
+    await waitUntil(() => recorded === 1, { description: "the registration after the throwing one to run", timeoutMs: CONNECT_WAIT_MS });
+    await waitForLog(log, logContains("The MQTT connect handler failed"));
+
+    const failed = log.entries.filter((entry) => (entry.level === "error") && logContains("The MQTT connect handler failed")(entry));
+    const failures = failed.map((entry) => formatLogEntry(entry));
+
+    assert.equal(failures.length, 1, "a throwing handler must leave exactly one failure line");
+    assert.ok(failures[0]?.includes("connect-handler-boom"), "the failure line must carry the thrown message, observed: " + String(failures[0]));
+  });
+
+  test("an asynchronously-rejecting handler reaches the same line and never floats as an unhandled rejection", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      await using broker = await startTestBroker();
+      const log = capturingLog();
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      let recorded = 0;
+
+      client.onConnect(async () => { throw new Error("connect-handler-rejection"); });
+      client.onConnect(() => { recorded++; });
+
+      await waitForLog(log, logContains("connect-handler-rejection"));
+      await waitUntil(() => recorded === 1, { description: "the registration after the rejecting one to run", timeoutMs: CONNECT_WAIT_MS });
+
+      const failure = log.entries.find((entry) => (entry.level === "error") && logContains("connect-handler-rejection")(entry));
+
+      assert.ok(failure, "a rejecting handler must reach the same error line a throwing one does");
+      assert.ok(formatLogEntry(failure).startsWith("The MQTT connect handler failed: "),
+        "the failure line must read as the sentence both failure shapes share, observed: " + formatLogEntry(failure));
+    });
+  });
+
+  test("registering the same function twice is one registration", async () => {
+
+    await using broker = await startTestBroker();
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    let connects = 0;
+
+    const handler = (): void => {
+
+      connects++;
+    };
+
+    client.onConnect(handler);
+    client.onConnect(handler);
+
+    await waitUntil(() => connects === 1, { description: "the connect to reach the registration", timeoutMs: CONNECT_WAIT_MS });
+    await delay(SETTLE_MS);
+
+    assert.equal(connects, 1, "the same function registered twice must be invoked once per connect, as it is on a topic");
+  });
+
+  test("a handler that releases a sibling or registers another mid-pass does not destabilize the current pass", async () => {
+
+    /* The snapshot rule, on the connect pass rather than on the message pass: the set may move underneath while the pass runs, and which registrations this connect
+     * invokes is settled before the first one is called. A sibling released mid-pass is still invoked by the pass it was in, and a registration made mid-pass waits
+     * for the connect after it.
+     */
+    await using broker = await startTestBroker();
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    const releasing = new AbortController();
+    const counts = { first: 0, late: 0, second: 0, third: 0 };
+
+    client.onConnect(() => {
+
+      counts.first++;
+      releasing.abort(new HbpuAbortError("replaced"));
+      client.onConnect(() => { counts.late++; });
+    });
+
+    client.onConnect(() => { counts.second++; }, { signal: releasing.signal });
+    client.onConnect(() => { counts.third++; });
+
+    await awaitClientConnected(client);
+    await waitForLog(log, logContains("Connected to"));
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(counts, { first: 1, late: 0, second: 1, third: 1 },
+      "the pass must invoke the registrations it snapshotted - the released sibling among them - and leave the one registered mid-pass for the connect after it");
+  });
+});
+
+describe("MqttClient - availability", () => {
+
+  /* The plugin-scoped half of the availability contract, end to end against a real broker: what the client states on each session it establishes, where that
+   * statement sits among a consumer's own publishes, what the broker keeps for a subscriber that was not listening yet, and what the broker says on the client's
+   * behalf once the connection ends without a DISCONNECT.
+   */
+  const AVAILABILITY_WAIT_MS = 5000;
+
+  // Open a raw mqtt.js client, subscribe it to one topic, and answer the first message the broker replays onto it - which, for a subscriber attaching after the
+  // fact, can only be the retained copy. The delivery wait is raced against an explicit budget so the teardown below always runs: an unbounded wait against a
+  // broker that retained nothing holds the raw connection open and carries the whole process past the runner's own per-test timeout instead of failing this row.
+  // The budget's timer is unreferenced, so winning the race does not leave a pending timer holding the event loop open.
+  async function readRetained(url: string, topic: string): Promise<{ payload: string; retain: boolean; topic: string }> {
+
+    const raw = connect(url);
+
+    try {
+
+      // Both waits are bridged through `Promise.withResolvers` on mqtt.js's own typed event surface, which is the codebase's pattern for turning a callback event
+      // into a promise, and which keeps the packet's own `retain` reading typed rather than recovered from a tuple.
+      const connected: PromiseWithResolvers<void> = Promise.withResolvers();
+      const delivered: PromiseWithResolvers<{ payload: string; retain: boolean; topic: string }> = Promise.withResolvers();
+
+      raw.once("connect", () => connected.resolve());
+      raw.once("message", (deliveredTopic, payload, packet) => {
+
+        delivered.resolve({ payload: payload.toString(), retain: packet.retain, topic: deliveredTopic });
+      });
+
+      await connected.promise;
+      raw.subscribe(topic);
+
+      const received = await Promise.race([ delivered.promise, delay(AVAILABILITY_WAIT_MS, null, { ref: false }) ]);
+
+      assert.ok(received, "the broker must replay the retained statement to a subscriber that attaches after it was published");
+
+      return received;
+    } finally {
+
+      raw.end(true);
+    }
+  }
+
+  test("a first connect puts exactly one retained statement on the plugin's availability topic", async () => {
+
+    // The recorder is installed ahead of the client so nothing the connect produces is missed, and the settle after the connect line is what makes the count an
+    // exactness claim rather than a snapshot taken too early: a second statement would have arrived inside it.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    await awaitClientConnected(client);
+    await waitForLog(log, logContains("Connected to"));
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(publishes.entries, [AVAILABILITY_ONLINE_RECORD],
+      "a session must state the plugin's availability exactly once, retained, on the availability topic under the configured prefix");
+  });
+
+  test("puts the plugin's statement on the wire ahead of anything a connect handler publishes", async () => {
+
+    // The order is the whole of this row, so it asserts the recorded sequence rather than membership: a set comparison would pass with the statement trailing the
+    // handler's publish, which is exactly the arrangement that lets a subscriber read a device as reachable under a plugin that has said nothing at all. The
+    // recorder reports arrival at the broker, which is the order the guarantee is about.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    client.onConnect(() => client.publishGuarded("device1/status", "on"));
+
+    await waitUntil(() => (publishes.entries.length >= 2), { description: "the broker to record both publishes", timeoutMs: AVAILABILITY_WAIT_MS });
+
+    assert.deepEqual(publishes.entries.map((entry) => entry.topic), [ AVAILABILITY_ONLINE_RECORD.topic, "test/device1/status" ],
+      "a consumer's connect handler must find the plugin's own statement already on the wire");
+  });
+
+  test("a session re-established after an outage restates it, retained, exactly once", async () => {
+
+    // The same shape the connect-notification suite uses to drive a real outage: dispose the broker, wait for the close line, and stand a fresh one up on the port
+    // the client is still reconnecting to. The recorder on the returning broker sees only what the re-established session produced.
+    const log = capturingLog();
+    const broker = await startTestBroker();
+    const port = Number.parseInt(new URL(broker.url).port, 10);
+
+    await using client = makeClient({ brokerUrl: broker.url, log, reconnectInterval: 1 });
+
+    await awaitClientConnected(client);
+    await broker[Symbol.asyncDispose]();
+    await waitForLog(log, logContains("Connection closed"));
+
+    await using returned = await startTestBroker({ port });
+
+    const afterOutage = recordClientPublishes(returned);
+
+    await awaitClientConnected(client);
+    await waitUntil(() => (afterOutage.entries.length >= 1),
+      { description: "the returning broker to record the restated statement", timeoutMs: AVAILABILITY_WAIT_MS });
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(afterOutage.entries, [AVAILABILITY_ONLINE_RECORD],
+      "every session the client establishes must restate the plugin's availability, once and retained");
+  });
+
+  test("carries a consumer's retain flag to the wire, and leaves a publish that asks for nothing unretained", async () => {
+
+    // The flag reaches the broker rather than merely reaching the options object, which is what the recorder's own reading of the packet proves. Both halves run
+    // on one session so the default and the request are read off the same wire.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+    await client.publish("device1/status", "on", { retain: true });
+    await client.publish("device1/other", "on");
+    await waitUntil(() => (publishes.entries.length >= 3), { description: "the broker to record both consumer publishes", timeoutMs: AVAILABILITY_WAIT_MS });
+
+    assert.deepEqual(publishes.entries,
+      [ AVAILABILITY_ONLINE_RECORD, { payload: "on", retain: true, topic: "test/device1/status" },
+        { payload: "on", retain: false, topic: "test/device1/other" } ],
+      "a publish asking for retention must be retained on the wire, and one asking for nothing must not be");
+  });
+
+  test("a forced teardown makes the broker publish the offline statement, retained", async () => {
+
+    // The client's only teardown destroys the socket without sending a DISCONNECT, which is the shape that leaves the broker holding a will to publish. The abort
+    // is explicit and lands while the broker is still listening, so the will's own publish is not racing the broker's teardown; the scope-bound disposal below is
+    // then a no-op on an already-aborted client.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+    await waitUntil(() => (publishes.entries.length >= 1), { description: "the session's own statement to reach the broker", timeoutMs: AVAILABILITY_WAIT_MS });
+
+    client.abort();
+
+    await waitUntil(() => publishes.entries.some((entry) => (entry.payload === AVAILABILITY_OFFLINE_RECORD.payload)),
+      { description: "the broker to publish the client's will", timeoutMs: AVAILABILITY_WAIT_MS });
+
+    assert.deepEqual(publishes.entries.at(-1), AVAILABILITY_OFFLINE_RECORD,
+      "a client that goes away without a DISCONNECT must leave the broker to state the plugin's absence, retained");
+  });
+
+  test("the broker retains both statements, so a subscriber attaching after either one reads it", async () => {
+
+    /* Each half opens its subscriber only after the broker's own pipeline has completed the statement it is about, which is what
+     * `recordRetainedStoreCompletions` observes and what arrival order cannot promise: aedes writes the retained store and only then emits the event this
+     * recorder is bound to, and the replay a late subscriber reads comes out of that same store. Subscribing on any earlier reading - the client's session flag,
+     * or arrival at the broker - races the store write, and a subscriber that wins that race finds nothing retained and waits out its budget.
+     */
+    await using broker = await startTestBroker();
+
+    const completions = recordRetainedStoreCompletions(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    await awaitClientConnected(client);
+    await waitUntil(() => completions.entries.some((entry) => (entry.payload === AVAILABILITY_ONLINE_RECORD.payload)),
+      { description: "the broker's retained store to hold the online statement", timeoutMs: AVAILABILITY_WAIT_MS });
+
+    assert.deepEqual(await readRetained(broker.url, AVAILABILITY_ONLINE_RECORD.topic), AVAILABILITY_ONLINE_RECORD,
+      "a subscriber attaching after the connect must read the retained online statement, with the packet's retain flag set");
+
+    client.abort();
+
+    await waitUntil(() => completions.entries.some((entry) => (entry.payload === AVAILABILITY_OFFLINE_RECORD.payload)),
+      { description: "the broker's retained store to hold the offline statement", timeoutMs: AVAILABILITY_WAIT_MS });
+
+    assert.deepEqual(await readRetained(broker.url, AVAILABILITY_OFFLINE_RECORD.topic), AVAILABILITY_OFFLINE_RECORD,
+      "a subscriber attaching after the teardown must read the retained offline statement the will produced");
+  });
+});
+
 // A plugin-side meta shape, standing in for the typed annotation channel a composing plugin threads through its own catalog.
 interface PluginMeta {
 
@@ -1841,6 +2551,9 @@ const _mqttGroupShapeExercises = (): void => {
     Device: [],
     [typed.category.name]: typed.options
   };
+
+  // The computed key above is only a literal key if the category name is the literal itself, so this holds that name fixed against a widening to `string`.
+  type _CategoryNameIsLiteral = Assert<Equal<typeof typed.category.name, "Mqtt">>;
 
   // An un-parameterized call resolves to the `unknown` forms and assigns into an untyped catalog, so every existing consumer compiles unchanged.
   const bare = mqttFeatureOptions({ defaultTopic: "ratgdo" });

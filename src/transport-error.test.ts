@@ -13,6 +13,7 @@ import { describe, test } from "node:test";
 import { HbpuAbortError } from "./util.ts";
 import assert from "node:assert/strict";
 import { classifyTransportError } from "./transport-error.ts";
+import { errnoError } from "./testing/index.ts";
 
 // The states a caller's lifetime signal can be in at the moment a failure is classified.
 type SignalState = "aborted" | "none" | "open";
@@ -40,9 +41,7 @@ function named(name: string, cause?: unknown): Error {
 // An error carrying a transport or errno code. The code is loosely typed on purpose: the platform's own `DOMException` carries a numeric one.
 function coded(code: number | string, cause?: unknown): Error {
 
-  const error = (cause === undefined) ? new Error("transport failure.") : new Error("transport failure.", { cause });
-
-  return Object.assign(error, { code });
+  return errnoError("transport failure.", code, cause);
 }
 
 // The shape a failed platform fetch presents to whoever called it: a `TypeError` saying nothing useful, with the errno one link below.
@@ -92,6 +91,15 @@ const FIXTURES: readonly FixtureRow[] = [
   { code: "ENOTFOUND", error: fetchFailure("ENOTFOUND"), kind: "dns", name: "a name that does not resolve", signal: "none" },
   { code: "EAI_AGAIN", error: coded("EAI_AGAIN"), kind: "dns", name: "a resolver failing temporarily", signal: "none" },
   { code: "ENOTFOUND", error: nested(2, coded("ENOTFOUND")), kind: "dns", name: "a code two links down", signal: "none" },
+  { code: "CERT_HAS_EXPIRED", error: coded("CERT_HAS_EXPIRED"), kind: "certificate", name: "an expired peer certificate", signal: "none" },
+  { code: "DEPTH_ZERO_SELF_SIGNED_CERT", error: coded("DEPTH_ZERO_SELF_SIGNED_CERT"), kind: "certificate", name: "a self-signed peer certificate", signal: "none" },
+  { code: "ERR_TLS_CERT_ALTNAME_INVALID", error: coded("ERR_TLS_CERT_ALTNAME_INVALID"), kind: "certificate",
+    name: "a certificate whose name does not match the host", signal: "none" },
+  { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE", error: coded("UNABLE_TO_VERIFY_LEAF_SIGNATURE"), kind: "certificate",
+    name: "a certificate chain that does not reach a trusted issuer", signal: "none" },
+  { code: "CERT_HAS_EXPIRED", error: fetchFailure("CERT_HAS_EXPIRED"), kind: "certificate", name: "a certificate verdict one link down", signal: "none" },
+  { code: "CERT_SOMETHING_ELSE", error: coded("CERT_SOMETHING_ELSE"), kind: "transport", name: "a code that only looks like a certificate verdict",
+    signal: "none" },
   { code: undefined, error: named("WrapError", named("TimeoutError")), kind: "timeout", name: "a wrapped deadline carrying no code", signal: "none" },
   { code: undefined, error: named("WrapError", named("AbortError")), kind: "timeout", name: "a wrapped cancellation carrying no code", signal: "open" },
   { code: undefined, error: named("TimeoutError"), kind: "aborted", name: "a deadline that raced a teardown", signal: "aborted" },
@@ -150,10 +158,10 @@ describe("the transport error classifier", () => {
    */
   test("names the kinds reached only by matching a code", () => {
 
-    const coded: Record<TransportFailureCodedKind, true> = { "connect-timeout": true, destroyed: true, dns: true, refused: true, reset: true,
+    const coded: Record<TransportFailureCodedKind, true> = { certificate: true, "connect-timeout": true, destroyed: true, dns: true, refused: true, reset: true,
       "retries-exhausted": true };
 
-    assert.deepEqual(Object.keys(coded).sort(), [ "connect-timeout", "destroyed", "dns", "refused", "reset", "retries-exhausted" ],
+    assert.deepEqual(Object.keys(coded).sort(), [ "certificate", "connect-timeout", "destroyed", "dns", "refused", "reset", "retries-exhausted" ],
       "the coded kinds are exactly the kinds the code map produces");
   });
 });

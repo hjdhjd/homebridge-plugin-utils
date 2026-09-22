@@ -17,7 +17,7 @@
  *
  * @module
  */
-import { composeSignals, waitWithSignal } from "./util.ts";
+import { assertPositiveFinite, assertPositiveInteger, composeSignals, waitWithSignal } from "./util.ts";
 import type { Clock } from "./clock.ts";
 import { systemClock } from "./clock.ts";
 
@@ -119,15 +119,8 @@ export class RateBudget {
 
     // Reject nonsensical ceilings loudly at the boundary. A fractional or non-positive capacity, or a non-finite window, describes no enforceable contract at all, and
     // a budget that silently accepted one would pace callers by a rule nobody stated.
-    if(!Number.isInteger(capacity) || (capacity < 1)) {
-
-      throw new TypeError("RateBudget: `capacity` must be a positive integer.");
-    }
-
-    if(!Number.isFinite(window) || (window <= 0)) {
-
-      throw new TypeError("RateBudget: `window` must be a positive, finite number of milliseconds.");
-    }
+    assertPositiveInteger(capacity, { optionName: "capacity", owner: "RateBudget" });
+    assertPositiveFinite(window, { optionName: "window", owner: "RateBudget", unit: "milliseconds" });
 
     this.#capacity = capacity;
     this.#clock = clock;

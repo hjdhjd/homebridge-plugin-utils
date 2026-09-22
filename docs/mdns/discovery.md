@@ -168,11 +168,17 @@ service type the wire cannot carry.
 #### Example
 
 ```ts
-import { discoverServices } from "homebridge-plugin-utils";
+import { dialAddress, discoverServices } from "homebridge-plugin-utils";
 
 await using discovery = discoverServices({
 
-  classify: (service) => { const mac = txtEntries(service.txt).get("mac"); return mac ? { address: service.addresses[0], mac } : null; },
+  classify: (service) => {
+
+    const mac = txtEntries(service.txt).get("mac");
+    const address = dialAddress(service.addresses);
+
+    return mac && address ? { address, mac } : null;
+  },
   log: this.log,
   serviceType: "_esphomelib._tcp.local",
   signal: this.signal

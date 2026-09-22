@@ -27,7 +27,9 @@ import type { HomebridgePluginLogging } from "./util.ts";
  * The posture behind the error is refusal rather than queuing. QoS 0 is at-most-once by definition, so a publish that cannot go out has no delivery guarantee left to
  * preserve by being held: retaining it grows memory for as long as the outage lasts, with no bound and no signal to the caller, and flushing the backlog on reconnect
  * delivers hours-old state changes and events to the broker as though they had just happened. Refusing on the spot keeps memory flat and keeps the broker's view of
- * the plugin honest...the caller learns immediately, and the next state change publishes normally once the session is back.
+ * the plugin honest...the caller learns immediately, and the next state change publishes normally once the session is back. A consumer holding state a subscriber may
+ * have missed in the meantime restates it for itself from {@link mqttClient!MqttClient.onConnect | MqttClient.onConnect}, which runs on every session the client
+ * establishes.
  *
  * {@link mqttClient!MqttClient.publishGuarded | MqttClient.publishGuarded} has no caller to answer, so it absorbs the refusal into a single debug line. A consumer
  * awaiting {@link mqttClient!MqttClient.publish | MqttClient.publish} directly tells the refusal apart from a delivery failure with `error instanceof
@@ -102,6 +104,35 @@ export function routeGuardedPublishFailure(options: { clientSignal: AbortSignal;
   }
 
   log.error("Unable to publish to the MQTT topic %s: %s.", topic, formatErrorMessage(error));
+}
+
+/**
+ * Name the reason a guarded publish rejected, as the tag a repeat is weighed against the next by. Pure function: it reads the rejection and nothing else, which is
+ * what lets the client and the shipped double answer the same question the same way rather than each deriving a tag of its own.
+ *
+ * The transport's own code is the tag wherever the rejection carries one, because a broker refusing for a single reason refuses every topic for it: the topic
+ * belongs in the reported line rather than in the tag, or one outage would read as a fresh fault per topic. Everything else answers the rendered message, which is
+ * the most specific thing a rejection carrying no code has to offer.
+ *
+ * Every rejection is tagged, the quiet ones included, and that costs them nothing: {@link routeGuardedPublishFailure} reports a cancellation and an offline refusal
+ * at debug, and a repeat-demoting adapter holds error and warn alone, so those lines reach the log live whatever tag the attempt settles with. The one visible
+ * consequence is that a cancellation landing between two identical delivery failures changes the tag and makes the second failure report in full again, which is
+ * louder rather than quieter and is the right direction for a log-volume mechanism to fail in.
+ *
+ * @param error - The value the publish rejected with, unchanged.
+ *
+ * @returns The tag this rejection is weighed by.
+ *
+ * @category Utilities
+ */
+export function guardedPublishReason(error: unknown): string {
+
+  if((error instanceof Error) && ("code" in error) && (typeof error.code === "string")) {
+
+    return error.code;
+  }
+
+  return formatErrorMessage(error);
 }
 
 /**

@@ -245,7 +245,7 @@ export class TestWebSocketFactory {
    *
    * @returns The recorded {@link TestWebSocket}.
    */
-  public readonly create: WebSocketFactory = (url: string): WebSocketLike => {
+  public readonly create = ((url: string): WebSocketLike => {
 
     const socket = this.#socket ?? new TestWebSocket(url);
 
@@ -262,7 +262,7 @@ export class TestWebSocketFactory {
     }
 
     return socket;
-  };
+  }) satisfies WebSocketFactory;
 
   /**
    * Resolve when the socket at `index` (0-based, in creation order) has been constructed, returning it - immediately when it already exists. Lets a reconnect test

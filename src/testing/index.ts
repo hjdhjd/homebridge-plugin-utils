@@ -8,8 +8,9 @@
  *
  * The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
  * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
- * finders, the unhandled-rejection assertion, the shared poll-with-deadline, and the macrotask yield with the two `TestClock` walks built on it - the runtime-floor
- * guard machinery in `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
+ * finders, the unhandled-rejection assertion, the shared poll-with-deadline and the turn-budgeted poll beside it, the macrotask yield with the two `TestClock` walks
+ * built on it, and the real-socket family that reserves a port and binds and stops a loopback server - the runtime-floor guard machinery in `runtime-floor.ts` beside
+ * this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
  *
  * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
  * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
@@ -23,15 +24,19 @@
  * @module
  */
 import { setTimeout as delay, setImmediate as flushImmediate } from "node:timers/promises";
+import { hasErrorCode, noOpLog } from "../util.ts";
 import type { HomebridgePluginLogging } from "../util.ts";
+import type { Server } from "node:net";
 import type { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
+import { createServer } from "node:net";
 import { format } from "node:util";
-import { noOpLog } from "../util.ts";
+import { once } from "node:events";
 
-/* The shipped doubles, aggregated from their physical homes, and the guard machinery that lives in this directory alongside the helpers. Each module is re-exported
- * wholesale rather than symbol-by-symbol, because the module on the other side already curates what it publishes and a second enumeration here would be a list to keep
- * in sync for nothing.
+/* The shipped doubles, aggregated from their physical homes, and the guard machinery and type-level assertion helpers that live in this directory alongside the
+ * helpers below. Each module is re-exported wholesale rather than symbol-by-symbol, because the module on the other side already curates what it publishes and a
+ * second enumeration here would be a list to keep in sync for nothing. The assertion helpers go out through `export type *`, which publishes their types and
+ * creates no runtime edge at all, because that module declares nothing else.
  */
 export * from "../clock-double.ts";
 export * from "../ffmpeg/fmp4-builders.ts";
@@ -42,6 +47,7 @@ export * from "../mdns/browser-double.ts";
 export * from "../mdns/message-builders.ts";
 export * from "../mqtt-client-double.ts";
 export * from "./runtime-floor.ts";
+export type * from "./type-assertions.ts";
 
 /**
  * Return `items[index]`, asserting the element exists. Narrows the result to `T` so test bodies can use the value without non-null assertions and without a separate
@@ -77,6 +83,41 @@ export function expectAt<T>(items: readonly T[], index: number, description = "a
   assert.ok(item !== undefined, "expected " + description + " at index " + index.toString());
 
   return item;
+}
+
+/**
+ * Return `value`, asserting it is neither `undefined` nor `null`. Narrows the result to `NonNullable<T>` so a test body uses the value without a cast and without a
+ * non-null assertion.
+ *
+ * The failure message is as much the point as the narrowing is. A lookup that found nothing otherwise surfaces as a bare `TypeError` on the next property read, or
+ * as a `deepEqual` against `undefined` that names neither what was being looked for nor where...this names the lookup and renders what arrived instead. The
+ * narrowing falls out of `assert.ok`'s `asserts` typing applied to the compound condition, the same mechanism {@link expectAt} relies on, so the body needs no cast.
+ *
+ * @typeParam T       - The value's type. Assumes a `T` that is meaningfully nullable; a `T` that already excludes `undefined` and `null` leaves the assertion
+ *                      unreachable and the call redundant.
+ * @param value       - The value to assert on.
+ * @param description - What the caller was looking for, in the grammar of "expected _____". Required rather than defaulted, because a failing index has positional
+ *                      context a default descriptor can lean on and a bare nullable has none, so a default would produce a sentence that names nothing.
+ *
+ * @returns `value`, narrowed to `NonNullable<T>`.
+ *
+ * @throws `AssertionError` when `value` is `undefined` or `null`.
+ *
+ * @example
+ *
+ * ```ts
+ * const entry = present(log.entries.find((candidate) => candidate.level === "warn"), "a warning about the stale segment");
+ *
+ * assert.match(entry.message, /segment/);
+ * ```
+ *
+ * @category Testing
+ */
+export function present<T>(value: T, description: string): NonNullable<T> {
+
+  assert.ok((value !== undefined) && (value !== null), "expected " + description + ", got " + String(value));
+
+  return value;
 }
 
 /**
@@ -390,6 +431,47 @@ export async function settle(turns = 1): Promise<void> {
 }
 
 /**
+ * Resolve as soon as `predicate()` reads `true`, yielding one macrotask turn between attempts, and throw when the turn budget is spent with the predicate still
+ * false.
+ *
+ * This sits between the two helpers it is built from. {@link waitUntil} budgets real time and sleeps between attempts, which is what a state the kernel settles asks
+ * for - a datagram delivered, a connection established. {@link settle} crosses a fixed number of turns whether or not anything changed. This one budgets macrotask
+ * TURNS and yields between attempts, for a state the process settles on its own queue: a handshake whose steps each schedule the next, a cascade whose depth the
+ * caller would otherwise have to write down and keep right. The budget is a ceiling that fails loudly naming the state that never arrived rather than a measurement
+ * of how long anything takes...stated in turns it costs nothing on a fast run, and it still ends a run that would otherwise spin.
+ *
+ * @param predicate           - The condition to read. Called before the first yield, so a state that already holds costs no turn at all.
+ * @param options             - Wait options.
+ * @param options.description - What the wait is for, in the grammar of "waiting for _____". It is the whole of the failure message, so name the state rather than
+ *                              the assertion.
+ * @param options.turns       - The most macrotask turns to cross. Defaults to 100.
+ *
+ * @throws `Error` when the budget is spent with the predicate still false.
+ *
+ * @example
+ *
+ * ```ts
+ * await settleUntil(() => broker.sessions.length === 2, { description: "both clients to finish their CONNACK handshakes" });
+ * ```
+ *
+ * @category Testing
+ */
+export async function settleUntil(predicate: () => boolean, { description, turns = 100 }: { description: string; turns?: number }): Promise<void> {
+
+  for(let turn = 0; !predicate(); turn++) {
+
+    if(turn === turns) {
+
+      throw new Error("settleUntil: " + description + " did not hold within " + turns.toString() + " macrotask turns.");
+    }
+
+    // Each turn has to reach the queue before the predicate is asked again, so these yields cannot be batched any more than `settle`'s own can.
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+  }
+}
+
+/**
  * Walk `clock` through a schedule of waits, letting the queue come to rest before each step and once more after the last.
  *
  * A subject registers its next wait only after the one before it has settled, so a single advance across the whole schedule moves past deadlines that were never
@@ -471,4 +553,170 @@ export async function drainClock(clock: TestClock, limit = 1000): Promise<number
       throw new Error("drainClock: the clock still had entries pending after " + limit.toString() + " steps.");
     }
   }
+}
+
+// Bind `server` through the caller's own `listen` call and answer the port the kernel assigned. The "listening" waiter is registered BEFORE the bind runs, so a
+// socket that binds in the same turn cannot slip past the subscription, and a bind that fails settles that same waiter on the emitter's "error" event rather than
+// firing an unhandled one. The port read narrows `address()` with an assertion rather than a cast. Both public open helpers compose against this, so the bind
+// shape lives in exactly one place, the way `bindLoopback` carries it for the datagram family.
+async function bindAndReadPort(server: Server, bind: () => void): Promise<number> {
+
+  const listening = once(server, "listening");
+
+  bind();
+
+  await listening;
+
+  const address = server.address();
+
+  assert.ok((address !== null) && (typeof address === "object"), "expected the listening socket to report the port the kernel chose");
+
+  return address.port;
+}
+
+/**
+ * Answer a TCP port nothing on this machine is holding, asked of the kernel the way an ephemeral bind asks for one and released again before the caller sees it.
+ *
+ * An arm needs this when its subject takes a port as configuration rather than choosing one: the port has to be named in a setting before the listener exists, and a
+ * hard-coded number collides the moment two files run at once. The kernel's own choice is the answer that cannot, so a throwaway server binds at port 0, the helper
+ * reads back what it was given, and the server closes. The close is awaited rather than fired and forgotten, which is what shuts the release-versus-rebind window a
+ * naive implementation carries...by the time the number comes back, the handle behind it is already gone.
+ *
+ * The bind takes the wildcard address rather than the loopback one, because the wildcard is what the caller's own listener will bind - `HttpListener` names no host
+ * either - and a loopback-only reservation would answer a port that is free on one interface and held on the one the caller is about to take.
+ *
+ * The port is free when it is answered rather than reserved for the caller: another process can take it in the gap before the caller's own bind. That is the price of
+ * naming a port before binding it, and it is why a consuming arm keeps its own release in `t.after` rather than leaning on this helper for a lifetime. An arm that
+ * needs a port HELD rather than named wants an occupy-and-hold helper instead, which is a different shape: that one keeps its socket.
+ *
+ * @returns A port the kernel chose and has released.
+ *
+ * @example
+ *
+ * ```ts
+ * const port = await freePort();
+ * const listener = new HttpListener({ label: "test listener", log, port });
+ *
+ * t.after(async () => await listener[Symbol.asyncDispose]());
+ *
+ * await listener.start();
+ *
+ * assert.equal(listener.boundPort, port, "the listener must take exactly the port the setting named");
+ * ```
+ *
+ * @category Testing
+ */
+export async function freePort(): Promise<number> {
+
+  const server = createServer();
+  const port = await bindAndReadPort(server, () => void server.listen(0));
+
+  await stopListening(server);
+
+  return port;
+}
+
+/**
+ * Bind `server` to the loopback interface at `port` and answer the port the kernel assigned, resolving once the socket is listening.
+ *
+ * This is the acquisition half of the loopback pair, and it is bind-only: it drains nothing and closes nothing, so the caller keeps the server's lifetime and hands
+ * it to {@link stopListening} when the arm is done. A bind that fails reaches the caller as this promise's rejection carrying the kernel's own error, because the
+ * waiter settles on the emitter's `"error"` event as readily as on `"listening"` - which is what a hand-rolled bind with no error listener loses, since an
+ * unhandled `"error"` on a server is thrown as an uncaught exception that ends the whole file rather than the one arm.
+ *
+ * @param server - The server to bind. Both a `node:http` server and a plain `net.Server` satisfy the type structurally.
+ * @param port   - The port to bind. Defaults to `0`, which asks the kernel for a free one - what an arm wants when it needs some port and no collision with a file
+ *                 running beside it. A caller names a port instead when the fixture has to come back on the address a client is already reconnecting to.
+ *
+ * @returns The port the kernel assigned, which is `port` itself whenever the caller named one.
+ *
+ * @throws The kernel's own error when the bind fails, `EADDRINUSE` above all.
+ *
+ * @example
+ *
+ * ```ts
+ * const server = createServer(handler);
+ * const port = await listenOnLoopback(server);
+ *
+ * t.after(async () => await stopListening(server));
+ *
+ * const response = await request("http://127.0.0.1:" + port.toString());
+ * ```
+ *
+ * @category Testing
+ */
+export async function listenOnLoopback(server: Server, port = 0): Promise<number> {
+
+  return bindAndReadPort(server, () => void server.listen(port, "127.0.0.1"));
+}
+
+/**
+ * Close `server` and resolve once its handle is released.
+ *
+ * The release waits on every in-flight connection ending, so an arm still holding live sockets destroys them itself before calling this...otherwise the wait lasts
+ * as long as the slowest peer. A server that is already closed, or that never listened at all, RESOLVES rather than failing: that is the postcondition this helper
+ * exists to reach, reported back. It is what lets an arm release a server by hand mid-body and still let its `await using` scope dispose it, where the scope's
+ * second call finds nothing left to do. Every other close failure REJECTS carrying the kernel's own error, so a dispose still reports a real one.
+ *
+ * @param server - The server to close. Both a `node:http` server and a plain `net.Server` satisfy the type structurally.
+ *
+ * @throws The kernel's own error for any close failure other than a server that was not running.
+ *
+ * @example
+ *
+ * ```ts
+ * const server = createServer(handler);
+ *
+ * await listenOnLoopback(server);
+ * await stopListening(server);
+ * ```
+ *
+ * @category Testing
+ */
+export async function stopListening(server: Server): Promise<void> {
+
+  await new Promise<void>((resolve, reject) => server.close((error) => {
+
+    // A server that is not running is already in the state this helper exists to reach, so a scope disposal arriving after a hand release finds nothing to do
+    // rather than a failure. Every other close error is a real one and reaches the caller.
+    if((error !== undefined) && !hasErrorCode(error, "ERR_SERVER_NOT_RUNNING")) {
+
+      reject(error);
+
+      return;
+    }
+
+    resolve();
+  }));
+}
+
+/**
+ * Build the errno-shaped error the platform and undici raise when a connection fails: an `Error` carrying a `code` beside its message, optionally over a cause.
+ *
+ * Every suite driving a transport or filesystem failure needs one of these, and hand-building it is an `Object.assign` and a conditional that say nothing about the
+ * failure being modelled...through this factory a site says only which failure it means. The `code` is loosely typed on purpose: the platform's own `DOMException`
+ * carries a numeric one, and a classifier with a branch that steps over a non-string code needs a fixture able to carry it. A cause is attached through `Error`'s
+ * own options bag, so the whole chain stays walkable by the library's own cause descent - and when no cause is given none is installed at all, because an own
+ * `cause` property valued `undefined` would send that descent one link further than the error actually goes.
+ *
+ * @typeParam T   - The code's own type, carried through to the result so a caller reads back exactly what it named rather than a widened union.
+ * @param message - The message the error carries.
+ * @param code    - The code to carry, either an errno string or the platform's legacy numeric form.
+ * @param cause   - An optional cause, attached through `Error`'s options bag. Omitting it leaves the result with no `cause` property at all.
+ *
+ * @returns An `Error` carrying `code` as a `readonly` property typed `T`.
+ *
+ * @example
+ *
+ * ```ts
+ * proc.stdin.emit("error", errnoError("write EPIPE", "EPIPE"));
+ * ```
+ *
+ * @category Testing
+ */
+export function errnoError<T extends number | string>(message: string, code: T, cause?: unknown): Error & { readonly code: T } {
+
+  const error = (cause === undefined) ? new Error(message) : new Error(message, { cause });
+
+  return Object.assign(error, { code });
 }

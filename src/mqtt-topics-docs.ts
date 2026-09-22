@@ -12,8 +12,14 @@
  *
  * One call renders both sections, because one traversal validates the catalog and emits the rows either section takes. Each section is a fragment for a marked
  * region of its own - {@link MQTT_PUBLISHED_DOC_BEGIN} and {@link MQTT_SUBSCRIBED_DOC_BEGIN} name them - rather than one region spanning both, so a plugin keeps its
- * H3 headings, their lead sentences, and every hand-written section around and between the two tables. A section the catalog declares no rows for renders as an
- * empty fragment: a publish-only plugin's subscribed region carries no table, and the plugin writes no heading above a region it declares nothing for.
+ * H3 headings, their lead sentences, and every hand-written section around and between the two tables. The published fragment always opens with the plugin
+ * availability block, because the library's own client publishes that topic for every plugin and no plugin can opt out, so a catalog declaring no published rows
+ * yields that block and nothing else. The subscribed fragment is the catalog's entirely: a publish-only plugin's subscribed region carries no table, and the plugin
+ * writes no heading above a region it declares nothing for.
+ *
+ * That block is the one row this module emits from its own knowledge rather than from the catalog. Its words come from the same constants the client publishes, so
+ * the statement a plugin's document makes and the statement on the wire cannot drift. A plugin's per-device availability rows are a separate matter and come from
+ * the catalog like every other row, through the shipped {@link mqtt-topics!mqttAvailabilityEntry | mqttAvailabilityEntry} a plugin spreads into it.
  *
  * What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when it
  * declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. A row credits the kinds its verb's narrowing
@@ -26,7 +32,8 @@
  *
  * @module
  */
-import { MQTT_DEVICE_COLUMN, mqttGetTopic, mqttSetTopic, mqttTopicPlaceholders, resolveMqttTopic } from "./mqtt-topics.ts";
+import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, MQTT_DEVICE_COLUMN, mqttGetTopic, mqttSetTopic, mqttTopicPlaceholders,
+  resolveMqttTopic } from "./mqtt-topics.ts";
 import type { MqttTopicCatalog, MqttTopicDeviceColumn, MqttTopicEntry } from "./mqtt-topics.ts";
 import { renderMarkdownTable } from "./doc-markdown.ts";
 
@@ -79,6 +86,16 @@ export interface MqttTopicsReference {
 // cell widths; the message side has no upper bound worth chasing, so it is a presentation constant of this document exactly as its counterpart is of the
 // feature-options reference. Padding is cosmetic - rendered markdown ignores it - so this is polish, not part of the semantic contract.
 const MESSAGE_DIVIDER_WIDTH = 34;
+
+// The plugin availability block's two texts, both of them this module's own rather than any catalog's. The lead names where the topic sits, since it is the one row
+// in the document that hangs off the topic prefix directly rather than under a device identity, and it is plain text rather than a heading: an ungrouped catalog's
+// published fragment carries no "####" at all, and a heading here would change that for a reason that has nothing to do with grouping. The message reads its two
+// words from the vocabulary the client publishes, so the sentence a plugin's document shows and the payload on the wire are one statement.
+const PLUGIN_AVAILABILITY_LEAD = "**Plugin availability.** The plugin publishes this topic for itself, directly under its configured topic prefix rather than " +
+  "under a device identity.";
+
+const PLUGIN_AVAILABILITY_MESSAGE = "`" + MQTT_AVAILABILITY_ONLINE + "` while the plugin holds a broker session, `" + MQTT_AVAILABILITY_OFFLINE + "` by the " +
+  "broker's last will when the plugin exits or its connection drops. Retained either way.";
 
 // What joins the device labels inside one cell.
 const LABEL_SEPARATOR = ", ";
@@ -295,6 +312,23 @@ function renderSection(rows: readonly TopicRow[], groups: readonly string[], hea
   return lines.join("\n");
 }
 
+/* Render the plugin-level availability block that opens every published fragment: the lead sentence, a blank line, a one-row table, and a blank line of its own.
+ *
+ * It is a block rather than a row inside the catalog's own table, and that is forced rather than chosen. A column-bearing table has no honest cell for a topic that
+ * belongs to no device kind, and the device-list check refuses such an entry outright. A grouped section prints only rows carrying one of the catalog's declared
+ * groups, so an injected row with no group would vanish from every grouping plugin's document. And rows sort by their tail, so an injected row would land wherever
+ * "availability" happened to sort rather than where a reader meets it first. A block of its own survives all three and reads first in every catalog shape.
+ */
+function renderPluginAvailabilityBlock(): string {
+
+  const table = renderMarkdownTable({ dividerWidth: MESSAGE_DIVIDER_WIDTH, headings: [ "Topic", "Message Published" ],
+    rows: [[ renderTopicCell(MQTT_AVAILABILITY_TOPIC), PLUGIN_AVAILABILITY_MESSAGE ]] });
+
+  // The trailing newline is what puts a real blank line between this block and whatever the catalog's own section opens with, rather than letting a heading or a
+  // header row butt against the table above it.
+  return [ PLUGIN_AVAILABILITY_LEAD, "", ...table, "" ].join("\n") + "\n";
+}
+
 /**
  * Render an MQTT topic catalog into the two markdown fragments a plugin embeds in its `docs/MQTT.md`: the published-topics tables and the subscribed-topics tables.
  *
@@ -304,8 +338,9 @@ function renderSection(rows: readonly TopicRow[], groups: readonly string[], hea
  *
  * Rows are ordered as the topic tree reads - a topic before every topic that extends it, siblings in plain order, and a topic's own get and set rows before the rows
  * of the topics beneath it - grouped when the catalog declares groups, and given a device column when the catalog declares one, with each entry's labels joined in
- * the order the vocabulary declares them. A row's device cell names the kinds its verb's narrowing lists, or the entry's whole list when the verb declares none. A
- * section the catalog has no rows for is an empty string.
+ * the order the vocabulary declares them. A row's device cell names the kinds its verb's narrowing lists, or the entry's whole list when the verb declares none. The
+ * published fragment carries the plugin availability block whatever the catalog declares, while the subscribed fragment is an empty string when the catalog
+ * declares no rows for it.
  *
  * @param catalog - The catalog to project, as {@link mqtt-topics!mqttTopicCatalog | mqttTopicCatalog} returned it.
  *
@@ -388,7 +423,7 @@ export function renderMqttTopicsReference(catalog: MqttTopicCatalog): MqttTopics
 
   return {
 
-    published: renderSection(published.toSorted(byTopicTree), groups, [ ...leadingHeadings, "Message Published" ]),
+    published: renderPluginAvailabilityBlock() + renderSection(published.toSorted(byTopicTree), groups, [ ...leadingHeadings, "Message Published" ]),
     subscribed: renderSection(subscribed.toSorted(byTopicTree), groups, [ ...leadingHeadings, "Message Expected" ])
   };
 }

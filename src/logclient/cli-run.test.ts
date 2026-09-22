@@ -7,12 +7,12 @@ import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts
 import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
 import { USAGE, runHblog } from "./cli-run.ts";
 import { describe, test } from "node:test";
+import { errnoError, settle } from "../testing/index.ts";
 import { LogSocket } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { settle } from "../testing/index.ts";
 
 // A capturing CliStream double. Records every chunk written so a test asserts the exact output, exposes a settable `isTTY`, and supports `on`/`off` hooks for the stdout
 // `error` trap and the backpressure `drain` wait. Optional behaviors drive the run's non-happy paths, each fired at most once (on the first write):
@@ -125,9 +125,7 @@ class CaptureStream implements CliStream {
   // perturb the iteration.
   #emitError(code: string): void {
 
-    const error = new Error("write " + code) as NodeJS.ErrnoException;
-
-    error.code = code;
+    const error = errnoError("write " + code, code);
 
     for(const listener of [...this.#errorListeners]) {
 
@@ -190,11 +188,7 @@ function realSocketFactory(): { socketFactory: LogSocketFactory; wsFactory: Test
 // and resolution falls through to env/flags/defaults. Tests that exercise `--version` or the config file override `readFile` with their own.
 async function missingFileReadFile(): Promise<string> {
 
-  const error = new Error("ENOENT") as Error & { code: string };
-
-  error.code = "ENOENT";
-
-  throw error;
+  throw errnoError("ENOENT", "ENOENT");
 }
 
 // Build the base runHblog options with capturing streams and a default environment/home. Individual tests override `argv`, `env`, the streams, and the transport doubles.

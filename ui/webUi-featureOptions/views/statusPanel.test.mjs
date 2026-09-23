@@ -510,6 +510,30 @@ describe("statusPanel - push handling by kind", () => {
     assert.equal(valueFor(root, "Status"), LOCKED_CONNECTED, "the lock returns for the next encrypted online event");
   });
 
+  test("a whitespace-only row value renders as the placeholder dash, from a snapshot and from a row update alike", () => {
+
+    using dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    // A value of only spaces is blank, so it reads as "no data yet" rather than an empty-looking cell.
+    fake.observed.emitPush(STATUS_EVENT, snapshotEvent("AA", 1, [{ id: "door", label: "Door", sizer: "Stopped (100%)", value: "   " }]));
+    assert.equal(valueFor(root, "Door"), "-", "a whitespace-only snapshot value renders the dash");
+
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", "Open"));
+    assert.equal(valueFor(root, "Door"), "Open", "precondition: a real value replaces the dash");
+
+    fake.observed.emitPush(STATUS_EVENT, rowEvent("AA", 1, "door", " \t "));
+    assert.equal(valueFor(root, "Door"), "-", "a whitespace-only row update renders the dash too");
+  });
+
   test("P8: a rebuild renders the device's own row values, never a phantom sizer or a placeholder", () => {
 
     using dom = createTestDom();

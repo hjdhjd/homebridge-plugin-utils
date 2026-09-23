@@ -225,7 +225,8 @@ const STATUS_SIZER = [ CONNECTING_STATUS_TEXT, DISCONNECTED_STATUS_TEXT, connect
   FALLBACK_ERROR_COPY.label, ...Object.values(DEFAULT_ERROR_COPY).map((copy) => copy.label) ];
 
 // Render a state-row value for display: a blank or empty value shows as a placeholder dash, so an unpopulated cell reads as "no data yet" rather than a rendering gap.
-const displayValue = (value) => ((typeof value === "string") && (value.length > 0)) ? value : "-";
+// A value of only whitespace is blank - it would render as exactly the gap the dash stands in for.
+const displayValue = (value) => ((typeof value === "string") && (value.trim().length > 0)) ? value : "-";
 
 // Map a run of state cells onto the panel's column tracks, returning the track each cell in the run takes. The run's first cell anchors to the first track and its
 // last to the last, with any cells between them distributed evenly across the tracks in between, so a two-cell run reads across the panel's whole width instead of

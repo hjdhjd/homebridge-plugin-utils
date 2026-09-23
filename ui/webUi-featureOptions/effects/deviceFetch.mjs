@@ -6,7 +6,7 @@
 
 import { DeadlineExpiredError, withDeadline } from "../../webUi-liveness.mjs";
 import { connectionFailureCopy } from "../state.mjs";
-import { errorMessage } from "../utils.mjs";
+import { errorMessage } from "../../webUi-errors.mjs";
 import { scopingControllerId } from "../selectors.mjs";
 
 /**

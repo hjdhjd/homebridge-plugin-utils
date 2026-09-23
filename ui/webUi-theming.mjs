@@ -1,6 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-theming.mjs: Page theming for the plugin webUI - the themed canvas, dark-mode handling, the page-kit classes, and Bootstrap accent probing.
+ * ui/webUi-theming.mjs: Page theming for the plugin webUI - the themed canvas, dark-mode handling, the page-kit classes and the menu-tab paint that wears them,
+ * and Bootstrap accent probing.
  */
 "use strict";
 
@@ -140,6 +141,44 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
   // until it resolves, the user sees the system accent. Void-discarded because the caller cannot meaningfully wait on it.
   void runAccentProbe({ intervalMs, signal, timeoutMs });
 };
+
+// The page's menu buttons, in the order the markup lays them out. This list is the single source of truth for which buttons a menu paint reaches: every paint site
+// names only the tab it is activating, so a page that gains or loses a menu surface is one edit here rather than one at each site.
+const MENU_IDS = [ "menuHome", "menuFeatureOptions", "menuSettings" ];
+
+/**
+ * Paint the menu tabs, marking exactly one of them active.
+ *
+ * One declarative call in place of per-button class juggling at each tab-switch site: the caller names the tab that is now active, and this owns everything else -
+ * which buttons the page has, what the framework's menu vocabulary is, and normalizing away the Bootstrap variant a consumer's markup ships its buttons with. That
+ * normalization runs on every paint, which is what makes the first paint the one that converts the markup's classes with no first-run special case anywhere.
+ *
+ * The `fo-` classes carry the whole visual state: `fo-menu` is the quiet ghost every tab wears and `fo-menu-active` adds the theme's accent fill over it, so the
+ * eye-catching treatment marks the tab the user is on. Both are styled in the page base stylesheet this module adopts, which is in force on every tab including
+ * Support, so the paint and the rules it relies on change together.
+ *
+ * A button the page does not carry is a no-op: a plugin's markup declares which menu surfaces it offers, and the paint reaches the ones it finds.
+ *
+ * @param {string} activeId - The element ID of the tab that is now active. An id no menu button carries leaves every tab inactive.
+ */
+export function paintMenuTabs(activeId) {
+
+  for(const id of MENU_IDS) {
+
+    const element = document.getElementById(id);
+
+    if(!element) {
+
+      continue;
+    }
+
+    // Both Bootstrap variants a menu button might arrive wearing come off, so the framework's own classes are the only thing describing the tab's state and no host
+    // variant styling competes with the theme sheet for it. The `btn` class itself stays: it carries the button's geometry, which these classes do not restate.
+    element.classList.remove("btn-elegant", "btn-primary");
+    element.classList.add("fo-menu");
+    element.classList.toggle("fo-menu-active", id === activeId);
+  }
+}
 
 // Set the color-scheme property on :root and toggle the fo-dark class. No accent probe - the accent custom properties are managed separately so the lightweight
 // color-scheme update does not pay the probe cost.

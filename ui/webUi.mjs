@@ -6,11 +6,11 @@
 
 import { BOOT_AWAIT_DEADLINE_SECONDS, webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 import { DeadlineExpiredError, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
-import { paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
+import { paintMenuTabs, registerThemeEffect } from "./webUi-theming.mjs";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
 import { markHandled } from "./mark-handled.js";
-import { registerThemeEffect } from "./webUi-theming.mjs";
 import { registerTokensEffect } from "./webUi-tokens.mjs";
+import { toastError } from "./webUi-errors.mjs";
 
 // The copy a launch that timed out surfaces. The session open is the page's first bridge call, before any store, view, or retry affordance exists, so the toast is the
 // only surface available - and the recovery it names has to hold for every plugin whatever menu its markup carries, which reopening the panel does: opening the panel

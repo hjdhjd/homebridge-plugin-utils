@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webUi-featureOptions/utils.mjs: Shared utilities for the plugin webUI - used by the feature-options components and the top-level orchestrator alike.
+ * webUi-featureOptions/utils.mjs: Shared DOM and presentation utilities for the feature-options components.
  */
 "use strict";
 
@@ -147,7 +147,8 @@ export function setCategoryExpanded(details, expanded) {
  * Move an element addressed by id from one class to another, tolerating an element the page does not carry.
  *
  * A generic two-state swap with no opinion about what the classes mean: a consumer's own page chrome uses it to move an element between mutually exclusive states
- * without writing the lookup and the null check at each site. What the framework's own menu tabs wear is {@link paintMenuTabs}' business, not this helper's.
+ * without writing the lookup and the null check at each site. What the framework's own menu tabs wear is the theming module's `paintMenuTabs` business, not this
+ * helper's.
  *
  * A plugin's markup declares which surfaces it offers, so a swap aimed at an element the markup omits is a deliberate no-op rather than a failure: the caller runs
  * the same code whether or not the page carries the element.
@@ -167,43 +168,6 @@ export function swapMenuClasses(id, removeClass, addClass) {
 
   element.classList.remove(removeClass);
   element.classList.add(addClass);
-}
-
-// The page's menu buttons, in the order the markup lays them out. This list is the single source of truth for which buttons a menu paint reaches: every paint site
-// names only the tab it is activating, so a page that gains or loses a menu surface is one edit here rather than one at each site.
-const MENU_IDS = [ "menuHome", "menuFeatureOptions", "menuSettings" ];
-
-/**
- * Paint the menu tabs, marking exactly one of them active.
- *
- * One declarative call in place of per-button class juggling at each tab-switch site: the caller names the tab that is now active, and this owns everything else -
- * which buttons the page has, what the framework's menu vocabulary is, and normalizing away the Bootstrap variant a consumer's markup ships its buttons with. That
- * normalization runs on every paint, which is what makes the first paint the one that converts the markup's classes with no first-run special case anywhere.
- *
- * The `fo-` classes carry the whole visual state: `fo-menu` is the quiet ghost every tab wears and `fo-menu-active` adds the theme's accent fill over it, so the
- * eye-catching treatment marks the tab the user is on. Both are styled in the page-lifetime theme sheet, which is in force on every tab including Support.
- *
- * A button the page does not carry is a no-op, the same posture {@link swapMenuClasses} takes toward a missing element.
- *
- * @param {string} activeId - The element ID of the tab that is now active. An id no menu button carries leaves every tab inactive.
- */
-export function paintMenuTabs(activeId) {
-
-  for(const id of MENU_IDS) {
-
-    const element = document.getElementById(id);
-
-    if(!element) {
-
-      continue;
-    }
-
-    // Both Bootstrap variants a menu button might arrive wearing come off, so the framework's own classes are the only thing describing the tab's state and no host
-    // variant styling competes with the theme sheet for it. The `btn` class itself stays: it carries the button's geometry, which these classes do not restate.
-    element.classList.remove("btn-elegant", "btn-primary");
-    element.classList.add("fo-menu");
-    element.classList.toggle("fo-menu-active", id === activeId);
-  }
 }
 
 /**
@@ -241,28 +205,4 @@ export function showToast(message, variant = "alert-success") {
     // Remove the node only after Bootstrap's `.fade` transition (150ms) has visually completed, so the toast fades out rather than vanishing abruptly.
     setTimeout(() => toast.remove(), 150);
   }, 3000);
-}
-
-/**
- * Extract a user-facing message from an arbitrary thrown value. The webUI's extension points - caller-supplied first-run hooks, plugin device fetchers, the
- * connection-error retry callback, the config re-sync - can reject with any shape (an Error, a string, a plain object, a primitive), so the message is extracted
- * defensively: `err?.message` when the value carries one, a string coercion of the whole value otherwise. This is the single error-to-text truth the webUI shares,
- * so a toast, a nav-view connection-error message, and the sync-failure copy all read the same thrown value the same way.
- *
- * @param {*} err - The thrown value to describe.
- * @returns {string} The extracted message.
- */
-export function errorMessage(err) {
-
-  return err?.message ?? String(err);
-}
-
-/**
- * Surface an arbitrary thrown value as an error toast. Routes the value through {@link errorMessage} so the toast text stays useful regardless of what bubbled out.
- *
- * @param {*} err - The thrown value to surface.
- */
-export function toastError(err) {
-
-  homebridge.toast.error(errorMessage(err), "Error");
 }

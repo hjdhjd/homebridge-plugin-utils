@@ -1,14 +1,15 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-theming.test.mjs: Unit tests for the page theme effect - its lifecycle, the color-scheme application, the page base stylesheet, and the page kit.
+ * ui/webUi-theming.test.mjs: Unit tests for the page theme effect - its lifecycle, the color-scheme application, the page base stylesheet, and the page kit - and
+ * for the menu-tab paint that wears the page kit's menu classes.
  */
 "use strict";
 
 import { BOOTSTRAP_PROBE_ACCENT, createTestDom, seedBootstrapProbeShim } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
+import { paintMenuTabs, registerThemeEffect } from "./webUi-theming.mjs";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
-import { registerThemeEffect } from "./webUi-theming.mjs";
 
 // Build a fake host whose userCurrentLightingMode returns the supplied mode. Tests override per-call.
 const fakeHost = (mode) => ({ userCurrentLightingMode: async () => mode });
@@ -737,5 +738,88 @@ describe("buildBaseCss - the page kit", () => {
 
     assert.ok(pageFormRules.length > 0, "precondition: the kit does declare form-control rules");
     assert.ok(pageFormRules.every((rule) => rule.startsWith(":root.fo-dark ")), "and every one of them is dark-qualified");
+  });
+});
+
+describe("paintMenuTabs", () => {
+
+  // The menu as a consumer's markup ships it: every button wearing Bootstrap's own variant, which the first paint is expected to normalize away.
+  function makeMenu(ids = [ "menuHome", "menuFeatureOptions", "menuSettings" ]) {
+
+    const buttons = {};
+
+    for(const id of ids) {
+
+      const button = document.createElement("button");
+
+      button.id = id;
+      button.classList.add("btn", "btn-primary");
+      document.body.appendChild(button);
+      buttons[id] = button;
+    }
+
+    return buttons;
+  }
+
+  test("paints every tab with the framework's own classes and marks exactly one active", () => {
+
+    using dom = createTestDom();
+
+    const buttons = makeMenu();
+
+    paintMenuTabs("menuFeatureOptions");
+
+    for(const [ id, button ] of Object.entries(buttons)) {
+
+      assert.equal(button.classList.contains("fo-menu"), true, id + " wears the shared menu class");
+      assert.equal(button.classList.contains("btn-primary"), false, id + " no longer carries the markup's Bootstrap variant");
+      assert.equal(button.classList.contains("btn-elegant"), false, id + " carries neither Bootstrap variant");
+      assert.equal(button.classList.contains("btn"), true, id + " keeps the geometry class the framework does not restate");
+    }
+
+    assert.equal(buttons.menuFeatureOptions.classList.contains("fo-menu-active"), true, "the named tab is the active one");
+    assert.equal(buttons.menuHome.classList.contains("fo-menu-active"), false, "and every other tab is not");
+    assert.equal(buttons.menuSettings.classList.contains("fo-menu-active"), false, "for each of them");
+  });
+
+  test("a repaint moves the active mark rather than accumulating one", () => {
+
+    using dom = createTestDom();
+
+    const buttons = makeMenu();
+
+    paintMenuTabs("menuHome");
+    paintMenuTabs("menuSettings");
+
+    assert.equal(buttons.menuSettings.classList.contains("fo-menu-active"), true, "the newly-named tab is active");
+    assert.equal(buttons.menuHome.classList.contains("fo-menu-active"), false, "and the tab it replaced is not, so exactly one is ever marked");
+  });
+
+  test("a menu surface the page omits is a silent no-op, and the tabs it does carry still paint", () => {
+
+    using dom = createTestDom();
+
+    // A plugin expressed entirely in feature options carries no schema-form button, so the paint must reach the buttons that exist and pass over the one that does
+    // not, rather than failing partway and leaving the menu half-painted.
+    const buttons = makeMenu([ "menuHome", "menuFeatureOptions" ]);
+
+    assert.doesNotThrow(() => paintMenuTabs("menuFeatureOptions"));
+    assert.equal(buttons.menuFeatureOptions.classList.contains("fo-menu-active"), true, "the active tab painted");
+    assert.equal(buttons.menuHome.classList.contains("fo-menu"), true, "and so did the sibling the page does carry");
+  });
+
+  test("an id no button carries leaves every tab inactive rather than throwing", () => {
+
+    using dom = createTestDom();
+
+    const buttons = makeMenu();
+
+    paintMenuTabs("menuNothing");
+
+    for(const [ id, button ] of Object.entries(buttons)) {
+
+      assert.equal(button.classList.contains("fo-menu"), true, id + " is still painted");
+      assert.equal(button.classList.contains("fo-menu-active"), false, id + " is inactive, since the named tab is not one of them");
+    }
   });
 });

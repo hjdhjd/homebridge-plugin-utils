@@ -10,8 +10,9 @@ import { MUTATING_ACTIONS, connectionFailureCopy, initialState, reducer } from "
 import { TAKEOVER_REGION_IDS, mountTakeoverView, releasedTakeover } from "./webUi-featureOptions/views/takeover.mjs";
 import { buildCatalogIndex, expandOption, removedListEntries } from "./featureOptions.js";
 import { completeControllerSelection, fetchControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
-import { createElement, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
+import { errorMessage, toastError } from "./webUi-errors.mjs";
 import { modelLoaded, persistPending, selectedControllerId, selectedDeviceId } from "./webUi-featureOptions/selectors.mjs";
+import { createElement } from "./webUi-featureOptions/utils.mjs";
 import { markHandled } from "./mark-handled.js";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
 import { mountDeviceInfoView } from "./webUi-featureOptions/views/deviceInfo.mjs";
@@ -20,6 +21,7 @@ import { mountNavView } from "./webUi-featureOptions/views/nav.mjs";
 import { mountOptionsView } from "./webUi-featureOptions/views/options.mjs";
 import { mountSearchView } from "./webUi-featureOptions/views/search.mjs";
 import { mountStatusPanelView } from "./webUi-featureOptions/views/statusPanel.mjs";
+import { paintMenuTabs } from "./webUi-theming.mjs";
 import { registerKeyboardEffect } from "./webUi-featureOptions/effects/keyboard.mjs";
 import { registerOptionsSkinEffect } from "./webUi-featureOptions/effects/optionsSkin.mjs";
 import { registerPersistEffect } from "./webUi-featureOptions/effects/persist.mjs";

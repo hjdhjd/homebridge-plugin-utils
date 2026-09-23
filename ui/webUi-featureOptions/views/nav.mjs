@@ -5,9 +5,10 @@
 "use strict";
 
 import { completeControllerSelection, fetchControllerDevices } from "../effects/deviceFetch.mjs";
-import { createElement, toastError } from "../utils.mjs";
+import { createElement } from "../utils.mjs";
 import { createSvgElement } from "../../webUi-svg.mjs";
 import { effect } from "../store.mjs";
+import { toastError } from "../../webUi-errors.mjs";
 
 /**
  * Mount the sidebar navigation view.

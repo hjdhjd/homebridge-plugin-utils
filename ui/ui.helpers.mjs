@@ -17,8 +17,8 @@
  *     toggles) or minimal stubs (getPluginConfig returns the seeded config). Individual tests override the methods they care about on a per-test basis.
  *
  * Layered on top are the module's remaining exports, each documented at its own definition: session and timing helpers ({@link openTestSession},
- * {@link waitFor}), global-installation helpers ({@link installHomebridge}, {@link installWebUiBoot}, {@link installPageEpoch}), and DOM-interaction and
- * probe-shim helpers ({@link clickCategoryHeader}, {@link BOOTSTRAP_PROBE_ACCENT}, {@link seedBootstrapProbeShim}).
+ * {@link waitFor}), global-installation helpers ({@link installHomebridge}, {@link installWebUiBoot}), and DOM-interaction and probe-shim helpers
+ * ({@link clickCategoryHeader}, {@link BOOTSTRAP_PROBE_ACCENT}, {@link seedBootstrapProbeShim}).
  *
  * Files under `ui/` are copied to `dist/ui/` during `npm run build-ui`; the step's shippable filter (see `build/fs-ops.mjs`) excludes every test-only file shape
  * so nothing from this module ships in the published package.
@@ -463,39 +463,6 @@ export function installWebUiBoot(fake) {
       }
 
       globalThis.webUiBoot = previous;
-    }
-  };
-}
-
-/**
- * Hand the test a window with no page epoch on it, and restore whatever was there on cleanup. Mirrors {@link installWebUiBoot}'s snapshot/restore shape, for the
- * other global the webUI keeps on the window: `webUiPageEpoch`, the handle a `webUi` construction uses to retire the copy that held the window before it.
- *
- * It takes no fake, because there is nothing useful to install: the value is an AbortController a real construction creates, and what a supersession test needs is
- * a known starting point rather than a stub. Tests that construct a `webUi` at all do NOT need this - the chokepoint REPLACES the global at every construction, so
- * a leftover epoch from a finished test is superseded rather than consulted, and replacement is the isolation. It exists so the tests that assert ON the epoch can
- * say where they started from, and so the shared webUi harness leaves the global table as it found it, the same courtesy the DOM globals get.
- *
- * @returns {{ [Symbol.dispose](): void }} A disposable handle.
- */
-export function installPageEpoch() {
-
-  const previous = globalThis.webUiPageEpoch;
-
-  delete globalThis.webUiPageEpoch;
-
-  return {
-
-    [Symbol.dispose]() {
-
-      if(previous === undefined) {
-
-        delete globalThis.webUiPageEpoch;
-
-        return;
-      }
-
-      globalThis.webUiPageEpoch = previous;
     }
   };
 }

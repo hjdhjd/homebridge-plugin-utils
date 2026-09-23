@@ -136,15 +136,14 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  */
 
 /**
- * What became of a {@link webUiFeatureOptions#commitConfig} call: one member per thing a consumer does about it, tagged by `kind` because the four are mutually
+ * What became of a {@link webUiFeatureOptions#commitConfig} call: one member per thing a consumer does about it, tagged by `kind` because the members are mutually
  * exclusive answers to one question and two of them carry the failure that explains them.
  *
  * `committed` and `staged` both mean the configuration changed and the page has been reconciled to it, so a consumer updates its own caches identically for the
  * two and differs only in what it tells the user: `staged` reached the host's memory and failed to reach disk, which the user's own Save still completes.
- * `failed` means nothing changed - a pending option edit never reached the host, or the host refused the write - and `superseded` means a newer page copy owns
- * the window, so the retired copy renders nothing at all.
+ * `failed` means nothing changed - a pending option edit never reached the host, or the host refused the write.
  *
- * @typedef {{ kind: "committed" } | { error: *, kind: "staged" } | { error: *, kind: "failed" } | { kind: "superseded" }} CommitConfigResult
+ * @typedef {{ kind: "committed" } | { error: *, kind: "staged" } | { error: *, kind: "failed" }} CommitConfigResult
  */
 
 /**
@@ -182,9 +181,8 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   for both names, so it renders nothing rather than failing loudly; this is a documented breaking change to the published hook contract. The hook is re-invoked on
  *   every render of a mount while the bag's `signal` stays one identity for that mount's life, so a hook that registers listeners or subscriptions registers them
  *   once against that signal and they die with the mount.
- *   That signal is the mount's lifetime, so a resource belonging to the module copy rather than to this panel is scoped to {@link webUi.epochSignal} instead when
- *   the page is driven by a `webUi` instance - a standalone instance of this class has no page epoch and therefore no copy lifetime to scope to. The rule for
- *   choosing between the two lives on that getter.
+ *   That signal is the mount's lifetime, so a resource meant to outlive the panel - a poll whose cache survives a navigation - belongs to the page instead and is
+ *   registered without it.
  * @property {(removals: readonly [import("./featureOptions.js").RemovedListEntry, ...import("./featureOptions.js").RemovedListEntry[]]) => void}
  *   [onListEntriesRemoved] - Invoked after a mutation removes one or more entries from any `multiple: true` option's configured list - a list editor's chip
  *   removed, a checkbox-group member unchecked, the option disabled or cleared entirely, a bulk options reset, or a model revert - covering a free-form list and
@@ -208,7 +206,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {() => void} [onLoaded] - Invoked once per show cycle immediately after that cycle's model has loaded: the catalog and the plugin's controllers are in
  *   the store, {@link webUiFeatureOptions.editedConfig} answers the live overlay, and the options view has rendered the catalog's categories - the page is
  *   established, and a consumer that needs to act at that moment has one signal for it. Every SHOW cycle that reaches a loaded model announces it once, the
- *   global-only path and every menu relaunch or retry that gets there included; a cycle that failed before that point, or that a newer page copy superseded, never
+ *   global-only path and every menu relaunch or retry that gets there included; a cycle that failed before that point, or that a newer cycle superseded, never
  *   announces at all. An establishment by {@link webUiFeatureOptions#commitConfig} is not a show cycle and does not announce: the page it re-establishes is the
  *   one the consumer is already standing on, and the call's own result is what tells that consumer the configuration moved.
  *   The device list arrives later in the cycle and is not this hook's promise. Invoked with no arguments and no debounce.
@@ -371,10 +369,6 @@ export class webUiFeatureOptions {
   // returns.
   #config;
 
-  // The page epoch, supplied by the orchestrator that owns the page lifetime. It aborts when a newer page copy claims the window, which is the one supersession this
-  // instance cannot observe for itself. Every cycle show() mints composes itself into it; a directly-constructed instance holds undefined and the composition no-ops.
-  #epochSignal;
-
   // The persist effect's flush handle, captured when the effect is registered in show(). hide() awaits it (bounded) to drain any debounced-but-unwritten edit to disk
   // before tearing the page down; the visibilitychange handler fires it best-effort on browser background/close. Recreated on every show(); nulled out on cleanup().
   #flushPersist;
@@ -399,7 +393,7 @@ export class webUiFeatureOptions {
   // Whether this instance has already spent its one bounded wait on the theming registration. The wait exists so the first paint lands with the mode applied, and
   // the registration promise is memoized, so awaiting it again on a later cycle would re-serve one hung bridge read as a fresh full-deadline stall on every
   // navigate-in. Set when the wait SETTLES - success, host rejection, or deadline expiry - and deliberately not when the cycle's own signal aborts mid-wait, since
-  // an abandoned wait was never experienced as a stall and the epoch has not spent it. Never reset: it dies with this instance, whose lifetime is the epoch's.
+  // an abandoned wait was never experienced as a stall and has not spent it. Never reset: it dies with this instance, which lives as long as the page.
   #themeAwaited = false;
 
   // The page's resume detector, supplied by the orchestrator that owns the page lifetime. Threaded to the views that probe on a resume and otherwise untouched; when
@@ -428,14 +422,13 @@ export class webUiFeatureOptions {
   // reference shared by all three is what lets a revert made before any save land on the anchor by reference, leaving the persist drain nothing to write.
   #initialOptions;
 
-  /* The guard that orders this instance's show() entries. Every entry that survives the epoch bail starts an action on it, which retires the entry before it, and
-   * after its awaited teardown an entry mints its cycle only while its own action is still the current one. An entry whose signal has aborted by the time that
-   * teardown returns was either overtaken - a second click on the menu, or the connection-error retry landing on a menu entry - or belongs to a page copy the
-   * epoch has superseded. Either way the page is someone else's, so the entry returns rather than standing a second store, a second set of effects, and a second
-   * set of listeners up beside the live cycle's. The guard's parent is the page epoch, which is what lets one signal answer both questions at once.
+  /* The guard that orders this instance's show() entries. Every entry starts an action on it, which retires the entry before it, and after its awaited teardown an
+   * entry mints its cycle only while its own action is still the current one. An entry whose signal has aborted by the time that teardown returns was overtaken - a
+   * second click on the menu, or the connection-error retry landing on a menu entry - so the page is someone else's, and the entry returns rather than standing a
+   * second store, a second set of effects, and a second set of listeners up beside the live cycle's.
    *
-   * Its lifetime is this instance's: an action started at every entry past the epoch bail, read once per entry after the teardown, and reset by nothing - not
-   * hide(), not cleanup(), not disposal - because an entry that has already been overtaken must never read as current again.
+   * Its lifetime is this instance's: an action started at every entry, read once per entry after the teardown, and reset by nothing - not hide(), not cleanup(), not
+   * disposal - because an entry that has already been overtaken must never read as current again.
    */
   #showGuard;
 
@@ -448,15 +441,13 @@ export class webUiFeatureOptions {
    *
    * @param {FeatureOptionsConfig} options - Configuration options for the webUI.
    * @param {Object} [wiring] - Framework wiring supplied by the page orchestrator.
-   * @param {AbortSignal} [wiring.epochSignal] - The page epoch, aborted when a newer page copy claims the window. Every show() cycle composes itself into it, so a
-   *                                             superseded copy tears down whole. Absent means no cycle is epoch-bounded.
    * @param {() => Promise<void>} [wiring.registerTheming] - The page's theming registration, memoized by the orchestrator that owns it, so calling it on every
    *                                                         show() cycle registers once and hands back the same promise afterwards. Absent means the page
    *                                                         registers no theming.
    * @param {{ subscribe: Function }} [wiring.resumeDetector] - The page's resume detector, threaded to the views that probe on a resume. Absent means no view
    *                                                            subscribes to resumes.
    */
-  constructor(options = {}, { epochSignal = undefined, registerTheming = undefined, resumeDetector = undefined } = {}) {
+  constructor(options = {}, { registerTheming = undefined, resumeDetector = undefined } = {}) {
 
     const {
 
@@ -499,11 +490,6 @@ export class webUiFeatureOptions {
 
         message: "infoPanel and statusPanel are mutually exclusive - the device-stats region has a single owner.",
         violated: Boolean(infoPanel) && Boolean(statusPanel)
-      },
-      {
-
-        message: "epochSignal is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
-        violated: "epochSignal" in options
       },
       {
 
@@ -566,7 +552,6 @@ export class webUiFeatureOptions {
     this.#bootAffordance = null;
     this.#catalogPromise = null;
     this.#commitQueue = Promise.resolve();
-    this.#epochSignal = epochSignal;
     this.#flushPersist = null;
     this.#pageAbort = null;
     this.#pendingCommit = null;
@@ -576,7 +561,7 @@ export class webUiFeatureOptions {
     this.#store = null;
     this.#takeoverView = null;
     this.#initialOptions = null;
-    this.#showGuard = createActionGuard({ signal: epochSignal });
+    this.#showGuard = createActionGuard();
   }
 
   /**
@@ -619,8 +604,8 @@ export class webUiFeatureOptions {
    * fixed for a given plugin version: there is no staleness question to answer, and therefore no cache policy to carry.
    *
    * A rejection clears the memo, so the next reader issues a fresh request rather than inheriting a failure that has already been reported and acted on. The read
-   * is bounded at five seconds and composed into the page epoch, and that is the whole of its lifecycle: a caller wanting a tighter bound or a cancellation of its
-   * own composes them over the returned promise rather than passing them in.
+   * is bounded at five seconds, and that is the whole of its lifecycle: a caller wanting a tighter bound or a cancellation of its own composes them over the
+   * returned promise rather than passing them in.
    *
    * @returns {Promise<{ categories: Object[], options: Object }>} The catalog's two members - exactly the pair the catalog index is built from.
    * @throws {Error} Through the returned promise: when the response is not a usable catalog, when the deadline elapses, or when the host call itself fails.
@@ -639,8 +624,9 @@ export class webUiFeatureOptions {
        * of the same promise, so nothing here swallows a failure a caller was waiting to see, and the mark answers the promise it was handed so the memo keeps
        * one identity.
        */
-      this.#catalogPromise = markHandled(withDeadline({ promise: homebridge.request("/getOptions").then(assertCatalogResponse), seconds: CATALOG_DEADLINE_SECONDS,
-        signal: this.#epochSignal }).catch((error) => {
+      const read = withDeadline({ promise: homebridge.request("/getOptions").then(assertCatalogResponse), seconds: CATALOG_DEADLINE_SECONDS });
+
+      this.#catalogPromise = markHandled(read.catch((error) => {
 
         this.#catalogPromise = null;
 
@@ -693,14 +679,6 @@ export class webUiFeatureOptions {
    */
   async show(session) {
 
-    // A superseded copy can still reach this method: its launch was stalled on a session open when the reopen replaced it, and the open settles - healed or expired -
-    // long afterwards and calls through. Every statement below is a side effect on shared page DOM the successor has already rendered into, clearContainers() above
-    // all, so the bail is the first thing here rather than a check further down: a zombie cycle must do nothing at all, not do less.
-    if(this.#epochSignal?.aborted) {
-
-      return;
-    }
-
     // This entry's own action on the instance's show() guard, started before the first side effect below and read once more after the teardown.
     const entry = this.#showGuard.start();
 
@@ -716,16 +694,12 @@ export class webUiFeatureOptions {
     // the menu or the connection-error retry must drain the previous cycle's debounced edit before this cycle's store replaces it.
     await this.hide();
 
-    /* The last act before the new cycle is minted, and its placement is the rule rather than a preference: the epoch may have aborted while the teardown above was
-     * running - the teardown waits for a pending edit and for a coordinated write's commit, either of which can span a supersession - and an abort that has already
-     * fired never replays into the listener composed below. A recheck placed ahead of that await would leave its whole window unguarded, so the order is the
-     * teardown's await, then the recheck, then the mint.
-     *
-     * One signal answers for both ways this entry can lose, because the guard's parent is the page epoch: the epoch's abort reaches this entry's signal, and so
-     * does a later show() entered while this one waited on the teardown above - a second click on the menu, or a retry landing on a menu entry. The page belongs
-     * to whichever of them arrived - latest wins, as it does everywhere else here - so this entry returns and mints nothing, and the winner's own teardown has
-     * already run or is running over the same flush. Every side effect this entry made ahead of the await is one the winner makes again, so there is nothing to
-     * undo on the way out. The check sits after the await for the same reason in either case: the window the await opens is exactly the window it guards.
+    /* The last act before the new cycle is minted, and its placement is the rule rather than a preference: a later show() entered while this one waited on the
+     * teardown above - a second click on the menu, or a retry landing on a menu entry - retires this entry's action, and the teardown waits for a pending edit and
+     * for a coordinated write's commit, either of which can span that entry. The page belongs to whichever of them arrived - latest wins, as it does everywhere else
+     * here - so this entry returns and mints nothing, and the winner's own teardown has already run or is running over the same flush. Every side effect this entry
+     * made ahead of the await is one the winner makes again, so there is nothing to undo on the way out. The check sits after the await because the window the
+     * await opens is exactly the window it guards.
      */
     if(entry.aborted) {
 
@@ -734,18 +708,6 @@ export class webUiFeatureOptions {
 
     // Fresh page-level abort controller for this show() cycle.
     this.#pageAbort = new AbortController();
-
-    /* Compose this cycle into the page epoch, so a supersession tears the whole cycle down through the machinery every effect and view already goes through rather
-     * than through any new signal plumbing. What that reaches matters most for the listeners registered on objects that OUTLIVE a module copy - statusPanel's
-     * STATUS_EVENT subscription on the `homebridge` host object above all - because an un-retired cycle keeps rendering pushes into detached DOM and arming latch
-     * timers for as long as the frame lives.
-     *
-     * The forwarding is minted per cycle rather than once at construction because #pageAbort is a per-cycle resource: it is null until the first show(), and an
-     * AbortController dispatches abort exactly once, so a construction-time listener would spend itself against null whenever supersession landed in the pre-launch
-     * window - which is precisely the window a stalled session open holds open. Registering it on the cycle's own signal is what keeps each listener to the one
-     * generation it guards: it dies with that generation, and the next show() mints a fresh one.
-     */
-    this.#epochSignal?.addEventListener("abort", () => this.#pageAbort?.abort(), { once: true, signal: this.#pageAbort.signal });
 
     const signal = this.#pageAbort.signal;
 
@@ -793,8 +755,8 @@ export class webUiFeatureOptions {
 
     /* Register the page's theming through the orchestrator that owns it: the design tokens and the page theme, adopted in that order and held for the page rather
      * than for this cycle, so navigating to Settings or Support keeps the themed canvas the user is looking at. The registration is memoized on the orchestrator's
-     * side, so this call registers on the first cycle and hands back the same promise on every later one. The optional chain is the same posture the epoch
-     * composition above takes: a directly-constructed instance carries no wiring and renders unthemed rather than crashing.
+     * side, so this call registers on the first cycle and hands back the same promise on every later one. The optional chain is the posture every piece of wiring
+     * takes: a directly-constructed instance carries none and renders unthemed rather than crashing.
      */
     const themeInitPromise = this.#registerTheming?.() ?? Promise.resolve();
 
@@ -1048,7 +1010,7 @@ export class webUiFeatureOptions {
         /* The staleness guard's verdict is the flag's too, because they answer the same question: was this cycle still the live one when the wait ended? A cycle
          * superseded mid-wait was abandoned rather than experienced - the user navigated away instead of waiting - so it neither says anything nor spends this
          * instance's one bounded wait, and the next cycle awaits again against a read that has usually settled by then. Every other rejection, a host that refused
-         * the read or the deadline elapsing, is a wait the epoch genuinely spent, so it warns and sets the flag together.
+         * the read or the deadline elapsing, is a wait this instance genuinely spent, so it warns and sets the flag together.
          */
         this.#themeAwaited = this.#unlessStale({ run: () => {
 
@@ -1340,9 +1302,8 @@ export class webUiFeatureOptions {
    * Contract:
    *
    *   - The call resolves a {@link CommitConfigResult}: `committed` (written and saved), `staged` (written into the host's memory with the save to disk refused,
-   *     so the page is reconciled exactly as for `committed` and the consumer renders a warning the user's own Save answers), `failed` (nothing changed - a
-   *     pending option edit did not reach the host, or the host refused the write), or `superseded` (a newer page copy owns the window, so the retired copy
-   *     renders nothing).
+   *     so the page is reconciled exactly as for `committed` and the consumer renders a warning the user's own Save answers), or `failed` (nothing changed - a
+   *     pending option edit did not reach the host, or the host refused the write).
    *   - Calls serialize. Each one waits for the one ahead of it, whatever became of that one, so two plugin actions in the same moment write in the order they
    *     were asked for and the second composes against the first's result.
    *   - A pending option edit is written first, at the page's own drain, and the composer sees it. A value control the user has typed into but not committed is
@@ -1351,9 +1312,9 @@ export class webUiFeatureOptions {
    *     write the plugin's change over a store that has just rolled the user's own edit back. A failure recorded before the call, with nothing pending at the
    *     call, describes a rollback the user has already been shown on a store that rollback left clean, and does not fail the call.
    *   - The write belongs to the session and the reconciliation belongs to whichever page cycle is live when the call reaches it. Nothing is captured at entry:
-   *     a call whose page is hidden, torn down, or re-shown mid-flight still writes and saves, because that is what the user asked for, and only a retired page
-   *     copy - the epoch - ends it as `superseded`. This is the deliberate divergence from `refreshControllers()`, which captures its cycle at entry and drops
-   *     its outcome: a repaint belongs to the page it was asked of, while a write belongs to the configuration.
+   *     a call whose page is hidden, torn down, or re-shown mid-flight still writes and saves, because that is what the user asked for. This is the deliberate
+   *     divergence from `refreshControllers()`, which captures its cycle at entry and drops its outcome: a repaint belongs to the page it was asked of, while a write
+   *     belongs to the configuration.
    *   - The page is re-established in place where it can be - the model reloaded against the written configuration, the controller list refetched, the revert
    *     target moved only when the write changed the options set - and through a fresh `show()` cycle where it cannot: a controller fetch that fails after the
    *     write, a page that has no loaded model, and a page standing on the connection-error frame all re-enter, because the boot owns every one of those surfaces
@@ -1437,7 +1398,7 @@ export class webUiFeatureOptions {
     };
 
     /* Drain, then hold, on the live page. The loop exists because draining is an await, and the page may be a different one on the other side of it: every
-     * iteration re-reads the epoch and the cycle from scratch, so a re-show that landed mid-drain is drained and held in its own right rather than written over.
+     * iteration re-reads the cycle from scratch, so a re-show that landed mid-drain is drained and held in its own right rather than written over.
      *
      * It cannot spin. A refusal after a clean pending read means the reducer found something the read did not name - a dirty store, or a write in flight - and
      * the next iteration's pending read finds it and drains it, which is a real await every time. The two lifecycles a loaded store can rest at here are idle and
@@ -1445,12 +1406,6 @@ export class webUiFeatureOptions {
      * returns.
      */
     for(;;) {
-
-      // A retired copy writes nothing at all. This is the one supersession the page cannot observe for itself, and it is read fresh on every iteration.
-      if(this.#epochSignal?.aborted) {
-
-        return { kind: "superseded" };
-      }
 
       const signal = this.#pageAbort?.signal;
       const store = this.#store;
@@ -1539,15 +1494,6 @@ export class webUiFeatureOptions {
 
       // The queue guarantees no other call issued a commit while this one was in flight, so the field this clears can only be the one published above.
       this.#pendingCommit = null;
-    }
-
-    // The write is staged in the host's memory and a newer page copy has taken the window. Skip the save and leave the edit staged for the user's own Save, which
-    // is the rule a consumer applies today between its commit and its save, and answer without touching a page this copy no longer owns.
-    if(this.#epochSignal?.aborted) {
-
-      releaseHold();
-
-      return { kind: "superseded" };
     }
 
     // The save is the only step whose failure still leaves the configuration changed, so it answers with a result of its own rather than with a failure: the host
@@ -2028,7 +1974,7 @@ export class webUiFeatureOptions {
    *
    * A takeover ends in any of several ways, and every one of them aborts the handle's `signal`: the plugin calls `release()`; the user moves the selection in the
    * sidebar, because the content area belongs to the selection; a later `takeover()` takes the area for another card, the latest call winning; or the page cycle
-   * ends - a navigate-away through `hide()`, a re-show, or this page copy being superseded by a newer one. A call made when no cycle is live answers with a handle
+   * ends - a navigate-away through `hide()`, or a re-show. A call made when no cycle is live answers with a handle
    * that is already released, so a consumer never has to ask whether the page is up before asking for the area.
    *
    * A card that saves something calls `release()` itself when its save resolves, without exception. A configuration write through {@link commitConfig} may re-show
@@ -2080,15 +2026,6 @@ export class webUiFeatureOptions {
   async hide() {
 
     await this.#flushPending();
-
-    /* An epoch that aborted while the flush ran means a newer page copy has taken the window, and hiding the regions would blank the page that copy has already
-     * rendered into. Return before any of it: the cycle's own abort has already cascaded from the epoch through the listener show() composed, so there is nothing
-     * left for the teardown below to do either.
-     */
-    if(this.#epochSignal?.aborted) {
-
-      return;
-    }
 
     for(const id of REGION_IDS) {
 

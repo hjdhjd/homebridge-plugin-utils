@@ -18,9 +18,10 @@ import { delay } from "./webUi-liveness.mjs";
  * frame body's own theme classes. Each announces a mode the user picked and a system flip an auto-detecting install inherits alike, because the host resolves
  * either into the same retint. Each route re-reads the mode through the bridge, so the bridge stays the one authority on which mode is current.
  *
- * Cleanup is automatic via the AbortSignal: aborting releases the stylesheet from the document, clears the `color-scheme`, `.fo-dark` class, and accent-token
- * inline overrides the effect wrote on `:root` (so it leaves no trace on a shared document), removes the message listener (via `{signal}` on addEventListener),
- * disconnects the class observer, and short-circuits the in-progress Bootstrap probe at the next await checkpoint.
+ * A supplied AbortSignal makes cleanup automatic: aborting releases the stylesheet from the document, clears the `color-scheme`, `.fo-dark` class, and
+ * accent-token inline overrides the effect wrote on `:root` (so it leaves no trace on a shared document), removes the message listener (via `{signal}` on
+ * addEventListener), disconnects the class observer, and short-circuits the in-progress Bootstrap probe at the next await checkpoint. With no signal the effect holds
+ * for the life of the document, which is how the page-lifetime registration holds it.
  *
  * The function returns once the initial lighting-mode read has been applied. Both follow routes are live before that read is even issued, so a page whose initial
  * read fails or never answers still follows every later host announcement. The Bootstrap accent probe runs in the background - the caller's pipeline is not blocked
@@ -30,7 +31,8 @@ import { delay } from "./webUi-liveness.mjs";
  * @param {Object} args
  * @param {{userCurrentLightingMode: () => Promise<string>}} args.host - The Homebridge bridge (or a test stub matching that surface). The lighting mode is normally
  *        "light" or "dark"; any unrecognized value is tolerated and treated as a no-op (no color scheme is applied).
- * @param {AbortSignal} args.signal - Lifecycle signal. Aborting tears down the listener, the class observer, and the background probe.
+ * @param {AbortSignal} [args.signal] - Lifecycle signal. Aborting tears down the listener, the class observer, and the background probe. Absent means the effect is
+ *        held for the life of the document.
  * @param {Object} [args.probe] - Optional probe overrides.
  * @param {number} [args.probe.timeoutMs=2000] - Maximum time, in milliseconds, to poll for Bootstrap's stylesheet before giving up and applying the fallback.
  *        The ceiling bounds how long a page whose stylesheet never arrives waits before rendering unthemed. Override to `0` in tests to skip the probe.
@@ -39,9 +41,9 @@ import { delay } from "./webUi-liveness.mjs";
  * @returns {Promise<void>} Resolves once the initial mode read has been applied, and rejects when that read rejects - the sheet and both follow routes are live
  *                          either way. Does NOT wait for the Bootstrap probe to complete.
  */
-export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, timeoutMs = 2000 } = {}, signal }) => {
+export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, timeoutMs = 2000 } = {}, signal = undefined }) => {
 
-  if(signal.aborted) {
+  if(signal?.aborted) {
 
     return;
   }
@@ -74,7 +76,7 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
       return;
     }
 
-    if(signal.aborted) {
+    if(signal?.aborted) {
 
       return;
     }
@@ -108,7 +110,7 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
 
   themeClassObserver.observe(document.body, { attributeFilter: ["class"], attributes: true });
 
-  signal.addEventListener("abort", () => {
+  signal?.addEventListener("abort", () => {
 
     // Restore the document to its pre-effect state, symmetric with every mutation the effect made to it: drop the adopted stylesheet, then the `color-scheme` and
     // `.fo-dark` class that applyColorScheme set on `:root` and the accent-token inline overrides the Bootstrap probe wrote there. The `color-scheme` removal is the
@@ -130,7 +132,7 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
   // property on :root and toggles the fo-dark class. Captured before the abort check for the same reason the follower captures its own read.
   const mode = await host.userCurrentLightingMode();
 
-  if(signal.aborted) {
+  if(signal?.aborted) {
 
     return;
   }
@@ -207,7 +209,7 @@ const runAccentProbe = async ({ intervalMs, signal, timeoutMs }) => {
 
   await waitForBootstrap({ intervalMs, signal, timeoutMs });
 
-  if(signal.aborted) {
+  if(signal?.aborted) {
 
     return;
   }
@@ -277,7 +279,7 @@ const isValidAccentValue = (value) => {
 const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
 
   // Honor the documented `probe: { timeoutMs: 0 }` opt-out synchronously. A pre-aborted caller signal gets the same fast path.
-  if((timeoutMs <= 0) || signal.aborted) {
+  if((timeoutMs <= 0) || signal?.aborted) {
 
     return false;
   }
@@ -299,7 +301,7 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
   };
 
   const deadline = AbortSignal.timeout(timeoutMs);
-  const composed = AbortSignal.any([ signal, deadline ]);
+  const composed = signal ? AbortSignal.any([ signal, deadline ]) : deadline;
 
   while(!composed.aborted) {
 
@@ -323,7 +325,7 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
 
   // Only warn on the deadline path - a caller-driven abort (page teardown) is not actionable, just a lifecycle event. The accent color falls back to the system
   // AccentColor keyword; the UI continues to function.
-  if(deadline.aborted && !signal.aborted) {
+  if(deadline.aborted && !signal?.aborted) {
 
     // eslint-disable-next-line no-console
     console.warn("FeatureOptions: Bootstrap stylesheet did not load within " + timeoutMs + "ms - accent color falling back to the system AccentColor keyword.");

@@ -194,12 +194,12 @@ export const withDeadline = ({ promise, seconds, signal = undefined }) => {
  * What the losing call site sees: its bounded await rejects with the signal's own abort reason rather than with {@link DeadlineExpiredError}, so the catch path
  * checks `signal.aborted` before it renders anything. A superseded action has no failure to report, because the action that superseded it owns the surface.
  *
- * The parent is whatever bounds the surface's life - the shell's page epoch for a card that lives as long as the page - and it is injected rather than reached for,
- * so the guard composes with a lifetime it never has to know the shape of.
+ * The parent is whatever bounds the surface's life - a takeover handle's `signal` for a card mounted in the page's content area - and it is injected rather than
+ * reached for, so the guard composes with a lifetime it never has to know the shape of.
  *
  * @example
  *
- * const guard = createActionGuard({ signal: ui.epochSignal });
+ * const guard = createActionGuard({ signal: takeover.signal });
  *
  * const probe = async () => {
  *

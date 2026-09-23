@@ -29,10 +29,9 @@ export const TAKEOVER_REGION_IDS = [ "deviceStatsContainer", "optionsContainer",
  * stands ends that one and takes its place without restoring the regions in between, so the area passes from one card to the next with no flash of the page
  * underneath.
  *
- * Teardown writes no region display, and the reason is the whole of why this view can be torn down by a bare signal. A page cycle ends either through `hide()`,
- * which has already hidden every region and whose next show() reveals them together, or as a page copy a successor superseded, where the window belongs to that
- * successor and a display write from the retired copy would blank or un-blank regions the successor has already rendered into. Removing this mount's own container
- * is safe for the same reason it is necessary: the successor never looks for it.
+ * Teardown writes no region display, and the reason is the whole of why this view can be torn down by a bare signal. A page cycle ends through `hide()` - a
+ * navigate-away, or the teardown a re-show runs first - which has already hidden every region, and whose next show() reveals them together. Removing this mount's
+ * own container is safe for the same reason it is necessary: the next cycle mounts a container of its own and never looks for this one.
  *
  * @param {Object} args
  * @param {HTMLElement} args.anchor - The `#deviceStatsContainer` element, the first main-content region in the page's markup. The framework's takeover element is

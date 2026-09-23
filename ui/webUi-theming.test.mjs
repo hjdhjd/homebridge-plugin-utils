@@ -91,6 +91,19 @@ describe("registerThemeEffect - synchronous setup", () => {
     assert.equal(document.adoptedStyleSheets.length, before + 1, "stylesheet adopted");
   });
 
+  test("with no signal the effect applies the host's mode and is held for the life of the document", async () => {
+
+    using dom = createTestDom();
+
+    const before = document.adoptedStyleSheets.length;
+
+    // The page-lifetime registration passes no signal, because nothing ends the page before its document does.
+    await registerThemeEffect({ host: fakeHost("dark"), probe: { timeoutMs: 0 } });
+
+    assert.equal(document.adoptedStyleSheets.length, before + 1, "the stylesheet is adopted with no lifecycle to release it");
+    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "and the host's mode is applied");
+  });
+
   test("applies color-scheme on :root from the host's reported lighting mode", async () => {
 
     using dom = createTestDom();

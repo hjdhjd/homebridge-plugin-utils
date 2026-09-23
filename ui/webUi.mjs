@@ -38,16 +38,6 @@ const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the pl
  */
 
 /**
- * The resume-subscription handle this instance hands down to the feature-options orchestrator and the views it mounts.
- *
- * The shape is the resume detector's own `subscribe` contract, documented on `createResumeDetector` in the liveness module; what this wrapper adds is the epoch
- * bound, so a subscription registered through it also ends when a successor supersedes this copy. Stated once here because the wrapper and the wiring both name it.
- *
- * @typedef {Object} EpochScopedResumeHandle
- * @property {(callback: () => void, options?: { shouldProbe?: () => boolean, signal?: AbortSignal }) => void} subscribe - Register a resume subscriber.
- */
-
-/**
  * webUi - Top-level plugin webUI orchestrator.
  *
  * Owns the page-level menu state, the first-run flow, page theming, and the {@link webUiFeatureOptions} instance that renders the feature options page. The
@@ -82,8 +72,7 @@ export class webUi {
    * The deadline helpers are NOT re-exposed here. A plugin that wants to bound its own awaits imports `withDeadline` from the liveness module directly, so there is one
    * path to that function rather than a field that shadows it.
    *
-   * Every subscription is bounded by the page epoch as well as by whatever signal the caller supplies: it never outlives the newest `webUi` construction in this
-   * window, so a plugin holding a subscription in a settings frame that gets reopened does not need to retire it itself.
+   * A subscription lasts until the `signal` its caller supplies aborts, or for the life of the page when the caller supplies none.
    *
    * @example
    *
@@ -95,7 +84,6 @@ export class webUi {
   liveness;
 
   #chromeBound = false;
-  #epochSignal;
   #firstRun;
   #name;
   #resumeDetector;
@@ -109,32 +97,10 @@ export class webUi {
    * Caller-supplied first-run hooks are merged in a single spread over the default no-op handlers, so partial overrides work naturally - a caller can supply only
    * `onSubmit` and the unspecified slots stay at the defaults that keep the flow driveable.
    *
-   * Construction is also the page's retirement chokepoint: it aborts the epoch of whichever copy held the window and claims the window for this one, which retires
-   * the abandoned copy whole - its liveness subscriptions, its orchestrator cycle and every view effect and host listener that cycle scopes, its chrome handlers,
-   * and any late launch settlement that would otherwise repaint shared chrome.
-   *
    * @param {WebUiConfig} [options] - Configuration options for the webUI. All fields are optional; firstRun's hooks fall back to no-op handlers, and
    * featureOptions/name simply default to undefined.
    */
   constructor({ featureOptions, firstRun = {}, name } = {}) {
-
-    /* Retire the predecessor and claim the window. The settings frame is reused across panel opens and each open imports a fresh cache-busted module copy, so the
-     * copy under construction here is the only party that knows the previous one is dead: no teardown event reaches an abandoned copy - the same silence that makes
-     * the clock-gap resume detector necessary in the first place - so nothing else can tell it to stand down, and its timers, listeners, and handlers would go on
-     * running in the reused window against DOM the successor now owns. Construction is the one moment a successor provably exists, which is what makes it the place
-     * to do this.
-     *
-     * The duck-typed guard is the browser-boundary narrowing posture: a foreign value squatting on the property degrades to replacement rather than a constructor
-     * throw, so a page that renders is never traded for a page that does not. A window's first construction finds no predecessor and no-ops.
-     */
-    if(typeof globalThis.webUiPageEpoch?.abort === "function") {
-
-      globalThis.webUiPageEpoch.abort();
-    }
-
-    globalThis.webUiPageEpoch = new AbortController();
-
-    this.#epochSignal = globalThis.webUiPageEpoch.signal;
 
     // First-run handlers default to no-ops; caller-supplied entries override per-key. The single-statement spread lands `#firstRun` in its final shape on first
     // assignment, so there is no intermediate object that gets discarded a line later.
@@ -145,116 +111,23 @@ export class webUi {
     // configuration. Its sampling timer is demand-driven, so a page whose views never subscribe pays nothing for holding one.
     this.#resumeDetector = createResumeDetector();
 
-    /** @type {EpochScopedResumeHandle} */
-    const resumeDetector = { subscribe: (callback, options) => this.#resumeDetector.subscribe(callback, this.#scopedToEpoch(options)) };
-
     this.featureOptions = new webUiFeatureOptions(featureOptions, {
 
-      epochSignal: this.#epochSignal,
       registerTheming: (options) => this.registerTheming(options),
-      resumeDetector
+      resumeDetector: this.#resumeDetector
     });
 
-    this.liveness = { onResume: (callback, options) => this.#resumeDetector.subscribe(callback, this.#scopedToEpoch(options)) };
+    this.liveness = { onResume: (callback, options) => this.#resumeDetector.subscribe(callback, options) };
     this.#name = name;
-  }
-
-  /**
-   * The lifetime of this module copy's claim on the window, as an `AbortSignal`. It aborts when a newer `webUi` construction in this window supersedes this copy,
-   * and at no other time. The retirement itself belongs to {@link webUi.constructor}, which documents what a supersession reaches, so the mechanism stays described
-   * in one place.
-   *
-   * Which signal a resource is scoped to is the question this surface exists to answer. A plugin holds resources with different lifetimes, and each has its own
-   * signal. The mount signal a render hook receives - the infoPanel bag's `signal` - ends when the panel it drew into is torn down, by a navigation away or by a
-   * re-show, and is the right scope for anything that serves the panel currently on screen. This signal ends only when a successor copy claims the window, and is
-   * the right scope for anything belonging to the module copy itself and meant to outlive any one panel: a recurring poll whose cache survives a navigation, or a
-   * listener registered on an object the frame keeps across copies.
-   *
-   * Published as a getter rather than a public field so the implementation is free to change without breaking callers; the observable shape is what plugins might
-   * consume, and the field behind it stays the class's own. What a consumer receives is the signal and never the controller, so a plugin can observe the end of its
-   * copy but can never declare it. It is deliberately not a teardown notification for the feature-options page either - that lifetime is the mount signal's.
-   *
-   * Adding an abort listener to a signal that has already aborted never fires it. A registration made synchronously in a render hook's own body cannot reach that
-   * state - the mount signal aborts with the epoch, so no render runs after a supersession - which is why the example below needs no guard for it. The framework
-   * calls a render hook un-awaited, so a hook that awaits and then registers from a deferred continuation can land on an already-aborted signal; that registration,
-   * like any made outside a render hook, checks `aborted` first.
-   *
-   * @example
-   *
-   * // A poll that outlives any single panel: armed once for this module copy, and ended only when a newer copy claims the window. The teardown is registered before
-   * // the resource it tears down, so a throw between the two statements can never leave an orphaned poll behind the re-entry guard.
-   * if(refreshTimer === undefined) {
-   *
-   *   ui.epochSignal.addEventListener("abort", () => clearInterval(refreshTimer), { once: true });
-   *
-   *   refreshTimer = setInterval(() => void refreshPrices(), REFRESH_INTERVAL_MS);
-   * }
-   *
-   * @returns {AbortSignal}
-   */
-  get epochSignal() {
-
-    return this.#epochSignal;
-  }
-
-  /**
-   * Register an event listener for the life of this module copy.
-   *
-   * A listener bound to a target that outlives a single module copy - the window, the document, the `homebridge` bridge - has to be retired when a successor claims
-   * the window, and composing that lifetime by hand at every registration is where the composition gets forgotten. This method owns it, so a plugin writes the
-   * registration it means and the epoch bound comes with it.
-   *
-   * Which of the page's lifetimes a resource wants is the question {@link webUi.epochSignal} answers at length, and the answer decides between this method and
-   * the mount signal: this scopes to the module copy, which suits a listener on an object the frame keeps across copies, while a listener serving the panel
-   * currently on screen belongs on the mount signal a render hook receives, registered directly with that signal.
-   *
-   * A caller's own `signal` composes rather than replaces - whichever of the two aborts first removes the listener - so a consumer that already scopes a listener to
-   * some narrower lifetime keeps that scope and gains the epoch bound on top of it. The `capture`-boolean spelling `addEventListener` accepts is normalized into the
-   * options-object form before that composition, so both call shapes reach the platform meaning the same thing.
-   *
-   * Positional parameters are deliberate here, against the house preference for an options object: this wraps `addEventListener`, and mirroring the platform API's
-   * universally-known shape is what makes a registration readable at a glance - a reader who knows `addEventListener` already knows this.
-   *
-   * The helper serves `addEventListener` targets, which is what accepting a `signal` at all means. A resource with no signal support of its own - a
-   * `MutationObserver`, an interval, a subscription to a foreign API - takes the `epochSignal.addEventListener("abort", ...)` teardown idiom that getter documents.
-   *
-   * A nullish target registers nothing. An element the page's markup omits declares that surface absent rather than marking the page broken, which is the stance the
-   * chrome bindings take on their own buttons, so a plugin may register straight against `document.getElementById(...)` output without guarding each site. The cost
-   * this accepts is that a mistyped element id reads as an omitted surface and registers in silence, so a listener that never fires is first checked against the id
-   * it was registered on.
-   *
-   * @example
-   *
-   * // A host push this plugin consumes for as long as its copy holds the window, retired the moment a newer copy claims it.
-   * ui.on(homebridge, "my-plugin-push", (event) => renderPush(event.data));
-   *
-   * @param {?EventTarget} target - The target to register on. Nullish registers nothing.
-   * @param {string} event - The event type.
-   * @param {Function} handler - The listener.
-   * @param {(Object|boolean)} [options] - The platform's own listener options, or the `capture` boolean shorthand. A `signal` among them composes with the epoch.
-   * @public
-   */
-  on(target, event, handler, options) {
-
-    // An element the page's markup omits declares that surface absent - the chrome binder's own posture - so a nullish target registers nothing rather than treating
-    // the page as broken. The trade this accepts is documented on the method: a mistyped element id also lands here, silently.
-    if(!target) {
-
-      return;
-    }
-
-    const normalized = (typeof options === "boolean") ? { capture: options } : (options ?? {});
-
-    target.addEventListener(event, handler, { ...normalized, signal: this.epochBounded(normalized.signal) });
   }
 
   /**
    * Register the framework's theming for the life of this page.
    *
    * One call is the whole contract: it adopts the design-token sheet, then the page theme - the themed canvas, dark-mode handling, the page-kit classes, and the
-   * Bootstrap accent probe - and holds both for as long as this module copy owns the window. Theming is a page concern rather than a view one, since everything it
-   * writes lands on `:root` and `body`, so a plugin's first-run page, support tab, and settings form all keep the theme rather than losing it on every navigation.
-   * The feature-options view routes through this same registration rather than registering theming of its own.
+   * Bootstrap accent probe - and holds both for the life of the page. Theming is a page concern rather than a view one, since everything it writes lands on `:root`
+   * and `body`, so a plugin's first-run page, support tab, and settings form all keep the theme rather than losing it on every navigation. The feature-options view
+   * routes through this same registration rather than registering theming of its own.
    *
    * Safe to call more than once: the first call registers, and every later call returns the same promise without registering anything a second time. A `probe`
    * override is honored on the FIRST call only - a later call's override is ignored, because the probe it would configure has already run.
@@ -285,78 +158,24 @@ export class webUi {
 
     if(!this.#themingPromise) {
 
-      registerTokensEffect({ signal: this.#epochSignal });
+      registerTokensEffect();
 
       // A caller that voids the returned promise attaches no rejection handler, and the void operator does not mark a rejection handled - so this branch owns the
       // diagnostic posture: it marks a failed initial mode read handled for the page (the failure is survivable by design - the sheets and the followed host
       // signals are live, and the next host announcement applies the mode), while a caller that awaits still observes the rejection through its own branch of the
       // same promise. The mark is the library's own, and it answers the promise it was handed, so the memo every caller shares keeps one identity.
-      this.#themingPromise = markHandled(registerThemeEffect({ host: homebridge, probe, signal: this.#epochSignal }));
+      this.#themingPromise = markHandled(registerThemeEffect({ host: homebridge, probe }));
     }
 
     return this.#themingPromise;
   }
 
   /**
-   * Bound a lifecycle signal by this module copy's own lifetime.
+   * Run an entry point's work, reporting its failure and settling its chrome.
    *
-   * The one home for the epoch-composition rule, and the surface a plugin reaches for when it holds a lifetime of its own that should also end when a successor
-   * claims the window. The framework's own consumers run through it too - {@link webUi.on} composes every listener registration here, and the liveness
-   * subscriptions compose their option bags here - so a plugin bounding a wiring envelope and the framework bounding a listener are applying one rule rather than
-   * two that could drift apart.
-   *
-   * Called with no signal, it hands back the page epoch itself rather than a composition over one, so the common case allocates no `AbortSignal.any` at all. Called
-   * with a signal, it hands back a composition that ends when either side does - the caller's own lifetime, or a supersession, whichever comes first. An
-   * already-aborted input yields an already-aborted composition, by the platform's own `AbortSignal.any` semantics rather than by anything added here.
-   *
-   * Which of the page's lifetimes a resource actually wants is the question {@link webUi.epochSignal} answers at length. This method is how that answer gets
-   * applied once it is the epoch's.
-   *
-   * @example
-   *
-   * // A wiring envelope that ends on its own abort or on a supersession, whichever lands first, so every cancellation point downstream reads one signal.
-   * const wiringSignal = ui.epochBounded(wiringController.signal);
-   *
-   * @param {AbortSignal} [signal] - The caller's own lifecycle signal, when it has one.
-   * @returns {AbortSignal} The caller's signal bounded by the epoch, or the epoch itself.
-   * @public
-   */
-  epochBounded(signal) {
-
-    return signal ? AbortSignal.any([ signal, this.#epochSignal ]) : this.#epochSignal;
-  }
-
-  /**
-   * Bound a liveness subscription's options by the page epoch.
-   *
-   * Applied at both points this instance hands a subscription out: the public `liveness.onResume` surface and the detector handle threaded down to the views. The
-   * options default keeps the documented single-argument `onResume(callback)` call shape working, and the spread carries every sibling key through by construction
-   * rather than by enumeration, so a key the detector grows later needs no edit here. The lifetime comes from {@link webUi.epochBounded}, so whichever of the
-   * caller's own signal and the epoch aborts first removes the subscription - the same demand-driven disarm the detector already implements. The detector itself
-   * stays page-ignorant either way, since deciding what supersedes a page is this object's job and not the primitive's.
-   *
-   * @param {{ shouldProbe?: () => boolean, signal?: AbortSignal }} [options] - The caller's own subscription options.
-   * @returns {{ shouldProbe?: () => boolean, signal: AbortSignal }} The caller's options with the lifecycle signal bounded by the epoch.
-   * @private
-   */
-  #scopedToEpoch(options = {}) {
-
-    return { ...options, signal: this.epochBounded(options.signal) };
-  }
-
-  /**
-   * Run an entry point's work, reporting its failure and settling its chrome only while this copy still speaks for the page.
-   *
-   * Every entry point in this shell repeats one skeleton: run some async work, report a failure to the user, settle the chrome the work brackets. The toast, the
-   * spinner, the menu, the schema form, and the boot monitor are all chrome of the frame the browser reuses across panel opens rather than of any one module copy,
-   * so a copy a successor has replaced leaves every one of them alone whichever way its own work settled. Reporting would put a stale diagnostic over the
-   * successor's working page; hiding the spinner would pull it out from under the successor's own in-flight launch; standing the boot monitor down would retract a
-   * panel raised for a page this copy no longer speaks for.
-   *
-   * The epoch is tested here rather than at each entry point's own catch and finally for the reason the feature-options cycle keeps its staleness chokepoint: a
-   * test written once is a rule the code enforces, while the same test repeated at every failure path is a rule each future one has to remember. The stop a
-   * superseded continuation raises - `throwIfAborted()` after an await - arrives in this catch as the abort reason and is discarded by that same test, so the two
-   * mechanisms settle into one answer.
+   * Every entry point in this shell repeats one skeleton: run some async work, report a failure to the user, settle the chrome the work brackets - the spinner, the
+   * menu, the schema form, the boot monitor. Owning that skeleton once means every entry point reports and settles on every path its work can take, rather than each
+   * one having to remember to.
    *
    * @param {Object} args
    * @param {(err: *) => void} [args.failed] - Reports a failure to the user. Defaults to the shared error-toast normalization.
@@ -372,18 +191,10 @@ export class webUi {
       await run();
     } catch(err) {
 
-      if(this.#epochSignal.aborted) {
-
-        return;
-      }
-
       failed(err);
     } finally {
 
-      if(!this.#epochSignal.aborted) {
-
-        settled();
-      }
+      settled();
     }
   }
 
@@ -467,7 +278,7 @@ export class webUi {
    * error-toast normalization its default carries.
    *
    * The spinner is raised here rather than inside the boundary's run, so the boundary's settle work is what brings it down: it then brackets the whole flow and
-   * drains on every path a live copy can take, the early bail on a falsy submit answer included.
+   * drains on every path, the early bail on a falsy submit answer included.
    *
    * @returns {Promise<void>}
    * @private
@@ -494,10 +305,6 @@ export class webUi {
         document.getElementById("menuWrapper").style.display = "inline-flex";
 
         await this.featureOptions.show(this.#session);
-
-        // featureOptions.show() returns quietly on a copy a successor has replaced, so without this stop a copy that no longer speaks for the page would go on to
-        // enable the save button over the successor's own first-run flow.
-        this.#epochSignal.throwIfAborted();
 
         homebridge.enableSaveButton();
       },
@@ -562,7 +369,7 @@ export class webUi {
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the schema form so any debounced-but-unwritten option edit is flushed into Homebridge's in-memory config model
    * first - the Settings form then renders against the flushed config rather than a stale snapshot. The reveal and the spinner are {@link #runEntryPoint}'s settle
-   * work, so they land on every path a live copy can take and nothing strands the user on a spinner. The flush drain's own failure surfaces via `persist:failed`'s
+   * work, so they land on every path and nothing strands the user on a spinner. The flush drain's own failure surfaces via `persist:failed`'s
    * toast rather than as a rejection here, and a rejection that contract rules out reaches the boundary's default toast with the tab painted regardless.
    *
    * @returns {Promise<void>}
@@ -596,7 +403,7 @@ export class webUi {
    * paint to mask transient layout shifts.
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the support page so any debounced-but-unwritten option edit is flushed first, matching the Settings path. The
-   * reveal and the spinner are {@link #runEntryPoint}'s settle work, so they land on every path a live copy can take. The flush drain's own failure surfaces via
+   * reveal and the spinner are {@link #runEntryPoint}'s settle work, so they land on every path. The flush drain's own failure surfaces via
    * `persist:failed`'s toast rather than as a rejection here, and a rejection that contract rules out reaches the boundary's default toast with the tab painted
    * regardless.
    *
@@ -646,14 +453,8 @@ export class webUi {
     // later reader sees.
     //
     // This is the page's FIRST bridge call, and an unbounded one would be the worst place to hang: nothing has rendered, so the user sees a spinner over an empty
-    // frame with no diagnostic and no way forward. The epoch signal exists here but is deliberately not bound to this deadline: a failure that arrives after a
-    // supersession is discarded at the entry-point boundary and a success that does is stopped by the check below, so binding the deadline itself would add no
-    // correctness benefit. A live copy's expiry surfaces through show()'s toast with the menu left usable for another attempt.
+    // frame with no diagnostic and no way forward. An expiry surfaces through show()'s toast with the menu left usable for another attempt.
     this.#session = await withDeadline({ promise: PluginConfigSession.open({ host: homebridge, name: this.#name }), seconds: BOOT_AWAIT_DEADLINE_SECONDS });
-
-    // A stalled open settles long after a reopen replaced this copy - healed or expired - and every statement below runs plugin code or writes chrome the successor
-    // owns. Stop here so a copy nobody is looking at runs no first-run hook, reveals no menu, and shows no view.
-    this.#epochSignal.throwIfAborted();
 
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
     // flow returns true on a fresh config (no valid credentials yet), and a plugin without one keeps the default `() => false` gate and lands straight on feature
@@ -690,11 +491,6 @@ export class webUi {
    * exists, and pageFirstRun is displayed only once the session is open and the caller's onStart hook has agreed. A synthetic click on a hidden button is outside
    * the page's contract and gets no defense of its own.
    *
-   * The epoch signal is what bounds them. The buttons themselves outlive any single module copy - they are elements of the reused frame, not of the copy that bound
-   * them - so a copy that is superseded and whose handlers stayed attached would answer every click alongside the successor's, running each tab switch twice against
-   * two different sessions and answering a submit for a page it no longer speaks for. Binding on the epoch retires this copy's set at the moment the successor
-   * claims the window.
-   *
    * Chrome click listeners use a uniform shape: an arrow expression that calls a handler and returns its result. addEventListener discards the return value, so each
    * async handler's promise is dropped; every handler runs its work through {@link #runEntryPoint}, which owns both the report and the settle, so the drop carries no
    * unobserved rejection. #showFeatureOptions serves both the first click before a session exists and every re-entry, and toasts a failure from either. The launch
@@ -715,12 +511,10 @@ export class webUi {
 
     this.#chromeBound = true;
 
-    const signal = this.#epochSignal;
-
-    document.getElementById("menuHome")?.addEventListener("click", () => this.#showSupport(), { signal });
-    document.getElementById("menuFeatureOptions")?.addEventListener("click", () => this.#showFeatureOptions(), { signal });
-    document.getElementById("menuSettings")?.addEventListener("click", () => this.#showSettings(), { signal });
-    document.getElementById("firstRun")?.addEventListener("click", () => this.#submitFirstRun(), { signal });
+    document.getElementById("menuHome")?.addEventListener("click", () => this.#showSupport());
+    document.getElementById("menuFeatureOptions")?.addEventListener("click", () => this.#showFeatureOptions());
+    document.getElementById("menuSettings")?.addEventListener("click", () => this.#showSettings());
+    document.getElementById("firstRun")?.addEventListener("click", () => this.#submitFirstRun());
   }
 
   /**
@@ -731,10 +525,6 @@ export class webUi {
    * call sites stay flat. The context object is forwarded to the function form so each hook is a pure function of its injected config (and, for `onSubmit`, the
    * commit callback) rather than reaching for the session or the host itself.
    *
-   * Every plugin hook the shell runs is awaited here and nowhere else, which is what makes this the one place that can keep a slow hook's answer from steering a copy
-   * a successor has already replaced: a hook can take as long as a login, and the reopen that supersedes this copy can land anywhere inside that wait. The stop is
-   * the platform's own `throwIfAborted()`, and what it raises is discarded at the entry-point boundary along with any other failure that lands after a supersession.
-   *
    * @param {Function|*} handler - Caller-supplied handler. When a function, it is awaited; otherwise it is treated as a truthy/falsy continuation flag.
    * @param {FirstRunContext} [context] - The injected context forwarded to the function form of the handler.
    * @returns {Promise<boolean>} `true` when the workflow should continue, `false` when it should be aborted.
@@ -742,10 +532,6 @@ export class webUi {
    */
   async #processHandler(handler, context) {
 
-    const answer = (typeof handler === "function") ? await handler(context) : handler;
-
-    this.#epochSignal.throwIfAborted();
-
-    return Boolean(answer);
+    return Boolean((typeof handler === "function") ? await handler(context) : handler);
   }
 }

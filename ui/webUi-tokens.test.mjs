@@ -56,6 +56,18 @@ describe("registerTokensEffect", () => {
     assert.equal(document.adoptedStyleSheets.length, before, "stylesheet released on abort");
   });
 
+  test("with no signal the stylesheet is adopted and held for the life of the document", () => {
+
+    using dom = createTestDom();
+
+    const before = document.adoptedStyleSheets.length;
+
+    // The page-lifetime registration passes no signal, because nothing ends the page before its document does.
+    registerTokensEffect();
+
+    assert.equal(document.adoptedStyleSheets.length, before + 1, "the stylesheet is adopted with no lifecycle to release it");
+  });
+
   test("a pre-aborted signal does not adopt the stylesheet at all", () => {
 
     using dom = createTestDom();

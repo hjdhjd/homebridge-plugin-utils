@@ -1115,8 +1115,8 @@ describe("webUiFeatureOptions - the boot window", () => {
 
   /* Two entries into one instance, close enough together that the second arrives while the first is still inside the teardown its own entry started. That is one
    * user gesture landing twice - a double click on the menu - and it must produce one page. What makes the window real is that hide() is awaited: without an entry
-   * generation both entries pass their epoch check, both come out of the same teardown, and both mint a cycle, leaving the first cycle's store, effects, and
-   * listeners standing unaborted behind the second's. The counters are the observation, and the edit at the end is what proves the cycle that stood is the live
+   * generation both entries come out of the same teardown and both mint a cycle, leaving the first cycle's store, effects, and listeners standing unaborted behind
+   * the second's. The counters are the observation, and the edit at the end is what proves the cycle that stood is the live
    * one rather than a torn-down winner: an aborted cycle's persist effect drops the edit and nothing reaches the host at all.
    */
   test("two show() entries inside one teardown window mint one cycle between them", async () => {
@@ -1201,63 +1201,6 @@ describe("webUiFeatureOptions - the boot window", () => {
     orchestrator.cleanup();
   });
 
-  /* A re-entry's own await opens the same window a synchronous double-entry does, just on the clock instead of the call stack: the epoch can abort while this entry
-   * is inside its own teardown, and the guard must catch that exactly as it catches a synchronous supersession, because both are the same "someone else owns the
-   * page now" fact arriving through the guard's one parent. The stalled host write is what holds the window open long enough for the abort to land inside it, the
-   * same stall the no-hang guarantee test below exercises for a different purpose.
-   */
-  test("an epoch that aborts while a re-entry's show() awaits its own teardown mints no second cycle", async () => {
-
-    using dom = createTestDom();
-
-    const skeleton = createSkeletonFeatureOptionsDom();
-    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
-
-    fake.updatePluginConfig = () => new Promise(() => {});
-
-    using homebridgeInstall = installHomebridge(fake);
-
-    seedBootstrapProbeShim();
-
-    const counts = { controllers: 0 };
-    const epoch = new AbortController();
-    const orchestrator = new webUiFeatureOptions({
-
-      getControllers: () => {
-
-        counts.controllers += 1;
-
-        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
-      },
-
-      getDevices: () => ({ devices: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Front Door", serialNumber: "DEV-1" } ], error: "" }),
-      ui: { isController: (device) => device?.serialNumber === "CTRL-A" }
-    }, { epochSignal: epoch.signal });
-
-    const session = await openTestSession();
-
-    await orchestrator.show(session);
-    await flush();
-
-    assert.equal(counts.controllers, 1, "the first cycle stood up normally");
-
-    skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
-
-    const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
-
-    motionCheckbox.checked = false;
-    motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
-
-    const reentry = orchestrator.show(session);
-
-    epoch.abort();
-
-    await reentry;
-
-    assert.equal(counts.controllers, 1, "the epoch's abort during the re-entry's teardown left no second cycle standing");
-
-    orchestrator.cleanup();
-  });
 });
 
 describe("webUiFeatureOptions.hide", () => {
@@ -6634,10 +6577,11 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
     orchestrator.cleanup();
   });
 
-  test("never fires for a cycle a newer page copy superseded", async () => {
+  test("never fires for a cycle a re-show superseded", async () => {
 
     // A superseded cycle returns before the dispatch, which is what makes a staleness guard on the call unnecessary rather than merely unused. This row is what
-    // proves the return actually happens rather than being assumed.
+    // proves the return actually happens rather than being assumed: the first cycle is parked on its catalog read when a re-show supersedes it, and the one read
+    // both cycles share then answers them together.
     using dom = createTestDom();
 
     const { promise, resolve } = Promise.withResolvers();
@@ -6646,19 +6590,20 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
     using homebridgeInstall = homebridgeGuard;
 
     let fired = 0;
-    const epoch = new AbortController();
-    const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++ }, { epochSignal: epoch.signal });
-    const showPromise = orchestrator.show(await openTestSession());
+    const orchestrator = new webUiFeatureOptions({ onLoaded: () => fired++ });
+    const session = await openTestSession();
+    const first = orchestrator.show(session);
 
-    await waitFor(() => calls.length === 1, { message: "the cycle must reach its catalog read before the supersession lands" });
+    await waitFor(() => calls.length === 1, { message: "the cycle must reach its catalog read before the re-show lands" });
 
-    epoch.abort();
+    const second = orchestrator.show(session);
+
     resolve(FEATURES);
 
-    await showPromise;
+    await Promise.all([ first, second ]);
     await flush();
 
-    assert.equal(fired, 0, "the superseded cycle announces nothing, whatever its catalog does afterwards");
+    assert.equal(fired, 1, "only the cycle that stood announces - the superseded one returned before the dispatch");
 
     orchestrator.cleanup();
   });
@@ -6714,8 +6659,8 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
 describe("webUiFeatureOptions - takeover", () => {
 
   /* Stand up the page skeleton and a fake bridge, with one controller carrying one device so the sidebar a row clicks is the real one. Kept apart from the
-   * orchestrator itself, since the rows below construct a variety of them - a global-only page, a page with an `onLoaded` hook that takes the area during the boot,
-   * a page carrying an epoch signal.
+   * orchestrator itself, since the rows below construct a variety of them - a global-only page, and a page with an `onLoaded` hook that takes the area during the
+   * boot.
    */
   const arrange = () => {
 
@@ -6869,31 +6814,6 @@ describe("webUiFeatureOptions - takeover", () => {
     assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and no container accumulates across cycles");
 
     orchestrator.cleanup();
-  });
-
-  test("an epoch abort ends a standing takeover and removes its container", async () => {
-
-    using dom = createTestDom();
-
-    const { homebridgeGuard } = arrange();
-
-    using homebridgeInstall = homebridgeGuard;
-
-    const epoch = new AbortController();
-    const orchestrator = new webUiFeatureOptions({}, { epochSignal: epoch.signal });
-
-    await orchestrator.show(await openTestSession());
-    await flush();
-
-    const handle = orchestrator.takeover(pluginCard());
-
-    assert.ok(document.querySelector("[data-fo-takeover]"), "precondition: the card holds the area");
-
-    epoch.abort();
-
-    assert.equal(handle.signal.aborted, true, "a page copy a successor superseded takes its takeover with it");
-    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and the retired copy's own element leaves the page");
-    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "while the regions are left exactly as they were, for the successor to arrange");
   });
 
   test("a takeover begun from onLoaded survives the end-of-load reveal", async () => {

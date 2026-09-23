@@ -54,7 +54,7 @@ const makePluginConfig = ({ controllers = [CONTROLLER_A], options = [] } = {}) =
  * Returns the fake bridge, the orchestrator, the skeleton's elements, and the recording surfaces - `hooks.controllerCalls`, `hooks.deviceCalls`, `loaded` (the
  * onLoaded count), and `panels` (every bag the device-info hook was handed).
  */
-const makePage = ({ config = makePluginConfig(), epochSignal = undefined } = {}) => {
+const makePage = ({ config = makePluginConfig() } = {}) => {
 
   const skeleton = createSkeletonFeatureOptionsDom();
   const fake = createFakeHomebridge({ config, requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
@@ -87,7 +87,7 @@ const makePage = ({ config = makePluginConfig(), epochSignal = undefined } = {})
     infoPanel: (bag) => panels.push(bag),
     onLoaded: () => { state.loaded += 1; },
     ui: { isController: (device) => !device?.serialNumber?.endsWith("-CAM") }
-  }, { epochSignal });
+  });
 
   return {
 
@@ -684,7 +684,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
 
     assert.equal(tableHeld(page.skeleton), true, "precondition: the call holds the cycle it is about to lose");
 
-    // The page goes away under the call, which is a page fact rather than a write fact: only a newer copy of the whole page ends the write as superseded.
+    // The page goes away under the call, which is a page fact rather than a write fact, so the write still lands and saves.
     page.orchestrator.cleanup();
     writes.release();
 
@@ -692,7 +692,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
 
     await flush();
 
-    assert.ok(page.fake.observed.calls.includes("savePluginConfig"), "and the save ran, because the page dying is not the epoch retiring");
+    assert.ok(page.fake.observed.calls.includes("savePluginConfig"), "and the save ran, because the page going away does not end the write");
   });
 
   test("a page re-shown during the drain is the page the call drains, holds, and establishes", async (t) => {
@@ -838,33 +838,6 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
 
     await reshown;
     await flush();
-  });
-
-  test("the epoch aborting between the write and the save answers superseded and leaves the write staged", async () => {
-
-    using dom = createTestDom();
-
-    const epoch = new AbortController();
-
-    using page = makePage({ epochSignal: epoch.signal });
-
-    await page.orchestrator.show(await openTestSession());
-    await flush();
-
-    const writes = holdWrites(page.fake);
-    const pending = page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }));
-
-    await waitFor(() => writes.pending === 1, { message: "the call's write must reach the host" });
-
-    epoch.abort();
-    writes.release();
-
-    assert.deepEqual(await pending, { kind: "superseded" }, "a retired copy renders nothing, so it answers with the one member that says so");
-
-    await flush();
-
-    assert.ok(page.fake.observed.calls.includes("updatePluginConfig"), "the write itself reached the host");
-    assert.ok(!page.fake.observed.calls.includes("savePluginConfig"), "and it stays staged there for the user's own save");
   });
 
   test("a page hidden and re-shown during the post-write controller fetch answers committed and touches no successor", async () => {
@@ -1223,13 +1196,10 @@ describe("webUiFeatureOptions.commitConfig - the caller's own bugs and the page'
 
 describe("webUiFeatureOptions - the teardown's own edges", () => {
 
-  test("hide() waits for a commit in flight, and hides nothing when the epoch aborts while it waits", async () => {
+  test("hide() waits for a commit in flight before it hides the regions", async () => {
 
     using dom = createTestDom();
-
-    const epoch = new AbortController();
-
-    using page = makePage({ epochSignal: epoch.signal });
+    using page = makePage();
 
     await page.orchestrator.show(await openTestSession());
     await flush();
@@ -1246,49 +1216,12 @@ describe("webUiFeatureOptions - the teardown's own edges", () => {
 
     assert.equal(hidden, false, "the teardown does not report itself finished while a write it issued is still at the host");
 
-    // A newer page copy claims the window while the teardown waits, so the teardown must leave the regions that copy has rendered into alone.
-    epoch.abort();
     writes.release();
 
     await hiding;
 
-    assert.deepEqual(await pending, { kind: "superseded" });
-    assert.equal(page.skeleton.sidebar.style.display, "", "a retired copy's teardown blanks nothing");
-    assert.equal(page.skeleton.optionsContainer.style.display, "", "not one of the regions the live copy is showing");
-  });
-
-  test("show() mints no cycle when the epoch aborts during the teardown, and the prior store still answers editedConfig", async () => {
-
-    using dom = createTestDom();
-
-    const epoch = new AbortController();
-
-    using page = makePage({ epochSignal: epoch.signal });
-
-    await page.orchestrator.show(await openTestSession());
-    await flush();
-
-    const writes = holdWrites(page.fake);
-
-    // An edit of the user's own, still at the host: the store carries it, which is what makes a store swap visible from outside.
-    optionRow(page.skeleton, "Motion", "Motion.Detect").click();
-
-    await waitFor(() => writes.pending === 1, { message: "the edit's write must reach the host" });
-
-    const edited = [...page.orchestrator.editedConfig[0].options];
-
-    assert.ok(edited.some((entry) => entry.startsWith("Disable.Motion.Detect")), "precondition: the store carries the edit");
-
-    const reshown = page.orchestrator.show(await openTestSession());
-
-    epoch.abort();
-    writes.release();
-
-    await reshown;
-    await flush();
-
-    assert.ok(page.skeleton.pageFeatureOptions.querySelector(".progress") === null, "no boot affordance: no cycle was minted");
-    assert.equal(page.skeleton.sidebar.style.display, "", "and the teardown that ran inside it hid no region of the copy that took the window");
-    assert.deepEqual(page.orchestrator.editedConfig[0].options, edited, "and the prior store still answers, where a fresh one would report the saved options");
+    assert.deepEqual(await pending, { kind: "committed" }, "the write the teardown waited for landed and was saved");
+    assert.equal(page.skeleton.sidebar.style.display, "none", "and once it settled the teardown hid the regions");
+    assert.equal(page.skeleton.optionsContainer.style.display, "none", "every one of them");
   });
 });

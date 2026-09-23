@@ -133,8 +133,8 @@ describe("mountTakeoverView - beginning a takeover", () => {
     const handle = begin(pluginCard());
 
     assert.equal(handle.signal.aborted, true, "a cycle that has ended has no area to give");
-    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and nothing is mounted into a page this copy no longer owns");
-    assert.deepEqual(regionDisplays(), [ "", "", "" ], "the regions are left to whoever owns the page now");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and nothing is mounted for a cycle that has ended");
+    assert.deepEqual(regionDisplays(), [ "", "", "" ], "and no region display is written on that cycle's behalf");
   });
 });
 
@@ -323,7 +323,7 @@ describe("mountTakeoverView - the page cycle ending", () => {
     assert.equal(handle.signal.aborted, true, "the takeover ends with the page cycle that carried it");
     assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and the framework element leaves the page with it");
     assert.deepEqual(regionDisplays(), [ "none", "none", "none" ],
-      "the regions are left untouched: a teardown has already hidden them, and a successor copy owns whatever it has rendered");
+      "the regions are left untouched: the teardown has already hidden them, and the next show() reveals them together");
   });
 });
 

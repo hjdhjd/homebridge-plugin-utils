@@ -1974,8 +1974,8 @@ export class webUiFeatureOptions {
    *
    * A takeover ends in any of several ways, and every one of them aborts the handle's `signal`: the plugin calls `release()`; the user moves the selection in the
    * sidebar, because the content area belongs to the selection; a later `takeover()` takes the area for another card, the latest call winning; or the page cycle
-   * ends - a navigate-away through `hide()`, or a re-show. A call made when no cycle is live answers with a handle
-   * that is already released, so a consumer never has to ask whether the page is up before asking for the area.
+   * ends - a navigate-away through `hide()`, or a re-show. A call made when no cycle is live answers with a handle that is already released, so a consumer never
+   * has to ask whether the page is up before asking for the area.
    *
    * A card that saves something calls `release()` itself when its save resolves, without exception. A configuration write through {@link commitConfig} may re-show
    * the whole page, or re-establish it in place with the cycle left standing, and a card cannot tell which of those it got. `release()` is safe either way, and

@@ -112,7 +112,8 @@ export const mountTakeoverView = ({ anchor, signal, store }) => {
 
   return (element) => {
 
-    // A cycle that has already ended has no area to give, so answer with a handle that reads as released rather than mounting into a page this copy no longer owns.
+    // A cycle that has already ended has no area to give, and its abort has already run, so nothing would ever take a card mounted after it back out of the page.
+    // Answer with a handle that reads as released instead.
     if(signal.aborted) {
 
       return releasedTakeover();

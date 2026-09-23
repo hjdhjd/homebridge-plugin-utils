@@ -181,10 +181,16 @@ export interface HttpListenerRouteOptions {
   methods?: readonly string[];
 }
 
-// One registered route: the handler and the method filter it was registered with. Held as its own record so a route's disposal handle can compare the entry it
-// registered against whatever the map holds when it runs, and remove only its own.
+/* One registered route: the handler and the method filter it was registered with, and the repeat memory for the faults its handler raises. Held as its own record
+ * so a route's disposal handle can compare the entry it registered against whatever the map holds when it runs, and remove only its own.
+ *
+ * The repeat memory is the route's own because a fault inside one route is that route's alone: one memory shared across routes compares only the rendered reason,
+ * so a second route failing with the same text would have its first fault demoted to debug as a repeat of somebody else's. Living on the record also ties the
+ * memory's lifetime to the registration's, so a path released and claimed again starts out remembering nothing.
+ */
 interface HttpListenerRoute {
 
+  readonly failures: RepeatDemotedLog;
   readonly handler: HttpListenerHandler;
   readonly methods?: readonly string[];
 }
@@ -257,10 +263,6 @@ export class HttpListener implements AsyncDisposable {
   // Held as a field so `#teardown` can reject it, which is what settles `ready` for a lifetime that ends before a bind ever succeeds.
   readonly #readyResolvers: PromiseWithResolvers<void>;
 
-  // The repeat memory for faults the routes raise. A route that fails on every request would otherwise write one line per request, which is a sender's retry loop
-  // filling the log with one fact: the rendered reason is the tag, so the first failure is reported in full and the ones after it replay at debug.
-  readonly #routeFailures: RepeatDemotedLog;
-
   // The registered routes, keyed by exact path or by the catch-all sentinel.
   readonly #routes = new Map<HttpListenerPath, HttpListenerRoute>();
 
@@ -304,7 +306,6 @@ export class HttpListener implements AsyncDisposable {
     this.#log = log;
     this.#port = port;
     this.#retryMs = retryMs;
-    this.#routeFailures = repeatDemotedLog(log);
 
     this.#controller = new AbortController();
     this.signal = composeSignals(signal, this.#controller.signal);
@@ -365,7 +366,7 @@ export class HttpListener implements AsyncDisposable {
       throw new TypeError("The HTTP listener already routes " + describePath(path) + " to another handler.");
     }
 
-    const entry: HttpListenerRoute = { handler, methods: options.methods };
+    const entry: HttpListenerRoute = { failures: repeatDemotedLog(this.#log), handler, methods: options.methods };
 
     this.#routes.set(path, entry);
 
@@ -511,10 +512,12 @@ export class HttpListener implements AsyncDisposable {
     } catch(error: unknown) {
 
       /* A fault inside one route is that route's alone. The sender is told the request failed rather than that it was refused, because those mean different things
-       * to whatever is retrying on the other end. The attempt wraps the report rather than the call, so a route that answers costs nothing: the rendered reason is
-       * the tag, and a route failing the same way on every request is reported once and replayed at debug until the reason changes.
+       * to whatever is retrying on the other end. The report goes through the route's own repeat memory, since a route that fails on every request would otherwise
+       * write one line per request, which is a sender's retry loop filling the log with one fact. The attempt wraps the report rather than the call, so a route that
+       * answers costs nothing: the rendered reason is the tag, and a route failing the same way on every request is reported once and replayed at debug until the
+       * reason changes.
        */
-      this.#routeFailures.attempt((attemptLog): string => {
+      route.failures.attempt((attemptLog): string => {
 
         const reason = formatErrorMessage(error);
 

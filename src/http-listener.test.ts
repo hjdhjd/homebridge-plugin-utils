@@ -724,3 +724,128 @@ test("a route that keeps failing is reported once, replayed at debug, and report
   assert.equal(logCount(log.entries, "error", "handler fell over differently"), 1, "a fault that differs from the one before it is reported in full");
   assert.ok(loggedAt(log.entries, "error", LABEL), "every report names the listener by its label");
 });
+
+test("two routes failing with the same message each report their first failure in full", async () => {
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  const port = listener.boundPort;
+
+  using first = listener.route("/first", () => {
+
+    throw new Error("handler fell over");
+  });
+
+  using second = listener.route("/second", () => {
+
+    throw new Error("handler fell over");
+  });
+
+  assert.equal((await request({ body: "{}", path: "/first", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/second", port })).status, 500);
+
+  // Each route's first fault is news about that route, whatever another route last failed with. A memory shared across routes compares only the rendered reason,
+  // so it would read the second route's first fault as a repeat of the first route's and demote it.
+  assert.equal(logCount(log.entries, "error", "for /first failed: handler fell over."), 1, "the first route's first fault is reported in full");
+  assert.equal(logCount(log.entries, "error", "for /second failed: handler fell over."), 1, "the second route's first fault is reported in full");
+  assert.equal(logCount(log.entries, "debug", "handler fell over."), 0, "neither first fault is demoted");
+});
+
+test("a repeat on one route is demoted to debug even when another route fails the same way in between", async () => {
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  const port = listener.boundPort;
+
+  using first = listener.route("/first", () => {
+
+    throw new Error("handler fell over");
+  });
+
+  using second = listener.route("/second", () => {
+
+    throw new Error("handler fell over");
+  });
+
+  assert.equal((await request({ body: "{}", path: "/first", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/second", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/first", port })).status, 500);
+
+  // The first route's second fault is the same fact about the same route, so it replays at debug. The other route's failure between them is its own and does not
+  // make the repeat read as news.
+  assert.equal(logCount(log.entries, "error", "for /first failed: handler fell over."), 1, "the first route's repeat must not reach error level");
+  assert.equal(logCount(log.entries, "debug", "for /first failed: handler fell over."), 1, "the first route's repeat is replayed at debug");
+  assert.equal(logCount(log.entries, "error", "for /second failed: handler fell over."), 1, "the route in between reports its own first fault in full");
+});
+
+test("interleaved failures across two routes still demote each route's own repeats", async () => {
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  const port = listener.boundPort;
+
+  using first = listener.route("/first", () => {
+
+    throw new Error("first handler fell over");
+  });
+
+  using second = listener.route("/second", () => {
+
+    throw new Error("second handler fell over");
+  });
+
+  assert.equal((await request({ body: "{}", path: "/first", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/second", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/first", port })).status, 500);
+  assert.equal((await request({ body: "{}", path: "/second", port })).status, 500);
+
+  // Each route is weighed against its own last fault. A memory shared across routes would compare each fault against the other route's, which always differs, so
+  // two routes failing in alternation would report every request in full.
+  assert.equal(logCount(log.entries, "error", "first handler fell over."), 1, "the first route reports its fault once");
+  assert.equal(logCount(log.entries, "debug", "first handler fell over."), 1, "and replays its repeat at debug");
+  assert.equal(logCount(log.entries, "error", "second handler fell over."), 1, "the second route reports its fault once");
+  assert.equal(logCount(log.entries, "debug", "second handler fell over."), 1, "and replays its repeat at debug");
+});
+
+test("a path released and claimed again reports its new route's first failure in full", async () => {
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  const port = listener.boundPort;
+  const released = listener.route("/claimed", () => {
+
+    throw new Error("handler fell over");
+  });
+
+  assert.equal((await request({ body: "{}", path: "/claimed", port })).status, 500);
+
+  released[Symbol.dispose]();
+
+  using reclaimed = listener.route("/claimed", () => {
+
+    throw new Error("handler fell over");
+  });
+
+  assert.equal((await request({ body: "{}", path: "/claimed", port })).status, 500);
+
+  // The repeat memory lives on the route's own record, so it leaves with the registration. The new route's first fault is its own news, even though it reads the
+  // same as the last fault the released route reported.
+  assert.equal(logCount(log.entries, "error", "for /claimed failed: handler fell over."), 2, "each registration's first fault is reported in full");
+  assert.equal(logCount(log.entries, "debug", "handler fell over."), 0, "nothing is demoted as a repeat of a released route's fault");
+});

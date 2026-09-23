@@ -686,7 +686,8 @@ async function defaultReadFile(path: string): Promise<string> {
 }
 
 // Best-effort capture of the token that will be used for the connection, for redaction of a setup-phase error before `resolveConnection` has run. We read the flag/env
-// token directly (the sources known before the config file loads); a file-only token is not yet known here, but a file-only token never appears in a setup error message.
+// token directly (the sources known before the config file loads). A file-only token is not known here and needs no redaction: the config loader locates a failure in
+// the file without quoting any of its content, so nothing stored in the file can appear in a setup error message.
 function connectionToken(flags: ParsedFlags, env: NodeJS.ProcessEnv): Nullable<string> {
 
   return flags.token ?? env["HBLOG_TOKEN"] ?? null;

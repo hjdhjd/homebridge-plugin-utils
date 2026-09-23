@@ -77,6 +77,42 @@ describe("loadConfigFile - missing and malformed files", () => {
     });
   });
 
+  test("a malformed file holding a token reports where it failed and carries no part of the token", async () => {
+
+    /* A recognizable token, placed so the parser fails beside it. V8 quotes the text around an unexpected token in its own message - the leading characters of an
+     * unquoted token, or the whole of a short file - so each file below would print part of the token if the loader repeated that message. The positioned failures
+     * are here too, asserting the line and column the loader reports in place of the text.
+     */
+    const token = "Zq9XvK7wPj3RmT5yLb8NcH2dFg6S";
+    const cases: readonly (readonly [ string, string, string ])[] = [
+
+      [ "an unquoted token", "{\n  \"host\": \"ui.local\",\n  \"token\": " + token + "\n}\n", "" ],
+      [ "a short file the parser quotes whole", "{\"token\":" + token.slice(0, 8) + "}", "" ],
+      [ "a missing comma after the token", "{\n  \"token\": \"" + token + "\"\n  \"host\": \"ui.local\"\n}\n", " at line 3, column 3" ],
+      [ "an unterminated token string", "{\n  \"token\": \"" + token + "\n}\n", " at line 2, column 41" ]
+    ];
+
+    for(const [ label, file, location ] of cases) {
+
+      const { readFile } = fakeReadFile(file);
+      const { warn } = capturingWarn();
+
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(loadConfigFile("/home/dev/.hblog.json", { readFile, stat: fakeStat(MODE_OWNER_ONLY), warn }), (error: Error) => {
+
+        assert.equal(error.message, "The config file /home/dev/.hblog.json is not valid JSON" + location + ". Fix the file or remove it.", label);
+
+        // Checking short runs of the token rather than the whole value rules out any excerpt of it, however little the message quoted.
+        for(let start = 0; start <= (token.length - 3); start++) {
+
+          assert.ok(!error.message.includes(token.slice(start, start + 3)), label + " must carry no part of the token");
+        }
+
+        return true;
+      });
+    }
+  });
+
   test("a non-object JSON file (e.g. an array) throws a clear error", async () => {
 
     const { readFile } = fakeReadFile("[1, 2, 3]");

@@ -13,9 +13,9 @@
  * - {@link resolveConfigPath} - resolve the absolute config-file path, honoring the `HBLOG_CONFIG` environment override over the home-directory default
  *   ({@link DEFAULT_CONFIG_FILENAME}).
  * - {@link loadConfigFile} - read and parse the optional `~/.hblog.json`. A missing file resolves to `undefined` silently (the file is optional); a malformed file raises
- *   a clear, actionable error; unknown keys are ignored; and a file whose permissions are group/other-readable triggers a single one-line warning recommending `chmod
- *   600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`, and `warn` functions are injected so the loader is
- *   unit-tested without touching the real filesystem.
+ *   a clear, actionable error that locates the failure without quoting any of the file; unknown keys are ignored; and a file whose permissions are group/other-readable
+ *   triggers a single one-line warning recommending `chmod 600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`,
+ *   and `warn` functions are injected so the loader is unit-tested without touching the real filesystem.
  * - {@link resolveConnection} - a PURE merge of the configuration sources into one resolved connection, applying the precedence flags > environment > file > defaults.
  *   It performs no I/O of its own; the caller supplies the already-loaded file, the environment slice, and the parsed flags.
  *
@@ -37,6 +37,12 @@ export const DEFAULT_CONFIG_FILENAME = ".hblog.json";
 // only (mode 600); when any of these bits is present we warn once and recommend `chmod 600`. We mask the raw `mode` (which carries file-type bits in its high bits) with
 // this so only the group/other permission triplet is consulted.
 const GROUP_OTHER_MASK = 0o077;
+
+// The line and column V8 reports for a JSON syntax error, which close its message whenever it computes a position. The rest of that message can quote the file's text
+// around the failure, and the file is where a stored password or token lives, so the loader reads only this position out of it and never repeats the message itself.
+// Anchoring at the end means the match can only ever be V8's own suffix, never digits inside quoted file text. V8 reports no position for its unexpected-token errors,
+// so a failure of that kind names the file alone.
+const JSON_ERROR_POSITION = /\(line (\d+) column (\d+)\)$/;
 
 /**
  * The shape of the optional `~/.hblog.json` config file. Every field is optional; unknown keys in the file are ignored. The file deliberately carries no `otp` field - a
@@ -218,10 +224,11 @@ function readBoolean(record: Record<string, unknown>, key: string): boolean | un
  * Load and parse the optional `~/.hblog.json` config file.
  *
  * The file is optional: when it does not exist (ENOENT) this resolves to `undefined` silently. Every other failure is thrown as a clear, actionable error naming the
- * path: a non-ENOENT read failure (a permission or I/O fault), a file that cannot be parsed as JSON, or a file whose top-level value is not a JSON object. Recognized
- * keys ({@link HblogConfigFile}) are picked out by type (a wrong-typed field is ignored, not coerced); any unknown key is ignored. As a security courtesy, if the file's
- * permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted through the `warn` function, because the file
- * may store a password or a long-lived token in plaintext.
+ * path: a non-ENOENT read failure (a permission or I/O fault), a file that cannot be parsed as JSON, or a file whose top-level value is not a JSON object. A parse
+ * failure is located by line and column wherever the parser reports a position, and no error carries any of the file's content, because that content is where a
+ * stored credential lives. Recognized keys ({@link HblogConfigFile}) are picked out by type (a wrong-typed field is ignored, not coerced); any unknown key is ignored.
+ * As a security courtesy, if the file's permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted
+ * through the `warn` function, because the file may store a password or a long-lived token in plaintext.
  *
  * @param path    - The absolute path of the config file to load (the CLI resolves `~/.hblog.json`, or honors `HBLOG_CONFIG`).
  * @param options - The injectable filesystem and warning functions. See {@link LoadConfigFileOptions}.
@@ -261,7 +268,12 @@ export async function loadConfigFile(path: string, options: LoadConfigFileOption
     parsed = JSON.parse(text);
   } catch(error: unknown) {
 
-    throw new Error("The config file " + path + " is not valid JSON: " + formatErrorMessage(error) + ". Fix the file or remove it.");
+    // A parse failure is reported by where it happened, carrying no content from the file, so a credential stored in it can never reach the terminal through this
+    // error. See JSON_ERROR_POSITION for why V8's own message is never repeated.
+    const position = JSON_ERROR_POSITION.exec((error instanceof Error) ? error.message : "");
+    const location = (position !== null) ? " at line " + (position[1] ?? "") + ", column " + (position[2] ?? "") : "";
+
+    throw new Error("The config file " + path + " is not valid JSON" + location + ". Fix the file or remove it.");
   }
 
   if(!isRecord(parsed)) {

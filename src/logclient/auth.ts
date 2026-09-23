@@ -105,18 +105,32 @@ export function isPermanentAuthError(error: unknown): boolean {
 }
 
 /**
- * Options accepted by {@link acquireToken}: the connection target plus an injectable `fetch` implementation.
+ * Options accepted by {@link acquireToken}: the connection target plus an injectable `fetch` implementation and an optional abort signal.
  *
- * @property fetch - The fetch implementation to use. Defaults to the global `fetch`. Injected so the auth flow is testable without a live server.
- * @property host  - The hostname or IP of the homebridge-config-ui-x server.
- * @property port  - The TCP port the server listens on.
- * @property tls   - When `true`, use the secure (`https`) scheme; when `false` or omitted, plaintext (`http`).
+ * @property fetch  - The fetch implementation to use. Defaults to the global `fetch`. Injected so the auth flow is testable without a live server.
+ * @property host   - The hostname or IP of the homebridge-config-ui-x server.
+ * @property port   - The TCP port the server listens on.
+ * @property signal - Optional abort signal forwarded to the login request. When it aborts, the request is cancelled wherever it stands - awaiting the server or reading
+ *                    its response - and the acquisition rejects with the signal's reason rather than an authentication failure.
+ * @property tls    - When `true`, use the secure (`https`) scheme; when `false` or omitted, plaintext (`http`).
  *
  * @category Log Client
  */
 export interface AcquireTokenOptions extends EndpointTarget {
 
   readonly fetch?: typeof fetch;
+  readonly signal?: AbortSignal;
+}
+
+// One auth POST, named field by field: the endpoint and what it carries, the failure wording for its path, and the signal that can cancel it.
+interface TokenRequest {
+
+  readonly body?: Record<string, string>;
+  readonly fetch: typeof fetch;
+  readonly pathLabel: string;
+  readonly permanentHint: string;
+  readonly signal?: AbortSignal;
+  readonly url: string;
 }
 
 // Read a token out of a successful auth response body. The server returns `{ access_token, token_type: "Bearer", expires_in }`; we need only `access_token`. A 2xx
@@ -234,14 +248,15 @@ function networkFailure(pathLabel: string, error: unknown): LogAuthError {
  * - `noauth` - posts to `POST /api/auth/noauth`, which the server honors only when its UI is configured with `auth: "none"`.
  *
  * On failure it rejects with a {@link LogAuthError} whose `kind` classifies the failure as permanent (wrong credentials, OTP required, noauth disabled, broken success
- * body) or transient (network fault, 5xx, 429), so the reconnect loop can fail fast on permanent failures and retry transient ones.
+ * body) or transient (network fault, 5xx, 429), so the reconnect loop can fail fast on permanent failures and retry transient ones. `options.signal` cancels a login in
+ * flight: the request is aborted and the acquisition rejects with the signal's reason, so a teardown never waits on the server and never reads as a failed login.
  *
  * @param credentials - The credentials to authenticate with. See {@link LogClientCredentials}.
- * @param options     - The connection target and the injectable `fetch` implementation. See {@link AcquireTokenOptions}.
+ * @param options     - The connection target, the injectable `fetch` implementation, and the optional abort signal. See {@link AcquireTokenOptions}.
  *
  * @returns A promise resolving to the raw bearer token (the bare JWT, with no `Bearer` prefix).
  *
- * @throws {@link LogAuthError} on any authentication failure, classified permanent or transient.
+ * @throws {@link LogAuthError} on any authentication failure, classified permanent or transient. Propagates `options.signal`'s reason when the signal aborts.
  *
  * @category Log Client
  */
@@ -262,8 +277,14 @@ export async function acquireToken(credentials: LogClientCredentials, options: A
 
       // The no-authentication path. The server returns a token from `POST /api/auth/noauth` only when its UI is configured with `auth: "none"`; otherwise it rejects,
       // which we classify permanent because the server's auth mode will not change between reconnect attempts.
-      return postForToken(fetchImpl, base + "/api/auth/noauth", undefined, "No-auth authentication",
-        "the server does not have authentication disabled (set the UI auth mode to \"none\", or supply --user/--pass)");
+      return postForToken({
+
+        fetch: fetchImpl,
+        pathLabel: "No-auth authentication",
+        permanentHint: "the server does not have authentication disabled (set the UI auth mode to \"none\", or supply --user/--pass)",
+        signal: options.signal,
+        url: base + "/api/auth/noauth"
+      });
     }
 
     case "password": {
@@ -277,8 +298,15 @@ export async function acquireToken(credentials: LogClientCredentials, options: A
         body["otp"] = credentials.otp;
       }
 
-      return postForToken(fetchImpl, base + "/api/auth/login", body, "Password authentication",
-        "the username, password, or one-time passcode was rejected (a 2FA-enabled account requires --otp)");
+      return postForToken({
+
+        body,
+        fetch: fetchImpl,
+        pathLabel: "Password authentication",
+        permanentHint: "the username, password, or one-time passcode was rejected (a 2FA-enabled account requires --otp)",
+        signal: options.signal,
+        url: base + "/api/auth/login"
+      });
     }
 
     default: {
@@ -291,31 +319,45 @@ export async function acquireToken(credentials: LogClientCredentials, options: A
 }
 
 // Issue a single POST to an auth endpoint and extract the access token, mapping every failure shape to a classified {@link LogAuthError}. A JSON body is sent when one is
-// supplied (the login path); the noauth path posts with no body. Network rejections are transient; non-2xx statuses are classified by `throwForStatus`.
-async function postForToken(fetchImpl: typeof fetch, url: string, body: Record<string, string> | undefined, pathLabel: string, permanentHint: string): Promise<string> {
+// supplied (the login path); the noauth path posts with no body. Network rejections are transient; non-2xx statuses are classified by `throwForStatus`. An abort is not
+// an authentication failure at all, so it surfaces as the signal's own reason - see the catch below.
+async function postForToken({ body, fetch: fetchImpl, pathLabel, permanentHint, signal, url }: TokenRequest): Promise<string> {
 
   // The JSON content-type header is a claim that a JSON body follows, so the two are derived together from a single condition: a request that carries a body
   // declares `application/json` and serializes it, and a bodyless request (the no-auth path) sends neither. This coupling is the single source of truth that keeps
   // every auth POST well-formed - declaring `application/json` with no body is incoherent, and Fastify (the homebridge-config-ui-x HTTP server) rejects a
   // declared-JSON body that is empty.
   const init: RequestInit = (body !== undefined) ?
-    { body: JSON.stringify(body), headers: { "Content-Type": "application/json" }, method: "POST" } :
-    { method: "POST" };
+    { body: JSON.stringify(body), headers: { "Content-Type": "application/json" }, method: "POST", signal } :
+    { method: "POST", signal };
 
-  let response: Response;
-
+  /* The caller's signal is the single source of truth for cancellation. It reaches the request, so an abort cancels the login wherever it stands - awaiting the server,
+   * or reading the body of a response that already arrived - and each of those rejections would otherwise be classified below as a failed login, transient or even
+   * permanent. Any rejection that coincides with an aborted signal therefore becomes the signal's reason, the same normalization `retry` applies, while a genuine
+   * failure with no abort behind it passes through unchanged.
+   */
   try {
 
-    response = await fetchImpl(url, init);
+    let response: Response;
+
+    try {
+
+      response = await fetchImpl(url, init);
+    } catch(error: unknown) {
+
+      throw networkFailure(pathLabel, error);
+    }
+
+    if(!response.ok) {
+
+      return await throwForStatus(response, pathLabel, permanentHint);
+    }
+
+    return await readAccessToken(response, pathLabel);
   } catch(error: unknown) {
 
-    throw networkFailure(pathLabel, error);
+    signal?.throwIfAborted();
+
+    throw error;
   }
-
-  if(!response.ok) {
-
-    return throwForStatus(response, pathLabel, permanentHint);
-  }
-
-  return readAccessToken(response, pathLabel);
 }

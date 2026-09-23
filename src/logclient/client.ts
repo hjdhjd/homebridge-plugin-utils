@@ -184,11 +184,11 @@ export class HomebridgeLogClient implements AsyncDisposable {
     this.#controller = new AbortController();
     this.signal = composeSignals(options.signal, this.#controller.signal);
 
-    // Build the token provider once. The `signal` parameter is part of the `TokenProvider` contract (the socket forwards each connect attempt's signal so an in-flight
-    // acquisition can be cancelled), but `acquireToken` exposes no signal parameter of its own today, so the closure does not forward it - hence the underscore prefix.
-    // Each invocation re-derives the token from the stored credentials, which is exactly the "re-auth on reconnect for password/noauth, return-verbatim for token"
-    // behavior the token lifecycle requires.
-    this.#tokenProvider = (_signal: AbortSignal): Promise<string> => acquireToken(this.#credentials, { fetch: this.#fetch, host: this.#host, port: this.#port,
+    // Build the token provider once. Each caller hands it the signal of the work it serves - the socket a connect attempt's, a history download its call's - and every
+    // one of those is composed under this client's own signal, so forwarding it to `acquireToken` is what lets the client's teardown cancel a login in flight rather
+    // than wait for the server to answer it. Each invocation re-derives the token from the stored credentials, which is exactly the "re-auth on reconnect for
+    // password/noauth, return-verbatim for token" behavior the token lifecycle requires.
+    this.#tokenProvider = (signal: AbortSignal): Promise<string> => acquireToken(this.#credentials, { fetch: this.#fetch, host: this.#host, port: this.#port, signal,
       tls: this.#tls });
   }
 

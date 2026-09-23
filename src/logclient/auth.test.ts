@@ -1,9 +1,10 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * logclient/auth.test.ts: Unit tests for token acquisition - the credential-DU switch, permanent/transient classification, and actionable, token-safe errors.
+ * logclient/auth.test.ts: Unit tests for token acquisition - the credential-DU switch, failure classification, actionable, token-safe errors, and cancellation.
  */
 import { LogAuthError, acquireToken, isPermanentAuthError } from "./auth.ts";
 import { describe, test } from "node:test";
+import { settle, waitUntil } from "../testing/index.ts";
 import type { LogClientCredentials } from "./types.ts";
 import assert from "node:assert/strict";
 
@@ -259,5 +260,84 @@ describe("acquireToken - actionable, token-safe errors", () => {
     assert.equal(isPermanentAuthError(new Error("some other error")), false);
     assert.equal(isPermanentAuthError(null), false);
     assert.equal(isPermanentAuthError(new LogAuthError("transient fault", { kind: "transient" })), false);
+  });
+});
+
+describe("acquireToken - cancellation", () => {
+
+  // A fetch double that treats its signal the way the platform's fetch does: the request stays open until the signal it was handed aborts, then rejects with that
+  // signal's reason. `open` counts the requests still in flight, so a test can assert that none outlives the abort. A request that never receives the signal stays
+  // open forever, which each test's bounded wait turns into a failure rather than a hang.
+  const hangingFetch = (): { calls: { init: RequestInit | undefined; url: string }[]; fetch: typeof fetch; open: () => number } => {
+
+    let open = 0;
+
+    const { calls, fetch } = fakeFetch((_url, init) => new Promise<Response>((_resolve, reject) => {
+
+      const signal = init?.signal;
+
+      open++;
+
+      signal?.addEventListener("abort", () => {
+
+        open--;
+        reject(signal.reason as Error);
+      }, { once: true });
+    }));
+
+    return { calls, fetch, open: (): number => open };
+  };
+
+  test("aborting a login in flight rejects promptly with the signal's reason and leaves no request open", async () => {
+
+    const { calls, fetch, open } = hangingFetch();
+    const controller = new AbortController();
+    const reason = new Error("The client was torn down.");
+    let outcome: unknown;
+
+    const login = acquireToken({ kind: "password", password: "secret", username: "admin" }, { ...TARGET, fetch, signal: controller.signal }).
+      catch((error: unknown) => { outcome = error; });
+
+    await waitUntil(() => calls.length === 1, { description: "the login request to go out" });
+
+    controller.abort(reason);
+
+    await waitUntil(() => outcome !== undefined, { description: "the login to reject once its signal aborts", timeoutMs: 500 });
+    await login;
+
+    assert.equal(outcome, reason, "the rejection is the signal's own reason, not an authentication failure");
+    assert.equal(open(), 0, "the aborted request is no longer open");
+  });
+
+  test("an abort while the login's response is being read rejects with the signal's reason rather than a permanent failure", async () => {
+
+    // The server has answered and its body is still arriving when the signal aborts, so the double errors the body stream with the signal's reason, as the platform
+    // does for a response whose request was aborted. Reading that body is where a broken success response is classified permanent, so unless the abort takes
+    // precedence, a teardown would read as credentials that can never work.
+    const controller = new AbortController();
+    const reason = new Error("The client was torn down.");
+    let outcome: unknown;
+
+    const { fetch } = fakeFetch((_url, init) => new Response(new ReadableStream<Uint8Array>({
+
+      start(stream): void {
+
+        const signal = init?.signal;
+
+        signal?.addEventListener("abort", () => stream.error(signal.reason), { once: true });
+      }
+    }), { status: 200 }));
+
+    const login = acquireToken({ kind: "noauth" }, { ...TARGET, fetch, signal: controller.signal }).catch((error: unknown) => { outcome = error; });
+
+    // Let the response arrive and its body read begin before the abort lands.
+    await settle();
+
+    controller.abort(reason);
+
+    await waitUntil(() => outcome !== undefined, { description: "the login to reject once its signal aborts", timeoutMs: 500 });
+    await login;
+
+    assert.equal(outcome, reason, "the abort, not the unreadable body, is what the rejection reports");
   });
 });

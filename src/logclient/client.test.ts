@@ -6,7 +6,7 @@ import { HbpuAbortError, onAbort } from "../util.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
 import { SEED_SETTLE_MS, SEED_WINDOW_MAX_MS } from "./settings.ts";
 import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
-import { assertNoUnhandledRejections, settle, silentLog } from "../testing/index.ts";
+import { assertNoUnhandledRejections, settle, silentLog, waitUntil } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogRecord } from "./types.ts";
@@ -485,6 +485,52 @@ describe("HomebridgeLogClient - token lifecycle", () => {
     assert.equal(calls.filter((call) => call.url.includes("/api/auth")).length, 0, "a static token must never hit any auth endpoint (no refresh)");
 
     await drained;
+  });
+
+  test("the client's teardown cancels a login in flight rather than waiting for the server to answer it", async () => {
+
+    // The login request stays open until the signal it was handed aborts, then rejects with that signal's reason, the way the platform's fetch does. Unless the
+    // client's own signal reaches the request, tearing the client down leaves the history call waiting on a server that never answers, which the bounded wait below
+    // turns into a failure rather than a hang.
+    const logins: string[] = [];
+    let open = 0;
+
+    const fetchImpl = ((input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+
+      const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
+      const signal = init?.signal;
+
+      logins.push(url);
+      open++;
+
+      return new Promise<Response>((_resolve, reject) => {
+
+        signal?.addEventListener("abort", () => {
+
+          open--;
+          reject(signal.reason as Error);
+        }, { once: true });
+      });
+    }) as typeof fetch;
+
+    const client = new HomebridgeLogClient({
+
+      credentials: { kind: "password", password: "secret", username: "admin" },
+      fetch: fetchImpl,
+      log: silentLog(),
+      socketFactory: new TestLogSocketFactory()
+    });
+
+    let outcome: unknown;
+    const drained = collect(client.history()).catch((error: unknown) => { outcome = error; });
+
+    await waitUntil(() => logins.some((url) => url.includes("/api/auth/login")), { description: "the login request to go out" });
+    await client[Symbol.asyncDispose]();
+    await waitUntil(() => outcome !== undefined, { description: "the history call to end once the client is torn down", timeoutMs: 500 });
+    await drained;
+
+    assert.ok((outcome instanceof HbpuAbortError) && (outcome.name === "shutdown"), "the call ends with the client's own shutdown reason");
+    assert.equal(open, 0, "no login request outlives the teardown");
   });
 
   test("a static-token client whose socket handshake is rejected ends terminally rather than spinning", async () => {

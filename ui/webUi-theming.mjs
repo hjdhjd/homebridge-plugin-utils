@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { delay } from "./webUi-featureOptions/utils.mjs";
+import { delay } from "./webUi-liveness.mjs";
 
 /**
  * Register the page theme effect. Adopts the page base stylesheet, applies the color-scheme and dark-mode class from the Homebridge lighting-mode setting, follows

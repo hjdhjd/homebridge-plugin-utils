@@ -5,46 +5,6 @@
 "use strict";
 
 /**
- * Sleep for the given duration and resolve, or reject early when the supplied signal aborts.
- *
- * This is the browser-side counterpart to the server-side `onAbort` disposable pattern: every lifecycle-bound async pause in the webUI funnels through one
- * helper, so listener cleanup, pre-aborted fast-path semantics, and rejection-reason propagation live in exactly one place. Callers express "wait, but only while
- * this view is alive" by composing a delay with their lifecycle signal - the rest is mechanical.
- *
- * @param {number} ms - Duration to sleep, in milliseconds.
- * @param {AbortSignal} [signal] - Optional lifecycle signal. When provided, an abort cancels the timer and rejects the promise with the signal's reason. A signal
- *                                 that is already aborted at call time rejects synchronously on the next microtask without scheduling a timer.
- * @returns {Promise<void>} Resolves after `ms` milliseconds, or rejects with `signal.reason` on abort.
- */
-export function delay(ms, signal) {
-
-  if(signal?.aborted) {
-
-    return Promise.reject(signal.reason);
-  }
-
-  const { promise, resolve, reject } = Promise.withResolvers();
-
-  // `onAbort` references `timer` lexically; the const is initialized before any addEventListener fires it, so the TDZ is never touched at call time. Both
-  // closures only run later, after both consts are initialized, so `onAbort` is declared first purely for readability - either declaration order is safe.
-  const onAbort = () => {
-
-    clearTimeout(timer);
-    reject(signal.reason);
-  };
-
-  const timer = setTimeout(() => {
-
-    signal?.removeEventListener("abort", onAbort);
-    resolve();
-  }, ms);
-
-  signal?.addEventListener("abort", onAbort, { once: true });
-
-  return promise;
-}
-
-/**
  * Create a DOM element with optional properties and children.
  *
  * This utility is shared across all feature options components. It reduces the verbosity of DOM manipulation by handling common patterns like setting classes,

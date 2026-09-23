@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-liveness.test.mjs: The specification suite for the connection-liveness primitives - the rejecting deadline, the latest-action guard, the shared-timer
- * request watchdog, and the page-resume detector. Every clock in here is a node:test mock, so each test states the exact time it advances and nothing waits on
- * wall-clock duration.
+ * ui/webUi-liveness.test.mjs: The specification suite for the timing and connection-liveness primitives - the signal-aware sleep, the rejecting deadline, the
+ * latest-action guard, the shared-timer request watchdog, and the page-resume detector. Every clock in here is a node:test mock, so each test states the exact time
+ * it advances and nothing waits on wall-clock duration.
  */
 "use strict";
 
-import { DeadlineExpiredError, createActionGuard, createRequestWatchdog, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
+import { DeadlineExpiredError, createActionGuard, createRequestWatchdog, createResumeDetector, delay, withDeadline } from "./webUi-liveness.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
@@ -23,6 +23,78 @@ const flush = async () => {
     await flushImmediate();
   }
 };
+
+describe("delay", () => {
+
+  test("resolves after the configured duration when no signal is provided", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    let resolved = false;
+
+    const sleeping = delay(20).then(() => {
+
+      resolved = true;
+    });
+
+    // The mocked clock states the boundary exactly: a millisecond short of the duration nothing has resolved, and the duration itself settles the promise.
+    t.mock.timers.tick(19);
+    await flush();
+
+    assert.equal(resolved, false, "delay must not resolve before the configured duration");
+
+    t.mock.timers.tick(1);
+    await sleeping;
+
+    assert.equal(resolved, true, "delay resolves once the configured duration has elapsed");
+  });
+
+  test("rejects synchronously with signal.reason when the signal is already aborted at call time", async () => {
+
+    const controller = new AbortController();
+    const reason = new Error("preflight cancelled");
+
+    controller.abort(reason);
+
+    await assert.rejects(() => delay(10000, controller.signal), (error) => error === reason);
+  });
+
+  test("rejects with signal.reason when the signal aborts mid-delay and never schedules the resolution callback", async (t) => {
+
+    // Mock timers let us prove the resolution path is NOT taken: if it were, advancing past the delay would resolve the promise. We abort first, then tick well past
+    // the duration, and the promise must remain in its rejected state with the abort reason.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const controller = new AbortController();
+    const reason = new Error("torn down mid-window");
+    const promise = delay(1000, controller.signal);
+
+    // Race the abort against the (mocked) timer.
+    controller.abort(reason);
+
+    // Advance virtual time past the delay window. If the timer callback fired, the promise would resolve - which would violate the contract.
+    t.mock.timers.tick(5000);
+
+    await assert.rejects(() => promise, (error) => error === reason);
+  });
+
+  test("removes the abort listener after the timer fires so a later abort does not trigger a stale callback", async (t) => {
+
+    // We assert listener hygiene via the AbortSignal's own listener accounting: after the timer resolves, aborting the controller must not invoke anything that
+    // would resurrect a settled promise. The cleanest observable signal is that we can still await an already-resolved promise without throwing - if the listener
+    // were still bound, it would call reject on the same withResolvers tuple, which is a no-op on an already-resolved promise, but verifies the post-resolve abort
+    // does not throw or interfere.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const controller = new AbortController();
+    const sleeping = delay(5, controller.signal);
+
+    t.mock.timers.tick(5);
+    await sleeping;
+
+    assert.doesNotThrow(() => controller.abort(new Error("post-resolve abort must be inert")));
+  });
+});
 
 describe("withDeadline", () => {
 

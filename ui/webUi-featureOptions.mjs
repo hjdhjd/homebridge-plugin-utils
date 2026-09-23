@@ -4,13 +4,13 @@
  */
 "use strict";
 
-import { DeadlineExpiredError, createActionGuard, withDeadline } from "./webUi-liveness.mjs";
+import { DeadlineExpiredError, createActionGuard, delay, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { MUTATING_ACTIONS, connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { TAKEOVER_REGION_IDS, mountTakeoverView, releasedTakeover } from "./webUi-featureOptions/views/takeover.mjs";
 import { buildCatalogIndex, expandOption, removedListEntries } from "./featureOptions.js";
 import { completeControllerSelection, fetchControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
-import { createElement, delay, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
+import { createElement, errorMessage, paintMenuTabs, toastError } from "./webUi-featureOptions/utils.mjs";
 import { modelLoaded, persistPending, selectedControllerId, selectedDeviceId } from "./webUi-featureOptions/selectors.mjs";
 import { markHandled } from "./mark-handled.js";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";

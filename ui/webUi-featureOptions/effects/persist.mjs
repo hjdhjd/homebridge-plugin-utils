@@ -5,7 +5,7 @@
 "use strict";
 
 import { MUTATING_ACTIONS } from "../state.mjs";
-import { delay } from "../utils.mjs";
+import { delay } from "../../webUi-liveness.mjs";
 import { effect } from "../store.mjs";
 import { modelLoaded } from "../selectors.mjs";
 

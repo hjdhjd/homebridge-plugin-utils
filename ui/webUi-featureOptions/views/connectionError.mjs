@@ -4,7 +4,8 @@
  */
 "use strict";
 
-import { buildRecoveryButton, createElement, delay } from "../utils.mjs";
+import { buildRecoveryButton, createElement } from "../utils.mjs";
+import { delay } from "../../webUi-liveness.mjs";
 import { effect } from "../store.mjs";
 import { selectedController } from "../selectors.mjs";
 

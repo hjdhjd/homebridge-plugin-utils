@@ -11,13 +11,12 @@ import {
   buildRecoveryButton,
   captureCategoryStates,
   createElement,
-  delay,
   paintMenuTabs,
   setCategoryExpanded,
   showToast,
   swapMenuClasses
 } from "./utils.mjs";
-import { describe, mock, test } from "node:test";
+import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDom } from "../ui.helpers.mjs";
 
@@ -369,69 +368,6 @@ describe("showToast", () => {
     using dom = createTestDom();
 
     assert.doesNotThrow(() => showToast("Nothing to show"));
-  });
-});
-
-describe("delay - signal-aware sleep primitive", () => {
-
-  test("resolves after the configured duration when no signal is provided", async () => {
-
-    // Real timers are fine here: the duration is short and we are verifying the timer-driven path of the helper, not contending with mock infrastructure.
-    const start = Date.now();
-
-    await delay(20);
-
-    const elapsed = Date.now() - start;
-
-    assert.ok(elapsed >= 15, "delay must wait at least the configured duration (allow a small scheduling tolerance)");
-  });
-
-  test("rejects synchronously with signal.reason when the signal is already aborted at call time", async () => {
-
-    const controller = new AbortController();
-    const reason = new Error("preflight cancelled");
-
-    controller.abort(reason);
-
-    await assert.rejects(() => delay(10000, controller.signal), (error) => error === reason);
-  });
-
-  test("rejects with signal.reason when the signal aborts mid-delay and never schedules the resolution callback", async () => {
-
-    // mock.timers lets us prove the resolution path is NOT taken: if it were, advancing past the delay would resolve the promise. We abort first, then tick well
-    // past the duration, and the promise must remain in its rejected state with the abort reason.
-    mock.timers.enable({ apis: ["setTimeout"] });
-
-    try {
-
-      const controller = new AbortController();
-      const reason = new Error("torn down mid-window");
-      const promise = delay(1000, controller.signal);
-
-      // Race the abort against the (mocked) timer.
-      controller.abort(reason);
-
-      // Advance virtual time past the delay window. If the timer callback fired, the promise would resolve - which would violate the contract.
-      mock.timers.tick(5000);
-
-      await assert.rejects(() => promise, (error) => error === reason);
-    } finally {
-
-      mock.timers.reset();
-    }
-  });
-
-  test("removes the abort listener after the timer fires so a later abort does not trigger a stale callback", async () => {
-
-    // We assert listener hygiene via the AbortSignal's own listener accounting: after the timer resolves, aborting the controller must not invoke anything that
-    // would resurrect a settled promise. The cleanest observable signal is that we can still await an already-resolved promise without throwing - if the listener
-    // were still bound, it would call reject on the same withResolvers tuple, which is a no-op on an already-resolved promise, but verifies the post-resolve abort
-    // does not throw or interfere.
-    const controller = new AbortController();
-
-    await delay(5, controller.signal);
-
-    assert.doesNotThrow(() => controller.abort(new Error("post-resolve abort must be inert")));
   });
 });
 

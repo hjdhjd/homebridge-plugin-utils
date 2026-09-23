@@ -1,6 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-liveness.mjs: Connection-liveness primitives for plugin webUIs - request deadlines, an action guard, a trip-signal watchdog, and a page-resume detector.
+ * ui/webUi-liveness.mjs: Timing and connection-liveness primitives for plugin webUIs - a signal-aware sleep, request deadlines, an action guard, a trip-signal
+ * watchdog, and a page-resume detector.
  */
 
 /**
@@ -22,8 +23,9 @@
  *   - {@link createResumeDetector} covers the case where no request is in flight at all: the page was frozen by an OS app-switch and has just woken, with no way to
  *     know whether the helper process behind the relay survived. Subscribers are notified so each can run its own probe.
  *
- * The module holds no DOM, no store, and no plugin knowledge; it composes only with the shared {@link module:webUi-featureOptions/utils delay} helper. Policy stays
- * with the consumer: which awaits are worth bounding, how long is too long, what a resume probe does, and what any of it renders.
+ * {@link delay} is the signal-aware sleep every lifecycle-bound pause in the webUI goes through, the deadline race above included. The module holds no DOM, no
+ * store, and no plugin knowledge, and imports nothing, which is what lets the shell and the feature-options subsystem both build on it. Policy stays with the
+ * consumer: which awaits are worth bounding, how long is too long, what a resume probe does, and what any of it renders.
  *
  * @example
  *
@@ -40,8 +42,6 @@
  */
 "use strict";
 
-import { delay } from "./webUi-featureOptions/utils.mjs";
-
 // The resume detector's default tick cadence, in seconds. The interval notes the wall-clock time on each tick; a tick that observes far more elapsed time than this
 // cadence is the signature of a frozen-then-resumed page. Fifteen seconds keeps the idle cost negligible while sampling often enough that a resume is noticed within
 // one cadence of the page waking.
@@ -52,6 +52,46 @@ const DEFAULT_RESUME_INTERVAL_SECONDS = 15;
 // hidden desktop tab fires its background ticks at - each throttled tick stores its own timestamp, so its gap stays bounded near that cadence and well under the
 // threshold, while any genuine OS suspension runs to minutes and clears it comfortably.
 const DEFAULT_RESUME_THRESHOLD_SECONDS = 90;
+
+/**
+ * Sleep for the given duration and resolve, or reject early when the supplied signal aborts.
+ *
+ * This is the browser-side counterpart to the server-side `onAbort` disposable pattern: every lifecycle-bound async pause in the webUI funnels through one
+ * helper, so listener cleanup, pre-aborted fast-path semantics, and rejection-reason propagation live in exactly one place. Callers express "wait, but only while
+ * this view is alive" by composing a delay with their lifecycle signal - the rest is mechanical.
+ *
+ * @param {number} ms - Duration to sleep, in milliseconds.
+ * @param {AbortSignal} [signal] - Optional lifecycle signal. When provided, an abort cancels the timer and rejects the promise with the signal's reason. A signal
+ *                                 that is already aborted at call time rejects synchronously on the next microtask without scheduling a timer.
+ * @returns {Promise<void>} Resolves after `ms` milliseconds, or rejects with `signal.reason` on abort.
+ */
+export function delay(ms, signal) {
+
+  if(signal?.aborted) {
+
+    return Promise.reject(signal.reason);
+  }
+
+  const { promise, resolve, reject } = Promise.withResolvers();
+
+  // `onAbort` references `timer` lexically; the const is initialized before any addEventListener fires it, so the TDZ is never touched at call time. Both
+  // closures only run later, after both consts are initialized, so `onAbort` is declared first purely for readability - either declaration order is safe.
+  const onAbort = () => {
+
+    clearTimeout(timer);
+    reject(signal.reason);
+  };
+
+  const timer = setTimeout(() => {
+
+    signal?.removeEventListener("abort", onAbort);
+    resolve();
+  }, ms);
+
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  return promise;
+}
 
 /**
  * The marker a bounded await rejects with when its deadline elapses. Exported so a consumer can tell a deadline expiry apart from a genuine failure with one

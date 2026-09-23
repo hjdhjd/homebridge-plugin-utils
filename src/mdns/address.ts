@@ -80,8 +80,9 @@ function lowest(candidates: readonly string[]): string | undefined {
  * set the instant the incoming one is cached, and this function sees the incoming address alone. The outgoing address surfaces here only when it is
  * the host's last address of either family - nothing live to report - for the second its own hold keeps it reachable.
  *
- * A zoned candidate is dropped before anything else classifies it: a link-local address means nothing without the link it was heard on, and the zone a
- * browser stamps onto one is this function's signal that the address is of that kind.
+ * A zoned candidate is dropped before anything else classifies it. This library dials through undici, which parses the origin as a WHATWG URL, and a URL
+ * has no syntax for an IPv6 zone ID: a zoned literal is refused as an invalid URL before any connection is attempted, even though Node's `net` module
+ * accepts one.
  *
  * @param addresses - The service's advertised addresses, in any order.
  *
@@ -91,7 +92,7 @@ function lowest(candidates: readonly string[]): string | undefined {
  */
 export function dialAddress(addresses: readonly string[]): Nullable<string> {
 
-  // A zone cannot be part of a connection target, so a zoned candidate leaves before anything is classified.
+  // undici parses the origin it dials as a WHATWG URL, which has no syntax for an IPv6 zone ID, so a zoned candidate leaves before anything is classified.
   const unzoned = addresses.filter((candidate) => zoneOf(candidate) === null);
   const ipv4 = unzoned.filter((candidate) => isIP(candidate) === 4);
   const ipv6 = unzoned.filter((candidate) => isIP(candidate) === 6);

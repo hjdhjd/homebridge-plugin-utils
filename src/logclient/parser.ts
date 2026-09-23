@@ -52,21 +52,17 @@ const SGR_LEVEL: Readonly<Record<string, LogLevel>> = Object.freeze({
 // eslint-disable-next-line no-control-regex
 const SGR_PATTERN = /\[([0-9;]*)m/g;
 
-// Match the conventional `[timestamp] [Plugin Name] ` prefix at the start of an ANSI-stripped line, capturing the timestamp and plugin text. Each bracketed field is
-// guaranteed present when the match succeeds: the timestamp is rendered white and the plugin name is rendered cyan; the remainder after the closing plugin bracket and
-// its trailing space is the message body. Both captures use a negated character class (`[^\]]*`) that cannot cross a `]`, so a message containing brackets is not
-// absorbed into the prefix.
-const BRACKET_PREFIX_PATTERN = /^\[([^\]]*)\] \[([^\]]*)\] /;
+// Match the prefix a Homebridge log entry opens with, at the start of an ANSI-stripped line: the `[timestamp] ` bracket, then the `[Plugin Name] ` bracket that a
+// plugin's lines carry and Homebridge's own core lines omit. The captures are the timestamp text and, when the second bracket is present, the plugin text; the
+// remainder after the match is the message body. Both captures use a negated character class (`[^\]]*`) that cannot cross a `]`, so a message containing brackets is
+// not absorbed into the prefix. This is the one statement of the prefix grammar: parseLogLine applies it, and isLogLineStart asks parseLogLine rather than matching
+// for itself, so they can never disagree about which lines open an entry.
+const ENTRY_PREFIX_PATTERN = /^\[([^\]]*)\] (?:\[([^\]]*)\] )?/;
 
 // Recognize the Homebridge en-US default timestamp in both renderings the server emits: the 12-hour `M/D/YYYY, h:mm:ss AM` and the 24-hour `M/D/YYYY, HH:mm:ss` (meridiem
 // absent). One module-scope regex serves both - the meridiem group is optional - mirroring the other compiled-once patterns above. The capture groups are, in order:
 // month, day, four-digit year, hour, minute, second, and the optional AM/PM token.
 const LOG_TIMESTAMP_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),\s+(\d{1,2}):(\d{2}):(\d{2})(?:\s*([AaPp][Mm]))?$/;
-
-// Capture the contents of the FIRST bracket at the very start of an ANSI-stripped line - used by {@link isLogLineStart} to test whether a line opens with a timestamp.
-// Only the first bracket is captured (the negated class cannot cross a `]`), because a genuine log entry begins with `[timestamp]` whether or not a `[plugin]` bracket
-// follows; the timestamp's parseability, not the presence of a second bracket, is what marks an entry start.
-const LOG_LINE_START_PATTERN = /^\[([^\]]*)\]/;
 
 // Strip every ANSI escape sequence from a string, leaving only the printable text. Used to derive the human-readable `message` from a raw line; the raw line itself
 // retains the escapes so a `--raw` consumer can reproduce the server's coloring.
@@ -197,13 +193,15 @@ export class LogLineSplitter {
 /**
  * Parse a single raw log line into a {@link LogRecord}.
  *
- * The `[timestamp] [Plugin Name] ` prefix is extracted from the ANSI-stripped text, and the remainder becomes the human-readable `message`. The severity level is read
- * from the SGR color sequence that the server wraps around the MESSAGE - which means it appears AFTER the timestamp/plugin brackets, not at the start of the line: the
- * timestamp (white) and plugin (cyan) carry their own colors, so reading the line's first color would always misclassify them as severity. We therefore scan for the
- * severity color starting just past the plugin bracket. The original line is preserved verbatim in `raw`. A colored line that carries no severity color resolves to
- * `level: "info"` (Homebridge's info convention), while a fully color-stripped line resolves to `level: null` because severity is genuinely unknown; a line with no
- * bracketed prefix resolves to `timestamp: null` / `plugin: null`, a `message` equal to the full stripped line, and a level read from any severity color present
- * anywhere in the (prefix-less) line.
+ * The entry prefix is extracted from the ANSI-stripped text - the `[timestamp] ` bracket and, on a plugin's lines, the `[Plugin Name] ` bracket after it - and the
+ * remainder becomes the human-readable `message`. The full two-bracket prefix opens an entry whatever locale its timestamp is written in, because that shape is
+ * distinctive on its own. A lone leading bracket is not - an encoder's tagged output or an inspected object dump opens with one too - so a single bracket opens an entry
+ * only when it holds a timestamp {@link parseLogTimestamp} recognizes, which is what Homebridge's own core lines carry. The severity level is read from the SGR color
+ * sequence that the server wraps around the MESSAGE - which means it appears AFTER the prefix brackets, not at the start of the line: the timestamp (white) and plugin
+ * (cyan) carry their own colors, so reading the line's first color would always misclassify them as severity. We therefore scan for the severity color starting just
+ * past the prefix's last bracket. The original line is preserved verbatim in `raw`. A colored entry that carries no severity color resolves to `level: "info"`
+ * (Homebridge's info convention), while a fully color-stripped entry resolves to `level: null` because severity is genuinely unknown; a line that opens no entry
+ * resolves to `timestamp: null` / `plugin: null`, a `message` equal to the full stripped line, and a level read from any severity color present anywhere in the line.
  *
  * @param raw - A single raw log line (escapes intact, terminator already removed by {@link LogLineSplitter}).
  *
@@ -213,46 +211,44 @@ export class LogLineSplitter {
  */
 export function parseLogLine(raw: string): LogRecord {
 
-  // Strip ANSI to get the printable text, then peel the conventional `[timestamp] [Plugin Name] ` prefix. When the prefix is absent the whole stripped line is the
-  // message and both bracketed fields are null.
+  // Strip ANSI to get the printable text, then peel the entry prefix. `match[1]` is the timestamp text, and `match[2]` is the plugin text when the line carries a plugin
+  // bracket. A lone bracket opens an entry only when it holds a recognizable timestamp - see the rule above.
   const stripped = stripAnsi(raw);
-  const match = BRACKET_PREFIX_PATTERN.exec(stripped);
+  const match = ENTRY_PREFIX_PATTERN.exec(stripped);
+  const plugin = match?.[2];
 
-  if(match === null) {
+  if((match === null) || ((plugin === undefined) && (parseLogTimestamp(match[1] ?? "") === null))) {
 
-    // No bracketed prefix: this is a status or continuation line, not a formatted Homebridge log line, so the "uncolored = info" convention does not apply. The level is
+    // No entry prefix: this is a status or continuation line, not a formatted Homebridge log line, so the "uncolored = info" convention does not apply. The level is
     // whatever severity color the line carries (read from the whole line, since there is no prefix to skip past), or null.
     return { level: readLevel(raw, 0), message: stripped, plugin: null, raw, timestamp: null };
   }
 
-  // A formatted log line. The severity SGR colors the message, so it sits after the timestamp/plugin brackets; we anchor the scan just past the plugin bracket's closing
-  // `]` in the raw line so the timestamp's (white) and plugin's (cyan) own colors are not read as severity. When the message has no severity color, the level depends
-  // on whether the line is colored at ALL: a colored line with an uncolored message is Homebridge's info convention ("info"), whereas a line with no ANSI whatsoever is
-  // color-stripped, leaving severity genuinely unknown (null). We read "is the line colored" for free from the strip already performed - stripping shortened the text if
-  // and only if the line carried ANSI - rather than scanning a second time.
+  // A formatted log line. The severity SGR colors the message, so it sits after the prefix brackets; we anchor the scan just past the prefix's last `]` in the raw line
+  // so the timestamp's (white) and plugin's (cyan) own colors are not read as severity. When the message has no severity color, the level depends on whether the line
+  // is colored at ALL: a colored line with an uncolored message is Homebridge's info convention ("info"), whereas a line with no ANSI whatsoever is color-stripped,
+  // leaving severity genuinely unknown (null). We read "is the line colored" for free from the strip already performed - stripping shortened the text if and only if the
+  // line carried ANSI - rather than scanning a second time.
   const colored = stripped.length !== raw.length;
-  const level = readLevel(raw, messageColorStart(raw)) ?? (colored ? "info" : null);
+  const level = readLevel(raw, messageColorStart(raw, (plugin === undefined) ? 1 : 2)) ?? (colored ? "info" : null);
 
-  // `match[1]` is the timestamp text and `match[2]` is the plugin text; each bracketed field is guaranteed present when the match succeeds. The message is the
-  // stripped text after the matched prefix.
-  return { level, message: stripped.slice(match[0].length), plugin: match[2] ?? null, raw, timestamp: match[1] ?? null };
+  // The message is the stripped text after the matched prefix.
+  return { level, message: stripped.slice(match[0].length), plugin: plugin ?? null, raw, timestamp: match[1] ?? null };
 }
 
-// Locate, in the RAW (still-escaped) line, the index just past the second `]` - the plugin bracket's close - so the severity-color scan starts at the message portion
-// and never sees the timestamp's or plugin's own color. The closing bracket `]` never appears inside the SGR sequences the server emits, so scanning the raw line for it
-// is unambiguous. Returns 0 when fewer than two `]` are present (no recognizable prefix), letting the caller scan from the start.
-function messageColorStart(raw: string): number {
+// Locate, in the RAW (still-escaped) line, the index just past the entry prefix's last `]` - the timestamp bracket's close on a core line, the plugin bracket's on a
+// plugin's line - so the severity-color scan starts at the message portion and never sees the prefix's own colors. The closing bracket `]` never appears inside the SGR
+// sequences the server emits, so the Nth `]` in the raw line is the Nth in the stripped one, and the prefix match has already proven that many are there.
+function messageColorStart(raw: string, brackets: number): number {
 
-  const firstClose = raw.indexOf("]");
+  let start = 0;
 
-  if(firstClose === -1) {
+  for(let closed = 0; closed < brackets; closed++) {
 
-    return 0;
+    start = raw.indexOf("]", start) + 1;
   }
 
-  const secondClose = raw.indexOf("]", firstClose + 1);
-
-  return secondClose === -1 ? 0 : secondClose + 1;
+  return start;
 }
 
 // Read the severity level from the first severity-mapping SGR color sequence at or after `from` in the raw line, or null when none is present. Scanning from `from`
@@ -399,25 +395,25 @@ export function normalizeClock(parts: { hour: number; meridiem?: string; minute:
 }
 
 /**
- * Determine whether a raw log line begins a new Homebridge log entry - that is, whether it opens with a parseable bracketed timestamp.
+ * Determine whether a raw log line begins a new Homebridge log entry - that is, whether {@link parseLogLine} reads a recognizable timestamp from it.
  *
  * Every genuine entry the server emits starts with a `[timestamp]` field; a `[plugin]` bracket may or may not follow, because Homebridge's own core lines (for example
- * `[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 ... is running`) carry a timestamp but no plugin prefix. Only the FIRST bracket is inspected: requiring a second `[plugin]`
- * bracket would wrongly reject those core lines. A line that is not an entry start - the server's `Loading logs...` / `File: ...` seed preamble, a byte-truncated seed
- * fragment, or a continuation line such as a stack frame or a wrapped object dump - has no leading parseable timestamp and returns `false`. ANSI is stripped first
- * because the server wraps the timestamp in an SGR color, so the raw line begins with an escape sequence rather than the `[`.
+ * `[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 ... is running`) carry a timestamp but no plugin prefix. The answer is defined by the parser rather than by a match of its
+ * own, so a line this calls an entry start is always one the parser gives a timestamp, and the answers cannot come to disagree. A line that is not an entry start - the
+ * server's `Loading logs...` / `File: ...` seed preamble, a byte-truncated seed fragment, or a continuation line such as a stack frame or a wrapped object dump - carries
+ * no recognizable leading timestamp and returns `false`, as does an entry whose timestamp is in a locale {@link parseLogTimestamp} does not read.
  *
  * @param raw - A single raw log line (escapes intact, terminator already removed by {@link LogLineSplitter}).
  *
- * @returns `true` when the line opens with a parseable en-US timestamp bracket, `false` otherwise.
+ * @returns `true` when the line opens an entry whose timestamp is a recognized en-US timestamp, `false` otherwise.
  *
  * @category Log Client
  */
 export function isLogLineStart(raw: string): boolean {
 
-  const match = LOG_LINE_START_PATTERN.exec(stripAnsi(raw));
+  const { timestamp } = parseLogLine(raw);
 
-  return (match !== null) && (parseLogTimestamp(match[1] ?? "") !== null);
+  return (timestamp !== null) && (parseLogTimestamp(timestamp) !== null);
 }
 
 /**

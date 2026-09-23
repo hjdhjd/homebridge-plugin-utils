@@ -244,6 +244,59 @@ describe("parseLogLine", () => {
   });
 });
 
+describe("parseLogLine and isLogLineStart - single-bracket lines", () => {
+
+  test("a core entry's lone bracket is its timestamp, with no plugin", () => {
+
+    const record = parseLogLine("[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 (HAP v0.14.2) is running on port 36680.");
+
+    assert.equal(record.timestamp, "7/3/2026, 4:31:46 PM");
+    assert.equal(record.plugin, null);
+    assert.equal(record.message, "Homebridge v1.11.3 (HAP v0.14.2) is running on port 36680.");
+  });
+
+  test("a colored core entry reads its severity from past its one bracket", () => {
+
+    // The message carries a bracket of its own, so a scan anchored at the line's second `]` would start inside the message, past the warn color, and read the entry as
+    // info. The anchor follows the prefix the parser matched, which here is one bracket.
+    const warning = parseLogLine(ESC + "[37m[7/3/2026, 4:31:46 PM] " + ESC + "[39m" + ESC + "[33mRetrying [attempt 2] now." + ESC + "[39m");
+
+    assert.equal(warning.level, "warn");
+    assert.equal(warning.message, "Retrying [attempt 2] now.");
+
+    // A colored core entry with no severity color follows Homebridge's info convention, the same as a plugin's entry.
+    assert.equal(parseLogLine(ESC + "[37m[7/3/2026, 4:31:46 PM] " + ESC + "[39mHomebridge is running.").level, "info");
+  });
+
+  test("a lone bracket that holds no recognizable timestamp opens no entry, so the line stays whole", () => {
+
+    const record = parseLogLine("[hevc @ 0xb6d02ca80] Skipping invalid undecodable NALU: 1");
+
+    assert.equal(record.timestamp, null);
+    assert.equal(record.plugin, null);
+    assert.equal(record.message, "[hevc @ 0xb6d02ca80] Skipping invalid undecodable NALU: 1", "the tag is part of the message rather than a prefix");
+  });
+
+  test("isLogLineStart calls a single-bracket line an entry start exactly when parseLogLine gives it a timestamp", () => {
+
+    const lines: readonly (readonly [ string, boolean ])[] = [
+
+      [ "[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 (HAP v0.14.2) is running on port 36680.", true ],
+      [ "[7/3/2026, 4:31:34 PM] Got SIGTERM, shutting down child bridge process...", true ],
+      [ ESC + "[37m[6/29/2026, 19:30:15] " + ESC + "[39mA 24-hour core entry.", true ],
+      [ "[hevc @ 0xb6d02ca80] Skipping invalid undecodable NALU: 1", false ],
+      [ "[Object: null prototype] {", false ],
+      [ "[SomeTag] a tagged but timestamp-less line", false ]
+    ];
+
+    for(const [ line, entry ] of lines) {
+
+      assert.equal(isLogLineStart(line), entry, JSON.stringify(line) + " entry start");
+      assert.equal(parseLogLine(line).timestamp !== null, entry, JSON.stringify(line) + " parsed timestamp");
+    }
+  });
+});
+
 describe("parseLogTimestamp", () => {
 
   test("parses a 12-hour en-US timestamp to its local epoch", () => {

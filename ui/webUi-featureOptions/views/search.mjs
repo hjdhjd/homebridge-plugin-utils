@@ -17,7 +17,8 @@ const SEARCH_DEBOUNCE_MS = 300;
  *
  * The panel hosts the following interactive surfaces:
  *
- *   - **Search input** - debounced 300ms; dispatches `filter:changed` with the trimmed query.
+ *   - **Search input** - debounced 300ms; when the timer fires it dispatches `filter:changed` with the box's trimmed value as it stands then, unless the store already
+ *     holds that query. The box is built showing the store's query, so a rebuild over an applied filter shows the filter the table is applying.
  *   - **Filter pills** (All / Modified) - dispatch `filter:changed` with the mode.
  *   - **Toggle-all categories** - imperative DOM mutation; sets `<details open>` on every category in the config table.
  *   - **Status bar counters** (total / modified / grouped / visible) - read from the projection, updated on any state change that touches it.
@@ -76,8 +77,9 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
       }
 
       // Build the panel content. The view never reveals its own region; the orchestrator owns region visibility and reveals the search panel via revealRegions once the
-      // populated UI is ready, so the search box and its metrics do not flash in before the rest of the page.
-      buildPanel({ refs, root });
+      // populated UI is ready, so the search box and its metrics do not flash in before the rest of the page. A model arriving over a standing page keeps the store's
+      // filter, so the rebuilt box shows that query rather than an empty field over a table it is still narrowing.
+      buildPanel({ query: store.state.filter.query, refs, root });
     },
     signal,
     store
@@ -145,7 +147,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
     store
   });
 
-  // Wire the search input event listener. Reads the current value, dispatches debounced filter:changed.
+  // Wire the search input event listener. Each keystroke re-arms the debounced filter:changed.
   root.addEventListener("input", (event) => {
 
     if(event.target !== refs.search) {
@@ -153,7 +155,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
       return;
     }
 
-    scheduleSearchDispatch(event.target.value.trim());
+    scheduleSearchDispatch();
   }, { signal });
 
   // Wire button click handlers via delegation on the panel root.
@@ -171,12 +173,24 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
     }
   }, { capture: true, signal });
 
-  // Debounce helper; closes over `debounceTimer` and `store`. setTimeout is intentional here over the abort-driven equivalent: clearTimeout is the simplest
+  // Debounce helper; closes over `debounceTimer`, `refs`, and `store`. setTimeout is intentional here over the abort-driven equivalent: clearTimeout is the simplest
   // expression of "cancel the previous timer," with no abort-controller allocation per keystroke.
-  function scheduleSearchDispatch(query) {
+  //
+  // The timer reads the box when it fires rather than capturing a query when it was armed, and dispatches only a query the store does not already hold. The box can
+  // change without an input event - Escape clears it and dispatches the empty query itself - so a query captured at the last keystroke would re-apply what the user
+  // just cleared, while the live read finds the box and the store already agreeing and has nothing to do. The timer is deliberately left running across other
+  // filter:changed actions: a mode pill clicked mid-typing changes the mode, keeps the typed text in the box, and the text still applies when the timer fires.
+  function scheduleSearchDispatch() {
 
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
+
+      const query = refs.search.value.trim();
+
+      if(query === store.state.filter.query) {
+
+        return;
+      }
 
       store.dispatch({ query, type: "filter:changed" });
     }, SEARCH_DEBOUNCE_MS);
@@ -184,8 +198,8 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
 };
 
 // Build the panel DOM and fill the `refs` record with element pointers that update functions consult later. One-time call; safe to repeat only insofar as it reassigns
-// `refs` fields (the panel itself is rebuilt fresh, replacing any prior content).
-const buildPanel = ({ refs, root }) => {
+// `refs` fields (the panel itself is rebuilt fresh, replacing any prior content). `query` is the store's current search query, which the new search box shows.
+const buildPanel = ({ query, refs, root }) => {
 
   root.textContent = "";
   root.className = "";
@@ -260,7 +274,8 @@ const buildPanel = ({ refs, root }) => {
     classList: ["form-control"],
     id: "searchInput",
     placeholder: "Search options...",
-    type: "search"
+    type: "search",
+    value: query
   });
 
   const searchWrapper = createElement("div", {

@@ -11,6 +11,7 @@ import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
 import { mountSearchView } from "./search.mjs";
+import { registerKeyboardEffect } from "../effects/keyboard.mjs";
 
 const CATEGORIES = [{ description: "Motion Options", name: "Motion" }];
 const OPTIONS = { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] };
@@ -268,6 +269,90 @@ describe("mountSearchView - search input debounce", () => {
     await waitFor(() => store.state.filter.query === "motion", { timeout: 1000 });
 
     assert.equal(store.state.filter.query, "motion");
+  });
+});
+
+describe("mountSearchView with the keyboard effect - the box and the store's query stay in agreement", () => {
+
+  // The view's debounce, mirrored from search.mjs so a test can step the mock clock across it exactly.
+  const SEARCH_DEBOUNCE_MS = 300;
+
+  // Mount the search view and the keyboard effect against one store, the way the page wires them, so a test drives the box, Escape, and the pills together.
+  const setupWithKeyboard = () => {
+
+    const mounted = setup();
+    const controller = new AbortController();
+
+    registerKeyboardEffect({ signal: controller.signal, store: mounted.store });
+
+    return { ...mounted, input: mounted.root.querySelector("#searchInput") };
+  };
+
+  // Type into the box the way a user does: the value changes, then the input event fires and arms the debounce.
+  const type = (input, text) => {
+
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  test("Escape inside the debounce window clears the query for good, and the timer never applies the text it cleared", (t) => {
+
+    using dom = createTestDom();
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { input, store } = setupWithKeyboard();
+    const dispatched = [];
+
+    store.addEventListener("filter:changed", (event) => dispatched.push(event.detail));
+
+    type(input, "motion");
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }));
+
+    assert.equal(input.value, "", "precondition: Escape cleared the box");
+    assert.equal(store.state.filter.query, "", "precondition: the store holds the empty query");
+
+    t.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+
+    assert.equal(store.state.filter.query, "", "the timer armed by the typing did not bring the cleared text back");
+    assert.deepEqual(dispatched, [{ query: "", type: "filter:changed" }], "the only query dispatch was Escape's own");
+  });
+
+  test("a model arriving over a standing page rebuilds the box showing the query the store still applies", () => {
+
+    using dom = createTestDom();
+
+    const { input, root, store } = setupWithKeyboard();
+
+    store.dispatch({ query: "motion", type: "filter:changed" });
+    store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+    const rebuilt = root.querySelector("#searchInput");
+
+    assert.equal(store.state.filter.query, "motion", "precondition: the load kept the filter");
+    assert.ok(rebuilt !== input, "precondition: the load rebuilt the panel");
+    assert.equal(rebuilt.value, "motion", "the rebuilt box shows the query the table is filtered by");
+  });
+
+  test("a mode pill clicked mid-typing keeps the typed text, and the text applies when the timer fires", (t) => {
+
+    using dom = createTestDom();
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { input, root, store } = setupWithKeyboard();
+
+    type(input, "motion");
+    root.querySelector("#filter-modified").click();
+
+    assert.equal(store.state.filter.mode, "modified", "precondition: the pill changed the mode");
+    assert.equal(input.value, "motion", "the pill click left the typed text in the box");
+    assert.equal(store.state.filter.query, "", "and the text waits for the timer");
+
+    t.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+
+    assert.equal(store.state.filter.query, "motion", "the timer applied the typed text");
+    assert.equal(store.state.filter.mode, "modified", "over the mode the pill chose");
   });
 });
 

@@ -11,12 +11,13 @@
  */
 import { AudioRecordingCodecType, H264Level, H264Profile } from "./hap-enums.ts";
 import type { FfmpegOptionsConfig, VideoEncoderOptions } from "./options.ts";
-import { before, describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import type { CodecsInit } from "./codecs.helpers.ts";
 import { FfmpegCodecs } from "./codecs.ts";
 import { FfmpegOptions } from "./options.ts";
 import { RPI4_HW_TRANSCODE_MAX_PIXELS } from "./settings.ts";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { ffmpegIntegrationEnabled } from "./integration.helpers.ts";
@@ -107,9 +108,8 @@ const BASE_ENCODER_OPTIONS: VideoEncoderOptions = {
   width: 1920
 };
 
-// Caller-supplied CPU-side filters used by the videoFilters boundary rows. Opaque to the encoder: it appends them at the chain tail in caller order, bridging a
-// download transfer ahead of them only when the platform scaler left frames on the GPU. More than one entry, so the rows also lock in that the encoder joins
-// them with ", ".
+// Caller-supplied CPU-side filters used by the videoFilters boundary rows. Opaque to the encoder: it runs them after its scaler in caller order, always in system
+// memory. More than one entry, so the rows also lock in that the encoder joins them with ", ".
 const CALLER_VIDEO_FILTERS = [ "fps=30", "minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc" ];
 
 // Assert an ordered `-key value` pair is present in the args array. FFmpeg option parsing is strictly positional, so the key and value must appear adjacently.
@@ -289,21 +289,24 @@ describe("FfmpegOptions - videoDecoder", () => {
 
     const { options } = makeOptions({ hostSystem: "generic" });
 
-    assert.deepEqual(options.videoDecoder("h264"), []);
+    assert.deepEqual(options.videoDecoder({ inputCodec: "h264" }), []);
   });
 
   test("returns empty args for an unknown codec regardless of hardware state", () => {
 
-    const { options } = makeOptions({ hostSystem: "generic" });
+    // An unknown codec resolves hardware decoding off in the pipeline resolver, so the return is empty even on hosts that decode H.264 on hardware, and typos can never
+    // leak into argv.
+    for(const options of [ makeOptions({ hostSystem: "generic" }).options, makeOptions(QSV_CODECS, HW_TRANSCODE).options,
+      makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL).options ]) {
 
-    // Unknown codecs short-circuit before the hardware branch, so the return is empty even when the caller misuses the API by passing "vp9" or similar.
-    assert.deepEqual(options.videoDecoder("vp9"), []);
+      assert.deepEqual(options.videoDecoder({ inputCodec: "vp9" }), []);
+    }
   });
 
   test("macOS hardware decoder emits -hwaccel videotoolbox", () => {
 
     const { options } = makeOptions(VIDEOTOOLBOX_CODECS, HW_DECODE);
-    const args = options.videoDecoder("h264");
+    const args = options.videoDecoder({ inputCodec: "h264" });
 
     assertHasArg(args, "-hwaccel", "videotoolbox");
   });
@@ -313,7 +316,7 @@ describe("FfmpegOptions - videoDecoder", () => {
     // The 8.x branch carries an extra pair of args for explicit output-format selection, emitted for a pipeline whose encoder runs on the GPU too. This test freezes that
     // version-gated behavior.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
-    const args = options.videoDecoder("h264");
+    const args = options.videoDecoder({ inputCodec: "h264" });
 
     assertHasArg(args, "-hwaccel_output_format", "videotoolbox_vld");
   });
@@ -321,7 +324,7 @@ describe("FfmpegOptions - videoDecoder", () => {
   test("QSV h264 decoder emits -hwaccel qsv, output format qsv, and h264_qsv codec", () => {
 
     const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
-    const args = options.videoDecoder("h264");
+    const args = options.videoDecoder({ inputCodec: "h264" });
 
     assertHasArg(args, "-hwaccel", "qsv");
     assertHasArg(args, "-hwaccel_output_format", "qsv");
@@ -339,7 +342,7 @@ describe("FfmpegOptions - videoDecoder", () => {
       decoders: { ...QSV_CODECS.decoders, av1: ["av1_qsv"] }
     }, HW_TRANSCODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), []);
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), []);
   });
 
   test("QSV AV1 decoding is enabled on CPU generation 11 or newer", () => {
@@ -350,16 +353,25 @@ describe("FfmpegOptions - videoDecoder", () => {
       cpuGeneration: 12,
       decoders: { ...QSV_CODECS.decoders, av1: ["av1_qsv"] }
     }, HW_TRANSCODE);
-    const args = options.videoDecoder("av1");
+    const args = options.videoDecoder({ inputCodec: "av1" });
 
     assertHasArg(args, "-codec:v", "av1_qsv");
   });
 
+  test("a pipeline that names no source codec describes an H.264 source", () => {
+
+    // The source codec defaults to H.264 on both sides of the pipeline, so omitting it - or the whole pipeline - selects the H.264 decoder.
+    const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
+
+    assert.deepEqual(options.videoDecoder(), [ "-hwaccel", "qsv", "-hwaccel_output_format", "qsv", "-codec:v", "h264_qsv" ]);
+    assert.deepEqual(options.videoDecoder({ hardwareTranscoding: false }), [ "-hwaccel", "qsv", "-codec:v", "h264_qsv" ]);
+  });
+
   test("normalizes h265 input to hevc", () => {
 
-    // The argument normalization happens before the QSV map lookup. Callers can pass "h265" and get HEVC-QSV args back.
+    // The codec normalization happens before the QSV map lookup. A pipeline can name its source "h265" and get HEVC-QSV args back.
     const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
-    const args = options.videoDecoder("h265");
+    const args = options.videoDecoder({ inputCodec: "h265" });
 
     assertHasArg(args, "-codec:v", "hevc_qsv");
   });
@@ -369,8 +381,8 @@ describe("FfmpegOptions - videoDecoder", () => {
     // The macOS branch in videoDecoder is codec-agnostic for h264 and hevc - both receive the same -hwaccel videotoolbox args. AV1 is gated separately (see the gate
     // tests below), so it's deliberately NOT asserted equal here.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
-    const h264Args = options.videoDecoder("h264");
-    const hevcArgs = options.videoDecoder("hevc");
+    const h264Args = options.videoDecoder({ inputCodec: "h264" });
+    const hevcArgs = options.videoDecoder({ inputCodec: "hevc" });
 
     assert.deepEqual(h264Args, hevcArgs, "macOS videoDecoder must emit identical args for h264 and hevc");
     assertHasArg(h264Args, "-hwaccel", "videotoolbox");
@@ -382,7 +394,7 @@ describe("FfmpegOptions - videoDecoder", () => {
     // The `-hwaccel_output_format videotoolbox_vld` arg only appears on FFmpeg 8.x. Pre-8.x emits just `-hwaccel videotoolbox`. Exercised on h264 (AV1 on pre-8.x is
     // the gate-matrix concern, covered separately below).
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "7.1" }, HW_DECODE);
-    const args = options.videoDecoder("h264");
+    const args = options.videoDecoder({ inputCodec: "h264" });
 
     assertHasArg(args, "-hwaccel", "videotoolbox");
     assert.equal(args.includes("-hwaccel_output_format"), false, "pre-8.x macOS must not emit -hwaccel_output_format");
@@ -393,7 +405,7 @@ describe("FfmpegOptions - videoDecoder", () => {
     // AV1 hardware decode via VideoToolbox requires: (a) Apple Silicon M3+ (cpuGeneration >= 3), (b) FFmpeg 8.0 or newer, (c) hostSystem macOS.Apple. All three must
     // hold. cpuGeneration mirrors the M-series generation (M3 maps to 3, M4 maps to 4, ...).
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 3, ffmpegVersion: "8.0" }, HW_FULL);
-    const args = options.videoDecoder("av1");
+    const args = options.videoDecoder({ inputCodec: "av1" });
 
     assertHasArg(args, "-hwaccel", "videotoolbox");
     assertHasArg(args, "-hwaccel_output_format", "videotoolbox_vld");
@@ -405,7 +417,7 @@ describe("FfmpegOptions - videoDecoder", () => {
     // fallback explicit and safe.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 2, ffmpegVersion: "8.0" }, HW_DECODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), [], "AV1 on pre-M3 Apple Silicon must return [] so FFmpeg falls back to software decode");
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), [], "AV1 on pre-M3 Apple Silicon must return [] so FFmpeg falls back to software decode");
   });
 
   test("macOS AV1 hardware decode returns [] on M3+ Apple Silicon with FFmpeg 7.x (VT AV1 decoder absent pre-8.0)", () => {
@@ -414,7 +426,7 @@ describe("FfmpegOptions - videoDecoder", () => {
     // even on otherwise-capable M3+ silicon. The gate must treat the FFmpeg version as a hard floor regardless of hardware generation.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 3, ffmpegVersion: "7.1" }, HW_DECODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), [], "AV1 on FFmpeg 7.x must return [] - VideoToolbox AV1 decoder requires FFmpeg 8.0+");
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), [], "AV1 on FFmpeg 7.x must return [] - VideoToolbox AV1 decoder requires FFmpeg 8.0+");
   });
 
   test("macOS.Intel AV1 hardware decode returns [] regardless of FFmpeg version (no Intel VT AV1 support ever)", () => {
@@ -422,11 +434,11 @@ describe("FfmpegOptions - videoDecoder", () => {
     // Intel Macs never shipped AV1 hardware decode through VideoToolbox. The gate returns [] independent of ffmpegVersion - Intel Mac is a hard "no" for AV1.
     const eightX = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0", hostSystem: "macOS.Intel" }, HW_DECODE);
 
-    assert.deepEqual(eightX.options.videoDecoder("av1"), [], "AV1 on Intel Mac (FFmpeg 8.x) must return []");
+    assert.deepEqual(eightX.options.videoDecoder({ inputCodec: "av1" }), [], "AV1 on Intel Mac (FFmpeg 8.x) must return []");
 
     const sevenX = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "7.1", hostSystem: "macOS.Intel" }, HW_DECODE);
 
-    assert.deepEqual(sevenX.options.videoDecoder("av1"), [], "AV1 on Intel Mac (FFmpeg 7.x) must return []");
+    assert.deepEqual(sevenX.options.videoDecoder({ inputCodec: "av1" }), [], "AV1 on Intel Mac (FFmpeg 7.x) must return []");
   });
 
   test("macOS h264/hevc still emit args on pre-M3 Apple Silicon (the AV1 gate is AV1-specific)", () => {
@@ -435,8 +447,8 @@ describe("FfmpegOptions - videoDecoder", () => {
     // break hardware decode for the common-case codecs on M1 / M2.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 2, ffmpegVersion: "8.0" }, HW_DECODE);
 
-    assertHasArg(options.videoDecoder("h264"), "-hwaccel", "videotoolbox");
-    assertHasArg(options.videoDecoder("hevc"), "-hwaccel", "videotoolbox");
+    assertHasArg(options.videoDecoder({ inputCodec: "h264" }), "-hwaccel", "videotoolbox");
+    assertHasArg(options.videoDecoder({ inputCodec: "hevc" }), "-hwaccel", "videotoolbox");
   });
 
   test("macOS h264/hevc still emit args on FFmpeg 7.x (the AV1 gate's version check is AV1-specific)", () => {
@@ -445,8 +457,8 @@ describe("FfmpegOptions - videoDecoder", () => {
     // have been available for many FFmpeg versions and must continue to emit args on 7.x.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 3, ffmpegVersion: "7.1" }, HW_DECODE);
 
-    assertHasArg(options.videoDecoder("h264"), "-hwaccel", "videotoolbox");
-    assertHasArg(options.videoDecoder("hevc"), "-hwaccel", "videotoolbox");
+    assertHasArg(options.videoDecoder({ inputCodec: "h264" }), "-hwaccel", "videotoolbox");
+    assertHasArg(options.videoDecoder({ inputCodec: "hevc" }), "-hwaccel", "videotoolbox");
   });
 
   test("macOS.Intel h264/hevc still emit args (the AV1 gate is AV1-specific)", () => {
@@ -454,8 +466,8 @@ describe("FfmpegOptions - videoDecoder", () => {
     // Same regression guard for Intel Mac: the AV1 gate must not accidentally block h264 or hevc.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0", hostSystem: "macOS.Intel" }, HW_DECODE);
 
-    assertHasArg(options.videoDecoder("h264"), "-hwaccel", "videotoolbox");
-    assertHasArg(options.videoDecoder("hevc"), "-hwaccel", "videotoolbox");
+    assertHasArg(options.videoDecoder({ inputCodec: "h264" }), "-hwaccel", "videotoolbox");
+    assertHasArg(options.videoDecoder({ inputCodec: "hevc" }), "-hwaccel", "videotoolbox");
   });
 });
 
@@ -470,7 +482,7 @@ describe("FfmpegOptions - decoded frame residency", () => {
 
     const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
 
-    assert.deepEqual(options.videoDecoder("h264", softwareEncode), [ "-hwaccel", "qsv", "-codec:v", "h264_qsv" ],
+    assert.deepEqual(options.videoDecoder({ ...softwareEncode, inputCodec: "h264" }), [ "-hwaccel", "qsv", "-codec:v", "h264_qsv" ],
       "the decoder hands its frames over in system memory");
     assert.equal(filterChain(options.streamEncoder(softwareEncode)), "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
       "so the software chain runs on the CPU from its first filter, with no download");
@@ -480,7 +492,8 @@ describe("FfmpegOptions - decoded frame residency", () => {
 
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
 
-    assert.deepEqual(options.videoDecoder("h264", softwareEncode), [ "-hwaccel", "videotoolbox" ], "the decoder hands its frames over in system memory");
+    assert.deepEqual(options.videoDecoder({ ...softwareEncode, inputCodec: "h264" }), [ "-hwaccel", "videotoolbox" ],
+      "the decoder hands its frames over in system memory");
     assert.equal(filterChain(options.streamEncoder(softwareEncode)), "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
       "so the software chain runs on the CPU from its first filter, with no download");
   });
@@ -490,7 +503,7 @@ describe("FfmpegOptions - decoded frame residency", () => {
     // The class config is the default pipeline, so on a decode-only macOS configuration the decoder and the encoder both default to the software-encode pairing.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_DECODE);
 
-    assert.deepEqual(options.videoDecoder("h264"), [ "-hwaccel", "videotoolbox" ], "the decoder hands its frames over in system memory");
+    assert.deepEqual(options.videoDecoder({ inputCodec: "h264" }), [ "-hwaccel", "videotoolbox" ], "the decoder hands its frames over in system memory");
     assert.equal(filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS)).includes("hwdownload"), false, "and the software encode it feeds downloads nothing");
   });
 
@@ -499,12 +512,12 @@ describe("FfmpegOptions - decoded frame residency", () => {
     const qsv = makeOptions(QSV_CODECS, HW_TRANSCODE).options;
     const macOS = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL).options;
 
-    for(const decoderArgs of [ qsv.videoDecoder("h264"), qsv.videoDecoder("h264", BASE_ENCODER_OPTIONS) ]) {
+    for(const decoderArgs of [ qsv.videoDecoder({ inputCodec: "h264" }), qsv.videoDecoder({ ...BASE_ENCODER_OPTIONS, inputCodec: "h264" }) ]) {
 
       assertHasArg(decoderArgs, "-hwaccel_output_format", "qsv");
     }
 
-    for(const decoderArgs of [ macOS.videoDecoder("h264"), macOS.videoDecoder("h264", BASE_ENCODER_OPTIONS) ]) {
+    for(const decoderArgs of [ macOS.videoDecoder({ inputCodec: "h264" }), macOS.videoDecoder({ ...BASE_ENCODER_OPTIONS, inputCodec: "h264" }) ]) {
 
       assertHasArg(decoderArgs, "-hwaccel_output_format", "videotoolbox_vld");
     }
@@ -518,9 +531,293 @@ describe("FfmpegOptions - decoded frame residency", () => {
     // A decode-only class config: a per-call request for hardware encoding is clamped away, and a per-call opt-out of hardware decoding is honored.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_DECODE);
 
-    assert.deepEqual(options.videoDecoder("h264", { hardwareTranscoding: true }), [ "-hwaccel", "videotoolbox" ],
+    assert.deepEqual(options.videoDecoder({ hardwareTranscoding: true, inputCodec: "h264" }), [ "-hwaccel", "videotoolbox" ],
       "a hardware encode the class config has turned off cannot be requested per call");
-    assert.deepEqual(options.videoDecoder("h264", { hardwareDecoding: false }), [], "and a pipeline that decodes in software emits no decoder args");
+    assert.deepEqual(options.videoDecoder({ hardwareDecoding: false, inputCodec: "h264" }), [], "and a pipeline that decodes in software emits no decoder args");
+  });
+
+  test("a source the host's hardware decoder cannot take decodes in software on both sides of the pipeline", () => {
+
+    // The codec gate lives in the one pipeline resolver, so the decoder and the encoder read the same answer. A source the hardware cannot take - AV1 before Apple M3,
+    // on an Intel Mac, or before 11th-generation Intel silicon, or a codec outside the supported set - gets no hardware decoder args, and the hardware encode it
+    // feeds uploads the frames it receives in system memory, with the device that upload needs.
+    const cases: { codec: string; host: CodecsInit; init: string; name: string; scaler: string; upload: string }[] = [
+
+      { codec: "av1", host: { ...VIDEOTOOLBOX_CODECS, cpuGeneration: 2, ffmpegVersion: "8.0" }, init: "videotoolbox=hw", name: "M2 with FFmpeg 8",
+        scaler: "scale_vt=", upload: "format=nv12, hwupload, " },
+      { codec: "av1", host: { ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "9.0.1", hostSystem: "macOS.Intel" }, init: "videotoolbox=hw", name: "Intel Mac with FFmpeg 9",
+        scaler: "scale_vt=", upload: "format=nv12, hwupload, " },
+      { codec: "vp9", host: { ...VIDEOTOOLBOX_CODECS, cpuGeneration: 3, ffmpegVersion: "8.0" }, init: "videotoolbox=hw", name: "an unsupported codec on M3",
+        scaler: "scale_vt=", upload: "format=nv12, hwupload, " },
+      { codec: "av1", host: { ...QSV_CODECS, cpuGeneration: 10 }, init: "qsv=hw", name: "10th-generation Quick Sync", scaler: "vpp_qsv=", upload: "hwupload, " },
+      { codec: "vp9", host: { ...QSV_CODECS, cpuGeneration: 12 }, init: "qsv=hw", name: "an unsupported codec on Quick Sync", scaler: "vpp_qsv=", upload: "hwupload, " }
+    ];
+
+    for(const { codec, host, init, name, scaler, upload } of cases) {
+
+      const { options } = makeOptions(host, (host.hostSystem === "generic") ? HW_TRANSCODE : HW_FULL);
+      const pipeline: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, inputCodec: codec };
+      const args = options.streamEncoder(pipeline);
+
+      assert.deepEqual(options.videoDecoder(pipeline), [], name + ": the decoder emits no hardware args");
+      assert.ok(filterChain(args).startsWith(upload + scaler), name + ": the chain uploads ahead of its GPU scaler - got " + filterChain(args));
+      assertHasArg(args, "-init_hw_device", init);
+      assert.deepEqual(options.recordEncoder(pipeline), options.streamEncoder({ ...pipeline, smartQuality: false }), name + ": recordings read the same pipeline");
+    }
+  });
+
+  test("a source the host's hardware decoder can take keeps its frames on the GPU from decoder to encoder", () => {
+
+    // The counterpart rows: AV1 on Apple M3 with FFmpeg 8 and on 11th-generation Quick Sync decodes on hardware, so the decoder keeps its frames on the GPU and the chain
+    // neither uploads nor initializes a device of its own.
+    const cases: { decoder: string[]; host: CodecsInit; name: string }[] = [
+
+      { decoder: [ "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld" ], host: { ...VIDEOTOOLBOX_CODECS, cpuGeneration: 3, ffmpegVersion: "8.0" },
+        name: "M3 with FFmpeg 8" },
+      { decoder: [ "-hwaccel", "qsv", "-hwaccel_output_format", "qsv", "-codec:v", "av1_qsv" ], host: { ...QSV_CODECS, cpuGeneration: 11 },
+        name: "11th-generation Quick Sync" }
+    ];
+
+    for(const { decoder, host, name } of cases) {
+
+      const { options } = makeOptions(host, (host.hostSystem === "generic") ? HW_TRANSCODE : HW_FULL);
+      const pipeline: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, inputCodec: "av1" };
+      const args = options.streamEncoder(pipeline);
+
+      assert.deepEqual(options.videoDecoder(pipeline), decoder, name + ": the decoder keeps its frames on the GPU");
+      assert.equal(filterChain(args).includes("hwupload"), false, name + ": the chain uploads nothing - got " + filterChain(args));
+      assert.equal(args.includes("-init_hw_device"), false, name + ": and initializes no device of its own");
+    }
+  });
+
+  test("caller filters move a VideoToolbox pipeline's decoded frames into system memory, and leave a Quick Sync pipeline's on the GPU", () => {
+
+    // VideoToolbox's scaler cannot fix its output format, so caller filters run the whole chain on the CPU, starting where the decoder hands its frames over. Quick
+    // Sync's scaler fixes the transfer format, so its pipeline keeps the frames on the GPU through the scaler and downloads them after it.
+    const withFilters: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS };
+
+    for(const host of [ "macOS.Apple", "macOS.Intel" ]) {
+
+      for(const ffmpegVersion of [ "8.0", "9.0.1" ]) {
+
+        const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion, hostSystem: host }, HW_FULL);
+        const label = host + " " + ffmpegVersion;
+        const gpuOutput = [ "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld" ];
+
+        assert.deepEqual(options.videoDecoder({ ...withFilters, inputCodec: "hevc" }), [ "-hwaccel", "videotoolbox" ],
+          label + ": frames reach the chain in system memory");
+        assert.deepEqual(options.videoDecoder({ ...withFilters, inputCodec: "hevc", videoFilters: [] }), gpuOutput,
+          label + ": an empty filter list keeps the frames on the GPU");
+        assert.deepEqual(options.videoDecoder({ inputCodec: "hevc" }), gpuOutput, label + ": omitting the pipeline describes one with no caller filters");
+      }
+    }
+
+    const qsv = makeOptions(QSV_CODECS, HW_TRANSCODE).options;
+
+    assertHasArg(qsv.videoDecoder({ ...withFilters, inputCodec: "hevc" }), "-hwaccel_output_format", "qsv");
+    assert.ok(filterChain(qsv.streamEncoder(withFilters)).startsWith("vpp_qsv=format=nv12:"), "the Quick Sync chain opens with its GPU scaler");
+  });
+});
+
+describe("FfmpegOptions - 10-bit sources", () => {
+
+  // Every HomeKit stream is 8-bit H.264, so every pipeline has to turn a 10-bit source into 8-bit somewhere FFmpeg can do it. These rows lock in where each path does
+  // it: libx264 through its input format, Quick Sync in its GPU scaler, and VideoToolbox in the upload that closes a chain running on the CPU, in the encoder itself
+  // when its frames arrive on the GPU, or before FFmpeg 8 in FFmpeg's conversion into the only 8-bit formats the encoder takes from system memory. The integration
+  // suite at the bottom of this file runs the same argv against real 8-bit and 10-bit sources where the host allows.
+
+  test("every libx264 encode fixes its input to 8-bit yuv420p, whichever host and decoder feed it", () => {
+
+    // libx264 takes 10-bit input too, and a 10-bit source it was handed as-is would ask for a bit depth that no H.264 profile HomeKit requests can carry, so the
+    // encoder refuses to open. Each row is a different route into libx264: plain software, a hardware decoder feeding a software encode on each platform, caller
+    // filters at the tail, and the Raspberry Pi recording fallback.
+    const cases: { args: string[]; name: string }[] = [
+
+      { args: makeOptions({ hostSystem: "generic" }).options.streamEncoder(BASE_ENCODER_OPTIONS), name: "plain software" },
+      { args: makeOptions({ hostSystem: "generic" }).options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }),
+        name: "plain software with caller filters" },
+      { args: makeOptions(QSV_CODECS, HW_TRANSCODE).options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareTranscoding: false }),
+        name: "Quick Sync decode feeding libx264" },
+      { args: makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_DECODE).options.streamEncoder(BASE_ENCODER_OPTIONS),
+        name: "VideoToolbox FFmpeg 8.x decode feeding libx264" },
+      { args: makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "7.1" }, HW_DECODE).options.streamEncoder(BASE_ENCODER_OPTIONS),
+        name: "VideoToolbox FFmpeg 7.x decode feeding libx264" },
+      { args: makeOptions(RASPBIAN_CODECS, HW_FULL).options.recordEncoder(BASE_ENCODER_OPTIONS), name: "Raspberry Pi recording fallback" }
+    ];
+
+    for(const { args, name } of cases) {
+
+      assertHasArg(args, "-codec:v", "libx264");
+      assertHasArg(args, "-pix_fmt", "yuv420p");
+      assert.equal(args.filter((arg) => arg === "-pix_fmt").length, 1, name + ": the input format is fixed exactly once");
+    }
+  });
+
+  test("the Raspberry Pi recording fallback converts through libx264's input format alone", () => {
+
+    // The fallback resolves the hardware encoder it falls back from, but a software encode transfers nothing, so the chain carries no leading format filter of its
+    // own - libx264's input format is the one place its 8-bit conversion is decided.
+    const { options } = makeOptions(RASPBIAN_CODECS, HW_FULL);
+
+    assert.deepEqual(options.recordEncoder(BASE_ENCODER_OPTIONS), [
+
+      "-codec:v", "libx264",
+      "-preset", "veryfast",
+      "-profile:v", "high",
+      "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
+      "-noautoscale",
+      "-bf", "0",
+      "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-g:v", "60",
+      "-bufsize", "6000k",
+      "-maxrate", "3000k",
+      "-b:v", "3000k"
+    ]);
+  });
+
+  test("every Quick Sync chain hands h264_qsv nv12 from its one vpp_qsv, whatever the decode mode, crop, or caller filters", () => {
+
+    // h264_qsv takes only 8-bit surfaces, and vpp_qsv otherwise keeps the input's format, so a 10-bit source would reach the encoder as p010. The scaler fixes nv12 on
+    // every path, which also makes the download ahead of caller filters valid, and no path reaches h264_qsv without passing through it.
+    for(const crop of [ undefined, { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } ]) {
+
+      const { options } = makeOptions(QSV_CODECS, { ...HW_TRANSCODE, ...(crop ? { crop } : {}) });
+
+      for(const hardwareDecoding of [ undefined, false ]) {
+
+        for(const videoFilters of [ undefined, CALLER_VIDEO_FILTERS ]) {
+
+          const pipeline: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, ...((hardwareDecoding === undefined) ? {} : { hardwareDecoding }),
+            ...(videoFilters ? { videoFilters } : {}) };
+
+          for(const args of [ options.streamEncoder(pipeline), options.recordEncoder(pipeline) ]) {
+
+            const chain = filterChain(args);
+            const label = JSON.stringify({ crop: Boolean(crop), hardwareDecoding, videoFilters: Boolean(videoFilters) }) + " - got " + chain;
+
+            assertHasArg(args, "-codec:v", "h264_qsv");
+            assert.equal(chain.split("vpp_qsv=").length - 1, 1, "exactly one Quick Sync scaler: " + label);
+            assert.ok(chain.includes("vpp_qsv=format=nv12:"), "the scaler fixes nv12: " + label);
+            assert.equal(chain.includes("format=same"), false, "no scaler keeps the source's format: " + label);
+          }
+        }
+      }
+    }
+  });
+
+  test("no VideoToolbox chain downloads frames, because no download fixed to one format can carry a 10-bit source", () => {
+
+    // scale_vt keeps the format of the frames context it was handed, so a download after it could only ever serve one bit depth. Whatever the decode mode, FFmpeg
+    // version, crop, or caller filters, a VideoToolbox chain either stays on the GPU to the encoder or runs on the CPU and uploads at its tail.
+    for(const hostSystem of [ "macOS.Apple", "macOS.Intel" ]) {
+
+      for(const ffmpegVersion of [ "7.1", "8.0", "9.0.1" ]) {
+
+        for(const crop of [ undefined, { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } ]) {
+
+          const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion, hostSystem }, { ...HW_FULL, ...(crop ? { crop } : {}) });
+
+          for(const hardwareDecoding of [ undefined, false ]) {
+
+            for(const videoFilters of [ undefined, CALLER_VIDEO_FILTERS ]) {
+
+              const pipeline: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, ...((hardwareDecoding === undefined) ? {} : { hardwareDecoding }),
+                ...(videoFilters ? { videoFilters } : {}) };
+              const chain = filterChain(options.streamEncoder(pipeline));
+              const label = hostSystem + " " + ffmpegVersion + " " + JSON.stringify({ crop: Boolean(crop), hardwareDecoding, videoFilters: Boolean(videoFilters) }) +
+                " - got " + chain;
+
+              assert.equal(chain.includes("hwdownload"), false, "no download: " + label);
+
+              // Wherever the chain uploads, the upload closes a CPU chain or opens a GPU one, and it always converts to the transfer format first.
+              if(chain.includes("hwupload")) {
+
+                assert.ok(chain.includes("format=nv12, hwupload"), "the upload converts to nv12 first: " + label);
+                assert.ok(chain.endsWith("hwupload") || chain.includes("hwupload, scale_vt="), "the upload closes the chain or feeds scale_vt: " + label);
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  test("the decoder, the upload, and the device init agree about where every pipeline's frames are", () => {
+
+    // One pipeline description decides each of them, so they can never disagree. Across every hardware host, FFmpeg version, source, crop, decode mode, and
+    // caller-filter choice: a decoder that keeps its frames on the GPU feeds a chain that neither uploads nor scales in software; a decoder that emits no hardware args
+    // feeds a hardware encode that uploads wherever its platform uploads; a chain that uploads initializes the device its upload needs, and only such a chain does;
+    // crop always opens the chain on frames in system memory; and caller filters always run in system memory, after any GPU stage has handed its frames back.
+    const hosts: { codecs: CodecsInit; flags: MakeOptionsFlags; name: string }[] = [
+
+      { codecs: VIDEOTOOLBOX_CODECS, flags: HW_FULL, name: "macOS.Apple" },
+      { codecs: { ...VIDEOTOOLBOX_CODECS, hostSystem: "macOS.Intel" }, flags: HW_FULL, name: "macOS.Intel" },
+      { codecs: QSV_CODECS, flags: HW_TRANSCODE, name: "Quick Sync" },
+      { codecs: RASPBIAN_CODECS, flags: HW_FULL, name: "Raspberry Pi" }
+    ];
+
+    // HEVC, which every hardware decoder takes, and AV1 on silicon too old to decode it and on silicon new enough to.
+    const sources = [ { cpuGeneration: 2, inputCodec: "hevc" }, { cpuGeneration: 2, inputCodec: "av1" }, { cpuGeneration: 12, inputCodec: "av1" } ];
+
+    for(const { codecs, flags, name } of hosts) {
+
+      for(const ffmpegVersion of [ "7.1", "8.0" ]) {
+
+        // Whether this platform's hardware encode takes frames from system memory through an explicit upload.
+        const platformUploads = (name === "Quick Sync") || (name.startsWith("macOS") && (ffmpegVersion === "8.0"));
+
+        for(const { cpuGeneration, inputCodec } of sources) {
+
+          for(const crop of [ undefined, { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } ]) {
+
+            const { options } = makeOptions({ ...codecs, cpuGeneration, ffmpegVersion }, { ...flags, ...(crop ? { crop } : {}) });
+
+            for(const hardwareDecoding of [ undefined, false ]) {
+
+              for(const videoFilters of [ undefined, CALLER_VIDEO_FILTERS ]) {
+
+                const pipeline: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, ...((hardwareDecoding === undefined) ? {} : { hardwareDecoding }), inputCodec,
+                  ...(videoFilters ? { videoFilters } : {}) };
+                const args = options.streamEncoder(pipeline);
+                const chain = filterChain(args);
+                const decoderArgs = options.videoDecoder(pipeline);
+                const framesOnGpu = decoderArgs.includes("-hwaccel_output_format");
+                const label = name + " " + ffmpegVersion + " " + JSON.stringify({ cpuGeneration, crop: Boolean(crop), hardwareDecoding, inputCodec,
+                  videoFilters: Boolean(videoFilters) }) + " - got " + chain;
+
+                assert.equal(args.includes("-init_hw_device"), chain.includes("hwupload"), "the device is initialized exactly when the chain uploads: " + label);
+
+                if(framesOnGpu) {
+
+                  assert.equal(chain.includes("hwupload"), false, "GPU frames are not uploaded: " + label);
+                  assert.equal(chain.includes("scale=-2"), false, "GPU frames never reach the software scaler: " + label);
+                }
+
+                if(!decoderArgs.length && platformUploads) {
+
+                  assert.ok(chain.includes("hwupload"), "frames decoded in software are uploaded to the hardware encoder: " + label);
+                }
+
+                if(crop) {
+
+                  assert.equal(framesOnGpu, false, "a crop keeps the decoded frames in system memory: " + label);
+                  assert.ok(chain.startsWith("crop="), "crop opens the chain, ahead of every transfer: " + label);
+                }
+
+                if(videoFilters) {
+
+                  const ahead = chain.slice(0, chain.indexOf(videoFilters[0] ?? ""));
+
+                  assert.ok(ahead.lastIndexOf("hwdownload") >= ahead.lastIndexOf("hwupload"), "no upload stands between the caller filters and system memory: " + label);
+                  assert.ok(!framesOnGpu || ahead.includes("hwdownload"), "GPU frames are downloaded ahead of the caller filters: " + label);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   });
 });
 
@@ -753,8 +1050,8 @@ describe("FfmpegOptions - streamEncoder (hardware paths)", () => {
 
   test("macOS hardware-decode + hardware-transcode omits -init_hw_device (decoder already set it up)", () => {
 
-    // getHardwareDeviceInit only fires when software decode is followed by hardware encode. When both are hardware, the decoder already initialized the device context
-    // and re-initializing would be redundant. This test locks that contract.
+    // getHardwareDeviceInit only fires when the chain uploads. When both sides are hardware and the chain scales on the GPU, the frames stay on the decoder's device
+    // context from end to end and a device of our own would be redundant. This test locks that contract.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
     const args = options.streamEncoder(BASE_ENCODER_OPTIONS);
 
@@ -908,17 +1205,17 @@ describe("FfmpegOptions - cropFilter", () => {
 
   test("QSV hardware path includes the crop filter when configured", () => {
 
-    // Per-platform crop coverage: same rule for the generic QSV hardware path. FFmpeg's auto_scale handles the implicit hwdownload+hwupload bridge when no
-    // explicit transfer appears between the crop and vpp_qsv.
+    // Per-platform crop coverage: same rule for the generic QSV hardware path. Crop runs on the frames in system memory, ahead of the upload into vpp_qsv.
     const { options } = makeOptions(QSV_CODECS, { ...HW_TRANSCODE, crop: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } });
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
     assert.ok(chain.includes("crop=w=iw*0.5"), "QSV hardware-path filter chain must splice in the configured crop filter - got " + chain);
+    assert.ok(chain.indexOf("crop=") < chain.indexOf("hwupload"), "crop runs ahead of the upload - got " + chain);
   });
 
-  // Crop ordering rule: `crop` is a CPU-side filter and always sits on the CPU side of any transfer. Tests assert the exact ordering across the four crop
-  // scenarios on a real transfer-direction matrix, so a future refactor cannot silently emit `[crop, hwdownload, scale]` (which would ask crop to operate on GPU
-  // frames) or `[hwupload, crop, scale_vt]` (same problem after upload).
+  // Crop ordering rule: `crop` is a CPU-side filter and always sits on the CPU side of any transfer. Tests assert the exact ordering across the crop scenarios on a
+  // real transfer-direction matrix, so a future refactor cannot silently emit `[crop, hwdownload, scale]` (which would ask crop to operate on GPU frames) or
+  // `[hwupload, crop, scale_vt]` (same problem after upload).
 
   test("crop ordering (software path, HW-decode + SW-encode): [crop, scale] - the decoder hands frames over on the CPU, so crop leads", () => {
 
@@ -968,29 +1265,43 @@ describe("FfmpegOptions - cropFilter", () => {
     assert.ok(scalerIdx > uploadIdx, "scale_vt must follow hwupload so it operates on GPU frames - got " + chain);
   });
 
-  test("crop ordering (hardware path, HW-decode + HW-encode): [crop, scaler] - no explicit transfer, FFmpeg auto_scale bridges", () => {
+  test("crop ordering (hardware path, HW-decode + HW-encode): the decoder hands frames over in system memory, so [crop, hwupload, scaler]", () => {
 
-    // Both HW - no transfer emitted. The chain is just [crop, scale_vt]. FFmpeg's auto_scale auto-inserts an implicit download+crop+upload around the CPU-side crop
-    // when the source is GPU-resident. This is the baseline behavior that has worked in production; documented here so any future change that accidentally inserts an
-    // explicit transfer (or removes the crop) fails the test.
+    // On a GPU frame FFmpeg's crop only records the region in the frame's metadata, which scale_vt never reads, so a crop ahead of scale_vt on GPU frames is silently
+    // lost. A configured crop therefore keeps the decoded frames in system memory: crop cuts the region itself, and the chain takes the shape a software decode takes -
+    // the upload that converts to the transfer format, then the GPU scaler - with the device that upload needs initialized explicitly.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" },
       { ...HW_FULL, crop: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } });
-    const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
+    const args = options.streamEncoder(BASE_ENCODER_OPTIONS);
 
-    const cropIdx = chain.indexOf("crop=w=iw*0.5");
-    const scalerIdx = chain.indexOf("scale_vt=");
+    assert.deepEqual(options.videoDecoder({ ...BASE_ENCODER_OPTIONS, inputCodec: "hevc" }), [ "-hwaccel", "videotoolbox" ],
+      "the decoder hands its frames over in system memory");
+    assert.equal(filterChain(args), "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, format=nv12, hwupload, scale_vt=-2:min(ih\\, 1080)");
+    assertHasArg(args, "-init_hw_device", "videotoolbox=hw");
+    assertHasArg(args, "-filter_hw_device", "hw");
+  });
 
-    assert.ok(cropIdx >= 0, "expected crop in chain - got " + chain);
-    assert.ok(scalerIdx > cropIdx, "scaler must follow crop - got " + chain);
-    assert.equal(chain.includes("hwdownload"), false, "no explicit hwdownload - FFmpeg auto_scale bridges - got " + chain);
-    assert.equal(chain.includes("hwupload"), false, "no explicit hwupload - FFmpeg auto_scale bridges - got " + chain);
+  test("crop ordering (Quick Sync, HW-decode + HW-encode): the decoder hands frames over in system memory, so [crop, hwupload, vpp_qsv]", () => {
+
+    // vpp_qsv builds its input region from the link size at the surface's own origin and never reads the crop metadata FFmpeg's crop leaves on a GPU frame, so a crop
+    // ahead of it on GPU frames would cut the cropped size from the top-left corner instead of the configured offset. A configured crop keeps the decoded frames in
+    // system memory, where crop cuts the region itself before the upload into the Quick Sync scaler.
+    const { options } = makeOptions(QSV_CODECS, { ...HW_TRANSCODE, crop: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 } });
+    const args = options.streamEncoder(BASE_ENCODER_OPTIONS);
+
+    assert.deepEqual(options.videoDecoder({ ...BASE_ENCODER_OPTIONS, inputCodec: "hevc" }), [ "-hwaccel", "qsv", "-codec:v", "hevc_qsv" ],
+      "the decoder hands its frames over in system memory");
+    assert.equal(filterChain(args), "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, hwupload, vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)");
+    assertHasArg(args, "-init_hw_device", "qsv=hw");
+    assertHasArg(args, "-filter_hw_device", "hw");
   });
 });
 
 describe("FfmpegOptions - hardware transfer filter matrix (upload paths)", () => {
 
   // The upload branches of getHardwareTransferFilters fire when software decode + hardware transcode is requested. Observed by passing `hardwareDecoding: false` in the
-  // encoder options to an instance whose class-level hardwareTranscoding is true. The filter appears inside the streamEncoder's `-filter:v` chain via getScaleFilter.
+  // encoder options to an instance whose class-level hardwareTranscoding is true. The filter appears inside the streamEncoder's `-filter:v` chain via
+  // hardwareFilterChain.
 
   test("macOS FFmpeg 8.x emits hwupload for software-decode + hardware-transcode", () => {
 
@@ -1035,7 +1346,7 @@ describe("FfmpegOptions - hardware transfer filter matrix (upload paths)", () =>
 
 describe("FfmpegOptions - scale filter per platform", () => {
 
-  // `getScaleFilter` is called from `streamEncoder`'s hardware branch only. Each platform has its own scaler - macOS 8.x uses the hardware VideoToolbox scaler
+  // `hardwareFilterChain` is called from `streamEncoder`'s hardware branch only. Each platform has its own scaler - macOS 8.x uses the hardware VideoToolbox scaler
   // (scale_vt), pre-8.x falls back to software, raspbian always uses software scaling, generic with QSV uses the QSV post-processor (vpp_qsv). We observe the chosen
   // scaler by inspecting the streamEncoder filter chain on each platform.
 
@@ -1074,12 +1385,12 @@ describe("FfmpegOptions - scale filter per platform", () => {
     assert.ok(chain.includes("scale=-2:min(ih"), "RPi hardware path must use the software scale filter - got " + chain);
   });
 
-  test("generic QSV hardware-transcode uses vpp_qsv with format=same", () => {
+  test("generic QSV hardware-transcode uses vpp_qsv with format=nv12", () => {
 
     const { options } = makeOptions(QSV_CODECS, HW_TRANSCODE);
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
-    assert.ok(chain.includes("vpp_qsv=format=same"), "generic QSV hardware path must use vpp_qsv - got " + chain);
+    assert.ok(chain.includes("vpp_qsv=format=nv12"), "generic QSV hardware path must use vpp_qsv - got " + chain);
     assert.ok(chain.includes("w=min(iw"), "vpp_qsv must carry the width scale expression");
     assert.ok(chain.includes("h=min(ih"), "vpp_qsv must carry the height scale expression");
   });
@@ -1292,6 +1603,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-preset", "veryfast",
       "-profile:v", "high",
       "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
       "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
@@ -1315,6 +1627,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-preset", "veryfast",
       "-profile:v", "high",
       "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
       "-filter:v", "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
@@ -1335,6 +1648,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-preset", "veryfast",
       "-profile:v", "high",
       "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
       "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
@@ -1436,8 +1750,8 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
 
   test("macOS.Intel VideoToolbox 8.x SW decode + HW transcode (init_hw_device + hwupload, Intel case)", () => {
 
-    // macOS.Intel shares getHardwareDeviceInit and getScaleFilter branches with macOS.Apple on FFmpeg 8.x. This snapshot locks the grouping so a future refactor that
-    // accidentally splits the Intel case from Apple (e.g., separate Intel-specific init args) fails. Intel uses -b:v always, no -q:v.
+    // macOS.Intel shares getHardwareDeviceInit and hardwareFilterChain branches with macOS.Apple on FFmpeg 8.x. This snapshot locks the grouping so a future refactor
+    // that accidentally splits the Intel case from Apple (e.g., separate Intel-specific init args) fails. Intel uses -b:v always, no -q:v.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0", hostSystem: "macOS.Intel" }, HW_FULL);
 
     assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false }), [
@@ -1510,7 +1824,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "vpp_qsv=format=same:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)",
+      "-filter:v", "vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)",
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1529,7 +1843,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "vpp_qsv=format=same:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)",
+      "-filter:v", "vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)",
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3000k",
@@ -1541,7 +1855,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
 
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 3, ffmpegVersion: "8.0" }, HW_FULL);
 
-    assert.deepEqual(options.videoDecoder("av1"), [
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), [
 
       "-hwaccel", "videotoolbox",
       "-hwaccel_output_format", "videotoolbox_vld"
@@ -1552,21 +1866,21 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
 
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 2, ffmpegVersion: "8.0" }, HW_DECODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), []);
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), []);
   });
 
   test("videoDecoder: AV1 on M3+ Apple Silicon FFmpeg 7.x returns [] (VT AV1 decoder requires FFmpeg 8.0+)", () => {
 
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, cpuGeneration: 3, ffmpegVersion: "7.1" }, HW_DECODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), []);
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), []);
   });
 
   test("videoDecoder: AV1 on Intel Mac returns [] (no VideoToolbox AV1 support ever)", () => {
 
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0", hostSystem: "macOS.Intel" }, HW_DECODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), []);
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), []);
   });
 
   test("videoDecoder: AV1 on Intel QSV gen 12 emits QSV args", () => {
@@ -1578,7 +1892,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       decoders: { ...QSV_CODECS.decoders, av1: ["av1_qsv"] }
     }, HW_TRANSCODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), [
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), [
 
       "-hwaccel", "qsv",
       "-hwaccel_output_format", "qsv",
@@ -1595,24 +1909,25 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       decoders: { ...QSV_CODECS.decoders, av1: ["av1_qsv"] }
     }, HW_TRANSCODE);
 
-    assert.deepEqual(options.videoDecoder("av1"), []);
+    assert.deepEqual(options.videoDecoder({ inputCodec: "av1" }), []);
   });
 });
 
 describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filters)", () => {
 
   // Full-argv snapshots for the caller-filter boundary. Each row locks in the complete emission via deepEqual so a filter appended in the wrong position, a
-  // missing download bridge, or a spurious one fails loudly. The platform scaler chains match the golden snapshots above; the caller filters are appended at
-  // the tail, preceded by a download only when the scaler runs on the GPU.
+  // missing transfer, or a spurious one fails loudly. The platform scaler chains match the golden snapshots above. The caller filters follow the scaler and always
+  // run in system memory: after a download on Quick Sync, whose scaler hands its output over in the transfer format, and on VideoToolbox in a chain that runs on
+  // the CPU from the decoder onward and uploads at its tail.
   const swScaleChain = "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto";
   const scaleVtChain = "scale_vt=-2:min(ih\\, 1080)";
-  const vppQsvChain = "vpp_qsv=format=same:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)";
-
-  // The Quick Sync scaler ahead of caller filters: it hands its output over in the transfer format the download after it names.
-  const vppQsvBridgedChain = "vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)";
+  const vppQsvChain = "vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)";
 
   // The caller filters as the encoder appends them: the leading separator that joins them onto a non-empty chain, then the caller's filters comma-joined.
   const callerTail = ", " + CALLER_VIDEO_FILTERS.join(", ");
+
+  // The VideoToolbox chain with caller filters: software scale, the caller's filters, and the upload that converts to the transfer format and closes the chain.
+  const vtCpuChain = swScaleChain + callerTail + ", format=nv12, hwupload";
 
   test("software path appends the caller filters at the chain tail with a single separator", () => {
 
@@ -1624,6 +1939,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-preset", "veryfast",
       "-profile:v", "high",
       "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
       "-filter:v", swScaleChain + callerTail,
@@ -1645,6 +1961,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-preset", "veryfast",
       "-profile:v", "high",
       "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
       "-filter:v", swScaleChain + callerTail,
@@ -1655,14 +1972,19 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
     ]);
   });
 
-  test("macOS VideoToolbox 8.x bridges a download between the GPU scaler and the caller filters", () => {
+  test("macOS VideoToolbox 8.x runs a chain with caller filters on the CPU and uploads at its tail", () => {
 
-    // scale_vt leaves frames on the GPU, so the caller's CPU-side filters must be preceded by the platform download transfer (hwdownload, format=nv12 on macOS 8.x). The
-    // bridge sits between the encoder's own chain and the caller's filters.
+    // scale_vt cannot choose its output format, so a 10-bit source decoded on the GPU would reach a download as p010, which no download fixed to one format can emit.
+    // With caller filters the decoder hands its frames over in system memory instead, the software scaler and the caller's filters run there, and the chain closes
+    // by converting to the transfer format and uploading, with the device that upload needs initialized explicitly.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
+    const pipeline: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS };
 
-    assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }), [
+    assert.deepEqual(options.videoDecoder({ ...pipeline, inputCodec: "hevc" }), [ "-hwaccel", "videotoolbox" ], "the decoder hands its frames over in system memory");
+    assert.deepEqual(options.streamEncoder(pipeline), [
 
+      "-init_hw_device", "videotoolbox=hw",
+      "-filter_hw_device", "hw",
       "-codec:v", "h264_videotoolbox",
       "-allow_sw", "1",
       "-realtime", "1",
@@ -1670,7 +1992,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", scaleVtChain + ", hwdownload, format=nv12" + callerTail,
+      "-filter:v", vtCpuChain,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1713,7 +2035,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", vppQsvBridgedChain + ", hwdownload, format=nv12" + callerTail,
+      "-filter:v", vppQsvChain + ", hwdownload, format=nv12" + callerTail,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1742,11 +2064,10 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
     ]);
   });
 
-  test("both transfer directions compose around the scaler on a SW-decode + HW-transcode macOS 8.x chain", () => {
+  test("a SW-decode + HW-transcode macOS 8.x chain with caller filters also runs on the CPU and uploads once, at its tail", () => {
 
-    // Software decode paired with hardware transcode: the chain uploads (format=nv12, hwupload) into the GPU scaler, scale_vt runs GPU-resident, then the caller's
-    // CPU-side filters pull the frames back down (hwdownload, format=nv12) before running. Both transfer directions compose correctly around the scaler in one chain,
-    // and the nv12 assertion on the upload side is what lets the download side name nv12 as its output format.
+    // Software decode paired with hardware transcode already hands the chain its frames in system memory, so caller filters take the same CPU chain as a hardware
+    // decode does: software scale, the caller's filters, then the one upload - rather than an upload into the GPU scaler and a download back out for the filters.
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
 
     assert.deepEqual(options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS }), [
@@ -1760,7 +2081,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "format=nv12, hwupload, " + scaleVtChain + ", hwdownload, format=nv12" + callerTail,
+      "-filter:v", vtCpuChain,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1782,6 +2103,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-preset", "veryfast",
       "-profile:v", "high",
       "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
       "-filter:v", swScaleChain + callerTail,
@@ -1847,6 +2169,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-preset", "veryfast",
       "-profile:v", "high",
       "-level:v", "4.0",
+      "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
       "-filter:v", swScaleChain,
@@ -1867,7 +2190,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
     const chain = filterChain(options.recordEncoder({ ...BASE_ENCODER_OPTIONS, videoFilters: CALLER_VIDEO_FILTERS }));
 
-    assert.equal(chain, scaleVtChain + ", hwdownload, format=nv12" + callerTail);
+    assert.equal(chain, vtCpuChain);
   });
 });
 
@@ -1993,11 +2316,12 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
 
   // Construct FfmpegOptions against the real FfmpegCodecs probe so the encoder path selection reflects the actual host's capabilities, ffmpegVersion, and cpuGeneration.
   // The hardware flags are the caller's intent - `configureHwAccel` runs in the constructor and resolves them against real capabilities just as it would in production.
-  const buildOptions = (flags: { hardwareDecoding: boolean; hardwareTranscoding: boolean }): FfmpegOptions => {
+  const buildOptions = (flags: { crop?: FfmpegOptionsConfig["crop"]; hardwareDecoding: boolean; hardwareTranscoding: boolean }): FfmpegOptions => {
 
     const config: FfmpegOptionsConfig = {
 
       codecSupport: realCodecs,
+      ...(flags.crop ? { crop: flags.crop } : {}),
       hardwareDecoding: flags.hardwareDecoding,
       hardwareTranscoding: flags.hardwareTranscoding,
       log: silentLog(),
@@ -2140,11 +2464,9 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
       return;
     }
 
-    /* The one chain that carries both transfer directions: the upload pairing puts frames on the GPU for scale_vt, and the caller's CPU-side filters pull them back
-     * down again. The two ends have to agree on the frames context's pixel format, and only a real FFmpeg graph configuration can prove they do - the unit snapshots
-     * lock in the argument order but cannot tell a working agreement from a broken one. This chain failed in the field with "[hwdownload] Invalid output format nv12"
-     * because the download names nv12 while the upload had let the frames context inherit the software decoder's yuv420p, so the format conversion has to sit ahead
-     * of the upload for the download to have anything it can emit.
+    /* Caller filters run a VideoToolbox chain on the CPU: software scale, the caller's filters, then the conversion to the transfer format and the upload that hands
+     * the encoder its frames, with the device that upload needs initialized explicitly. Only a real FFmpeg graph configuration can prove the upload finds its device
+     * and the encoder takes what it produces - the unit snapshots lock in the argument order but cannot tell a working chain from a broken one.
      */
     const options = buildOptions({ hardwareDecoding: true, hardwareTranscoding: true });
     const args = options.streamEncoder({ ...BASE_ENCODER_OPTIONS, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS });
@@ -2190,7 +2512,7 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
           await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "1",
             "-c:v", encoder, ...source, file ]);
 
-          const decoderArgs = options.videoDecoder(codec, { hardwareTranscoding: false });
+          const decoderArgs = options.videoDecoder({ hardwareTranscoding: false, inputCodec: codec });
 
           assertHasArg(decoderArgs, "-hwaccel", "videotoolbox");
           assert.equal(decoderArgs.includes("-hwaccel_output_format"), false,
@@ -2208,4 +2530,190 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
         await rm(directory, { force: true, recursive: true });
       }
     });
+
+  describe("8-bit H.264 output from 8-bit and 10-bit sources", () => {
+
+    /* Every HomeKit stream is 8-bit H.264, so every pipeline shape has to turn a 10-bit source into 8-bit somewhere FFmpeg can do it. Each row hands the library's
+     * own decoder and encoder argv one pipeline description, runs them against a synthesized 8-bit H.264 source and a 10-bit HEVC source, and reads the encoded
+     * stream back to confirm it is 8-bit H.264. The sources are synthesized once into a scratch directory, so the rows depend on no external asset.
+     */
+    const SOURCES = [
+
+      { codec: "h264", encoder: "libx264", file: "8bit.mp4", label: "8-bit H.264", source: [ "-pix_fmt", "yuv420p" ] },
+      { codec: "hevc", encoder: "libx265", file: "10bit.mp4", label: "10-bit HEVC", source: [ "-pix_fmt", "yuv420p10le", "-tag:v", "hvc1" ] }
+    ];
+
+    // AV1 sources for the rows that exercise the hardware decoder's codec gate.
+    const AV1_SOURCES = [
+
+      { codec: "av1", encoder: "libsvtav1", file: "8bit-av1.mp4", label: "8-bit AV1", source: [ "-pix_fmt", "yuv420p", "-preset", "10" ] },
+      { codec: "av1", encoder: "libsvtav1", file: "10bit-av1.mp4", label: "10-bit AV1", source: [ "-pix_fmt", "yuv420p10le", "-preset", "10" ] }
+    ];
+
+    // A HomeKit-shaped request smaller than the sources, so every chain actually scales.
+    const PIPELINE: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, height: 240, width: 426 };
+
+    let directory = "";
+
+    before(async () => {
+
+      directory = await mkdtemp(join(tmpdir(), "hbpu-bit-depth-"));
+
+      for(const { codec, encoder, file, source } of [ ...SOURCES, ...AV1_SOURCES ]) {
+
+        if(realCodecs.hasEncoder(codec, encoder)) {
+
+          // eslint-disable-next-line no-await-in-loop
+          await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "1",
+            "-c:v", encoder, ...source, join(directory, file) ]);
+        }
+      }
+    });
+
+    after(async () => {
+
+      await rm(directory, { force: true, recursive: true });
+    });
+
+    // Encode each source through one pipeline description, its source codec included, and assert each result is 8-bit H.264 at the expected size - the sources scaled
+    // to the pipeline's height unless a row crops first. With an input and no output, FFmpeg prints the input's stream layout and exits non-zero, which is all the
+    // read-back needs, so the rejection is where the layout comes from.
+    //
+    // size                              The expected output dimensions. Defaults to the uncropped sources scaled to the pipeline's height.
+    // sources                           The sources to encode. Defaults to the 8-bit H.264 and 10-bit HEVC pair.
+    const assertEightBitH264 = async (t: TestContext, options: FfmpegOptions, pipeline: VideoEncoderOptions,
+      { size = "426x240", sources = SOURCES }: { size?: string; sources?: typeof SOURCES } = {}): Promise<void> => {
+
+      for(const { codec, encoder, file, label } of sources) {
+
+        if(!realCodecs.hasEncoder(codec, encoder)) {
+
+          t.diagnostic("host does not advertise " + encoder + ", so the " + label + " source cannot be synthesized");
+
+          continue;
+        }
+
+        const output = join(directory, "encoded-" + file);
+        const sourcePipeline: VideoEncoderOptions = { ...pipeline, inputCodec: codec };
+
+        // eslint-disable-next-line no-await-in-loop
+        await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-nostats", "-loglevel", "error", "-y", ...options.videoDecoder(sourcePipeline), "-i",
+          join(directory, file), ...options.streamEncoder(sourcePipeline), "-an", "-frames:v", "15", "-f", "mp4", output ]);
+
+        // eslint-disable-next-line no-await-in-loop
+        const { stderr } = await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-i", output ]).catch((error: unknown) => error as { stderr: string });
+        const stream = stderr.split("\n").find((line) => line.includes("Video:")) ?? "";
+
+        assert.ok(stream.includes("Video: h264"), label + ": the output must be H.264 - got " + stream);
+        assert.match(stream, /, yuv420p[(,]/, label + ": the output must be 8-bit 4:2:0 - got " + stream);
+        assert.ok(stream.includes(", " + size), label + ": the output must be " + size + " - got " + stream);
+      }
+    };
+
+    // Whether this host can exercise the VideoToolbox rows at all.
+    const hasVideoToolbox = (): boolean => realCodecs.hasEncoder("h264", "h264_videotoolbox") && realCodecs.hasHwAccel("videotoolbox");
+
+    test("libx264 fed by a software decoder", async (t) => {
+
+      await assertEightBitH264(t, buildOptions({ hardwareDecoding: false, hardwareTranscoding: false }), PIPELINE);
+    });
+
+    test("libx264 fed by a VideoToolbox decoder (skipped when VideoToolbox is unavailable)", async (t) => {
+
+      if(!hasVideoToolbox()) {
+
+        t.skip("host does not advertise h264_videotoolbox / videotoolbox");
+
+        return;
+      }
+
+      await assertEightBitH264(t, buildOptions({ hardwareDecoding: true, hardwareTranscoding: true }), { ...PIPELINE, hardwareTranscoding: false });
+    });
+
+    test("VideoToolbox decode and encode with frames on the GPU (skipped when VideoToolbox is unavailable)", async (t) => {
+
+      if(!hasVideoToolbox()) {
+
+        t.skip("host does not advertise h264_videotoolbox / videotoolbox");
+
+        return;
+      }
+
+      await assertEightBitH264(t, buildOptions({ hardwareDecoding: true, hardwareTranscoding: true }), PIPELINE);
+    });
+
+    test("VideoToolbox decode and encode with caller filters, the chain on the CPU (skipped when VideoToolbox is unavailable)", async (t) => {
+
+      if(!hasVideoToolbox()) {
+
+        t.skip("host does not advertise h264_videotoolbox / videotoolbox");
+
+        return;
+      }
+
+      await assertEightBitH264(t, buildOptions({ hardwareDecoding: true, hardwareTranscoding: true }), { ...PIPELINE, videoFilters: CALLER_VIDEO_FILTERS });
+    });
+
+    test("software decode and VideoToolbox encode, with and without caller filters (skipped when VideoToolbox is unavailable)", async (t) => {
+
+      if(!hasVideoToolbox()) {
+
+        t.skip("host does not advertise h264_videotoolbox / videotoolbox");
+
+        return;
+      }
+
+      const options = buildOptions({ hardwareDecoding: true, hardwareTranscoding: true });
+
+      await assertEightBitH264(t, options, { ...PIPELINE, hardwareDecoding: false });
+      await assertEightBitH264(t, options, { ...PIPELINE, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS });
+    });
+
+    test("VideoToolbox decode and encode with a crop, which the chain cuts on frames in system memory (skipped when VideoToolbox is unavailable)", async (t) => {
+
+      if(!hasVideoToolbox()) {
+
+        t.skip("host does not advertise h264_videotoolbox / videotoolbox");
+
+        return;
+      }
+
+      // The centered quarter of each 640x360 source is 320x180, which is already under the requested height, so an honored crop comes out at 320x180. A crop lost on
+      // GPU frames would leave the full frame to be scaled to 426x240 instead.
+      const options = buildOptions({ crop: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 }, hardwareDecoding: true, hardwareTranscoding: true });
+
+      await assertEightBitH264(t, options, PIPELINE, { size: "320x180" });
+      await assertEightBitH264(t, options, { ...PIPELINE, videoFilters: CALLER_VIDEO_FILTERS }, { size: "320x180" });
+    });
+
+    test("AV1 decodes in software and uploads where VideoToolbox cannot take it, and stays on the GPU where it can (skipped when VideoToolbox is unavailable)",
+      async (t) => {
+
+        if(!hasVideoToolbox()) {
+
+          t.skip("host does not advertise h264_videotoolbox / videotoolbox");
+
+          return;
+        }
+
+        /* A pre-M3 Mac's capabilities, pointed at this host's FFmpeg binary: the library emits exactly the argv such a Mac receives - software AV1 decode feeding an
+         * upload into scale_vt - and that argv runs here whatever this host's own silicon. The second pass takes this host's own capabilities, so on an M3 or newer
+         * with FFmpeg 8 it exercises AV1 decoding on the GPU, and elsewhere the same software shape again.
+         */
+        const preM3 = new FfmpegOptions({
+
+          codecSupport: makeCodecs({ cpuGeneration: 2, encoders: { h264: ["h264_videotoolbox"] }, ffmpegExec: realCodecs.ffmpegExec,
+            ffmpegVersion: realCodecs.ffmpegVersion, hostSystem: "macOS.Apple", hwAccels: ["videotoolbox"] }),
+          hardwareDecoding: true,
+          hardwareTranscoding: true,
+          log: silentLog(),
+          name: (): string => "integration-test"
+        });
+
+        assert.deepEqual(preM3.videoDecoder({ ...PIPELINE, inputCodec: "av1" }), [], "a pre-M3 Mac decodes AV1 in software");
+
+        await assertEightBitH264(t, preM3, PIPELINE, { sources: AV1_SOURCES });
+        await assertEightBitH264(t, buildOptions({ hardwareDecoding: true, hardwareTranscoding: true }), PIPELINE, { sources: AV1_SOURCES });
+      });
+  });
 });

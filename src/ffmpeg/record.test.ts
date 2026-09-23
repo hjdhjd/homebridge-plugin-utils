@@ -734,7 +734,7 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
   // every `videoDecoder` invocation receives. `resolveRecordingOptions` uses `options.config.codecSupport.ffmpegAtLeast(8)` to gate the default hardware-decoding value,
   // so this helper is the single point where FFmpeg version and hardware flags flow into record.ts's defaulting logic. The captures are live arrays the tests read after
   // each process construction has completed - the spies push into them in place, so callers always see every invocation.
-  type SpyRecordEncoderOptions = Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "videoFilters">;
+  type SpyRecordEncoderOptions = Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "inputCodec" | "videoFilters">;
 
   function makeSpyingOptions(ffmpegVersion: string, hardwareDecoding: boolean,
     hardwareTranscoding = false): { captures: SpyRecordEncoderOptions[]; decoderCaptures: (SpyRecordEncoderOptions | undefined)[]; options: FfmpegOptions } {
@@ -760,7 +760,7 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
 
         return [ "-codec:v", "libx264" ];
       },
-      videoDecoder: (_codec: string, state?: SpyRecordEncoderOptions): string[] => {
+      videoDecoder: (state?: SpyRecordEncoderOptions): string[] => {
 
         decoderCaptures.push(state);
 
@@ -831,6 +831,28 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
     assert.equal(spy.decoderCaptures.length, 1, "the decoder is asked exactly once");
     assert.equal(spy.decoderCaptures[0], firstCapture(spy.captures), "and it receives the object the encoder receives");
     assert.equal(firstCapture(spy.captures).hardwareDecoding, false, "which carries the recording's resolved decode state, not the class config's");
+  });
+
+  test("the recording's source codec reaches the decoder and the encoder through the one pipeline object", async () => {
+
+    // Whether the decoder can run on hardware depends on the source's codec, and the encoder has to know the answer to place its upload, so the codec travels in the
+    // shared pipeline object rather than as a separate decoder argument. The default codec reaches it too.
+    const withCodec = makeSpyingOptions("8.0", true, true);
+
+    await using av1 = new FfmpegRecordingProcess(withCodec.options, { recording: { codec: "av1" }, recordingConfig: makeRecordingConfig() });
+
+    await av1.exited.catch(() => { /* ignore. */ });
+
+    assert.equal(withCodec.decoderCaptures[0], firstCapture(withCodec.captures), "the decoder and the encoder receive one object");
+    assert.equal(firstCapture(withCodec.captures).inputCodec, "av1", "which carries the recording's source codec");
+
+    const withDefault = makeSpyingOptions("8.0", true, true);
+
+    await using h264 = new FfmpegRecordingProcess(withDefault.options, { recordingConfig: makeRecordingConfig() });
+
+    await h264.exited.catch(() => { /* ignore. */ });
+
+    assert.equal(firstCapture(withDefault.captures).inputCodec, "h264", "an omitted codec reaches the pipeline as the recording's H.264 default");
   });
 
   test("explicit init.recording.hardwareDecoding overrides the version gate", async () => {

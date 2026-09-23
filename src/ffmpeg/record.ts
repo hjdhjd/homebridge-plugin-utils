@@ -31,7 +31,7 @@
  * | `separateAudioInputArgs` | `[]`                                       | Separate audio URL when configured      |
  * | `audioInputIndex`        | `0`                                        | `0` or `1` (if separate audio)          |
  * | `audioTarget`            | `recordingConfig.audioCodec` (transcoding) | `init.audio` when provided              |
- * | `videoDecoderArgs`       | `options.videoDecoder(codec, pipeline)`    | `options.videoDecoder(codec)`           |
+ * | `videoDecoderArgs`       | `options.videoDecoder(pipeline)`           | `options.videoDecoder({ inputCodec })`  |
  * | `videoEncoderArgs`       | `options.recordEncoder(pipeline)`          | `-codec:v copy`                         |
  * | `fragmentArgs`           | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
  * | `metadataLabel`          | `"HKSV Event"`                             | `"Livestream Buffer"`                   |
@@ -167,8 +167,8 @@ export interface FMp4AudioTarget {
  * @property probesize           - Number of bytes to analyze for stream information. Defaults to 5,000,000 bytes (mirrors FFmpeg's own default probesize).
  * @property timeshift           - Timeshift offset for event-based recording (in milliseconds). Defaults to 0.
  * @property transcodeAudio      - Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`.
- * @property videoFilters        - Video filters for FFmpeg to process. These are passed as an array of filters and appended, in caller order, after the encoder's own
- *                                 scale and pixel-format chain. Defaults to none.
+ * @property videoFilters        - Video filters for FFmpeg to process. These are passed as an array of filters and run, in caller order, after the encoder's own crop
+ *                                 and scale filters, in system memory. Defaults to none.
  *
  * @category FFmpeg
  */
@@ -487,8 +487,8 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     "-ss", recording.timeshift.toString() + "ms"
   ];
 
-  // Recordings transcode video using the platform-appropriate encoder for HKSV. The one description of the video pipeline - the recording's resolved hardware state
-  // among it - goes to both the decoder and the encoder, so the two sides agree on where the decoded frames live.
+  // Recordings transcode video using the platform-appropriate encoder for HKSV. The one description of the video pipeline - the recording's source codec and resolved
+  // hardware state among it - goes to both the decoder and the encoder, so the two sides agree on whether the decoder runs on hardware and where its frames live.
   const pipeline: VideoEncoderOptions = {
 
     bitrate: recordingConfig.videoCodec.parameters.bitRate,
@@ -497,6 +497,7 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     hardwareTranscoding: recording.hardwareTranscoding,
     height: recordingConfig.videoCodec.resolution[1],
     idrInterval: HKSV_IDR_INTERVAL,
+    inputCodec: recording.codec,
     inputFps: recording.fps,
     level: recordingConfig.videoCodec.parameters.level,
     profile: recordingConfig.videoCodec.parameters.profile,
@@ -515,7 +516,7 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     options,
     separateAudioInputArgs: [],
     verbose: init.verbose ?? false,
-    videoDecoderArgs: options.videoDecoder(recording.codec, pipeline),
+    videoDecoderArgs: options.videoDecoder(pipeline),
     videoEncoderArgs: options.recordEncoder(pipeline)
   });
 }
@@ -561,7 +562,7 @@ function buildLivestreamCommandLine(options: FfmpegOptions, init: FfmpegLivestre
     options,
     separateAudioInputArgs: separateAudio.args,
     verbose: init.verbose ?? false,
-    videoDecoderArgs: options.videoDecoder(fMp4Options.codec),
+    videoDecoderArgs: options.videoDecoder({ inputCodec: fMp4Options.codec }),
     videoEncoderArgs
   });
 }

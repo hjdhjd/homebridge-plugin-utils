@@ -715,11 +715,32 @@ describe("reducer - takeover", () => {
 
     assert.equal(armed.takeover, true, "precondition: the area is held and a row is armed");
 
-    const next = reducer(armed, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const next = reducer(armed, { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.equal(next.takeover, false, "the area belongs to the selection, so moving the selection gives it back");
     assert.equal(next.armedOption, null, "the armed row still stands down");
     assert.deepEqual(next.scope, { controllerId: "ctrl-a", kind: "controller" }, "and the selection still moves");
+  });
+
+  test("the boot's own selection and a continuation onto a controller's row leave the hold standing", () => {
+
+    // Neither is the user going anywhere: the boot selects for the page, and a continuation carries a selected controller onto the row that stands for it. The
+    // selection still moves and an armed row still stands down, because those belong to the view rather than to who moved.
+    const cases = [
+
+      [ "the boot's selection", { origin: "boot", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" } ],
+      [ "a continuation", { origin: "continuation", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" } ]
+    ];
+
+    for(const [ label, action ] of cases) {
+
+      const armed = reducer(reducer(loadedState(), { type: "takeover:started" }), { option: "Audio.Volume", type: "option:armed" });
+      const next = reducer(armed, action);
+
+      assert.equal(next.takeover, true, label + " leaves the plugin holding the area");
+      assert.equal(next.armedOption, null, label + " still disarms the armed row");
+      assert.deepEqual(next.scope, action.scope, label + " still moves the selection");
+    }
   });
 
   test("a model arriving over a standing takeover leaves it standing", () => {

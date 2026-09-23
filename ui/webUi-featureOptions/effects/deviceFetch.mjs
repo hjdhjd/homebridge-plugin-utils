@@ -119,6 +119,9 @@ export const fetchControllerDevices = async ({ controllerId, deadlineSeconds, fa
  * called after an outcome has landed rather than alongside it. A list carrying no such row leaves the selection where it rests, which is the controller's own
  * view, and that is exactly the resting place a nothing-to-list notice renders over.
  *
+ * The move is dispatched as a continuation rather than a user move, whoever began the selection. It carries a selection that already stands onto the row that
+ * represents it, so it never ends a plugin's takeover: a sidebar click already did that with its own move, and the boot never should.
+ *
  * @param {Object} args
  * @param {string} args.controllerId - The controller the selection belongs to, as the sidebar names it.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store the selection is dispatched against.
@@ -132,5 +135,5 @@ export const completeControllerSelection = ({ controllerId, store }) => {
     return;
   }
 
-  store.dispatch({ scope: { controllerId, deviceId, kind: "device" }, type: "scope:changed" });
+  store.dispatch({ origin: "continuation", scope: { controllerId, deviceId, kind: "device" }, type: "scope:changed" });
 };

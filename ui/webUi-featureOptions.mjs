@@ -946,7 +946,9 @@ export class webUiFeatureOptions {
     /* In the device-bearing modes the boot is a click of the first controller, and it takes the click's shape exactly: select the controller, record the fetch at the
      * store's chokepoint, then fire it. One operation, one choreography. The selection ahead of the fetch is what carries the controller through a failure - the
      * connection-error view hands its plugin panel the selected controller entry, so a boot that cannot reach the controller offers the same repair surface a click
-     * that cannot reach it offers. Device-only mode has no controller to select and keeps the global scope the initial state already holds.
+     * that cannot reach it offers. Device-only mode has no controller to select and keeps the global scope the initial state already holds. The boot departs from
+     * a click in the move's origin: the boot selects for the page rather than for a user, so its move is tagged as the boot's own, and the reducer knows
+     * that no one has moved away from a takeover a plugin opens from `onLoaded`.
      *
      * The sequence, not the controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
      *
@@ -958,7 +960,7 @@ export class webUiFeatureOptions {
 
       if(initialController !== null) {
 
-        this.#store.dispatch({ scope: { controllerId: initialController.serialNumber, kind: "controller" }, type: "scope:changed" });
+        this.#store.dispatch({ origin: "boot", scope: { controllerId: initialController.serialNumber, kind: "controller" }, type: "scope:changed" });
       }
 
       this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, type: "devices:requested" });

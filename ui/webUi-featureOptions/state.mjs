@@ -41,8 +41,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     that copy are the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw.
  *     A clean outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry. A clean outcome
  *     that carried no devices and an `emptyMessage` also records that message, which is how a plugin says its controller is reachable with nothing to list.
- *   - `scope:changed` - selection pointer moved (global / controller / device). An armed row and a plugin's hold on the main-content area both belong to the
- *     selection the user moved away from, so both stand down here.
+ *   - `scope:changed` - selection pointer moved (global / controller / device), tagged with the `origin` of the move: `user` for a sidebar click, `boot` for the page
+ *     cycle's own first selection, and `continuation` for a selected controller carried onto the row that stands for it. An armed row stands down on every move. A
+ *     plugin's hold on the main-content area belongs to the selection the user chose, so only a `user` move ends it.
  *   - `takeover:started` - a plugin took the page's main-content area: the framework's own regions step aside and the plugin's node stands in their place.
  *   - `takeover:released` - the plugin gave the main-content area back, and the framework's regions return to it.
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
@@ -590,11 +591,17 @@ export const reducer = (state, action) => {
         throw new Error("FeatureOptionsState.reducer: scope:changed to \"" + action.scope.kind + "\" is not permitted in global-only mode.");
       }
 
-      // Replace the selection pointer wholesale. The DU is atomic - controllerId, deviceId, and kind all move together so subscribers never observe a partial
-      // selection state. An armed row belongs to the view that armed it, so the selection moving disarms it. The main-content area belongs to the selection in the
-      // same way: a plugin holding it was showing the user something about where they were, so the selection moving gives the area back exactly as an armed row
-      // stands down. Every plugin that takes the area over needs that rule, and owning it here is what spares each of them from writing it again.
-      return { ...state, armedOption: null, scope: action.scope, takeover: false };
+      /* Replace the selection pointer wholesale. The DU is atomic - controllerId, deviceId, and kind all move together so subscribers never observe a partial
+       * selection state. An armed row belongs to the view that armed it, so the selection moving disarms it.
+       *
+       * The main-content area belongs to the selection the user chose: a plugin holding it was showing the user something about where they were, so the user moving
+       * the selection gives the area back exactly as an armed row stands down. Every plugin that takes the area over needs that rule, and owning it here is what
+       * spares each of them from writing it again. Only a move the user made does this, and `origin` is what says who made it. The boot's own first selection and a
+       * continuation onto a selected controller's row are the framework settling where the page rests rather than the user going somewhere else - and a plugin's
+       * `onLoaded` hook runs between the boot's selection and its continuation, so ending a takeover on either would close a card the plugin opened before anyone
+       * moved at all.
+       */
+      return { ...state, armedOption: null, scope: action.scope, takeover: (action.origin === "user") ? false : state.takeover };
     }
 
     case "takeover:started": {

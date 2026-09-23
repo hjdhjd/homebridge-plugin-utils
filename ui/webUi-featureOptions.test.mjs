@@ -6947,6 +6947,43 @@ describe("webUiFeatureOptions - takeover", () => {
     orchestrator.cleanup();
   });
 
+  test("a takeover begun from onLoaded survives the boot carrying its selection onto the controller's own row", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    /* The boot selects the first controller before the model loads, and once that controller's devices land it continues the selection onto the row the plugin's
+     * `isController` names. `onLoaded` runs between them, so the card opened there is already standing when the continuation lands - and a continuation
+     * is the boot settling where the page rests rather than the user moving, so the card stays.
+     */
+    let handle = null;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+      getDevices: async () => ({ devices: [{ firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Hub A", serialNumber: "CTRL-A" }], error: "" }),
+      onLoaded: () => (handle = orchestrator.takeover(pluginCard())),
+      ui: { isController: (device) => device?.serialNumber === "CTRL-A" }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A",
+      "precondition: the boot continued its selection onto the controller's own row");
+    assert.equal(handle.signal.aborted, false, "the takeover is still standing when the load completes");
+    assert.ok(document.querySelector("[data-fo-takeover]"), "with its card still on the page");
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "and the regions it holds still stepped aside");
+
+    handle.release();
+
+    assert.deepEqual(contentDisplays(), [ "", "", "" ], "and the release is what reveals the regions the load's own reveal skipped");
+
+    orchestrator.cleanup();
+  });
+
   test("a takeover cycle writes nothing to the host", async () => {
 
     using dom = createTestDom();

@@ -464,7 +464,7 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
 
     case "global": {
 
-      store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+      store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
 
       return;
     }
@@ -474,7 +474,7 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
       // Optimistic scope update before the fetch so the sidebar highlight repaints immediately. The fetch's outcome lands through the shared fetch's own
       // request-and-outcome pairing - the reducer owns both the staleness decision and the failure transition - and a clean one continues onto the
       // controller-as-device entry.
-      store.dispatch({ scope: { controllerId: deviceSerial, kind: "controller" }, type: "scope:changed" });
+      store.dispatch({ origin: "user", scope: { controllerId: deviceSerial, kind: "controller" }, type: "scope:changed" });
 
       if(!getDevices) {
 
@@ -499,7 +499,7 @@ const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevi
       // scope carries no controller, so reading it would drop the parent and mis-highlight Global. `devicesControllerId` preserves the association.
       const controllerId = store.state.devicesControllerId;
 
-      store.dispatch({ scope: { controllerId, deviceId: deviceSerial, kind: "device" }, type: "scope:changed" });
+      store.dispatch({ origin: "user", scope: { controllerId, deviceId: deviceSerial, kind: "device" }, type: "scope:changed" });
     }
   }
 };

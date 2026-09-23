@@ -189,7 +189,7 @@ describe("mountTakeoverView - releasing a takeover", () => {
     const { begin, store } = setup();
     const handle = begin(pluginCard());
 
-    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.equal(handle.signal.aborted, true, "the content area belongs to the selection, so moving the selection ends the takeover");
     assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "the card leaves the page with it");

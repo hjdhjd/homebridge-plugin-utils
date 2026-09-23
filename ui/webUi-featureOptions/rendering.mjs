@@ -4,8 +4,9 @@
  */
 "use strict";
 
-import { createElement, createSvgElement } from "./utils.mjs";
 import { formatValueList, hasValueContent, isValueOption, optionExists, parseValueList, selectValues } from "../featureOptions.js";
+import { createElement } from "./utils.mjs";
+import { createSvgElement } from "../webUi-svg.mjs";
 
 /**
  * Pure DOM construction for the feature options webUI.

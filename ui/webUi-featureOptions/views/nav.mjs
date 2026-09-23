@@ -5,7 +5,8 @@
 "use strict";
 
 import { completeControllerSelection, fetchControllerDevices } from "../effects/deviceFetch.mjs";
-import { createElement, createSvgElement, toastError } from "../utils.mjs";
+import { createElement, toastError } from "../utils.mjs";
+import { createSvgElement } from "../../webUi-svg.mjs";
 import { effect } from "../store.mjs";
 
 /**

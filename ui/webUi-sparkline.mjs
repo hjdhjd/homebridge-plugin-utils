@@ -25,7 +25,7 @@
  */
 "use strict";
 
-import { createSvgElement } from "./webUi-featureOptions/utils.mjs";
+import { createSvgElement } from "./webUi-svg.mjs";
 
 // The strip's drawing grid. The consumer sizes and positions the element with its own CSS and the viewBox stretches to fill it, so these are aspect-free coordinate
 // units rather than pixels on screen.

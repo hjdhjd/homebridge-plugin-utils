@@ -32,6 +32,12 @@ const NAME_DISALLOWED = new RegExp("[^" + NAME_CHARACTERS + "]", "gu");
 const NAME_INVALID_START = new RegExp("^[^" + NAME_START_CHARACTERS + "]+", "u");
 const NAME_INVALID_END = new RegExp("[^" + NAME_END_CHARACTERS + "]+$", "u");
 
+// The line and column V8 reports for a JSON syntax error, which close its message whenever it computes a position. The rest of that message can quote the text
+// around the failure, and a JSON file is where a stored password or token lives, so parseJson() reads only this position out of it and never repeats the message
+// itself. Anchoring at the end means the match can only ever be V8's own suffix, never digits inside quoted text. V8 reports no position for its unexpected-token
+// errors, so a failure of that kind names its subject alone.
+const JSON_ERROR_POSITION = /\(line (\d+) column (\d+)\)$/;
+
 // A sentinel AbortSignal that never aborts. Helpers that accept an optional caller signal fall back to this so internal code can always address a non-nullable signal,
 // without branching for the "no signal supplied" case on every operation. Shared module-scope constant rather than per-call allocation - the underlying platform
 // AbortController that produced it is unreferenced after module init, leaving the signal in a permanent unaborted state for the module's lifetime.
@@ -1092,6 +1098,48 @@ export function formatErrorMessage(error: unknown): string {
   }
 
   return rendered;
+}
+
+/**
+ * Parse JSON text, reporting a malformed document by what it is and where it failed rather than by what it says.
+ *
+ * `JSON.parse` throws a `SyntaxError` whose message names no source and can quote the text around the failure. A JSON document is where a password or a
+ * long-lived token is typically stored, so a message that quoted it could carry a credential onto a terminal, into a log, or into a bug report. The error thrown here
+ * names the subject the caller describes, the line and column wherever the parser reports a position, and the remedy the caller supplies - and none of the text.
+ *
+ * @param options         - The document and how to describe it.
+ * @param options.remedy  - Optional. The corrective action, as a complete sentence appended to the message.
+ * @param options.subject - What the text is, phrased to open the message: "The config file /home/me/.hblog.json".
+ * @param options.text    - The JSON text to parse.
+ *
+ * @returns The parsed value.
+ *
+ * @throws `Error` naming `subject`, the failure's line and column when the parser reports one, and `remedy` when supplied, carrying no part of `text`.
+ *
+ * @example
+ *
+ * ```ts
+ * const config = parseJson({ remedy: "Fix the file or remove it.", subject: "The config file " + path, text: await readFile(path, "utf8") });
+ * ```
+ *
+ * A malformed file then throws: `The config file /home/me/.hblog.json is not valid JSON at line 3, column 3. Fix the file or remove it.`
+ *
+ * @category Utilities
+ */
+export function parseJson({ remedy, subject, text }: { remedy?: string; subject: string; text: string }): unknown {
+
+  try {
+
+    return JSON.parse(text);
+  } catch(error: unknown) {
+
+    const position = JSON_ERROR_POSITION.exec((error instanceof Error) ? error.message : "");
+    const location = (position !== null) ? " at line " + (position[1] ?? "") + ", column " + (position[2] ?? "") : "";
+
+    // The parser's own error is deliberately not attached as the cause. formatErrorMessage renders every message down a cause chain, so a cause would carry the
+    // quoted text straight back out wherever this error is reported through it.
+    throw new Error(subject + " is not valid JSON" + location + "." + ((remedy !== undefined) ? " " + remedy : ""));
+  }
 }
 
 /**

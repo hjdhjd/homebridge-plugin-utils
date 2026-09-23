@@ -22,7 +22,7 @@
  * @module
  */
 import { DEFAULT_HOST, DEFAULT_PORT } from "./settings.ts";
-import { formatErrorMessage, hasErrorCode } from "../util.ts";
+import { formatErrorMessage, hasErrorCode, parseJson } from "../util.ts";
 import type { Nullable } from "../util.ts";
 
 /**
@@ -37,12 +37,6 @@ export const DEFAULT_CONFIG_FILENAME = ".hblog.json";
 // only (mode 600); when any of these bits is present we warn once and recommend `chmod 600`. We mask the raw `mode` (which carries file-type bits in its high bits) with
 // this so only the group/other permission triplet is consulted.
 const GROUP_OTHER_MASK = 0o077;
-
-// The line and column V8 reports for a JSON syntax error, which close its message whenever it computes a position. The rest of that message can quote the file's text
-// around the failure, and the file is where a stored password or token lives, so the loader reads only this position out of it and never repeats the message itself.
-// Anchoring at the end means the match can only ever be V8's own suffix, never digits inside quoted file text. V8 reports no position for its unexpected-token errors,
-// so a failure of that kind names the file alone.
-const JSON_ERROR_POSITION = /\(line (\d+) column (\d+)\)$/;
 
 /**
  * The shape of the optional `~/.hblog.json` config file. Every field is optional; unknown keys in the file are ignored. The file deliberately carries no `otp` field - a
@@ -261,20 +255,9 @@ export async function loadConfigFile(path: string, options: LoadConfigFileOption
     throw new Error("Unable to read the config file " + path + ": " + formatErrorMessage(error) + ".");
   }
 
-  let parsed: unknown;
-
-  try {
-
-    parsed = JSON.parse(text);
-  } catch(error: unknown) {
-
-    // A parse failure is reported by where it happened, carrying no content from the file, so a credential stored in it can never reach the terminal through this
-    // error. See JSON_ERROR_POSITION for why V8's own message is never repeated.
-    const position = JSON_ERROR_POSITION.exec((error instanceof Error) ? error.message : "");
-    const location = (position !== null) ? " at line " + (position[1] ?? "") + ", column " + (position[2] ?? "") : "";
-
-    throw new Error("The config file " + path + " is not valid JSON" + location + ". Fix the file or remove it.");
-  }
+  // A parse failure is reported by where it happened, carrying no content from the file, so a credential stored in it can never reach the terminal through this
+  // error.
+  const parsed = parseJson({ remedy: "Fix the file or remove it.", subject: "The config file " + path, text });
 
   if(!isRecord(parsed)) {
 

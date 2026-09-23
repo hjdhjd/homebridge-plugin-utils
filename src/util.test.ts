@@ -8,8 +8,8 @@
  */
 import { HbpuAbortError, Watchdog, assertPositiveFinite, assertPositiveInteger, causeChain, composeSignals, consoleLog, debugGatedLog, defaultRetryBackoff,
   exponentialBackoff, formatBps, formatBytes, formatErrorMessage, formatMs, formatPercent, formatSeconds, formatUrlHost, guardedDispatch, hasErrorCode,
-  isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, membershipDelta, onAbort, prefixedLog, repeatDemotedLog, retry, runWithAbort,
-  sameEntries, sanitizeName, superviseLoop, superviseStream, takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
+  isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, loopFaultReporter, membershipDelta, onAbort, parseJson, prefixedLog, repeatDemotedLog, retry,
+  runWithAbort, sameEntries, sanitizeName, superviseLoop, superviseStream, takeLast, toStartCase, validateName, waitWithSignal } from "./util.ts";
 import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, errnoError, expectAt, formatLogEntry, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { RetryBackoff } from "./util.ts";
@@ -3034,6 +3034,45 @@ describe("causeChain", () => {
     assert.ok(yielded.length > 2, "the descent follows the cycle rather than stopping at the first repeat, because it holds no visited set");
     assert.deepEqual(yielded, Array.from({ length: yielded.length }, (_unused, index) => ((index % 2) === 0) ? first : second),
       "the cycle is yielded in chain order until the bound ends it");
+  });
+});
+
+describe("parseJson", () => {
+
+  // A recognizable value placed so the parser fails beside it. V8 quotes the text around an unexpected token in its own message, so any excerpt of this value in a
+  // thrown message would mean that message was repeated.
+  const marker = "Zq9XvK7wPj3RmT5y";
+
+  // Every three-character run of the value, so an assertion rules out any excerpt however little of it a message quoted.
+  const runsOf = (value: string): string[] => Array.from({ length: value.length - 2 }, (_unused, start) => value.slice(start, start + 3));
+
+  test("returns the parsed value of well-formed text", () => {
+
+    assert.deepEqual(parseJson({ subject: "The sample", text: "{\"host\": \"ui.local\", \"port\": [8581]}" }), { host: "ui.local", port: [8581] });
+  });
+
+  test("names the subject, the line and column, and the remedy, and carries none of the text", () => {
+
+    assert.throws(() => parseJson({ remedy: "Fix it.", subject: "The sample", text: "{\n  \"token\": \"" + marker + "\"\n  \"host\": \"ui.local\"\n}\n" }),
+      (error: Error) => {
+
+        assert.equal(error.message, "The sample is not valid JSON at line 3, column 3. Fix it.");
+        assert.ok(runsOf(marker).every((run) => !error.message.includes(run)), "no part of the text reaches the message");
+        assert.equal(error.cause, undefined, "and the parser's own error, which quotes the text, is not carried as the cause");
+
+        return true;
+      });
+  });
+
+  test("names the subject alone where the parser reports no position", () => {
+
+    assert.throws(() => parseJson({ subject: "The sample", text: "{\"token\": " + marker + "}" }), (error: Error) => {
+
+      assert.equal(error.message, "The sample is not valid JSON.");
+      assert.ok(runsOf(marker).every((run) => !error.message.includes(run)), "no part of the text reaches the message");
+
+      return true;
+    });
   });
 });
 

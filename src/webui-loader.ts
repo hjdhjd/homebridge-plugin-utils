@@ -21,6 +21,7 @@
  *
  * @module
  */
+import { parseJson } from "./util.ts";
 
 // The config-comment prefix and terminator. The plugin declares its loader config in a single HTML comment - `<!-- WEBUI LOADER CONFIG {...} -->` - placed OUTSIDE the
 // stamped marker pair, so it survives every stamp. The prefix is distinct from the BEGIN marker below (`... LOADER CONFIG ` versus `... LOADER:BEGIN`), so a search for
@@ -107,17 +108,8 @@ export function parseWebUiLoaderConfig(html: string, htmlPath: string): WebUiLoa
     throw new Error("webui-loader: the `WEBUI LOADER CONFIG` comment in " + htmlPath + " is not terminated.");
   }
 
-  const rawJson = html.slice(jsonStart, commentEnd).trim();
-  let parsed: unknown;
-
-  try {
-
-    parsed = JSON.parse(rawJson);
-  } catch(error) {
-
-    throw new Error("webui-loader: the `WEBUI LOADER CONFIG` comment in " + htmlPath + " is not valid JSON: " + (error instanceof Error ? error.message : String(error)) +
-      ".");
-  }
+  // The comment's JSON is reported through the shared rule, which names where a parse failed and never repeats the text around it.
+  const parsed = parseJson({ subject: "webui-loader: the `WEBUI LOADER CONFIG` comment in " + htmlPath, text: html.slice(jsonStart, commentEnd).trim() });
 
   if((typeof parsed !== "object") || (parsed === null)) {
 

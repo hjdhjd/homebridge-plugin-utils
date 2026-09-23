@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { parseJson } from "../util.ts";
 import { spawn } from "node:child_process";
 import { spliceJsonStringValue } from "../doc-json.ts";
 import { spliceMarkedRegion } from "../doc-markdown.ts";
@@ -1431,7 +1432,7 @@ describe("prepareChrome", () => {
 
     await writePluginTree({ root: scratch.path });
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const readme = await readFile(join(scratch.path, "README.md"), "utf8");
 
@@ -1468,7 +1469,7 @@ describe("prepareChrome", () => {
 
     await writePluginTree({ root: scratch.path });
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
     const region = html.slice(html.indexOf(docChrome.LOGO_BEGIN) + docChrome.LOGO_BEGIN.length, html.indexOf(docChrome.LOGO_END));
@@ -1495,7 +1496,7 @@ describe("prepareChrome", () => {
 
     // A page missing the logo pair fails exactly as a page missing the documentation pair does: the splice refuses in the in-memory pass, before any file is written.
     // That is the adoption contract - each consumer authors the pair around its existing image element once, and the run says so by name until it does.
-    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion,
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion,
       spliceJson: spliceJsonStringValue }), (error: unknown) => {
 
       assert.equal(error instanceof Error, true);
@@ -1528,7 +1529,7 @@ describe("prepareChrome", () => {
 
     await writeFile(join(scratch.path, "docs", "Changelog.md"), pristine);
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     assert.equal(await readFile(join(scratch.path, "docs", "Changelog.md"), "utf8"), pristine, "the fully-opted-out changelog must be byte-untouched");
 
@@ -1563,7 +1564,7 @@ describe("prepareChrome", () => {
      * would resolve its URL against the plugin root and then abort the entire run on the unreadable target, because the stamp is all-or-nothing - so a run that
      * completes is itself the proof that the walk passed over it.
      */
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const externalLink = /\[Companion Plugin\]\(https:\/\/github\.com\/acme\/companion-plugin#readme\)/;
     const readme = await readFile(join(scratch.path, "README.md"), "utf8");
@@ -1596,7 +1597,7 @@ describe("prepareChrome", () => {
     await writeFile(manifestPath, JSON.stringify(BASE_MANIFEST));
     await writePluginTree({ root: scratch.path });
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const readme = await readFile(join(scratch.path, "README.md"), "utf8");
 
@@ -1616,8 +1617,8 @@ describe("prepareChrome", () => {
 
     const readmeBefore = await readFile(join(scratch.path, "README.md"), "utf8");
 
-    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }),
-      /begin marker not found/);
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path,
+      splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }), /begin marker not found/);
 
     assert.equal(await readFile(join(scratch.path, "README.md"), "utf8"), readmeBefore, "no file may be written when any region fails to splice");
   });
@@ -1640,7 +1641,8 @@ describe("prepareChrome", () => {
         text: async (): Promise<string> => JSON.stringify([{ blurb: "access support.", href: "https://github.com/acme/access", title: "unifi-access" }]) };
     }) as unknown as typeof fetch;
 
-    await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, parseJson, pluginRoot: scratch.path,
+      splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     assert.equal(requested, "https://projects.test/list.json", "the manifest's project URL must be fetched");
 
@@ -1660,7 +1662,7 @@ describe("prepareChrome", () => {
 
     const fetchImpl = (async (): Promise<unknown> => ({ ok: false, status: 404, text: async (): Promise<string> => "" })) as unknown as typeof fetch;
 
-    await assert.rejects(prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion,
+    await assert.rejects(prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion,
       spliceJson: spliceJsonStringValue }), /HTTP 404/);
   });
 
@@ -1677,7 +1679,7 @@ describe("prepareChrome", () => {
 
     await writeFile(join(scratch.path, "projects.json"), JSON.stringify(projects));
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
 
@@ -1701,7 +1703,7 @@ describe("prepareChrome", () => {
 
     const webuiPath = join(scratch.path, "homebridge-ui", "public", "index.html");
 
-    await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, offline: true, pluginRoot: scratch.path, splice: spliceMarkedRegion,
+    await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, offline: true, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion,
       spliceJson: spliceJsonStringValue });
 
     const html = await readFile(webuiPath, "utf8");
@@ -1714,7 +1716,7 @@ describe("prepareChrome", () => {
     assert.equal(html.split("stale region content").length - 1, 1, "every region other than the projects region must still be stamped");
 
     // With the projects region unplanned, a check of the tree the write just stamped has nothing to report: the skip is consistent across both modes.
-    const changed = await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, mode: "check", offline: true, pluginRoot: scratch.path,
+    const changed = await prepareChrome({ chrome: docChrome, fetchImpl, manifestPath, mode: "check", offline: true, parseJson, pluginRoot: scratch.path,
       splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     assert.deepEqual(changed, [], "an offline check of an offline-stamped tree must report nothing");
@@ -1733,7 +1735,8 @@ describe("prepareChrome", () => {
 
     await writeFile(join(scratch.path, "projects.json"), JSON.stringify(projects));
 
-    await prepareChrome({ chrome: docChrome, manifestPath, offline: true, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, offline: true, parseJson, pluginRoot: scratch.path,
+      splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const html = await readFile(join(scratch.path, "homebridge-ui", "public", "index.html"), "utf8");
 
@@ -1749,8 +1752,8 @@ describe("prepareChrome", () => {
     await writeFile(manifestPath, "{ not valid json");
     await writePluginTree({ root: scratch.path });
 
-    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }),
-      /Doc-chrome manifest .* is not valid JSON/);
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path,
+      splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }), /Doc-chrome manifest .* is not valid JSON/);
   });
 
   test("frames a local project list that is not valid JSON with a source-naming diagnostic", async () => {
@@ -1763,8 +1766,50 @@ describe("prepareChrome", () => {
     await writePluginTree({ root: scratch.path });
     await writeFile(join(scratch.path, "projects.json"), "{ not valid json");
 
-    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }),
-      /The project list at .* is not valid JSON/);
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path,
+      splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }), /The project list at .* is not valid JSON/);
+  });
+
+  test("reports a malformed manifest or project list by where it failed and carries none of the file's text", async () => {
+
+    /* V8 quotes the text around an unexpected token in its own message, so an error that repeated it would print whatever the file held. The manifest fails where V8
+     * reports no position and the project list where it reports a line and column; each carries a recognizable value placed so the parser fails beside it.
+     */
+    const marker = "Zq9XvK7wPj3RmT5y";
+
+    await using scratch = await makeScratchRoot();
+
+    await writePluginTree({ root: scratch.path });
+
+    const jsonManifestPath = join(scratch.path, "docChrome.json");
+    const listManifestPath = await writeManifest({ manifest: { ...BASE_MANIFEST, projects: { file: "projects.json" } }, root: scratch.path });
+
+    await writeFile(jsonManifestPath, "{\"masthead\": " + marker + "}");
+    await writeFile(join(scratch.path, "projects.json"), "[\n  { \"name\": \"" + marker + "\" }\n  { \"name\": \"Other\" }\n]\n");
+
+    const cases: readonly (readonly [ string, string, string ])[] = [
+
+      [ "a JSON manifest", jsonManifestPath, "Doc-chrome manifest " + jsonManifestPath + " is not valid JSON." ],
+      [ "a local project list", listManifestPath, "The project list at " + join(scratch.path, "projects.json") + " is not valid JSON at line 3, column 3." ]
+    ];
+
+    for(const [ label, manifestPath, message ] of cases) {
+
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion,
+        spliceJson: spliceJsonStringValue }), (error: Error) => {
+
+        assert.equal(error.message, message, label + " is named by its source and position");
+
+        // Checking short runs of the value rather than the whole of it rules out any excerpt, however little the message quoted.
+        for(let start = 0; start <= (marker.length - 3); start++) {
+
+          assert.ok(!error.message.includes(marker.slice(start, start + 3)), label + " must carry no part of the file's text");
+        }
+
+        return true;
+      });
+    }
   });
 
   test("skips the webUI when no index.html is present, still stamping the README and docs", async () => {
@@ -1775,7 +1820,7 @@ describe("prepareChrome", () => {
 
     await writePluginTree({ root: scratch.path, webui: false });
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const readme = await readFile(join(scratch.path, "README.md"), "utf8");
 
@@ -1794,7 +1839,7 @@ describe("prepareChrome", () => {
     const schemaPath = join(scratch.path, "config.schema.json");
     const before = await readFile(schemaPath, "utf8");
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     const after = await readFile(schemaPath, "utf8");
 
@@ -1824,7 +1869,7 @@ describe("prepareChrome", () => {
     const before = await readFile(schemaPath, "utf8");
     const mtime = (await stat(schemaPath, { bigint: true })).mtimeNs;
 
-    await prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
+    await prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue });
 
     // An undeclared surface is no target at all, which is what lets a plugin whose footer says something else of its own adopt every other region today and this one
     // never.
@@ -1854,8 +1899,8 @@ describe("prepareChrome", () => {
 
     const readmeBefore = await readFile(join(scratch.path, "README.md"), "utf8");
 
-    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }),
-      /member "footerDisplay" not found at the top level of source; seed it with an empty string value/);
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path, splice: spliceMarkedRegion,
+      spliceJson: spliceJsonStringValue }), /member "footerDisplay" not found at the top level of source; seed it with an empty string value/);
 
     assert.equal(await readFile(join(scratch.path, "README.md"), "utf8"), readmeBefore, "no file may be written when the schema's member is absent");
     assert.equal(await readFile(schemaPath, "utf8"), unseeded, "least of all the schema itself");
@@ -1872,18 +1917,18 @@ describe("prepareChrome", () => {
 
     const readmeBefore = await readFile(join(scratch.path, "README.md"), "utf8");
 
-    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, pluginRoot: scratch.path, splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }),
-      /`masthead` must be an object/);
+    await assert.rejects(prepareChrome({ chrome: docChrome, manifestPath, parseJson, pluginRoot: scratch.path,
+      splice: spliceMarkedRegion, spliceJson: spliceJsonStringValue }), /`masthead` must be an object/);
 
     assert.equal(await readFile(join(scratch.path, "README.md"), "utf8"), readmeBefore, "a manifest rejected before planning must write nothing");
   });
 });
 
 /**
- * Write the compiled dist modules the `prepare-chrome` dispatch reaches through computed dynamic imports: `dist/docChrome.js`, `dist/doc-json.js`, and
- * `dist/doc-markdown.js`, each a thin re-export of the real source through a `file:` URL. This runs the dispatch path - every dynamic import, the prepareChrome call,
- * and the return - against a self-contained root, independent of whether dist/ has been built. The dispatch imports each of them unconditionally, so a root missing
- * any one reports itself as not built.
+ * Write the compiled dist modules the `prepare-chrome` dispatch reaches through computed dynamic imports: `dist/docChrome.js`, `dist/doc-json.js`,
+ * `dist/doc-markdown.js`, and `dist/util.js`, each a thin re-export of the real source through a `file:` URL. This runs the dispatch path - every dynamic import,
+ * the prepareChrome call, and the return - against a self-contained root, independent of whether dist/ has been built. The dispatch imports each of them
+ * unconditionally, so a root missing any one reports itself as not built.
  *
  * @param sourceRoot - The synthetic HBPU source root whose `dist/` receives the re-export modules.
  */
@@ -1892,11 +1937,13 @@ async function writeChromeDist(sourceRoot: string): Promise<void> {
   const realChrome = fileURLToPath(new URL("../docChrome.ts", import.meta.url));
   const realJson = fileURLToPath(new URL("../doc-json.ts", import.meta.url));
   const realMarkdown = fileURLToPath(new URL("../doc-markdown.ts", import.meta.url));
+  const realUtil = fileURLToPath(new URL("../util.ts", import.meta.url));
 
   await mkdir(join(sourceRoot, "dist"), { recursive: true });
   await writeFile(join(sourceRoot, "dist", "docChrome.js"), "export * from " + JSON.stringify(pathToFileURL(realChrome).href) + ";\n");
   await writeFile(join(sourceRoot, "dist", "doc-json.js"), "export { spliceJsonStringValue } from " + JSON.stringify(pathToFileURL(realJson).href) + ";\n");
   await writeFile(join(sourceRoot, "dist", "doc-markdown.js"), "export { spliceMarkedRegion } from " + JSON.stringify(pathToFileURL(realMarkdown).href) + ";\n");
+  await writeFile(join(sourceRoot, "dist", "util.js"), "export { parseJson } from " + JSON.stringify(pathToFileURL(realUtil).href) + ";\n");
 }
 
 describe("runCli - prepare-chrome dispatch", () => {

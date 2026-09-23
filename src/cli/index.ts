@@ -30,6 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { parseWebUiLoaderConfig, renderWebUiBootRegion } from "../webui-loader.ts";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
+import type { parseJson } from "../util.ts";
 import { realpathSync } from "node:fs";
 import type { renderFeatureOptionsReference } from "../featureOptions-docs.ts";
 import type { renderMqttTopicsReference } from "../mqtt-topics-docs.ts";
@@ -528,28 +529,15 @@ export async function prepareMqttDocs({ catalogModulePath, docPath, docs, mode =
 // resolveProjects share one message rather than duplicating the string.
 const PROJECTS_SOURCE_ERROR = "The manifest `projects` field must be an array, a { file } reference, or a { url } reference.";
 
-// Parse JSON, re-throwing a parse failure as a framed error that names where the invalid JSON lives. Plain `JSON.parse` throws a bare `SyntaxError` with no source
-// attribution; wrapping it keeps a malformed manifest or project list reporting the same "names the source" quality as the shape validators.
-function parseJsonFramed(raw: string, describe: string): unknown {
-
-  try {
-
-    return JSON.parse(raw);
-  } catch(error) {
-
-    throw new Error(describe + " is not valid JSON: " + (error instanceof Error ? error.message : String(error)) + ".");
-  }
-}
-
 // Load a documentation-chrome manifest, dispatching on the path's extension: a `.json` file is read and parsed as data, while any other path is dynamically
 // imported as a module and its `docChrome` (or default) export taken. Both paths converge on one in-memory value the caller validates, so a plugin may author its
 // manifest as a typed module or a static JSON file with no change to the mechanism. The dynamic import goes through a `file:` URL for the same portability reason
-// `prepareDocs` converts the catalog path.
-async function loadDocChromeManifest(manifestPath: string): Promise<unknown> {
+// `prepareDocs` converts the catalog path. A JSON manifest parses through the injected shared rule, which names the file and never repeats its text.
+async function loadDocChromeManifest({ manifestPath, parseJsonText }: { manifestPath: string; parseJsonText: typeof parseJson }): Promise<unknown> {
 
   if(manifestPath.endsWith(".json")) {
 
-    return parseJsonFramed(await readFile(manifestPath, "utf8"), "Doc-chrome manifest " + manifestPath);
+    return parseJsonText({ subject: "Doc-chrome manifest " + manifestPath, text: await readFile(manifestPath, "utf8") });
   }
 
   const namespace = await import(pathToFileURL(manifestPath).href) as { default?: unknown; docChrome?: unknown };
@@ -560,12 +548,13 @@ async function loadDocChromeManifest(manifestPath: string): Promise<unknown> {
 // Resolve the manifest's project source to an inline array of entries. The source may be omitted (no project region is stamped), an inline array, a local file relative
 // to the plugin root, or a remote URL fetched at stamp time. The remote form is what lets a family-wide project list live in one external file that every plugin's build
 // pulls from, keeping this library free of any plugin-specific data. The injected `parseEntries` validates the resolved entries and returns them typed, so every
-// manifest-shape check stays the single responsibility of `docChrome.ts`.
-async function resolveProjects(source: unknown, { fetchImpl, manifestPath, offline, parseEntries, pluginRoot }: {
+// manifest-shape check stays the single responsibility of `docChrome.ts`, and the injected `parseJsonText` is the shared rule a list read as text parses through.
+async function resolveProjects(source: unknown, { fetchImpl, manifestPath, offline, parseEntries, parseJsonText, pluginRoot }: {
   fetchImpl: typeof fetch;
   manifestPath: string;
   offline: boolean;
   parseEntries: (value: unknown, origin: string) => readonly ProjectEntry[];
+  parseJsonText: typeof parseJson;
   pluginRoot: string;
 }): Promise<readonly ProjectEntry[] | undefined> {
 
@@ -586,7 +575,7 @@ async function resolveProjects(source: unknown, { fetchImpl, manifestPath, offli
   }
 
   // A remote reference is fetched at stamp time; a non-OK response is a framed error naming the URL and status. We read the body as text and parse it ourselves so a
-  // malformed remote list reports through the same framed-JSON path as a local one.
+  // malformed remote list reports through the same shared rule as a local one.
   if(("url" in source) && (typeof source.url === "string")) {
 
     /* An offline run answers undefined without reaching the network, which is the answer an omitted `projects` field already gives: the region goes unplanned, so
@@ -606,7 +595,7 @@ async function resolveProjects(source: unknown, { fetchImpl, manifestPath, offli
       throw new Error("Failed to fetch the project list from " + source.url + ": HTTP " + String(response.status) + ".");
     }
 
-    return parseEntries(parseJsonFramed(await response.text(), "The project list fetched from " + source.url), source.url);
+    return parseEntries(parseJsonText({ subject: "The project list fetched from " + source.url, text: await response.text() }), source.url);
   }
 
   // A local-file reference is read relative to the plugin root and parsed as JSON.
@@ -614,7 +603,7 @@ async function resolveProjects(source: unknown, { fetchImpl, manifestPath, offli
 
     const filePath = resolve(pluginRoot, source.file);
 
-    return parseEntries(parseJsonFramed(await readFile(filePath, "utf8"), "The project list at " + filePath), filePath);
+    return parseEntries(parseJsonText({ subject: "The project list at " + filePath, text: await readFile(filePath, "utf8") }), filePath);
   }
 
   throw new Error(PROJECTS_SOURCE_ERROR);
@@ -652,9 +641,10 @@ interface DocChromeModule {
  * feature-options region in one doc, this regenerates several named regions in many files, so a plugin's masthead and navigation cannot drift between the surfaces that
  * repeat them.
  *
- * Pure-by-injection like {@link prepareDocs}: the `docChrome` renderers and validator arrive through the injected `chrome` namespace and the splice helpers through
- * `splice` and `spliceJson`, so this function is unit-testable against the real exports without a built `dist/`, and the CLI's single-file no-static-relative-import
- * discipline is preserved. `fetchImpl` is injected (defaulting to the global `fetch`) so the remote project-source path is testable without network access.
+ * Pure-by-injection like {@link prepareDocs}: the `docChrome` renderers and validator arrive through the injected `chrome` namespace, the splice helpers through
+ * `splice` and `spliceJson`, and the shared JSON rule through `parseJson`, so this function is unit-testable against the real exports without a built `dist/`, and
+ * the CLI's single-file no-static-relative-import discipline is preserved. `fetchImpl` is injected (defaulting to the global `fetch`) so the remote project-source
+ * path is testable without network access.
  *
  * The manifest is loaded (a typed module or a static JSON file), validated with a field-naming diagnostic, and its optional project source resolved to inline data. The
  * per-file edit plan is then built - the README carries the masthead, the documentation index, and the dashboard badges; each content doc carries whichever regions
@@ -674,6 +664,8 @@ interface DocChromeModule {
  * @param args.manifestPath - Absolute path to the plugin's manifest - a compiled module or a `.json` file.
  * @param args.mode         - `"write"` to write the targets that differ, `"check"` to report them without writing. Defaults to `"write"`.
  * @param args.offline      - When `true`, a remote project list is left unfetched and the projects region goes unplanned. Defaults to `false`.
+ * @param args.parseJson    - The injected {@link parseJson} from `util.ts`, which parses a JSON manifest or project list and reports a malformed one by its source
+ *                            and position, never by its text.
  * @param args.pluginRoot   - Absolute path to the plugin root that the manifest's surface and file references resolve against.
  * @param args.splice       - The injected {@link spliceMarkedRegion} from `doc-markdown.ts`.
  * @param args.spliceJson   - The injected {@link spliceJsonStringValue} from `doc-json.ts`, which stamps the configuration schema's footer member.
@@ -683,13 +675,15 @@ interface DocChromeModule {
  * @throws When the manifest is mis-shaped, when a resolved project source is malformed, when a target file cannot be read, when any region's marker pair is absent or
  *         ambiguous, or when the declared schema has no footer member - propagating the splices' own framed errors so the dispatch site frames them uniformly.
  */
-export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, mode = "write", offline = false, pluginRoot, splice, spliceJson }: {
+export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, mode = "write", offline = false, parseJson: parseJsonText, pluginRoot, splice,
+  spliceJson }: {
 
   chrome: DocChromeModule;
   fetchImpl?: typeof fetch;
   manifestPath: string;
   mode?: "check" | "write";
   offline?: boolean;
+  parseJson: typeof parseJson;
   pluginRoot: string;
   splice: typeof spliceMarkedRegion;
   spliceJson: typeof spliceJsonStringValue;
@@ -701,10 +695,10 @@ export async function prepareChrome({ chrome, fetchImpl = fetch, manifestPath, m
 
   // Load and validate the manifest up front so a mis-shaped manifest fails with a diagnostic naming the offending field rather than a downstream render error. Parsing
   // returns the same value typed as a validated manifest, so every field access below is type-checked.
-  const manifest = parseDocChromeManifest(await loadDocChromeManifest(manifestPath), manifestPath);
+  const manifest = parseDocChromeManifest(await loadDocChromeManifest({ manifestPath, parseJsonText }), manifestPath);
 
   // Resolve the optional project source to inline data before rendering; the renderers never perform I/O.
-  const projects = await resolveProjects(manifest.projects, { fetchImpl, manifestPath, offline, parseEntries: parseProjectEntries, pluginRoot });
+  const projects = await resolveProjects(manifest.projects, { fetchImpl, manifestPath, offline, parseEntries: parseProjectEntries, parseJsonText, pluginRoot });
 
   /* Build the per-file edit plan. Each target file collects the ordered edits that apply to it; a file may carry more than one - the README carries the masthead, the
    * documentation index, and, when declared, the dashboard badges - each applied independently. An edit names either a marked region and the pair that frames it, or
@@ -1108,32 +1102,36 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       const manifestPath = resolve(cwd, manifestArg);
       const pluginRoot = resolve(cwd, values.root ?? ".");
 
-      // Reach HBPU's own doc-chrome renderers and its splice primitives through computed dynamic imports of their compiled modules - never static relative imports -
-      // so the single-file bin stays symlink-safe. A failed import means HBPU itself has not been built, a distinct and actionable condition from a downstream failure.
+      // Reach HBPU's own doc-chrome renderers, its splice primitives, and its shared JSON rule through computed dynamic imports of their compiled modules - never static
+      // relative imports - so the single-file bin stays symlink-safe. A failed import means HBPU itself has not been built, a distinct and actionable condition from a
+      // downstream failure.
       const chromePath = join(sourceRoot, "dist", "docChrome.js");
       const jsonSplicePath = join(sourceRoot, "dist", "doc-json.js");
       const splicePath = join(sourceRoot, "dist", "doc-markdown.js");
+      const utilPath = join(sourceRoot, "dist", "util.js");
 
       let chrome: DocChromeModule;
       let jsonSplicer: { spliceJsonStringValue: typeof spliceJsonStringValue };
       let splicer: { spliceMarkedRegion: typeof spliceMarkedRegion };
+      let util: { parseJson: typeof parseJson };
 
       try {
 
         chrome = await import(pathToFileURL(chromePath).href) as DocChromeModule;
         jsonSplicer = await import(pathToFileURL(jsonSplicePath).href) as typeof jsonSplicer;
         splicer = await import(pathToFileURL(splicePath).href) as typeof splicer;
+        util = await import(pathToFileURL(utilPath).href) as typeof util;
       } catch {
 
-        stderr.write("homebridge-plugin-utils prepare-chrome: HBPU has not been built: " + chromePath + ", " + jsonSplicePath + ", or " + splicePath + " is missing. " +
-          "Run `npm run build` in HBPU first.\n");
+        stderr.write("homebridge-plugin-utils prepare-chrome: HBPU has not been built: " + chromePath + ", " + jsonSplicePath + ", " + splicePath + ", or " + utilPath +
+          " is missing. Run `npm run build` in HBPU first.\n");
 
         return 1;
       }
 
       try {
 
-        const changed = await prepareChrome({ chrome, manifestPath, mode, offline: values.offline === true, pluginRoot,
+        const changed = await prepareChrome({ chrome, manifestPath, mode, offline: values.offline === true, parseJson: util.parseJson, pluginRoot,
           splice: splicer.spliceMarkedRegion, spliceJson: jsonSplicer.spliceJsonStringValue });
 
         if(mode === "check") {

@@ -62,6 +62,35 @@ describe("parseWebUiLoaderConfig", () => {
     assert.throws(() => parseWebUiLoaderConfig(htmlWith("{not valid json}"), "index.html"), /`WEBUI LOADER CONFIG` comment in index\.html is not valid JSON/);
   });
 
+  test("reports invalid config JSON by where it failed and carries none of the comment's text", () => {
+
+    /* V8 quotes the text around an unexpected token in its own message, so an error that repeated it would print whatever the comment held. Each comment below
+     * carries a recognizable value placed so the parser fails beside it: the first fails where V8 reports no position, the second where it reports a line and column.
+     */
+    const marker = "Zq9XvK7wPj3RmT5y";
+    const cases: readonly (readonly [ string, string, string ])[] = [
+
+      [ "an unquoted value", "{\"entry\": " + marker + "}", "" ],
+      [ "a missing comma after a value", "{\n\"entry\": \"" + marker + "\"\n\"bust\": []\n}", " at line 3, column 1" ]
+    ];
+
+    for(const [ label, json, location ] of cases) {
+
+      assert.throws(() => parseWebUiLoaderConfig(htmlWith(json), "index.html"), (error: Error) => {
+
+        assert.equal(error.message, "webui-loader: the `WEBUI LOADER CONFIG` comment in index.html is not valid JSON" + location + ".", label);
+
+        // Checking short runs of the value rather than the whole of it rules out any excerpt, however little the message quoted.
+        for(let start = 0; start <= (marker.length - 3); start++) {
+
+          assert.ok(!error.message.includes(marker.slice(start, start + 3)), label + " must carry no part of the comment's text");
+        }
+
+        return true;
+      });
+    }
+  });
+
   test("throws a framed error when the entry field is missing or not a string", () => {
 
     assert.throws(() => parseWebUiLoaderConfig(htmlWith("{\"bust\":[\"./x.mjs\"]}"), "index.html"), /must carry an `entry` string/);

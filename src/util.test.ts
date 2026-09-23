@@ -3561,6 +3561,21 @@ describe("sanitizeName", () => {
     assert.equal(sanitizeName("Device \u{1F680}"), "Device");
   });
 
+  test("strips every trailing character a name may not end with, so the result satisfies validateName", () => {
+
+    // A hyphen and an ampersand are both allowed inside a name and neither may end one, so both have to go. Stripping only the last would leave "Test-", which the
+    // validator rejects.
+    assert.equal(sanitizeName("Test-&"), "Test");
+    assert.equal(validateName(sanitizeName("Test-&")), true);
+
+    // A longer run mixing a space and several permitted-but-not-final punctuation marks is stripped whole.
+    assert.equal(sanitizeName("Test -&,#"), "Test");
+    assert.equal(validateName(sanitizeName("Test -&,#")), true);
+
+    // The trailing-period collapse runs after the strip, so periods the strip uncovers are collapsed too.
+    assert.equal(sanitizeName("Test..-&"), "Test.");
+  });
+
   test("removes emojis entirely", () => {
 
     // Pictographic code points fall through the character-class replacement to a space, which is then trimmed out from the ends.

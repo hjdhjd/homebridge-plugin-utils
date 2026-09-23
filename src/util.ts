@@ -14,8 +14,23 @@ import { isIP } from "node:net";
 import { markHandled } from "./mark-handled.ts";
 import { systemClock } from "./clock.ts";
 
+/* HomeKit's naming rule, stated once as the character classes it is built from, so validateName() and sanitizeName() read one definition and cannot drift apart. A
+ * name starts with a letter or number, ends with a letter, number, or period, and in between holds only letters, numbers, spaces, and HomeKit's permitted punctuation.
+ * Each is the body of a character class, composed into the patterns below.
+ */
+const NAME_START_CHARACTERS = "\\p{L}\\p{N}";
+const NAME_END_CHARACTERS = NAME_START_CHARACTERS + ".";
+const NAME_CHARACTERS = NAME_START_CHARACTERS + "\\-\"'.,#& ";
+
 // Validates a name against HomeKit's naming conventions. Compiled once at module scope since this sits on the fast path of sanitizeName().
-const VALID_HOMEKIT_NAME = /^(?!.*\p{Extended_Pictographic})(?!.* {2})(?=^[\p{L}\p{N}].*[\p{L}\p{N}.]$)[\p{L}\p{N}\-"'.,#& ]+$/u;
+const VALID_HOMEKIT_NAME = new RegExp("^(?!.*\\p{Extended_Pictographic})(?!.* {2})(?=^[" + NAME_START_CHARACTERS + "].*[" + NAME_END_CHARACTERS + "]$)[" +
+  NAME_CHARACTERS + "]+$", "u");
+
+// The sanitizer's passes, each the inverse of one part of the rule above: every character a name may not hold anywhere, the run of characters a name may not start
+// with, and the run of characters a name may not end with. Stripping each whole run, rather than a single character, is what lets the result satisfy the validator.
+const NAME_DISALLOWED = new RegExp("[^" + NAME_CHARACTERS + "]", "gu");
+const NAME_INVALID_START = new RegExp("^[^" + NAME_START_CHARACTERS + "]+", "u");
+const NAME_INVALID_END = new RegExp("[^" + NAME_END_CHARACTERS + "]+$", "u");
 
 // A sentinel AbortSignal that never aborts. Helpers that accept an optional caller signal fall back to this so internal code can always address a non-nullable signal,
 // without branching for the "no signal supplied" case on every operation. Shared module-scope constant rather than per-call allocation - the underlying platform
@@ -2169,16 +2184,14 @@ export function sanitizeName(name: string): string {
     return name;
   }
 
-  // Here are the steps we're taking to sanitize names for HomeKit:
+  // Here are the steps we're taking to sanitize names for HomeKit, each derived from the naming rule the validator enforces:
   //
   //   - Replace any disallowed char (including emojis) with a space.
   //   - Collapse multiple spaces to one.
-  //   - Trim spaces at the beginning and end of the string.
-  //   - Strip any leading non-letter/number.
-  //   - Collapse two or more trailing periods into one.
-  //   - Remove any other trailing char that's not letter/number/period.
-  return name.replace(/[^\p{L}\p{N}\-"'.,#&\s]/gu, " ").replace(/\s+/g, " ").trim().replace(/^[^\p{L}\p{N}]+/u, "").replace(/\.{2,}$/g, ".").
-    replace(/[^\p{L}\p{N}.]$/u, "");
+  //   - Strip the run of characters a name may not start with, leading spaces included.
+  //   - Strip the run of characters a name may not end with, trailing spaces included.
+  //   - Collapse two or more trailing periods into one. This follows the end strip, so a period the strip uncovers is collapsed too.
+  return name.replace(NAME_DISALLOWED, " ").replace(/\s+/g, " ").replace(NAME_INVALID_START, "").replace(NAME_INVALID_END, "").replace(/\.{2,}$/, ".");
 }
 
 /**

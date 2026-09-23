@@ -3552,6 +3552,20 @@ describe("validateName", () => {
     assert.equal(validateName("Test|Switch"), false);
     assert.equal(validateName("Test/Switch"), false);
   });
+
+  test("accepts a single character that may both start and end a name", () => {
+
+    // A one-character name is its own first and last character, so a lone letter or number satisfies both ends of the rule at once.
+    assert.equal(validateName("A"), true, "a single letter is a name");
+    assert.equal(validateName("7"), true, "and so is a single number");
+  });
+
+  test("rejects a single character a name may not start with", () => {
+
+    assert.equal(validateName("|"), false, "a character no name may hold is no name on its own");
+    assert.equal(validateName("-"), false, "nor is one a name may hold only inside");
+    assert.equal(validateName("."), false, "nor a period, which may end a name but never start one");
+  });
 });
 
 describe("sanitizeName", () => {
@@ -3613,6 +3627,14 @@ describe("sanitizeName", () => {
 
     // The trailing-period collapse runs after the strip, so periods the strip uncovers are collapsed too.
     assert.equal(sanitizeName("Test..-&"), "Test.");
+  });
+
+  test("keeps a single-character name, which validateName accepts, while an input with nothing valid still sanitizes to no name", () => {
+
+    assert.equal(sanitizeName("A"), "A");
+    assert.equal(validateName(sanitizeName("A")), true, "the sanitizer's answer for a one-letter name is one the validator accepts");
+    assert.equal(sanitizeName("|"), "", "an input holding no permitted character sanitizes to the empty string");
+    assert.equal(validateName(""), false, "which is not a name");
   });
 
   test("removes emojis entirely", () => {

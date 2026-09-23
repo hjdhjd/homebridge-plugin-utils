@@ -262,6 +262,24 @@ export function parseRpiGpuMem(stdout: string): number {
 }
 
 /**
+ * Parse a CPU model string, as `os.cpus()` reports it, into its Apple Silicon generation. The generation is the number after "Apple M", whatever follows it: a base
+ * chip reports its model with nothing after the digits ("Apple M3"), and a variant appends its name ("Apple M3 Pro", "Apple M2 Ultra"). Returns `0` for a model
+ * string that names no Apple Silicon chip, an Intel Mac's included - matching the class-level fallback.
+ *
+ * @param model - A CPU model string from `os.cpus()`.
+ *
+ * @returns The Apple Silicon generation, or `0` when the model string names no Apple Silicon chip.
+ *
+ * @category FFmpeg
+ */
+export function parseAppleSiliconGeneration(model: string): number {
+
+  const generationMatch = /Apple M(\d+)/i.exec(model);
+
+  return Number(generationMatch?.[1] ?? 0);
+}
+
+/**
  * Options for configuring FFmpeg probing.
  *
  * @category FFmpeg
@@ -678,18 +696,8 @@ function probeHwOs(): { hostSystem: string; cpuGeneration: number } {
 
       hostSystem = "macOS." + (cpuModelString.includes("Apple") ? "Apple" : "Intel");
 
-      // Identify what generation of Apple Silicon we have.
-      if(cpuModelString.includes("Apple")) {
-
-        // Pull the generation digit out of a model string like "Apple M1 Pro" or "Apple M2 Ultra": the number after "M" is the generation itself, and the
-        // wildcard tail absorbs whatever chip variant name follows it.
-        const cpuModel = /Apple M(\d+) .*/i.exec(cpuModelString);
-
-        if(cpuModel?.[1]) {
-
-          cpuGeneration = Number(cpuModel[1]);
-        }
-      }
+      // Identify what generation of Apple Silicon we have. An Intel model string names no Apple Silicon chip, so it reads as generation zero.
+      cpuGeneration = parseAppleSiliconGeneration(cpuModelString);
 
       break;
 

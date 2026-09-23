@@ -4,7 +4,8 @@
  * per-command deadline; a real-binary integration test runs whenever an FFmpeg binary is discoverable on PATH (or `FFMPEG_INTEGRATION=1` is set), and is skipped
  * otherwise. See `integration.helpers.ts` for the full gate semantics.
  */
-import { FfmpegCodecs, ffmpegVersionAtLeast, parseFfmpegCodecs, parseFfmpegHwAccels, parseFfmpegVersion, parseFfmpegVersionParts, parseRpiGpuMem } from "./codecs.ts";
+import { FfmpegCodecs, ffmpegVersionAtLeast, parseAppleSiliconGeneration, parseFfmpegCodecs, parseFfmpegHwAccels, parseFfmpegVersion, parseFfmpegVersionParts,
+  parseRpiGpuMem } from "./codecs.ts";
 import { capturingLog, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -151,6 +152,30 @@ describe("parseRpiGpuMem", () => {
   test("returns 0 when the captured value is not numeric", () => {
 
     assert.equal(parseRpiGpuMem("gpu=xxxM\n"), 0);
+  });
+});
+
+describe("parseAppleSiliconGeneration", () => {
+
+  test("reads the generation from a base chip, whose model string ends at the digits", () => {
+
+    // A base chip carries no variant name after its generation. The AV1 hardware-decode gate needs generation three or later, so a base M3 reading as zero here
+    // would turn that gate off on hardware that supports it.
+    assert.equal(parseAppleSiliconGeneration("Apple M1"), 1);
+    assert.equal(parseAppleSiliconGeneration("Apple M3"), 3);
+  });
+
+  test("reads the generation from a variant chip, whatever variant name follows the digits", () => {
+
+    assert.equal(parseAppleSiliconGeneration("Apple M3 Pro"), 3);
+    assert.equal(parseAppleSiliconGeneration("Apple M4 Max"), 4);
+    assert.equal(parseAppleSiliconGeneration("Apple M2 Ultra"), 2);
+  });
+
+  test("returns 0 for a model string that names no Apple Silicon chip", () => {
+
+    assert.equal(parseAppleSiliconGeneration("Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz"), 0);
+    assert.equal(parseAppleSiliconGeneration(""), 0);
   });
 });
 

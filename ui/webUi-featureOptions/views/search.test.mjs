@@ -364,7 +364,7 @@ describe("mountSearchView - following the table's presentation", () => {
 
   const clickController = (store, { controllerId = "ctrl-a", devices = [], error = "" } = {}) => {
 
-    store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId, kind: "controller" }, type: "scope:changed" });
     store.dispatch({ controllerId, type: "devices:requested" });
     store.dispatch({ controllerId, devices, error, seq: store.state.devicesRequest.seq, type: "devices:loaded" });
   };
@@ -413,7 +413,7 @@ describe("mountSearchView - following the table's presentation", () => {
 
     const { root, store } = setup();
 
-    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
     store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
     store.dispatch({
 

@@ -158,7 +158,7 @@ describe("selectedDevice", () => {
 
     assert.equal(selectedDevice(state), undefined, "global scope - no device");
 
-    const inController = reducer(state, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const inController = reducer(state, { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.equal(selectedDevice(inController), undefined, "controller scope - no concrete device");
   });
@@ -167,7 +167,7 @@ describe("selectedDevice", () => {
 
     const dev = { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
     const state = loadedState({ devices: [dev] });
-    const inDevice = reducer(state, { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    const inDevice = reducer(state, { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.equal(selectedDevice(inDevice), dev);
   });
@@ -175,7 +175,7 @@ describe("selectedDevice", () => {
   test("returns undefined when the device id does not match any loaded device", () => {
 
     const state = loadedState({ devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }] });
-    const inDevice = reducer(state, { scope: { controllerId: null, deviceId: "missing", kind: "device" }, type: "scope:changed" });
+    const inDevice = reducer(state, { origin: "user", scope: { controllerId: null, deviceId: "missing", kind: "device" }, type: "scope:changed" });
 
     assert.equal(selectedDevice(inDevice), undefined);
   });
@@ -195,11 +195,11 @@ describe("selectedController", () => {
     const ctrl = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
     const state = loadedState({ controllers: [ctrl], mode: "controller-based" });
 
-    const inController = reducer(state, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const inController = reducer(state, { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.equal(selectedController(inController), ctrl);
 
-    const inDevice = reducer(state, { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    const inDevice = reducer(state, { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.equal(selectedController(inDevice), ctrl);
   });
@@ -207,7 +207,7 @@ describe("selectedController", () => {
   test("returns null when the device scope has no parent controller (device-only mode)", () => {
 
     const state = loadedState({ devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }] });
-    const inDevice = reducer(state, { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    const inDevice = reducer(state, { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.equal(selectedController(inDevice), null);
   });
@@ -468,7 +468,7 @@ describe("projection - the declared-scopes view gate", () => {
     const requested = reducer(base, { controllerId: "ctrl-a", type: "devices:requested" });
     const withDevices = reducer(requested, { controllerId: "ctrl-a", devices: [DEVICE], error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 
-    return scope ? reducer(withDevices, { scope, type: "scope:changed" }) : withDevices;
+    return scope ? reducer(withDevices, { origin: "user", scope, type: "scope:changed" }) : withDevices;
   };
 
   const scopedNames = (state) => projection(state).categories.flatMap((c) => c.entries).map((e) => e.name);
@@ -558,7 +558,7 @@ describe("projection - the presented view scope", () => {
     const requested = reducer(base, { controllerId: "ctrl-a", type: "devices:requested" });
     const withDevices = reducer(requested, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 
-    return reducer(withDevices, { scope, type: "scope:changed" });
+    return reducer(withDevices, { origin: "user", scope, type: "scope:changed" });
   };
 
   const entryScope = (state, optionName) => projection(state).categories[0].entries.find((e) => e.name === optionName).scope;
@@ -675,7 +675,7 @@ describe("the controller's scoping identity", () => {
     const requested = reducer(base, { controllerId: listOwner, type: "devices:requested" });
     const withDevices = reducer(requested, { controllerId: listOwner, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 
-    return reducer(withDevices, { scope, type: "scope:changed" });
+    return reducer(withDevices, { origin: "user", scope, type: "scope:changed" });
   };
 
   const hksvEntry = (state) => projection(state).categories[0].entries.find((e) => e.name === "Hksv");
@@ -838,7 +838,8 @@ describe("tablePresentation - the nothing-to-list variant", () => {
   // otherwise fill in.
   const landedAt = ({ controllerId = "ctrl-a", devices = [], emptyMessage, scopeControllerId = "ctrl-a" }) => {
 
-    const base = reducer(loadedState({ mode: "controller-based" }), { scope: { controllerId: scopeControllerId, kind: "controller" }, type: "scope:changed" });
+    const base = reducer(loadedState({ mode: "controller-based" }),
+      { origin: "boot", scope: { controllerId: scopeControllerId, kind: "controller" }, type: "scope:changed" });
     const requested = reducer(base, { controllerId, type: "devices:requested" });
 
     return reducer(requested, { controllerId, devices, emptyMessage, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
@@ -867,7 +868,7 @@ describe("tablePresentation - the nothing-to-list variant", () => {
       { kind: "empty", message: NOTICE }, "precondition");
 
     const empty = landedAt({ emptyMessage: NOTICE });
-    const movedAway = reducer(empty, { scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
+    const movedAway = reducer(empty, { origin: "user", scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
 
     assert.deepEqual(tablePresentation(movedAway), { kind: "options" }, "the message is inert against a controller it does not describe");
   });
@@ -876,9 +877,9 @@ describe("tablePresentation - the nothing-to-list variant", () => {
 
     const empty = landedAt({ emptyMessage: NOTICE });
 
-    assert.deepEqual(tablePresentation(reducer(empty, { scope: { kind: "global" }, type: "scope:changed" })), { kind: "options" },
+    assert.deepEqual(tablePresentation(reducer(empty, { origin: "user", scope: { kind: "global" }, type: "scope:changed" })), { kind: "options" },
       "the global view is always editable, so it never wears a controller's notice");
-    assert.deepEqual(tablePresentation(reducer(empty, { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" })),
+    assert.deepEqual(tablePresentation(reducer(empty, { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" })),
       { kind: "options" }, "and neither does a device view beneath that controller");
   });
 
@@ -1054,7 +1055,7 @@ describe("projection - resolved choices", () => {
   test("the projection recomputes on a controllers-only refresh, since a source reads the selected controller", () => {
 
     const controllers = [{ name: "old", serialNumber: "ctrl-a" }];
-    const state = reducer(pickerState({ controllers }), { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const state = reducer(pickerState({ controllers }), { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.deepEqual(pickerEntry(state, "Named").choices.map((c) => c.value), ["old"], "the source read the controller in scope");
 

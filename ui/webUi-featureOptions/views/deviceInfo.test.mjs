@@ -98,7 +98,7 @@ describe("mountDeviceInfoView", () => {
     // The mount fired the initial render via the immediate-run pass.
     assert.deepEqual(calls, [null], "global scope at mount - no device");
 
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.deepEqual(calls, [ null, "dev-a" ], "device scope after dispatch");
     assert.equal(root.textContent, "Device A");
@@ -120,7 +120,7 @@ describe("mountDeviceInfoView", () => {
     store.dispatch({ controllerId: null, devices: [DEVICE], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
 
     mountDeviceInfoView({ root, signal: controller.signal, store });
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     const items = [...root.querySelectorAll(".stat-item")];
 
@@ -145,7 +145,7 @@ describe("mountDeviceInfoView", () => {
     store.dispatch({ controllerId: null, type: "devices:requested" });
     store.dispatch({ controllerId: null, devices: [DEVICE], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
     mountDeviceInfoView({ root, signal: controller.signal, store });
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.ok(root.textContent.length > 0, "the view rendered the device stats");
     assert.equal(root.style.display, "none", "the view did not reveal its own region - reveal is the orchestrator's responsibility");
@@ -173,8 +173,8 @@ describe("mountDeviceInfoView", () => {
     // data that moves with the selection, while `signal` is the mount's own identity and is the object a hook keys its once-ness on.
     mountDeviceInfoView({ infoPanel: (args) => { captured.push(args); }, root, signal: controller.signal, store });
 
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
 
     const serials = captured.map((call) => call.device?.serialNumber ?? null);
 

@@ -117,7 +117,7 @@ describe("mountTakeoverView - beginning a takeover", () => {
 
     assert.deepEqual(regionDisplays(), [ "none", "none", "none" ], "the mount itself writes no display, so the hidden page stays hidden");
 
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
 
     assert.deepEqual(regionDisplays(), [ "none", "none", "none" ], "and neither does a selection change that finds no takeover standing");
   });

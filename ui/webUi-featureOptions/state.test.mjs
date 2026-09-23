@@ -192,8 +192,8 @@ describe("reducer - model:loaded reconciles the facts that name a controller", (
 
   test("a selection naming a departed controller falls back to global, and a held one keeps its reference", () => {
 
-    const controllerScope = reducer(controllerBased(), { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
-    const deviceScope = reducer(controllerBased(), { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    const controllerScope = reducer(controllerBased(), { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const deviceScope = reducer(controllerBased(), { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.deepEqual(reload(controllerScope, []).scope, { kind: "global" }, "a controller selection the list cannot place falls back to global");
     assert.deepEqual(reload(deviceScope, []).scope, { kind: "global" }, "and so does a device selection under that controller");
@@ -246,7 +246,7 @@ describe("reducer - model:loaded reconciles the facts that name a controller", (
   test("device-only state is untouched: a null id names no controller, so there is nothing to take away", () => {
 
     const deviceOnly = reducer(requestThenLoad(loadedState(), { controllerId: null, devices: DEVICES }),
-      { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+      { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.equal(deviceOnly.devicesControllerId, null, "precondition: device-only mode owns its list under no controller");
 
@@ -639,7 +639,7 @@ describe("reducer - scope:changed", () => {
 
   test("replaces the scope tag atomically", () => {
 
-    const next = reducer(initialState(), { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const next = reducer(initialState(), { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.deepEqual(next.scope, { controllerId: "ctrl-a", kind: "controller" });
   });
@@ -647,10 +647,10 @@ describe("reducer - scope:changed", () => {
   test("works for every scope kind", () => {
 
     const base = initialState();
-    const global = reducer(base, { scope: { kind: "global" }, type: "scope:changed" });
-    const controller = reducer(base, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
-    const device = reducer(base, { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
-    const deviceOnly = reducer(base, { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    const global = reducer(base, { origin: "user", scope: { kind: "global" }, type: "scope:changed" });
+    const controller = reducer(base, { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const device = reducer(base, { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    const deviceOnly = reducer(base, { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     assert.equal(global.scope.kind, "global");
     assert.equal(controller.scope.kind, "controller");
@@ -664,19 +664,38 @@ describe("reducer - scope:changed", () => {
     const globalOnly = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "global-only", type: "model:loaded" });
     const deviceOnly = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
     const controllerBased = reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "controller-based", type: "model:loaded" });
-    const controllerScope = { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" };
-    const deviceScope = { scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" };
+    const controllerScope = { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" };
+    const deviceScope = { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" };
 
     // Global-only mode holds the scope fixed at global: a controller-kind or device-kind dispatch is a bug at the dispatch site and throws.
     assert.throws(() => reducer(globalOnly, controllerScope), /not permitted in global-only mode/, "a controller scope throws in global-only mode");
     assert.throws(() => reducer(globalOnly, deviceScope), /not permitted in global-only mode/, "a device scope throws in global-only mode");
 
     // A global scope stays permitted, including in global-only mode.
-    assert.equal(reducer(globalOnly, { scope: { kind: "global" }, type: "scope:changed" }).scope.kind, "global", "a global scope is permitted in global-only mode");
+    assert.equal(reducer(globalOnly, { origin: "user", scope: { kind: "global" }, type: "scope:changed" }).scope.kind, "global",
+      "a global scope is permitted in global-only mode");
 
     // The same non-global dispatches pass unchanged in the device-bearing modes - the guard is scoped to global-only.
     assert.equal(reducer(deviceOnly, controllerScope).scope.kind, "controller", "a controller scope is permitted in device-only mode");
     assert.equal(reducer(controllerBased, deviceScope).scope.kind, "device", "a device scope is permitted in controller-based mode");
+  });
+
+  test("throws when the move carries no origin, naming the missing piece", () => {
+
+    // Only a user's move ends a takeover, so a dispatch site that forgot its tag would otherwise read as the framework's own move and leave a plugin's card standing
+    // with no error anywhere. The absent field has to reach the same loud failure an illegal one does.
+    const held = reducer(loadedState(), { type: "takeover:started" });
+
+    assert.throws(() => reducer(held, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), /unknown origin "undefined"/,
+      "a move with no origin throws");
+  });
+
+  test("throws on an origin outside the vocabulary", () => {
+
+    const held = reducer(loadedState(), { type: "takeover:started" });
+
+    assert.throws(() => reducer(held, { origin: "User", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), /unknown origin "User"/,
+      "an illegal origin literal throws");
   });
 });
 
@@ -848,7 +867,7 @@ describe("reducer - option:armed / option:disarmed", () => {
     assert.equal(reducer(armed, { type: "options:reset" }).armedOption, null, "a reset disarms");
     assert.equal(reducer(armed, { type: "model:reverted" }).armedOption, null, "a revert disarms");
     assert.equal(reducer(armed, { error: new Error("boom"), type: "persist:failed" }).armedOption, null, "a persist rollback disarms");
-    assert.equal(reducer(armed, { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" }).armedOption, null,
+    assert.equal(reducer(armed, { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" }).armedOption, null,
       "a selection move disarms");
     assert.equal(reducer(armed, { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" }).armedOption, null,
       "a model reload disarms");
@@ -1168,7 +1187,7 @@ describe("reducer - commit:started", () => {
     const permitted = [
 
       { type: "option:disarmed" },
-      { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" },
+      { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" },
       { query: "motion", type: "filter:changed" },
       { controllerId: "ctrl-a", type: "devices:requested" },
       { controllers: [], type: "controllers:loaded" }
@@ -1233,7 +1252,7 @@ describe("reducer - structural sharing", () => {
 
       catalog: CATALOG, configuredOptions: ["Enable.Motion.Detect"], controllers: [], mode: "device-only", type: "model:loaded"
     });
-    const next = reducer(loaded, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const next = reducer(loaded, { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.notEqual(next, loaded, "top-level reference changes");
     assert.notEqual(next.scope, loaded.scope, "the touched slice gets a new reference");

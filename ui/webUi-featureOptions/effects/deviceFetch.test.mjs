@@ -51,7 +51,7 @@ const setup = ({ controllerId = "ctrl-a" } = {}) => {
 
   if(controllerId !== null) {
 
-    store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId, kind: "controller" }, type: "scope:changed" });
   }
 
   return store;

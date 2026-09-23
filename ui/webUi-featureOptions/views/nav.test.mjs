@@ -350,7 +350,7 @@ describe("mountNavView - click dispatch", () => {
     const globalLink = rootControllers.querySelector(".nav-link[data-navigation='global']");
 
     // Move scope away from global so we can detect the dispatch.
-    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
     assert.equal(store.state.scope.kind, "controller");
 
     globalLink.click();
@@ -957,7 +957,7 @@ describe("mountNavView - the Global Options row", () => {
 
     assert.equal(globalIn(rootControllers).classList.contains("active"), true, "global scope activates the row at first render");
 
-    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
 
     assert.equal(globalIn(rootControllers).classList.contains("active"), false, "and moving the scope off global deactivates it");
   });

@@ -185,7 +185,7 @@ describe("mountConnectionErrorView - plugin slot", () => {
 
     // The page's own sequence for a sidebar controller click whose fetch fails: the scope moves onto the clicked controller first, then the outcome lands through
     // the request/outcome pairing the reducer gates, and its non-empty error is what the reducer folds into connection-error status.
-    store.dispatch({ scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
     store.dispatch({ controllerId: "ctrl-b", type: "devices:requested" });
     store.dispatch({ controllerId: "ctrl-b", devices: [], error: "Controller unreachable.", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
 

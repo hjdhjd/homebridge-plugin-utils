@@ -63,7 +63,7 @@ const loadedState = ({ configuredOptions = [], devices = [], scope } = {}) => {
   const requested = reducer(base, { controllerId: null, type: "devices:requested" });
   const withDevices = reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 
-  return scope ? reducer(withDevices, { scope, type: "scope:changed" }) : withDevices;
+  return scope ? reducer(withDevices, { origin: "user", scope, type: "scope:changed" }) : withDevices;
 };
 
 const findEntry = (state, categoryName, optionName) => projection(state).categories.find((c) => c.name === categoryName).entries.find((e) => e.name === optionName);
@@ -1075,7 +1075,7 @@ describe("triStateTransition - the upstream probe honors declared scopes", () =>
     const requested = reducer(base, { controllerId: null, type: "devices:requested" });
     const withDevices = reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 
-    return reducer(withDevices, { scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    return reducer(withDevices, { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
   };
 
   // Simulate the click that takes a checked box to unchecked, and hand back the action the machine chose.
@@ -1312,7 +1312,7 @@ const pickerState = ({ configuredOptions = [], devices = [], scope, types = abcS
   const requested = reducer(base, { controllerId: null, type: "devices:requested" });
   const withDevices = reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 
-  return scope ? reducer(withDevices, { scope, type: "scope:changed" }) : withDevices;
+  return scope ? reducer(withDevices, { origin: "user", scope, type: "scope:changed" }) : withDevices;
 };
 
 const pickerEntry = (state, optionName) => findEntry(state, "Pick", optionName);

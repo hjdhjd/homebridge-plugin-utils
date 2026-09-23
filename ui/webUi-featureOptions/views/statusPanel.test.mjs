@@ -72,8 +72,11 @@ const readyStore = (devices, { controllers = [], mode = "device-only" } = {}) =>
 };
 
 // Move the selection to a device or to global.
-const selectDevice = (store, deviceId, controllerId = null) => store.dispatch({ scope: { controllerId, deviceId, kind: "device" }, type: "scope:changed" });
-const selectGlobal = (store) => store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+const selectDevice = (store, deviceId, controllerId = null) => {
+
+  store.dispatch({ origin: "user", scope: { controllerId, deviceId, kind: "device" }, type: "scope:changed" });
+};
+const selectGlobal = (store) => store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
 
 // Re-fire devices:loaded for the same device set - the same-device re-invocation the effect responds to without a fresh view request.
 const refireDevices = (store, devices) => {
@@ -400,7 +403,7 @@ describe("statusPanel - selection and the view request", () => {
     const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
 
     // A controller-only scope (no deviceId) resolves selectedDevice to undefined, exactly like global.
-    store.dispatch({ scope: { controllerId: "CTRL", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: "CTRL", kind: "controller" }, type: "scope:changed" });
     assert.equal(root.textContent, "", "a controller scope clears the panel");
     assert.equal(viewRequests.length, 0, "a controller scope sends no view request");
 

@@ -66,7 +66,7 @@ const setup = ({ catalog = CATALOG, configuredOptions = [], scope } = {}) => {
 
   if(scope) {
 
-    store.dispatch({ scope, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope, type: "scope:changed" });
   }
 
   mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
@@ -74,7 +74,7 @@ const setup = ({ catalog = CATALOG, configuredOptions = [], scope } = {}) => {
   // The mount registers the scope-render effect; trigger an initial scope render so the table has category shells.
   if(!scope) {
 
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "boot", scope: { kind: "global" }, type: "scope:changed" });
   }
 
   return { abort: () => controller.abort(), configTable, store };
@@ -207,7 +207,7 @@ describe("mountOptionsView - open-category row materialization", () => {
     const { configTable, store } = setup();
 
     // The window a sidebar controller click opens, in the order the nav view dispatches it: the optimistic scope first, the fetch record second.
-    store.dispatch({ scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
     store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
 
     const motion = poisonCategory(configTable, "Motion");
@@ -664,7 +664,7 @@ describe("mountOptionsView - a controller's own options page", () => {
     store.dispatch({ catalog: PAGE_CATALOG, configuredOptions, controllers: [CONTROLLER], mode: "controller-based", type: "model:loaded" });
     store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
     store.dispatch({ controllerId: "ctrl-a", devices: DEVICES, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
-    store.dispatch({ scope, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope, type: "scope:changed" });
 
     mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
 
@@ -790,7 +790,7 @@ describe("mountOptionsView - a controller whose scoping identity differs from it
     store.dispatch({ catalog: IDENTITY_CATALOG, configuredOptions, controllers: CONTROLLERS, mode: "controller-based", type: "model:loaded" });
     store.dispatch({ controllerId: NVR_ADDRESS, type: "devices:requested" });
     store.dispatch({ controllerId: NVR_ADDRESS, devices: DEVICES, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
-    store.dispatch({ scope, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope, type: "scope:changed" });
 
     mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
 
@@ -901,7 +901,7 @@ describe("mountOptionsView - per-device cache", () => {
     store.dispatch({ controllerId: null, devices: [dev], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
 
     // Move to a device scope to populate per-device cache.
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     const motion = configTable.querySelector("details[data-category='Motion']");
 
@@ -911,8 +911,8 @@ describe("mountOptionsView - per-device cache", () => {
     const materializedFingerprint = motion.querySelector(".fo-category-rows").children.length;
 
     // Navigate away and back.
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     const restoredMotion = configTable.querySelector("details[data-category='Motion']");
 
@@ -932,17 +932,17 @@ describe("mountOptionsView - per-device cache", () => {
 
     store.dispatch({ controllerId: null, type: "devices:requested" });
     store.dispatch({ controllerId: null, devices: devs, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     const motionA = configTable.querySelector("details[data-category='Motion']");
 
     motionA.open = true;
     motionA.dispatchEvent(new Event("toggle", { bubbles: false }));
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
 
     // Mutate Motion.Detect globally while viewing dev-b. dev-a's cached DOM showed the old (default-true) state; after the rebuild it must reflect the new state.
     store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
 
     // The category state for dev-a (Motion expanded) is restored, so rows materialize. They must reflect the post-mutation state - the cache was invalidated.
     const restoredMotion = configTable.querySelector("details[data-category='Motion']");
@@ -1014,7 +1014,7 @@ describe("mountOptionsView - controller-scope cache invalidation", () => {
    */
   const visit = (configTable, store, scope) => {
 
-    store.dispatch({ scope, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope, type: "scope:changed" });
 
     const details = configTable.querySelector("details[data-category='Camera']");
 
@@ -1036,7 +1036,7 @@ describe("mountOptionsView - controller-scope cache invalidation", () => {
     document.body.appendChild(configTable);
 
     store.dispatch({ catalog: CACHE_CATALOG, configuredOptions: [], controllers: CACHE_CONTROLLERS, mode: "controller-based", type: "model:loaded" });
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "boot", scope: { kind: "global" }, type: "scope:changed" });
 
     mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
 
@@ -1090,7 +1090,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     const harness = setup({ catalog, configuredOptions });
 
-    harness.store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+    harness.store.dispatch({ origin: "user", scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
     harness.store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
 
     return harness;
@@ -1164,7 +1164,7 @@ describe("mountOptionsView - in-flight device fetch", () => {
     // Settle controller A's list, then sit in its view: the loaded list names this controller and no fetch is outstanding, so the table is live.
     store.dispatch({ controllerId: CONTROLLER_A, type: "devices:requested" });
     store.dispatch({ controllerId: CONTROLLER_A, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
-    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
 
     expandCategory(configTable, "Motion");
 
@@ -1172,8 +1172,8 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     // Leave and come back, which is what a sidebar click does. The optimistic scope lands first and finds the loaded list still naming this controller, so the
     // scope alone says nothing is wrong - only the fetch record that follows can tell the view that what it is showing is about to be replaced.
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
-    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
 
     assert.equal(configTable.classList.contains("fo-options-busy"), false, "the optimistic scope alone does not open the window");
 
@@ -1279,11 +1279,11 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     // Away and back with the fetch still in flight. The restored DOM is re-derived from the projection on arrival, which on its own would hand every row back its
     // interactivity...the busy state is derived again at that same moment, so it does not.
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
 
     assert.equal(configTable.classList.contains("fo-options-busy"), false, "the global view is never busy - its writes key from the selection itself");
 
-    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
 
     assert.equal(configTable.classList.contains("fo-options-busy"), true, "the restored view is busy again");
     assert.equal(allInputsDisabled(configTable), true, "every restored row is inert");
@@ -1300,8 +1300,8 @@ describe("mountOptionsView - in-flight device fetch", () => {
 
     // The same round-trip against a view that has settled. Nothing about the window was recorded on the cached nodes, so what comes back is whatever the
     // projection says it should be.
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
-    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
 
     const detect = configTable.querySelector("details[data-category='Motion'] #Motion\\.Detect");
 
@@ -1378,7 +1378,7 @@ describe("mountOptionsView - a coordinated configuration write", () => {
 
     // The successful ending of a coordinated write is the model that replaces the page's own, which the scope-render effect answers by rebuilding the table.
     store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "boot", scope: { kind: "global" }, type: "scope:changed" });
 
     const detect = expandMotion(configTable);
 
@@ -1437,7 +1437,7 @@ describe("mountOptionsView - legacy category-state key migration", () => {
 
     store.dispatch({ controllerId: null, type: "devices:requested" });
     store.dispatch({ controllerId: null, devices: [dev], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
-    store.dispatch({ scope: { controllerId: null, deviceId: "DEV-A", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "DEV-A", kind: "device" }, type: "scope:changed" });
 
     const motion = configTable.querySelector("details[data-category='Motion']");
     const audio = configTable.querySelector("details[data-category='Audio']");
@@ -1506,7 +1506,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
   // produces them. The outcome's shape is what decides whether this reads as a failure or as a healthy list.
   const clickController = (store, { controllerId, devices = [], error = "" }) => {
 
-    store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId, kind: "controller" }, type: "scope:changed" });
     store.dispatch({ controllerId, type: "devices:requested" });
     store.dispatch({ controllerId, devices, error, seq: store.state.devicesRequest.seq, type: "devices:loaded" });
   };
@@ -1554,7 +1554,7 @@ describe("mountOptionsView - deference to a standing connection error", () => {
 
     // Fail into the error presentation, then recover straight back to the same view.
     clickController(store, { controllerId: CONTROLLER_A, error: "Controller unreachable." });
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
 
     assert.equal(configTable.children.length, 0, "precondition: the error presentation is still standing over the global view");
 
@@ -1594,7 +1594,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
   // landed list carries no row the validator names, and an `emptyMessage` on a clean outcome only supplies that notice's words.
   const clickController = (store, { controllerId, devices = [], emptyMessage, error = "" }) => {
 
-    store.dispatch({ scope: { controllerId, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId, kind: "controller" }, type: "scope:changed" });
     store.dispatch({ controllerId, type: "devices:requested" });
     store.dispatch({ controllerId, devices, emptyMessage, error, seq: store.state.devicesRequest.seq, type: "devices:loaded" });
   };
@@ -1665,8 +1665,8 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
     const first = notice(configTable);
 
     // Leave for the global view and come back. A cached notice would return by identity; a rebuilt one is a different element carrying the same copy.
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
-    store.dispatch({ scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: CONTROLLER_A, kind: "controller" }, type: "scope:changed" });
 
     const second = notice(configTable);
 
@@ -1687,7 +1687,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
     motion.open = true;
     motion.dispatchEvent(new Event("toggle", { bubbles: false }));
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
 
     // Return to the same controller, which now reports itself empty. The notice renders; the cached table must still be waiting behind it.
     clickController(store, { controllerId: CONTROLLER_A, emptyMessage: NOTICE });
@@ -1710,7 +1710,7 @@ describe("mountOptionsView - the nothing-to-list notice", () => {
 
     // Enter a notice view whose key has never held a table, then leave it and come back with devices. What renders must be a freshly-built table, not notice DOM.
     clickController(store, { controllerId: CONTROLLER_B, emptyMessage: NOTICE });
-    store.dispatch({ scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
     clickController(store, { controllerId: CONTROLLER_B, devices: [DEVICE_A] });
 
     assert.ok(notice(configTable) === null, "no notice DOM came back out of the cache");
@@ -1787,7 +1787,9 @@ const pickerSetup = ({ configuredOptions = [], controllers = [], devices = [], m
 
   store.dispatch({ controllerId: scope?.controllerId ?? null, type: "devices:requested" });
   store.dispatch({ controllerId: scope?.controllerId ?? null, devices, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
-  store.dispatch({ scope: scope ?? { kind: "global" }, type: "scope:changed" });
+
+  // A named scope is the user's selection. With none named, the page rests at global the way its own first render leaves it.
+  store.dispatch({ origin: scope ? "user" : "boot", scope: scope ?? { kind: "global" }, type: "scope:changed" });
 
   const details = configTable.querySelector("details[data-category='Pick']");
 
@@ -2078,7 +2080,7 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
       "device A's own list");
     assert.deepEqual([...pickerControl(configTable, "Named").options].map((o) => o.value), [ "", "x", "y" ], "and the dropdown drawn from the same source");
 
-    store.dispatch({ scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
+    store.dispatch({ origin: "user", scope: { controllerId: null, deviceId: "dev-b", kind: "device" }, type: "scope:changed" });
 
     const details = configTable.querySelector("details[data-category='Pick']");
 

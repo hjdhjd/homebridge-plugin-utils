@@ -589,6 +589,14 @@ export const reducer = (state, action) => {
 
     case "scope:changed": {
 
+      // Validate the origin literal before reading it. The takeover rule below asks only whether the move was the user's, so a dispatch that forgot its tag or
+      // misspelled it would read as the framework's own move and leave a plugin's takeover standing after the user moved away from it. Surface it loudly at the
+      // dispatch site, the same policy the unknown-mode check and the unknown-action default apply.
+      if(![ "boot", "continuation", "user" ].includes(action.origin)) {
+
+        throw new Error("FeatureOptionsState.reducer: scope:changed carried an unknown origin \"" + action.origin + "\".");
+      }
+
       // Global-only mode locks the scope to global for the page's life. A dispatch carrying any other scope kind is a bug at the dispatch site - the orchestrator never
       // fires one in this mode - so surface it loudly rather than rendering a device or controller view the page mounts no navigation for.
       if((state.mode === "global-only") && (action.scope.kind !== "global")) {

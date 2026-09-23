@@ -6,6 +6,7 @@
 
 import { createElement, setCategoryExpanded } from "../utils.mjs";
 import { editsHeld, projection, tablePresentation } from "../selectors.mjs";
+import { MUTATING_ACTIONS } from "../state.mjs";
 import { effect } from "../store.mjs";
 
 // Long enough to absorb a fast typist's keystrokes between dispatches, short enough that the filtered table still feels like it is responding to each edit.
@@ -86,7 +87,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
   // nothing relevant changed (e.g., a devices:loaded outcome that misses the pending request returns state unchanged, so the read hits the cached projection).
   effect({
 
-    events: [ "model:loaded", "option:set", "option:cleared", "options:reset", "model:reverted", "filter:changed", "scope:changed", "devices:loaded" ],
+    events: [ "model:loaded", ...MUTATING_ACTIONS, "filter:changed", "scope:changed", "devices:loaded" ],
     fn: () => {
 
       if(!refs.total) {

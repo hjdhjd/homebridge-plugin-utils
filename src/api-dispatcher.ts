@@ -174,8 +174,9 @@ export interface ApiDispatcherOptions {
   origin: string | URL;
 
   /**
-   * Whether to require a valid TLS certificate chain. Defaults to `true`. Relaxing it is occasionally the only way to reach a device shipping a certificate it
-   * generated for itself, and a plugin that does relax it owns that decision.
+   * Whether to require a valid TLS certificate chain. Omitted, the dispatcher sets nothing and the platform decides: Node verifies the chain by default, and a process
+   * started with `NODE_TLS_REJECT_UNAUTHORIZED=0` does not. `true` requires a chain the platform accepts, which no environment setting can relax. `false` verifies
+   * nothing, which is occasionally the only way to reach a device shipping a certificate it generated for itself, and a plugin that does relax it owns that decision.
    */
   rejectUnauthorized?: boolean;
 

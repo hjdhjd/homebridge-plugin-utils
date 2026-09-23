@@ -599,7 +599,8 @@ async function bindAndReadPort(server: Server, bind: () => void): Promise<number
  *
  * t.after(async () => await listener[Symbol.asyncDispose]());
  *
- * await listener.start();
+ * // Binding begins at construction, and `ready` resolves once the listener holds the port.
+ * await listener.ready;
  *
  * assert.equal(listener.boundPort, port, "the listener must take exactly the port the setting named");
  * ```

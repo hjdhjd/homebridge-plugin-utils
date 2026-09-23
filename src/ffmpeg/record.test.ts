@@ -730,16 +730,17 @@ describe("FfmpegRecordingProcess - caller video filters join the encoder chain",
 
 describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gate", () => {
 
-  // Build an FfmpegOptions stand-in whose FFmpeg version is configurable, plus a live capture of every `recordEncoder` invocation's arguments. `resolveRecordingOptions`
-  // uses `options.config.codecSupport.ffmpegAtLeast(8)` to gate the default hardware-decoding value, so this helper is the single point where FFmpeg version and
-  // hardware flags flow into record.ts's defaulting logic. The capture is returned as a live Map the tests read after each process construction has completed - the
-  // map itself is mutated in place by the spy, so callers always see the most recent invocation.
+  // Build an FfmpegOptions stand-in whose FFmpeg version is configurable, plus a live capture of every `recordEncoder` invocation's arguments and of the pipeline state
+  // every `videoDecoder` invocation receives. `resolveRecordingOptions` uses `options.config.codecSupport.ffmpegAtLeast(8)` to gate the default hardware-decoding value,
+  // so this helper is the single point where FFmpeg version and hardware flags flow into record.ts's defaulting logic. The captures are live arrays the tests read after
+  // each process construction has completed - the spies push into them in place, so callers always see every invocation.
   type SpyRecordEncoderOptions = Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding" | "videoFilters">;
 
   function makeSpyingOptions(ffmpegVersion: string, hardwareDecoding: boolean,
-    hardwareTranscoding = false): { captures: SpyRecordEncoderOptions[]; options: FfmpegOptions } {
+    hardwareTranscoding = false): { captures: SpyRecordEncoderOptions[]; decoderCaptures: (SpyRecordEncoderOptions | undefined)[]; options: FfmpegOptions } {
 
     const captures: SpyRecordEncoderOptions[] = [];
+    const decoderCaptures: (SpyRecordEncoderOptions | undefined)[] = [];
 
     const options = {
 
@@ -759,10 +760,15 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
 
         return [ "-codec:v", "libx264" ];
       },
-      videoDecoder: (): string[] => []
+      videoDecoder: (_codec: string, state?: SpyRecordEncoderOptions): string[] => {
+
+        decoderCaptures.push(state);
+
+        return [];
+      }
     } as unknown as FfmpegOptions;
 
-    return { captures, options };
+    return { captures, decoderCaptures, options };
   }
 
   // Return the first captured call's options. Every test in this block constructs exactly one recording process, so there is only ever one capture and the assertion
@@ -810,6 +816,21 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
     await proc.exited.catch(() => { /* ignore. */ });
 
     assert.equal(firstCapture(spy.captures).hardwareDecoding, false);
+  });
+
+  test("the recording hands its decoder the very pipeline object it hands its encoder", async () => {
+
+    // One description per pipeline: the decoder decides where its frames live from the same resolved hardware state the encoder reads. On FFmpeg 7.x the recording's
+    // own default turns hardware decoding off, and the decoder is told so through that shared object rather than reading the class config, which asks for it.
+    const spy = makeSpyingOptions("7.0", true, true);
+
+    await using proc = new FfmpegRecordingProcess(spy.options, { recordingConfig: makeRecordingConfig() });
+
+    await proc.exited.catch(() => { /* ignore. */ });
+
+    assert.equal(spy.decoderCaptures.length, 1, "the decoder is asked exactly once");
+    assert.equal(spy.decoderCaptures[0], firstCapture(spy.captures), "and it receives the object the encoder receives");
+    assert.equal(firstCapture(spy.captures).hardwareDecoding, false, "which carries the recording's resolved decode state, not the class config's");
   });
 
   test("explicit init.recording.hardwareDecoding overrides the version gate", async () => {

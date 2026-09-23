@@ -31,7 +31,8 @@
  * | `separateAudioInputArgs` | `[]`                                       | Separate audio URL when configured      |
  * | `audioInputIndex`        | `0`                                        | `0` or `1` (if separate audio)          |
  * | `audioTarget`            | `recordingConfig.audioCodec` (transcoding) | `init.audio` when provided              |
- * | `videoEncoderArgs`       | `options.recordEncoder(...)`               | `-codec:v copy`                         |
+ * | `videoDecoderArgs`       | `options.videoDecoder(codec, pipeline)`    | `options.videoDecoder(codec)`           |
+ * | `videoEncoderArgs`       | `options.recordEncoder(pipeline)`          | `-codec:v copy`                         |
  * | `fragmentArgs`           | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
  * | `metadataLabel`          | `"HKSV Event"`                             | `"Livestream Buffer"`                   |
  *
@@ -42,11 +43,11 @@
  * @module
  */
 import { AudioRecordingCodecType, AudioRecordingSamplerate } from "./hap-enums.ts";
+import type { FfmpegOptions, VideoEncoderOptions } from "./options.ts";
 import { HKSV_IDR_INTERVAL, HKSV_TIMEOUT } from "./settings.ts";
 import type { HbpuAbortError, PartialWithId } from "../util.ts";
 import { isHbpuAbortReason, onAbort } from "../util.ts";
 import type { CameraRecordingConfiguration } from "homebridge";
-import type { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessInit } from "./process.ts";
 import type { Mp4Segment } from "./mp4-assembler.ts";
@@ -266,6 +267,7 @@ interface FMp4CommandLineInput {
   options: FfmpegOptions;
   separateAudioInputArgs: string[];
   verbose: boolean;
+  videoDecoderArgs: string[];
   videoEncoderArgs: string[];
 }
 
@@ -306,7 +308,8 @@ function resolveRecordingOptions(options: FfmpegOptions, partial: Partial<FMp4Re
 // hooks inline against their own init and FfmpegOptions, then invoke this function once to produce the final arg vector.
 function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
 
-  const { audioInputIndex, audioTarget, fMp4Options, fragmentArgs, inputArgs, metadataLabel, options, separateAudioInputArgs, verbose, videoEncoderArgs } = input;
+  const { audioInputIndex, audioTarget, fMp4Options, fragmentArgs, inputArgs, metadataLabel, options, separateAudioInputArgs, verbose, videoDecoderArgs,
+    videoEncoderArgs } = input;
 
   // Configure our video parameters for our input:
   //
@@ -323,7 +326,7 @@ function buildFMp4CommandLine(input: FMp4CommandLineInput): string[] {
     "-nostats",
     "-fflags", "+discardcorrupt",
     "-err_detect", "ignore_err",
-    ...options.videoDecoder(fMp4Options.codec),
+    ...videoDecoderArgs,
     "-max_delay", "500000",
 
     // Mode-specific input arguments (RTSP input for livestream, stdin pipe for recording).
@@ -484,8 +487,9 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     "-ss", recording.timeshift.toString() + "ms"
   ];
 
-  // Recordings transcode video using the platform-appropriate encoder for HKSV.
-  const videoEncoderArgs = options.recordEncoder({
+  // Recordings transcode video using the platform-appropriate encoder for HKSV. The one description of the video pipeline - the recording's resolved hardware state
+  // among it - goes to both the decoder and the encoder, so the two sides agree on where the decoded frames live.
+  const pipeline: VideoEncoderOptions = {
 
     bitrate: recordingConfig.videoCodec.parameters.bitRate,
     fps: recordingConfig.videoCodec.resolution[2],
@@ -498,7 +502,7 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     profile: recordingConfig.videoCodec.parameters.profile,
     videoFilters: recording.videoFilters,
     width: recordingConfig.videoCodec.resolution[0]
-  });
+  };
 
   return buildFMp4CommandLine({
 
@@ -511,7 +515,8 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     options,
     separateAudioInputArgs: [],
     verbose: init.verbose ?? false,
-    videoEncoderArgs
+    videoDecoderArgs: options.videoDecoder(recording.codec, pipeline),
+    videoEncoderArgs: options.recordEncoder(pipeline)
   });
 }
 
@@ -556,6 +561,7 @@ function buildLivestreamCommandLine(options: FfmpegOptions, init: FfmpegLivestre
     options,
     separateAudioInputArgs: separateAudio.args,
     verbose: init.verbose ?? false,
+    videoDecoderArgs: options.videoDecoder(fMp4Options.codec),
     videoEncoderArgs
   });
 }

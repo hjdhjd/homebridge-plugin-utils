@@ -141,9 +141,10 @@ export interface AudioEncoderOptions {
  *
  * @property bitrate             - Target video bitrate, in kilobits per second.
  * @property fps                 - Target output frames per second.
- * @property hardwareDecoding    - Optional. If `true`, the emitted encoder args assume the input stream has already been hardware-decoded (the GPU holds the frames).
- *                                 Used by the transfer-filter logic to decide between `hwupload`, `hwdownload`, or neither. Defaults to the resolved
- *                                 `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance.
+ * @property hardwareDecoding    - Optional. If `true`, the emitted encoder args assume the input stream is hardware-decoded. Together with `hardwareTranscoding` it
+ *                                 decides where the decoded frames live: a hardware decode feeding a hardware encode keeps them on the GPU, and a hardware decode
+ *                                 feeding a software encode hands them over in system memory. Defaults to the resolved `FfmpegOptionsConfig.hardwareDecoding` value on
+ *                                 the owning `FfmpegOptions` instance.
  * @property hardwareTranscoding - Optional. If `true`, the emitted args select a hardware-accelerated encoder (`h264_videotoolbox` / `h264_qsv` / `h264_v4l2m2m`) and
  *                                 the matching filter pipeline. If `false`, the args fall back to the libx264 software encoder. Defaults to the resolved
  *                                 `FfmpegOptionsConfig.hardwareTranscoding` value on the owning `FfmpegOptions` instance.
@@ -157,7 +158,7 @@ export interface AudioEncoderOptions {
  *                                 always emit a fixed `-b:v` regardless. In all cases, `smartQuality` also adds `HOMEKIT_STREAMING_HEADROOM` to `-maxrate`, giving the
  *                                 encoder a narrow band of variation above the target bitrate. Defaults to `true`.
  * @property videoFilters        - Optional. Caller-supplied CPU-side video filters appended at the tail of the composed filter chain, in caller order.
- *                                 When the encoder's own chain leaves frames GPU-resident at that point, the encoder inserts its platform's download transfer first, so
+ *                                 When the encoder's own chain would leave frames GPU-resident at that point, the encoder brings them to system memory first, so
  *                                 callers never reason about GPU residency. Omitted or empty means the chain is exactly the encoder's own.
  * @property width               - Output video width, in pixels.
  *
@@ -296,11 +297,18 @@ const QSV_DECODER_BY_CODEC = Object.freeze({
   "hevc": "hevc_qsv"
 } satisfies Record<SupportedDecodeCodec, string>);
 
-// Minimal view of the encoder options that the hardware-transfer and hardware-device-init helpers actually need. `Required<Pick<...>>` so every flag this view exposes
-// is a definite boolean at the type level: every caller either passes a `ResolvedVideoEncoderOptions` (where the resolver guarantees the fields) or an inline object
-// literal with concrete booleans, so the weaker `boolean | undefined` optional view has no caller behavior to represent. Defined as a dedicated type so those helpers
-// can be called with either shape without casts - the typed counterpart to "pass only what you read."
+// A pipeline's resolved hardware state: whether it decodes on hardware and whether it encodes on hardware. The decode-args builders, the residency predicate, and
+// the hardware-transfer and device-init helpers all read it. `Required<Pick<...>>` so every flag this view exposes is a definite boolean at the type level: every
+// caller passes one the resolver produced, a `ResolvedVideoEncoderOptions` or the view `resolveHardwareState` returns, so the weaker `boolean | undefined` optional
+// view has no caller behavior to represent. Defined as a dedicated type so those helpers can be called with either shape without casts - the typed counterpart to
+// "pass only what you read."
 type HardwareStateView = Required<Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding">>;
+
+// The pixel format frames take whenever they cross between the GPU and system memory. hwdownload can only emit its frames context's own format, so the upload that
+// creates a VideoToolbox frames context, the Quick Sync scaler that outputs frames ahead of caller-supplied filters, and the download that brings those frames back
+// all name this one constant - none of them can drift from the others. nv12 is the native layout of both VideoToolbox and Quick Sync, so fixing it costs no extra
+// conversion on 8-bit sources.
+const GPU_TRANSFER_PIXEL_FORMAT = "nv12";
 
 /**
  * Provides Homebridge FFmpeg transcoding, decoding, and encoding options, selecting codecs, pixel formats, and hardware acceleration for the host system.
@@ -633,98 +641,60 @@ export class FfmpegOptions {
   }
 
   /**
-   * Determines the required hardware transfer filters based on the decoding and encoding configuration.
+   * Whether a pipeline's decoded frames live on the GPU. They stay there exactly when a hardware decoder feeds a hardware encoder: the GPU is then the next consumer, so
+   * keeping the frames there spares a download and an upload per frame. Everywhere else the decoder hands frames over in system memory in the stream's own format -
+   * 8-bit and 10-bit alike - because a software encoder is the next consumer and no download filter can name a format that fits every stream.
    *
-   * This method manages the transition between software and hardware processing contexts. When video data needs to move between the CPU and GPU for processing, we
-   * provide the appropriate FFmpeg filters to handle that transfer efficiently.
+   * This one answer decides both whether the decode args ask the decoder for GPU output (`-hwaccel_output_format`) and whether the filter chain needs an upload, so the
+   * decode and encode sides of a pipeline cannot disagree about where its frames are. A platform that cannot hold decoded frames on the GPU - VideoToolbox before
+   * FFmpeg 8 - emits neither the output-format flag nor a transfer whatever the answer.
    *
-   * @param options - The hardware-state view with the decoding and transcoding flags. Callers pass either a full `VideoEncoderOptions` (structurally assignable) or a
-   *                  purpose-built object exposing the same flags - whichever is natural at the call site.
-   * @returns Array of filter strings for hardware upload or download operations.
+   * @param state - The pipeline's resolved hardware state.
+   * @returns `true` when the decoded frames stay on the GPU, `false` when they are handed over in system memory.
+   */
+  #decodedFramesOnGpu(state: HardwareStateView): boolean {
+
+    return state.hardwareDecoding && state.hardwareTranscoding;
+  }
+
+  /**
+   * Determines the hardware transfer filters a pipeline needs ahead of its encoder.
+   *
+   * Frames need to move only when the encoder runs on the GPU and the decoded frames do not live there, which is a software decode feeding a hardware encode, so the
+   * one transfer this ever emits is an upload. A hardware decode feeding a software encode needs none, because its decoder hands frames over in system memory.
+   *
+   * @param options - The pipeline's resolved hardware state. Callers pass either a full `ResolvedVideoEncoderOptions` (structurally assignable) or the view the resolver
+   *                  returns - whichever is natural at the call site.
+   * @returns Array of filter strings for the upload, or an empty array when frames are already where the encoder needs them.
    */
   #getHardwareTransferFilters(options: HardwareStateView): string[] {
 
-    const filters: string[] = [];
+    if(!options.hardwareTranscoding || this.#decodedFramesOnGpu(options)) {
 
-    // We need to handle four possible state transitions between decoding and encoding.
-    //
-    // 1. Software decode -> Software encode: No transfer needed, stay in software.
-    // 2. Software decode -> Hardware encode: Need hwupload to move data to GPU.
-    // 3. Hardware decode -> Software encode: Need hwdownload to move data to CPU.
-    // 4. Hardware decode -> Hardware encode: No transfer needed, stay in hardware.
-    const needsUpload = !options.hardwareDecoding && options.hardwareTranscoding;
-    const needsDownload = options.hardwareDecoding && !options.hardwareTranscoding;
-
-    if(needsUpload) {
-
-      // We need to upload frames from system memory to the GPU for hardware encoding.
-      switch(this.#codecSupport.hostSystem) {
-
-        case "macOS.Apple":
-        case "macOS.Intel":
-
-          // FFmpeg 8.x on macOS requires explicit upload when moving from software decoding to VideoToolbox encoding. We convert to nv12 before uploading so the
-          // VideoToolbox frames context carries nv12 as its underlying pixel format rather than inheriting the software decoder's yuv420p. hwdownload can only emit
-          // the frames context's own format, so without that nv12 format lock, a chain that later bridges back to the CPU for caller-supplied filters (hwdownload,
-          // format=nv12) cannot start. nv12 is VideoToolbox's native layout, so the upload itself costs no extra conversion.
-          if(this.#codecSupport.ffmpegAtLeast(8)) {
-
-            filters.push("format=nv12", "hwupload");
-          }
-
-          break;
-
-        case "raspbian":
-
-          // The Raspberry Pi hardware encoder prefers being fed the ubiquitous yuv420p.
-          filters.push("format=yuv420p");
-
-          break;
-
-        default:
-
-          // We need to upload frames from system memory to the GPU for hardware encoding.
-          filters.push("hwupload");
-
-          break;
-      }
-
-      return filters;
+      return [];
     }
 
-    if(needsDownload) {
+    // We need to upload frames from system memory to the GPU for hardware encoding.
+    switch(this.#codecSupport.hostSystem) {
 
-      // We need to download frames from the GPU to system memory for software encoding.
-      switch(this.#codecSupport.hostSystem) {
+      case "macOS.Apple":
+      case "macOS.Intel":
 
-        case "macOS.Apple":
-        case "macOS.Intel":
+        // FFmpeg 8.x on macOS requires explicit upload when moving from software decoding to VideoToolbox encoding. We convert to the transfer format before uploading
+        // so the VideoToolbox frames context carries it as its underlying pixel format rather than inheriting the software decoder's yuv420p. hwdownload can only
+        // emit the frames context's own format, so without that lock, a chain that later brings frames back to the CPU for caller-supplied filters cannot start.
+        // nv12 is VideoToolbox's native layout, so the upload itself costs no extra conversion.
+        return this.#codecSupport.ffmpegAtLeast(8) ? [ "format=" + GPU_TRANSFER_PIXEL_FORMAT, "hwupload" ] : [];
 
-          // FFmpeg 8.x on macOS requires explicit download and format conversion when moving from VideoToolbox to software.
-          if(this.#codecSupport.ffmpegAtLeast(8)) {
+      case "raspbian":
 
-            filters.push("hwdownload", "format=nv12");
-          }
+        // The Raspberry Pi hardware encoder prefers being fed the ubiquitous yuv420p.
+        return ["format=yuv420p"];
 
-          break;
+      default:
 
-        case "raspbian":
-
-          // We don't need to download anything on Raspbian.
-          break;
-
-        default:
-
-          // Other platforms typically just need a simple download operation.
-          filters.push("hwdownload");
-
-          break;
-      }
-
-      return filters;
+        return ["hwupload"];
     }
-
-    return filters;
   }
 
   /**
@@ -886,17 +856,30 @@ export class FfmpegOptions {
   /**
    * Returns the video decoder arguments to use for decoding video.
    *
-   * @param codec            - Optional. Codec to decode (`"av1"`, `"h264"` (default), or `"hevc"`; `"h265"` is accepted as an
-   *                           alias for `"hevc"`, and codec matching is case-insensitive).
+   * Where the decoder leaves its frames depends on what consumes them next, so the decode args are built from the same hardware state as the rest of the pipeline. The
+   * design rule is one object per pipeline, handed to every builder: a caller passes `videoDecoder` the very options object it gives `streamEncoder` or
+   * `recordEncoder`, rather than restating the booleans separately, and the decode and encode sides then cannot disagree about where the frames are. A pipeline that
+   * decodes on hardware and encodes on hardware keeps its frames on the GPU; one that decodes on hardware and encodes in software - a snapshot, say, which passes
+   * `{ hardwareTranscoding: false }` - receives them in system memory, in the stream's own format.
+   *
+   * @param codec            - Optional. Codec to decode (`"av1"`, `"h264"` (default), or `"hevc"`; `"h265"` is accepted as an alias for `"hevc"`, and codec matching is
+   *                           case-insensitive).
+   * @param options          - Optional. The pipeline's hardware state - typically the `VideoEncoderOptions` the caller hands its encoder. Each flag resolves exactly as
+   *                           the encoders resolve it: an omitted flag takes the class config's value, and a flag the class config has turned off stays off. Omitting
+   *                           the object entirely describes the pipeline the class config describes.
    * @returns Array of FFmpeg command-line arguments for video decoding or an empty array if the codec isn't supported.
    *
    * @example
    *
    * ```ts
-   * const args = ffmpegOpts.videoDecoder("h264");
+   * // A livestream: the decoder and the encoder read one pipeline description.
+   * const args = [ ...ffmpegOpts.videoDecoder("h264", encoderOptions), ...ffmpegOpts.streamEncoder(encoderOptions) ];
+   *
+   * // A snapshot, encoded in software: the decoder hands its frames over in system memory.
+   * const snapshotArgs = ffmpegOpts.videoDecoder("h264", { hardwareTranscoding: false });
    * ```
    */
-  public videoDecoder(codec = "h264"): string[] {
+  public videoDecoder(codec = "h264", options: Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding"> = {}): string[] {
 
     // Normalize the caller-supplied codec into our `SupportedDecodeCodec` surface via a single table-driven lookup. `canonicalDecodeCodec` handles both case folding
     // and the `h265 -> hevc` alias; bogus codecs fall out as `undefined` and short-circuit before any hardware dispatch so typos can never leak into argv.
@@ -907,9 +890,11 @@ export class FfmpegOptions {
       return [];
     }
 
-    // Hardware decoding is an all-or-nothing gate at the plugin level. When the caller has opted out (or configureHwAccel disabled it on this host) we emit no decoder
-    // args and FFmpeg falls through to software decoding transparently.
-    if(!this.config.hardwareDecoding) {
+    const state = this.#resolveHardwareState(options);
+
+    // Hardware decoding is an all-or-nothing gate for the pipeline. When the caller has opted out (or configureHwAccel disabled it on this host) we emit no decoder args
+    // and FFmpeg falls through to software decoding transparently.
+    if(!state.hardwareDecoding) {
 
       return [];
     }
@@ -921,7 +906,7 @@ export class FfmpegOptions {
       case "macOS.Apple":
       case "macOS.Intel":
 
-        return this.#macOSHardwareDecodeArgs(normalized);
+        return this.#macOSHardwareDecodeArgs(normalized, state);
 
       case "raspbian":
 
@@ -929,7 +914,7 @@ export class FfmpegOptions {
 
       default:
 
-        return this.#qsvHardwareDecodeArgs(normalized);
+        return this.#qsvHardwareDecodeArgs(normalized, state);
     }
   }
 
@@ -946,9 +931,10 @@ export class FfmpegOptions {
    * every supported macOS configuration.
    *
    * @param codec - The canonicalized codec, already narrowed by `videoDecoder` to one of the supported decode codecs.
+   * @param state - The pipeline's resolved hardware state, which decides whether the decoder keeps its frames on the GPU.
    * @returns The VideoToolbox decoder args, or `[]` when the host cannot hardware-decode the requested codec.
    */
-  #macOSHardwareDecodeArgs(codec: SupportedDecodeCodec): string[] {
+  #macOSHardwareDecodeArgs(codec: SupportedDecodeCodec, state: HardwareStateView): string[] {
 
     if((codec === "av1") && ((this.#codecSupport.hostSystem === "macOS.Intel") || (this.#codecSupport.cpuGeneration < 3) ||
       (!this.#codecSupport.ffmpegAtLeast(8)))) {
@@ -957,11 +943,12 @@ export class FfmpegOptions {
     }
 
     // -hwaccel videotoolbox           Select VideoToolbox for hardware-accelerated decoding on macOS.
-    // -hwaccel_output_format ...      Explicit output format on FFmpeg 8.x; pre-8.x lets FFmpeg choose and the flag is omitted.
+    // -hwaccel_output_format ...      Keep the decoded frames on the GPU, emitted only when the pipeline's encoder runs there too and only on FFmpeg 8.x. Without it,
+    //                                 the decoder hands frames over in system memory in the stream's own format.
     return [
 
       "-hwaccel", "videotoolbox",
-      ...(this.#codecSupport.ffmpegAtLeast(8) ? [ "-hwaccel_output_format", "videotoolbox_vld" ] : [])
+      ...((this.#codecSupport.ffmpegAtLeast(8) && this.#decodedFramesOnGpu(state)) ? [ "-hwaccel_output_format", "videotoolbox_vld" ] : [])
     ];
   }
 
@@ -972,9 +959,10 @@ export class FfmpegOptions {
    * transparently. H.264 and HEVC paths always emit QSV decoder args on any advertised generation.
    *
    * @param codec - The canonicalized codec, already narrowed by `videoDecoder` to one of the supported decode codecs.
+   * @param state - The pipeline's resolved hardware state, which decides whether the decoder keeps its frames on the GPU.
    * @returns The QSV decoder args, or `[]` when the silicon cannot hardware-decode the requested codec.
    */
-  #qsvHardwareDecodeArgs(codec: SupportedDecodeCodec): string[] {
+  #qsvHardwareDecodeArgs(codec: SupportedDecodeCodec, state: HardwareStateView): string[] {
 
     if((codec === "av1") && (this.#codecSupport.cpuGeneration < 11)) {
 
@@ -982,13 +970,14 @@ export class FfmpegOptions {
     }
 
     // -hwaccel qsv                    Select Quick Sync Video for hardware-accelerated decoding.
-    // -hwaccel_output_format qsv      Keep frames on the GPU across the filter chain to avoid a needless download+upload round trip.
+    // -hwaccel_output_format qsv      Keep frames on the GPU across the filter chain to avoid a needless download+upload round trip, emitted only when the pipeline's
+    //                                 encoder runs on the GPU too. Without it, the decoder hands frames over in system memory in the stream's own format.
     // -codec:v <codec>_qsv            Select the specific QSV decoder for the requested codec. The `SupportedDecodeCodec` narrowing makes this lookup total at the
     //                                 type level, so no runtime fallback is required.
     return [
 
       "-hwaccel", "qsv",
-      "-hwaccel_output_format", "qsv",
+      ...(this.#decodedFramesOnGpu(state) ? [ "-hwaccel_output_format", "qsv" ] : []),
       "-codec:v", QSV_DECODER_BY_CODEC[codec]
     ];
   }
@@ -1004,18 +993,6 @@ export class FfmpegOptions {
   #raspbianHardwareDecodeArgs(): string[] {
 
     return [];
-  }
-
-  /**
-   * Returns the platform-appropriate FFmpeg video filters needed to transfer hardware-decoded frames to system memory. When hardware decoding is active, decoded frames
-   * may reside on the GPU and require explicit download before CPU-based filters (crop, scale, format conversion) can operate on them. Returns an empty array when
-   * hardware decoding is disabled or when the platform handles the transfer implicitly (e.g. Raspberry Pi).
-   *
-   * @returns An array of FFmpeg filter strings to prepend to a video filter chain, or an empty array if no transfer is needed.
-   */
-  public get hardwareDownloadFilters(): string[] {
-
-    return this.#getHardwareTransferFilters({ hardwareDecoding: this.config.hardwareDecoding, hardwareTranscoding: false });
   }
 
   /**
@@ -1052,33 +1029,33 @@ export class FfmpegOptions {
   }
 
   /**
-   * Generate the appropriate scale filter for the current platform. This method returns platform-specific scale filters to leverage hardware acceleration capabilities
-   * where available, and reports whether the chosen scaler leaves frames in GPU memory. The residency fact travels with the filters so the one switch that picks the
-   * scaler is also the single source of where the frames live afterward - the hardware-stream context reads it to decide whether appended CPU-side filters need a
-   * download transfer bridged in ahead of them.
+   * Generate the scale segment of a hardware-encode chain: any transfer the pipeline needs ahead of the scaler, the platform's scaler, and - when caller-supplied
+   * CPU-side filters follow a GPU scaler - the download that brings its output back to system memory for them. The segment ends wherever the next consumer runs, so
+   * the one switch that picks the scaler is also the one place that knows where the frames are afterward, and the caller's filters attach at the tail with no bridge of
+   * their own.
    */
-  #getScaleFilter(options: ResolvedVideoEncoderOptions): { filters: string[]; gpuResident: boolean } {
+  #getScaleFilter(options: ResolvedVideoEncoderOptions): string[] {
 
     // Determine the target dimensions for our scale operation. We maintain aspect ratio while ensuring the output doesn't exceed the requested height.
     const targetHeight = options.height.toString();
-    const filters: string[] = [];
 
-    // Whether the scaler chosen below leaves frames on the GPU. Software scalers are CPU-resident, so this stays false unless a hardware scaler (scale_vt, vpp_qsv) sets
-    // it - the fact the hardware-stream context reads to decide whether a caller's CPU-side filters need a download transfer bridged in ahead of them.
-    let gpuResident = false;
+    // Caller filters run on the CPU. When they follow a GPU scaler, that scaler hands its output over in the transfer format wherever it can choose one, and the
+    // segment closes with the download that format makes valid. With nothing following, the encoder is the next consumer and the frames stay on the GPU.
+    const cpuFiltersFollow = options.videoFilters.length > 0;
+    const gpuDownload = cpuFiltersFollow ? [ "hwdownload", "format=" + GPU_TRANSFER_PIXEL_FORMAT ] : [];
 
     // Our default software scaler.
     const swScale = "scale=-2:min(ih\\, " + targetHeight + ")" + ":in_range=auto:out_range=auto";
 
     // Add any required hardware transfer filters first. This ensures we're in the correct memory context before scaling.
-    filters.push(...this.#getHardwareTransferFilters(options));
+    const filters = this.#getHardwareTransferFilters(options);
 
     // Set our FFmpeg scale filter based on the platform and available hardware acceleration.
     //
     // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
     //                                   divisible by two. For macOS, we use the accelerated version, scale_vt. For Intel QSV, we use vpp_qsv.
     // in_range/out_range=auto           On the software path, let FFmpeg infer the input and output color ranges rather than forcing a conversion. The QSV path
-    //                                   instead carries a format=same sub-parameter inside vpp_qsv to keep frames in their existing GPU pixel format.
+    //                                   instead carries a format sub-parameter inside vpp_qsv that decides the pixel format its GPU output takes.
     switch(this.#codecSupport.hostSystem) {
 
       case "macOS.Apple":
@@ -1086,11 +1063,15 @@ export class FfmpegOptions {
 
         if(this.#codecSupport.ffmpegAtLeast(8) && options.hardwareTranscoding) {
 
-          // On macOS with FFmpeg 8.x, we can use the VideoToolbox scaler (scale_vt) which provides hardware-accelerated scaling. This is significantly more efficient
-          // than software scaling and can handle higher throughput with lower CPU usage. Prior to FFmpeg 8.0, this would break under a variety of scenarios and was
-          // unreliable. scale_vt runs on the GPU and leaves its output there.
-          filters.push("scale_vt=-2:min(ih\\, " + targetHeight + ")");
-          gpuResident = true;
+          /* On macOS with FFmpeg 8.x, we can use the VideoToolbox scaler (scale_vt) which provides hardware-accelerated scaling. This is significantly more efficient
+           * than software scaling and can handle higher throughput with lower CPU usage. Prior to FFmpeg 8.0, this would break under a variety of scenarios and was
+           * unreliable. scale_vt runs on the GPU and leaves its output there.
+           *
+           * scale_vt takes no output-format option - its options are its dimensions and color properties - so its output keeps the format of the frames context it
+           * was handed. The download into caller filters therefore works for 8-bit sources and for frames the upload above fixed to the transfer format, but a 10-bit
+           * source decoded on the GPU arrives as p010, which that download cannot emit, and such a chain fails to configure.
+           */
+          filters.push("scale_vt=-2:min(ih\\, " + targetHeight + ")", ...gpuDownload);
         } else {
 
           // Fall back to software scaling with explicit pixel format conversion.
@@ -1112,20 +1093,20 @@ export class FfmpegOptions {
 
           // When using Intel Quick Sync Video, we execute GPU-accelerated operations using the vpp_qsv post-processing filter.
           //
-          // format=same                   Set the output pixel format to the same as the input, since it's already in the GPU.
+          // format=...                    Keep the pixel format the frames already hold on the GPU (same) when the encoder consumes them there, or hand them over in
+          //                               the transfer format when caller filters follow, which is what makes the download after the scaler valid for 8-bit and
+          //                               10-bit sources alike.
           // w=...:h...                    Scale the video to the size that's being requested while respecting aspect ratios.
           filters.push(
 
             "vpp_qsv=" + [
 
-              "format=same",
+              "format=" + (cpuFiltersFollow ? GPU_TRANSFER_PIXEL_FORMAT : "same"),
               "w=min(iw\\, (iw / ih) * " + options.height.toString() + ")",
               "h=min(ih\\, " + options.height.toString() + ")"
-            ].join(":")
+            ].join(":"),
+            ...gpuDownload
           );
-
-          // vpp_qsv is a GPU post-processing filter and leaves its output on the GPU.
-          gpuResident = true;
         } else {
 
           filters.push(swScale);
@@ -1134,7 +1115,7 @@ export class FfmpegOptions {
         break;
     }
 
-    return { filters, gpuResident };
+    return filters;
   }
 
   // Generates the default set of FFmpeg video encoder arguments for software transcoding using libx264. Builds command-line options based on the provided encoder
@@ -1149,13 +1130,11 @@ export class FfmpegOptions {
     const fpsFilter = ["fps=" + options.fps.toString()];
 
     // Build our pixel-level filter chain. The universal rule across every encoder path in this class is that `crop` is a CPU-side filter and must operate on
-    // frames in system memory. On this software-encode path the only transfer that ever appears is a download (GPU->CPU, when hardware decoding is paired with
-    // software encoding), so crop sits *after* the transfer - immediately on the CPU side of the GPU boundary. The hardware-encode path in `streamEncoder` expresses
-    // the same rule with the opposite ordering, since its transfer is always an upload (CPU->GPU) and crop must precede it.
+    // frames in system memory. A software encode never needs a download: a hardware decoder feeding it hands its frames over in system memory, so the whole chain runs
+    // on the CPU from its first filter. The one transfer that can lead it is the format conversion Raspberry Pi's recording fallback inherits from its hardware
+    // encoder's upload row, and crop follows it.
     //
-    // hwdownload / format=nv12         Optional hardware transfer (emitted only when hardware decoding is paired with software encoding on FFmpeg 8.x macOS, or
-    //                                   when downloading from a GPU accelerator on a generic QSV-like host). Brings GPU-resident frames into system memory so the
-    //                                   downstream crop / scale filters can operate on them.
+    // format=yuv420p                    Emitted only on the Raspberry Pi recording fallback, whose resolved state still names the hardware encoder it falls back from.
     // crop=...                          Applied when `config.crop` is set. Uses relative iw/ih multipliers so the crop rectangle scales with source resolution;
     //                                   sized against the source frame and feeds the cropped region into the scaler so aspect-ratio math reflects the crop.
     // scale=-2:min(ih\,height)          Scale to HomeKit's requested dimensions while respecting aspect ratios and ensuring final dimensions divisible by two.
@@ -1327,10 +1306,27 @@ export class FfmpegOptions {
     return {
 
       ...options,
-      hardwareDecoding: (options.hardwareDecoding ?? this.config.hardwareDecoding) && this.config.hardwareDecoding,
-      hardwareTranscoding: (options.hardwareTranscoding ?? this.config.hardwareTranscoding) && this.config.hardwareTranscoding,
+      ...this.#resolveHardwareState(options),
       smartQuality: options.smartQuality ?? true,
       videoFilters: options.videoFilters ?? []
+    };
+  }
+
+  /**
+   * Resolve a pipeline's hardware state against the class config. The one formula every builder applies - the encoders through `resolveEncoderOptions` and the decoder
+   * through `videoDecoder` - so the decode and encode sides of a pipeline handed the same object always read the same state:
+   *
+   *   `resolved = (caller ?? classDefault) && clamp`
+   *
+   * @param options - The caller's hardware flags, either or both of which may be omitted.
+   * @returns The resolved view, each flag a definite boolean a caller can only ever have downgraded from the class config, never upgraded.
+   */
+  #resolveHardwareState(options: Pick<VideoEncoderOptions, "hardwareDecoding" | "hardwareTranscoding">): HardwareStateView {
+
+    return {
+
+      hardwareDecoding: (options.hardwareDecoding ?? this.config.hardwareDecoding) && this.config.hardwareDecoding,
+      hardwareTranscoding: (options.hardwareTranscoding ?? this.config.hardwareTranscoding) && this.config.hardwareTranscoding
     };
   }
 
@@ -1340,26 +1336,17 @@ export class FfmpegOptions {
    *
    * - `bufsize`, `gop`, `maxrate` are the pre-formatted rate-control strings every hardware handler splices directly into its `-bufsize` / `-g:v` / `-maxrate` args.
    *   Sourced from the module-scope `bufsizeArg` / `gopArg` / `maxrateArg` helpers so the software and hardware paths share one derivation of each.
-   * - `filterChain` is the comma-joined `-filter:v` value. Crop sits first when configured (CPU-side filter), then the platform-specific scaler (which may prepend its
-   *   own transfer filters; see `getScaleFilter`), and finally the caller's `videoFilters` at the tail, preceded by a download transfer when the scaler left frames on
-   *   the GPU.
+   * - `filterChain` is the comma-joined `-filter:v` value. Crop sits first when configured (CPU-side filter), then the platform scale segment (which may prepend its
+   *   own transfer filters, and ends in system memory whenever caller filters follow; see `getScaleFilter`), and finally the caller's `videoFilters` at the tail.
    * - `frameRateArg` materializes the `...(fps !== inputFps ? ["-r", fps] : [])` conditional once so every handler can splat it directly.
    * - `init` is the platform-specific hardware-device init args (`-init_hw_device` / `-filter_hw_device`, emitted only for SW-decode + HW-encode on FFmpeg 8.x macOS
    *   and on generic QSV hosts). Prepended by the dispatcher before the handler's output.
    */
   #hardwareStreamContext(options: ResolvedVideoEncoderOptions): HardwareStreamContext {
 
-    // Compose the encoder's own chain: crop (CPU-side) first when configured, then the platform scaler, which also reports whether it left frames on the GPU.
-    const { filters: scaleFilters, gpuResident } = this.#getScaleFilter(options);
-    const videoFilters = [ ...this.#cropFilterSegment, ...scaleFilters ];
-
-    // The caller's filters run CPU-side, so they go at the tail. When the scaler left frames in GPU memory, the platform's own download transfer bridges them back to
-    // system memory first - reached with a purpose-built flags view that says "frames are in hardware memory, the next stage is CPU-side", so the per-platform download
-    // vocabulary stays in one home and no version or hardware-flag check is restated here.
-    if(options.videoFilters.length) {
-
-      videoFilters.push(...(gpuResident ? this.#getHardwareTransferFilters({ hardwareDecoding: true, hardwareTranscoding: false }) : []), ...options.videoFilters);
-    }
+    // Compose the chain: crop (CPU-side) first when configured, then the platform scale segment, then the caller's CPU-side filters at the tail. The scale segment
+    // already ends in system memory whenever caller filters follow it, so they attach directly.
+    const videoFilters = [ ...this.#cropFilterSegment, ...this.#getScaleFilter(options), ...options.videoFilters ];
 
     return {
 

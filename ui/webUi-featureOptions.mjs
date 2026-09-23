@@ -1076,8 +1076,7 @@ export class webUiFeatureOptions {
         headerInfo.textContent = "";
       }
 
-      this.#removeBootAffordance();
-      revealRegions(this.#revealable(GLOBAL_ONLY_REGION_IDS), { warnOnNesting: true });
+      this.#revealPage(GLOBAL_ONLY_REGION_IDS, { warnOnNesting: true });
 
       return;
     }
@@ -1183,9 +1182,8 @@ export class webUiFeatureOptions {
       completeControllerSelection({ controllerId: initialController.serialNumber, store: this.#store });
     }
 
-    // Hand the frame from the boot affordance to the page itself, then reveal the full region set the views render into.
-    this.#removeBootAffordance();
-    revealRegions(this.#revealable(REGION_IDS));
+    // Hand the frame from the boot affordance to the page itself, revealing the full region set the views render into.
+    this.#revealPage(REGION_IDS);
   }
 
   /**
@@ -2006,6 +2004,17 @@ export class webUiFeatureOptions {
     return ids.filter((id) => !TAKEOVER_REGION_IDS.includes(id));
   }
 
+  /* End the boot by revealing the page: hand the frame from the boot affordance to the page, show the regions the page's state says are visible, and record that the
+   * reveal ran. The record is what hands region visibility from the boot to the views, so it lives with the reveal itself rather than beside each call - a takeover
+   * that ends before it leaves its regions for this reveal, and one that ends after it restores them.
+   */
+  #revealPage(ids, options) {
+
+    this.#removeBootAffordance();
+    revealRegions(this.#revealable(ids), options);
+    this.#store.dispatch({ type: "page:revealed" });
+  }
+
   /**
    * Hand a plugin's own node the page's main-content area, and answer with the handle that gives it back.
    *
@@ -2028,9 +2037,10 @@ export class webUiFeatureOptions {
    * a latest-action-wins guard - `createActionGuard` from `./webUi-liveness.mjs` - when the card runs asynchronous actions whose stale answers must not land.
    *
    * Timing a consumer needs to know about. A takeover begun from the `onLoaded` hook mounts beneath the page's loading affordance and waits there until the load
-   * completes, since `onLoaded` fires before the end-of-load reveal. And a controller-list refresh - {@link refreshControllers}, or a `getControllers` hook run by
-   * an in-place re-establish - leaves a standing takeover exactly where it is, so a card that must close when the controller list is refreshed calls `release()`
-   * from the plugin's own `getControllers` hook.
+   * completes, since `onLoaded` fires before the end-of-load reveal. One that ends before the load completes leaves the page hidden until that reveal shows it
+   * whole, so a card may release early without the page appearing half-drawn. And a controller-list refresh - {@link refreshControllers}, or a `getControllers`
+   * hook run by an in-place re-establish - leaves a standing takeover exactly where it is, so a card that must close when the controller list is refreshed calls
+   * `release()` from the plugin's own `getControllers` hook.
    *
    * @example
    *

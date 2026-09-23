@@ -30,14 +30,20 @@ const regionDisplays = () => TAKEOVER_REGION_IDS.map((id) => document.getElement
  */
 
 // Assembles one test's fixture: the page skeleton, a fresh store carrying a loaded model, and an AbortController standing in for the page cycle's signal. Returns
-// the begin function the page itself keeps, alongside the pieces a row needs to dispatch, abort, and read the DOM back.
-const setup = () => {
+// the begin function the page itself keeps, alongside the pieces a row needs to dispatch, abort, and read the DOM back. By default the store records the page's
+// reveal, as the page does once its boot shows it, which is the page most rows exercise; `revealed: false` keeps the fixture inside the boot window instead.
+const setup = ({ revealed = true } = {}) => {
 
   const skeleton = createSkeletonFeatureOptionsDom();
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const controller = new AbortController();
 
   store.dispatch({ catalog: CATALOG(), configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+
+  if(revealed) {
+
+    store.dispatch({ type: "page:revealed" });
+  }
 
   const begin = mountTakeoverView({ anchor: skeleton.deviceStatsContainer, signal: controller.signal, store });
 
@@ -194,6 +200,67 @@ describe("mountTakeoverView - releasing a takeover", () => {
     assert.equal(handle.signal.aborted, true, "the content area belongs to the selection, so moving the selection ends the takeover");
     assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "the card leaves the page with it");
     assert.deepEqual(regionDisplays(), [ "", "", "" ], "and the regions come back through the same restore a release runs");
+  });
+});
+
+describe("mountTakeoverView - a takeover ending inside the boot window", () => {
+
+  // Hide every takeover region the way the boot does for its whole window, so a row can tell a region the view left alone from one it showed.
+  const hideRegions = () => {
+
+    for(const id of TAKEOVER_REGION_IDS) {
+
+      document.getElementById(id).style.display = "none";
+    }
+  };
+
+  test("a release before the page's reveal retires the card and leaves the regions hidden for that reveal", () => {
+
+    using dom = createTestDom();
+
+    const { begin } = setup({ revealed: false });
+
+    hideRegions();
+
+    const handle = begin(pluginCard());
+
+    handle.release();
+
+    assert.equal(handle.signal.aborted, true, "the takeover ended");
+    assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and its card left the page");
+    assert.deepEqual(regionDisplays(), [ "none", "none", "none" ], "while the regions wait for the boot's reveal rather than appearing ahead of the page");
+  });
+
+  test("a user's move before the page's reveal leaves the regions hidden too", () => {
+
+    using dom = createTestDom();
+
+    const { begin, store } = setup({ revealed: false });
+
+    hideRegions();
+
+    const handle = begin(pluginCard());
+
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+
+    assert.equal(handle.signal.aborted, true, "the move ended the takeover");
+    assert.deepEqual(regionDisplays(), [ "none", "none", "none" ], "and the regions stay the reveal's to show");
+  });
+
+  test("once the page's reveal is recorded, a release restores the regions", () => {
+
+    using dom = createTestDom();
+
+    const { begin, store } = setup({ revealed: false });
+
+    hideRegions();
+
+    const handle = begin(pluginCard());
+
+    store.dispatch({ type: "page:revealed" });
+    handle.release();
+
+    assert.deepEqual(regionDisplays(), [ "", "", "" ], "the page is up, so the release gives the regions back");
   });
 });
 

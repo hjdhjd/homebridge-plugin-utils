@@ -17,7 +17,8 @@ export const TAKEOVER_REGION_IDS = [ "deviceStatsContainer", "optionsContainer",
  *
  * Subscribes to `scope:changed`, `takeover:released`, and `takeover:started`, and owns for the life of the mount both the framework element a plugin's node is
  * mounted inside and the main-content regions' `display` while a takeover stands. The page's own writers of those regions - the teardown hide and
- * the coordinated end-of-load reveal - stay out of a standing takeover's way, the reveal by reading the same store fact this view renders from.
+ * the coordinated end-of-load reveal - stay out of a standing takeover's way, the reveal by reading the same store fact this view renders from. The view returns
+ * the courtesy: until the store records that reveal, a takeover that ends leaves the regions for the reveal to show rather than showing them ahead of the page.
  *
  * The fact of a takeover is store state while the node is DOM, and the two live apart deliberately. `state.takeover` is the one answer to "is the area held", so the
  * reducer can give the area back on a selection change while knowing nothing about any node, and the element, its container, and their removal stay here where DOM
@@ -92,10 +93,16 @@ export const mountTakeoverView = ({ anchor, signal, store }) => {
         return;
       }
 
-      // The area came back to the page: retire whatever was standing in it, then give the regions their display back. A `scope:changed` arrives here too, which is
-      // how a plugin's card closes when the user moves the selection without any plugin writing that rule for itself.
+      // The area came back to the page: retire whatever was standing in it. A `scope:changed` arrives here too, which is how a plugin's card closes when the user
+      // moves the selection without any plugin writing that rule for itself.
       end();
-      setRegionDisplay("");
+
+      // Give the regions their display back only once the page has been revealed. While the boot is still open its reveal alone governs what shows, so the page
+      // arrives whole - a takeover ending before then leaves the regions hidden, and the reveal, which then finds no takeover standing, shows them with the rest.
+      if(store.state.revealed) {
+
+        setRegionDisplay("");
+      }
     },
     signal,
     store

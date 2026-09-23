@@ -779,6 +779,26 @@ describe("reducer - takeover", () => {
   });
 });
 
+describe("reducer - page:revealed", () => {
+
+  test("a fresh state is unrevealed, the reveal records itself once, and a second answers with the same state", () => {
+
+    assert.equal(initialState().revealed, false, "every page cycle begins inside its boot window");
+
+    const revealed = reducer(loadedState(), { type: "page:revealed" });
+
+    assert.equal(revealed.revealed, true, "the reveal is recorded");
+    assert.equal(reducer(revealed, { type: "page:revealed" }), revealed, "a second reveal answers by reference");
+  });
+
+  test("a takeover standing at the reveal keeps standing", () => {
+
+    const held = reducer(loadedState(), { type: "takeover:started" });
+
+    assert.equal(reducer(held, { type: "page:revealed" }).takeover, true, "recording the reveal says nothing about who holds the content area");
+  });
+});
+
 describe("reducer - option:set", () => {
 
   test("applies the pure transform - configuredOptions reference changes, catalog reference does not", () => {

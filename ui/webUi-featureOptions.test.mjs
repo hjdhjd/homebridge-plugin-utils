@@ -6947,6 +6947,65 @@ describe("webUiFeatureOptions - takeover", () => {
     orchestrator.cleanup();
   });
 
+  test("a takeover released before the boot settles never reveals part of the page, and one released after the reveal still restores", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, skeleton } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    /* The card opens from onLoaded and the plugin releases it while the boot is still parked on the controller's device fetch. Nothing may appear then: the options
+     * and search showing without the header or the sidebar, beneath a loading affordance still on the page, is the half-drawn page this guards against. The boot's own
+     * reveal shows the page whole once the fetch lands.
+     */
+    const devicesGate = Promise.withResolvers();
+    let handle = null;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: SIDEBAR_HOOKS.getControllers,
+      getDevices: async () => {
+
+        await devicesGate.promise;
+
+        return SIDEBAR_HOOKS.getDevices();
+      },
+      onLoaded: () => (handle = orchestrator.takeover(pluginCard()))
+    });
+
+    const showPromise = orchestrator.show(await openTestSession());
+
+    await waitFor(() => handle !== null, { message: "the plugin's card to open from onLoaded" });
+
+    handle.release();
+
+    assert.equal(handle.signal.aborted, true, "precondition: the release ended the takeover");
+    assert.ok(bootAffordanceIn(), "precondition: the boot is still open, parked on its device fetch");
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "the released regions stay hidden while the boot is open");
+    assert.equal(skeleton.headerInfo.style.display, "none", "alongside the header");
+    assert.equal(skeleton.sidebar.style.display, "none", "and the sidebar");
+
+    devicesGate.resolve();
+
+    await showPromise;
+    await flush();
+
+    assert.ok(bootAffordanceIn() === null, "the boot's reveal takes the frame back");
+    assert.deepEqual(contentDisplays(), [ "", "", "" ], "and shows the regions the release left to it");
+    assert.equal(skeleton.sidebar.style.display, "", "together with the rest of the page");
+
+    // After the reveal, a takeover's release restores its regions directly.
+    const later = orchestrator.takeover(pluginCard());
+
+    assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "precondition: a later card holds the area");
+
+    later.release();
+
+    assert.deepEqual(contentDisplays(), [ "", "", "" ], "and its release restores the regions");
+
+    orchestrator.cleanup();
+  });
+
   test("a takeover begun from onLoaded survives the boot carrying its selection onto the controller's own row", async () => {
 
     using dom = createTestDom();

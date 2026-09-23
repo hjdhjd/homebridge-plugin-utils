@@ -45,7 +45,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     cycle's own first selection, and `continuation` for a selected controller carried onto the row that stands for it. An armed row stands down on every move. A
  *     plugin's hold on the main-content area belongs to the selection the user chose, so only a `user` move ends it.
  *   - `takeover:started` - a plugin took the page's main-content area: the framework's own regions step aside and the plugin's node stands in their place.
- *   - `takeover:released` - the plugin gave the main-content area back, and the framework's regions return to it.
+ *   - `takeover:released` - the plugin gave the main-content area back, and the framework's regions return to it - once the page has been revealed.
+ *   - `page:revealed` - the page cycle's coordinated reveal showed the page, which hands region visibility from the boot to the views.
  *   - `option:set` - single option enabled/disabled (with optional value) at some scope.
  *   - `option:cleared` - single option removed at some scope.
  *   - `option:armed` - a value option's row is awaiting its first value: the checkbox gesture opened the input, and nothing persists until a value commits. At
@@ -192,6 +193,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   reducer refuses any other scope kind.
  * @property {readonly string[]} persistedAnchor - The last state the host accepted. Updated on every successful persist; restored to configuredOptions on a final
  *                                                  persist failure (memory then matches what the host holds).
+ * @property {boolean} revealed - Whether this page cycle's coordinated reveal has shown the page. Page-lifecycle state like `takeover`: the fresh store every show()
+ *   builds starts unrevealed, and the reveal is the one act that sets it. Until then the regions are the boot's to show, so a takeover that ends first leaves them for
+ *   that reveal rather than showing them early.
  * @property {Scope} scope - Selection pointer (DU).
  * @property {LifecycleStatus} status - Page-reachability pointer (DU).
  * @property {boolean} takeover - Whether a plugin currently holds the page's main-content area, with the framework's own regions there stepped aside and the
@@ -383,6 +387,7 @@ export const initialState = () => {
     initialOptions: empty,
     mode: "device-only",
     persistedAnchor: empty,
+    revealed: false,
     scope: { kind: "global" },
     status: { kind: "loading" },
     takeover: false,
@@ -628,6 +633,18 @@ export const reducer = (state, action) => {
       }
 
       return { ...state, takeover: false };
+    }
+
+    case "page:revealed": {
+
+      // The boot's coordinated reveal showed the page. Until it runs, the reveal alone decides which regions appear, so the rest of the page arrives together; from
+      // here on a takeover ending restores the regions it held. A cycle reveals once, so a second dispatch answers with the state reference itself.
+      if(state.revealed) {
+
+        return state;
+      }
+
+      return { ...state, revealed: true };
     }
 
     case "option:set": {

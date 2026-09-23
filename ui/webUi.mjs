@@ -124,10 +124,8 @@ export class webUi {
      * running in the reused window against DOM the successor now owns. Construction is the one moment a successor provably exists, which is what makes it the place
      * to do this.
      *
-     * The boot monitor's `webUiBoot` global is the precedent for holding state across module copies in one window; its own semantics are first-wins, while the
-     * newest-wins supersession here is this design's own. The duck-typed guard is the browser-boundary narrowing posture: a foreign value squatting on the property
-     * degrades to replacement rather than a constructor throw, so a page that renders is never traded for a page that does not. A window's first construction finds
-     * no predecessor and no-ops.
+     * The duck-typed guard is the browser-boundary narrowing posture: a foreign value squatting on the property degrades to replacement rather than a constructor
+     * throw, so a page that renders is never traded for a page that does not. A window's first construction finds no predecessor and no-ops.
      */
     if(typeof globalThis.webUiPageEpoch?.abort === "function") {
 

@@ -11,10 +11,9 @@
  *
  * The region carries, in boot order, a hidden status panel a screenshot turns into a complete support report; a boot monitor - a classic inline script, so
  * it runs during HTML parse ahead of any deferred module evaluation - that owns the on-page failure surface: it reveals the panel with a plain-language message
- * classified by the boot stage that failed, arms a ten-second watchdog for a boot that hangs, stands down when the app signals it rendered, and holds the bundle stamp
- * across boots so a page whose bundle has since been replaced says so instead of half-loading; and the loader - the importmap/cache-bust module script -
- * stage-instrumented so a fetch, importmap, or entry-import failure routes to the monitor with the stage that failed. The classic-versus-module split is for execution
- * ordering alone, not old-engine compatibility: the classic script runs during parse while the module script is deferred.
+ * classified by the boot stage that failed, arms a ten-second watchdog for a boot that hangs, and stands down when the app signals it rendered; and the loader - the
+ * importmap/cache-bust module script - stage-instrumented so a fetch, importmap, or entry-import failure routes to the monitor with the stage that failed. The
+ * classic-versus-module split is for execution ordering alone, not old-engine compatibility: the classic script runs during parse while the module script is deferred.
  *
  * Three exported pieces: the marked-region marker constants (following the family's uniform template - see `docChrome.ts`), {@link parseWebUiLoaderConfig} which reads
  * and validates the plugin's config comment, and {@link renderWebUiBootRegion} which renders the region from that config plus the destination and package facts the CLI
@@ -145,8 +144,7 @@ export function parseWebUiLoaderConfig(html: string, htmlPath: string): WebUiLoa
 }
 
 // The plain-language boot-failure copy the status panel shows, approved in design and expanded to complete sentences. The browser, delivery, and generic strings are
-// the three classified message buckets the boot monitor reveals by stage; a fourth, reload, is shown separately by checkStamp() on a stamp mismatch. The slow notice
-// is the watchdog's still-working signal; the headline sits above them all.
+// the classified message buckets the boot monitor reveals by stage. The slow notice is the watchdog's still-working signal; the headline sits above them all.
 // The copy lives here as panel text content, not as monitor script constants, so it renders exactly and contiguously on the page and stays clear of this file's
 // line-width wrap - HTML text content carries no such limit, and a long single-sentence string cannot be broken without splitting it away from a support grep.
 const BOOT_HEADLINE = "The settings interface couldn't load.";
@@ -154,8 +152,6 @@ const BOOT_MESSAGE_BROWSER = "Your browser doesn't support features this interfa
 const BOOT_MESSAGE_DELIVERY = "The interface files couldn't be retrieved from the Homebridge server. Reload the page to try again. " +
   "If this keeps happening, log out of the Homebridge interface and log back in.";
 const BOOT_MESSAGE_GENERIC = "An unexpected error occurred while starting the interface.";
-const BOOT_MESSAGE_RELOAD = "The settings interface was updated while this page was open, so this page is still on a version that is no longer installed. " +
-  "Reload the page to load the current version.";
 const BOOT_SLOW_NOTICE = "This is taking longer than expected. If nothing appears shortly, reload the page.";
 
 // The status panel markup: a hidden, centered block that a screenshot turns into a complete support report. It starts fully hidden and is revealed by the boot monitor
@@ -170,7 +166,6 @@ const BOOT_STATUS_PANEL: readonly string[] = [
   "    <p data-boot-bucket=\"browser\" style=\"display: none;\">" + BOOT_MESSAGE_BROWSER + "</p>",
   "    <p data-boot-bucket=\"delivery\" style=\"display: none;\">" + BOOT_MESSAGE_DELIVERY + "</p>",
   "    <p data-boot-bucket=\"generic\" style=\"display: none;\">" + BOOT_MESSAGE_GENERIC + "</p>",
-  "    <p data-boot-bucket=\"reload\" style=\"display: none;\">" + BOOT_MESSAGE_RELOAD + "</p>",
   "  </div>",
   "  <details open>",
   "    <summary>Technical details</summary>",
@@ -181,11 +176,10 @@ const BOOT_STATUS_PANEL: readonly string[] = [
 ];
 
 // The boot monitor: a classic inline script that runs during HTML parse, ahead of the deferred module loader, so it can catch a failure anywhere along the boot path
-// and report it on the page. Its whole body is an IIFE guarded against a second execution in the same window, exposing a frozen `window.webUiBoot` with `fail`,
-// `ready`, and `checkStamp`, window `error`/`unhandledrejection` listeners, and a ten-second watchdog. First failure wins; `ready()` from the app supersedes it, and a
-// stale-stamp verdict from `checkStamp` supersedes both. The block is static - no plugin fact reaches it - so it is a constant the renderer splices verbatim between
-// the panel and the loader. Because the guard makes the FIRST run's closure the only one in a window, that closure is where the loader's locked bundle stamp lives:
-// a later boot in the same window compares against it through `checkStamp` and finds a regeneration that happened underneath the page.
+// and report it on the page. Its whole body is an IIFE exposing a frozen `window.webUiBoot` with `fail` and `ready`, window `error`/`unhandledrejection` listeners,
+// and a ten-second watchdog. First failure wins; `ready()` from the app supersedes it. The Homebridge UI opens every settings panel in a fresh iframe, so the script
+// runs exactly once in each window and carries no state from one boot to the next. The block is static - no plugin fact reaches it - so it is a constant the renderer
+// splices verbatim between the panel and the loader.
 const BOOT_MONITOR: readonly string[] = [
 
   "<script>",
@@ -196,14 +190,6 @@ const BOOT_MONITOR: readonly string[] = [
   "   */",
   "  (function() {",
   "",
-  "    // A second execution of this script within one document - the monitor present in the page twice, or the page's markup written into the document again -",
-  "    // returns immediately, so the first run's listeners and watchdog are never duplicated into an orphaned registration that could resurrect the panel over a",
-  "    // working app.",
-  "    if(window.webUiBoot) {",
-  "",
-  "      return;",
-  "    }",
-  "",
   "    const watchdogMs = 10000;",
   "",
   "    // The stage-to-bucket map. The browser stage stands alone, the manifest and import delivery stages share the delivery bucket, and every other stage - an",
@@ -213,9 +199,6 @@ const BOOT_MONITOR: readonly string[] = [
   "    let settled = false;",
   "    let watchdog;",
   "",
-  "    // The bundle stamp the first successful boot in this window locked its importmap to. Undefined until a boot reports one; see checkStamp below.",
-  "    let lockedStamp;",
-  "",
   "    // Set an element's display by id, tolerating an absent node so a stamped region missing a panel element never throws from the monitor.",
   "    const setDisplay = (id, value) => {",
   "",
@@ -224,44 +207,6 @@ const BOOT_MONITOR: readonly string[] = [
   "      if(element) {",
   "",
   "        element.style.display = value;",
-  "      }",
-  "    };",
-  "",
-  "    // Reveal exactly one of the pre-rendered bucket messages, hiding the rest first so a second reveal in the same window cannot leave two messages stacked. The",
-  "    // bucket keys are internal constants, never user input, so the selector is safe.",
-  "    const showBucket = (bucket) => {",
-  "",
-  "      for(const message of document.querySelectorAll(\"#bootErrorMessage [data-boot-bucket]\")) {",
-  "",
-  "        message.style.display = \"none\";",
-  "      }",
-  "",
-  "      const chosen = document.querySelector(\"#bootErrorMessage [data-boot-bucket='\" + bucket + \"']\");",
-  "",
-  "      if(chosen) {",
-  "",
-  "        chosen.style.display = \"block\";",
-  "      }",
-  "    };",
-  "",
-  "    // Write the technical-details lines, each assigned as plain text so untrusted content is never parsed as markup.",
-  "    const writeDetails = (lines) => {",
-  "",
-  "      const details = document.getElementById(\"bootErrorDetails\");",
-  "",
-  "      if(!details) {",
-  "",
-  "        return;",
-  "      }",
-  "",
-  "      details.textContent = \"\";",
-  "",
-  "      for(const line of lines) {",
-  "",
-  "        const row = document.createElement(\"div\");",
-  "",
-  "        row.textContent = line;",
-  "        details.appendChild(row);",
   "      }",
   "    };",
   "",
@@ -288,9 +233,29 @@ const BOOT_MONITOR: readonly string[] = [
   "",
   "      stop();",
   "",
-  "      // Reveal the one pre-rendered message the failing stage's bucket names.",
-  "      showBucket(buckets[stage] ?? \"generic\");",
-  "      writeDetails([ \"Stage: \" + stage, \"Error: \" + ((error instanceof Error) ? error.message : String(error)), \"Browser: \" + navigator.userAgent ]);",
+  "      // Reveal the one pre-rendered message the failing stage's bucket names; the bucket keys are internal constants, never user input, so the selector is safe.",
+  "      const chosen = document.querySelector(\"#bootErrorMessage [data-boot-bucket='\" + (buckets[stage] ?? \"generic\") + \"']\");",
+  "",
+  "      if(chosen) {",
+  "",
+  "        chosen.style.display = \"block\";",
+  "      }",
+  "",
+  "      const details = document.getElementById(\"bootErrorDetails\");",
+  "",
+  "      if(details) {",
+  "",
+  "        // The error text is untrusted, so each detail line is assigned as plain text through textContent and is never parsed as markup.",
+  "        const lines = [ \"Stage: \" + stage, \"Error: \" + ((error instanceof Error) ? error.message : String(error)), \"Browser: \" + navigator.userAgent ];",
+  "",
+  "        for(const line of lines) {",
+  "",
+  "          const row = document.createElement(\"div\");",
+  "",
+  "          row.textContent = line;",
+  "          details.appendChild(row);",
+  "        }",
+  "      }",
   "",
   "      setDisplay(\"bootSlowNotice\", \"none\");",
   "      setDisplay(\"pageBootError\", \"block\");",
@@ -310,50 +275,10 @@ const BOOT_MONITOR: readonly string[] = [
   "      setDisplay(\"pageBootError\", \"none\");",
   "    };",
   "",
-  "    /* Compare this boot's bundle stamp against the one an earlier boot in this window locked its importmap to, and answer whether the boot may proceed.",
-  "     *",
-  "     * The settings frame outlives a single boot: a panel re-open runs the loader again in the same window, while the importmap the FIRST run injected is the one",
-  "     * still in force - a browser applies the first map and every bare specifier resolves through it for the document's life. That is harmless until the bundle is",
-  "     * regenerated underneath the page, at which point the locked subdir no longer exists on disk: the re-run would fetch the new manifest, inject a map nothing",
-  "     * consults, and import an entry whose every bare-specifier request 404s, leaving the user on the previous bundle's already-loaded code with no sign anything",
-  "     * was wrong. Stopping here is the only honest outcome, because no amount of retrying inside this document can reach the current bundle.",
-  "     *",
-  "     * The first call locks the stamp in and proceeds; a later match proceeds too, which is the ordinary re-open. A later call that differs is terminal, and it",
-  "     * deliberately overrides settled: the earlier boot's ready() is exactly what settles a window that then goes stale, so honoring it would suppress the one",
-  "     * message the user needs.",
-  "     */",
-  "    const checkStamp = (stamp) => {",
-  "",
-  "      if(lockedStamp === undefined) {",
-  "",
-  "        lockedStamp = stamp;",
-  "",
-  "        return true;",
-  "      }",
-  "",
-  "      if(lockedStamp === stamp) {",
-  "",
-  "        return true;",
-  "      }",
-  "",
-  "      settled = true;",
-  "",
-  "      stop();",
-  "",
-  "      showBucket(\"reload\");",
-  "      writeDetails([ \"Loaded: \" + lockedStamp, \"Available: \" + stamp ]);",
-  "",
-  "      setDisplay(\"bootSlowNotice\", \"none\");",
-  "      setDisplay(\"pageBootError\", \"block\");",
-  "      globalThis.homebridge?.hideSpinner?.();",
-  "",
-  "      return false;",
-  "    };",
-  "",
   "    const onError = (event) => fail(\"uncaught error\", event.error ?? event.message);",
   "    const onRejection = (event) => fail(\"unhandled rejection\", event.reason);",
   "",
-  "    window.webUiBoot = Object.freeze({ checkStamp, fail, ready });",
+  "    window.webUiBoot = Object.freeze({ fail, ready });",
   "",
   "    window.addEventListener(\"error\", onError);",
   "    window.addEventListener(\"unhandledrejection\", onRejection);",
@@ -375,11 +300,6 @@ const BOOT_MONITOR: readonly string[] = [
  * single `Date.now()` cache-bust stamp shared across the page load, a `bust()` helper that resolves a path against `import.meta.url` and appends the stamp, a
  * `cache: "no-store"` fetch of the manifest, an importmap, and a dynamic import of the entry, all wrapped in a stage-instrumented `try`/`catch` that routes a boot
  * failure to the monitor with the stage that failed, without adding any await or work to the happy path.
- *
- * Between reading the manifest and injecting anything, the loader hands the monitor the bundle stamp it is about to lock in. The settings frame outlives one boot, so
- * a re-open runs the loader again in a window whose importmap is already fixed to the first run's stamp; a stamp that no longer matches means the bundle was
- * regenerated underneath the document, and the boot stops on the monitor's needs-reload state rather than importing an entry whose bare specifiers all resolve into a
- * subdir that no longer exists.
  *
  * The catch classifies by stage. A manifest-stage failure reports directly, with no capability probe: the importmap is not injected yet, so probing resolution there
  * would misroute every ordinary delivery failure into the browser bucket. At the import stage the map is injected, so an engine without `import.meta.resolve` predates
@@ -444,30 +364,24 @@ export function renderWebUiBootRegion({ bust, entry, libPath, packageName }: { b
     "",
     "    const manifest = await response.json();",
     "",
-    "    // Hand the monitor this boot's bundle stamp before injecting anything. In a window that already booted, the importmap in force is the first run's, so a stamp",
-    "    // that no longer matches means the bundle was regenerated underneath this document and nothing injected now could reach it; the monitor shows the",
-    "    // needs-reload state and this boot stops rather than half-loading against a subdir that is gone.",
-    "    if(window.webUiBoot.checkStamp(manifest.subdir)) {",
+    "    const importMap = {",
     "",
-    "      const importMap = {",
+    "      imports: {",
     "",
-    "        imports: {",
+    ...importLines,
+    prefixLine,
+    "      }",
+    "    };",
     "",
-    ...importLines.map((line) => "  " + line),
-    "  " + prefixLine,
-    "        }",
-    "      };",
+    "    const mapScript = document.createElement(\"script\");",
     "",
-    "      const mapScript = document.createElement(\"script\");",
+    "    mapScript.type = \"importmap\";",
+    "    mapScript.textContent = JSON.stringify(importMap);",
+    "    document.head.appendChild(mapScript);",
     "",
-    "      mapScript.type = \"importmap\";",
-    "      mapScript.textContent = JSON.stringify(importMap);",
-    "      document.head.appendChild(mapScript);",
+    "    stage = \"import\";",
     "",
-    "      stage = \"import\";",
-    "",
-    "      await import(\"" + entry + "\");",
-    "    }",
+    "    await import(\"" + entry + "\");",
     "  } catch(error) {",
     "",
     "    // The monitor owns the on-page display, so after classifying we report and swallow: rethrowing would only add a duplicate uncaught error to the console the",

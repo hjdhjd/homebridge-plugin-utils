@@ -168,8 +168,9 @@ export const scopeCacheKey = (scope) => {
  * Build the O(1) lookup index from the configured-options array. Memoized on `(catalog, configuredOptions)` so any dispatch that does not touch the configured
  * options returns the cached index without rebuilding.
  *
- * Consumed by every other selector that needs to resolve options through the scope hierarchy (projection, rendering factories, effects) - sharing one cached index
- * across them means the parse-and-build work happens at most once per configured-options mutation.
+ * The projection reads it to resolve every option through the scope hierarchy, and the options view's change handler reads it to hand the row transitions for
+ * their upstream and existence probes. A gesture therefore reads the index the render pass it follows was drawn from, and the parse-and-build work happens at
+ * most once per configured-options mutation rather than again on every click.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {import("../featureOptions.js").ConfigIndex} The lookup index.

@@ -12,16 +12,14 @@ import { delay } from "./webUi-liveness.mjs";
  * the host's own announcements of a theme change, and probes Bootstrap's `.btn-primary` to enhance the accent tokens.
  *
  * The normal entry point is `webUi.registerTheming`, which composes this effect with the design tokens its rules read and holds both for the life of the page. A
- * direct call is for bespoke composition, where the caller owns the ordering and the lifetime itself.
+ * direct call is for bespoke composition, where the caller owns the ordering.
  *
  * Every route that can carry a host theme change into this page is followed: the message Homebridge posts into a plugin frame, and a mutation of that
  * frame body's own theme classes. Each announces a mode the user picked and a system flip an auto-detecting install inherits alike, because the host resolves
  * either into the same retint. Each route re-reads the mode through the bridge, so the bridge stays the one authority on which mode is current.
  *
- * A supplied AbortSignal makes cleanup automatic: aborting releases the stylesheet from the document, clears the `color-scheme`, `.fo-dark` class, and
- * accent-token inline overrides the effect wrote on `:root` (so it leaves no trace on a shared document), removes the message listener (via `{signal}` on
- * addEventListener), disconnects the class observer, and short-circuits the in-progress Bootstrap probe at the next await checkpoint. With no signal the effect holds
- * for the life of the document, which is how the page-lifetime registration holds it.
+ * The effect holds for the life of the document: the stylesheet stays adopted and every follow route stays live. Its scope is the page, and a plugin's settings
+ * page lasts exactly as long as the frame document it is drawn in, so nothing ends the effect before the document does.
  *
  * The function returns once the initial lighting-mode read has been applied. Both follow routes are live before that read is even issued, so a page whose initial
  * read fails or never answers still follows every later host announcement. The Bootstrap accent probe runs in the background - the caller's pipeline is not blocked
@@ -31,8 +29,6 @@ import { delay } from "./webUi-liveness.mjs";
  * @param {Object} args
  * @param {{userCurrentLightingMode: () => Promise<string>}} args.host - The Homebridge bridge (or a test stub matching that surface). The lighting mode is normally
  *        "light" or "dark"; any unrecognized value is tolerated and treated as a no-op (no color scheme is applied).
- * @param {AbortSignal} [args.signal] - Lifecycle signal. Aborting tears down the listener, the class observer, and the background probe. Absent means the effect is
- *        held for the life of the document.
  * @param {Object} [args.probe] - Optional probe overrides.
  * @param {number} [args.probe.timeoutMs=2000] - Maximum time, in milliseconds, to poll for Bootstrap's stylesheet before giving up and applying the fallback.
  *        The ceiling bounds how long a page whose stylesheet never arrives waits before rendering unthemed. Override to `0` in tests to skip the probe.
@@ -41,12 +37,7 @@ import { delay } from "./webUi-liveness.mjs";
  * @returns {Promise<void>} Resolves once the initial mode read has been applied, and rejects when that read rejects - the sheet and both follow routes are live
  *                          either way. Does NOT wait for the Bootstrap probe to complete.
  */
-export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, timeoutMs = 2000 } = {}, signal = undefined }) => {
-
-  if(signal?.aborted) {
-
-    return;
-  }
+export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, timeoutMs = 2000 } = {} }) => {
 
   // Build & adopt the stylesheet immediately. The user perceives the layout the moment this resolves, with the fallback accent color in effect via the CSS
   // custom-property cascade. The stylesheet content is mode-independent (`:root.fo-dark` selectors resolve dynamically based on the class), so it does not need
@@ -56,10 +47,7 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
   stylesheet.replaceSync(buildBaseCss());
   document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, stylesheet ];
 
-  /* The one follower both host routes share. The mode is captured before the abort check so a teardown that lands while the read is in flight can never be
-   * overwritten afterwards: a write that raced the teardown would put `color-scheme` and the dark class back on `:root` after the effect promised to leave no
-   * trace on it.
-   */
+  // The one follower both host routes share.
   const followHostTheme = async () => {
 
     /* The follow is opportunistic by contract: a read that fails says nothing the initial registration's own diagnostic has not already said, the next host
@@ -72,11 +60,6 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
 
       mode = await host.userCurrentLightingMode();
     } catch {
-
-      return;
-    }
-
-    if(signal?.aborted) {
 
       return;
     }
@@ -100,48 +83,21 @@ export const registerThemeEffect = async ({ host, probe: { intervalMs = 20, time
 
       void followHostTheme();
     }
-  }, { signal });
+  });
 
   /* The observer watches `document.body`'s class while applyColorScheme writes on `documentElement`, so the effect's own writes can never feed back into it, and a
    * host retint landing mid-registration is followed rather than missed. Constructed through `window` so a headless harness that installs its own globals supplies
    * this one too.
    */
-  const themeClassObserver = new window.MutationObserver(() => void followHostTheme());
-
-  themeClassObserver.observe(document.body, { attributeFilter: ["class"], attributes: true });
-
-  signal?.addEventListener("abort", () => {
-
-    // Restore the document to its pre-effect state, symmetric with every mutation the effect made to it: drop the adopted stylesheet, then the `color-scheme` and
-    // `.fo-dark` class that applyColorScheme set on `:root` and the accent-token inline overrides the Bootstrap probe wrote there. The `color-scheme` removal is the
-    // one that matters - it is a native property, so a leftover `dark` value would tint default form-control and scrollbar rendering on whatever content occupies the
-    // document after teardown (in a multi-page host, a sibling tab). The class and token overrides are inert once the stylesheet that reads them is gone, but are
-    // cleared too so the effect leaves no trace on `:root`.
-    //
-    // The observer takes no signal of its own, so its disconnect is spelled out here; the message listener needs no line because the native `{ signal }` option
-    // detaches it. This block registers after every resource it restores exists, so there is no window in which it could fire against a half-built effect.
-    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== stylesheet);
-    document.documentElement.classList.remove("fo-dark");
-    document.documentElement.style.removeProperty("color-scheme");
-    document.documentElement.style.removeProperty("--fo-accent-bg");
-    document.documentElement.style.removeProperty("--fo-accent-fg");
-    themeClassObserver.disconnect();
-  }, { once: true });
+  new window.MutationObserver(() => void followHostTheme()).observe(document.body, { attributeFilter: ["class"], attributes: true });
 
   // Apply the color-scheme from the current Homebridge setting. The lightweight portion of "apply theme" - no Bootstrap probe required; just sets the color-scheme
-  // property on :root and toggles the fo-dark class. Captured before the abort check for the same reason the follower captures its own read.
-  const mode = await host.userCurrentLightingMode();
-
-  if(signal?.aborted) {
-
-    return;
-  }
-
-  applyColorScheme(mode);
+  // property on :root and toggles the fo-dark class.
+  applyColorScheme(await host.userCurrentLightingMode());
 
   // Fire the Bootstrap probe in the background. Its job is to replace the fallback `AccentColor` keyword with Bootstrap's actual `.btn-primary` background color;
   // until it resolves, the user sees the system accent. Void-discarded because the caller cannot meaningfully wait on it.
-  void runAccentProbe({ intervalMs, signal, timeoutMs });
+  void runAccentProbe({ intervalMs, timeoutMs });
 };
 
 // The page's menu buttons, in the order the markup lays them out. This list is the single source of truth for which buttons a menu paint reaches: every paint site
@@ -203,17 +159,9 @@ const applyColorScheme = (mode) => {
 };
 
 // Background probe coordinator. Awaits Bootstrap readiness (or the timeout), then re-probes the accent color and writes the result into the :root custom properties.
-// A teardown that fires mid-probe short-circuits the post-await mutation; the stylesheet stays adopted (the signal-keyed listener handles that) and the fallback
-// accent remains in effect for the brief window before teardown completes.
-const runAccentProbe = async ({ intervalMs, signal, timeoutMs }) => {
+const runAccentProbe = async ({ intervalMs, timeoutMs }) => {
 
-  await waitForBootstrap({ intervalMs, signal, timeoutMs });
-
-  if(signal?.aborted) {
-
-    return;
-  }
-
+  await waitForBootstrap({ intervalMs, timeoutMs });
   probeAndApplyAccent();
 };
 
@@ -272,14 +220,13 @@ const isValidAccentValue = (value) => {
   return (normalized !== "transparent") && (normalized !== "rgba(0,0,0,0)");
 };
 
-// Wait for Bootstrap to finish loading in the DOM, or until the timeout expires. The composed signal (deadline + caller) is the single source of truth for the
-// loop and each per-iteration delay; one mechanism handles both timeout exhaustion and external cancellation. Emits a console.warn when the timeout expires
-// without detecting Bootstrap - a timeout-with-no-result is actionable info for plugin developers configuring their UI; without the warning the silent fallback
-// would leave them wondering why their accent color does not match Bootstrap.
-const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
+// Wait for Bootstrap to finish loading in the DOM, or until the timeout expires. The deadline signal is the single source of truth for the loop and each
+// per-iteration delay. Emits a console.warn when the timeout expires without detecting Bootstrap - a timeout-with-no-result is actionable info for plugin developers
+// configuring their UI; without the warning the silent fallback would leave them wondering why their accent color does not match Bootstrap.
+const waitForBootstrap = async ({ intervalMs, timeoutMs }) => {
 
-  // Honor the documented `probe: { timeoutMs: 0 }` opt-out synchronously. A pre-aborted caller signal gets the same fast path.
-  if((timeoutMs <= 0) || signal?.aborted) {
+  // Honor the documented `probe: { timeoutMs: 0 }` opt-out synchronously.
+  if(timeoutMs <= 0) {
 
     return false;
   }
@@ -301,9 +248,8 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
   };
 
   const deadline = AbortSignal.timeout(timeoutMs);
-  const composed = signal ? AbortSignal.any([ signal, deadline ]) : deadline;
 
-  while(!composed.aborted) {
+  while(!deadline.aborted) {
 
     if(isBootstrapApplied()) {
 
@@ -315,21 +261,18 @@ const waitForBootstrap = async ({ intervalMs, signal, timeoutMs }) => {
       // The poll interval is the loop's intentional throttle - one probe per interval, not in a tight loop. Same exception as the persist drain: the await is the
       // point of the iteration.
       // eslint-disable-next-line no-await-in-loop
-      await delay(intervalMs, composed);
+      await delay(intervalMs, deadline);
     } catch {
 
-      // Composed signal aborted (deadline or caller). Exit the loop.
+      // The deadline elapsed mid-wait. Exit the loop.
       break;
     }
   }
 
-  // Only warn on the deadline path - a caller-driven abort (page teardown) is not actionable, just a lifecycle event. The accent color falls back to the system
-  // AccentColor keyword; the UI continues to function.
-  if(deadline.aborted && !signal?.aborted) {
-
-    // eslint-disable-next-line no-console
-    console.warn("FeatureOptions: Bootstrap stylesheet did not load within " + timeoutMs + "ms - accent color falling back to the system AccentColor keyword.");
-  }
+  // The loop ends only on the deadline, so reaching here means Bootstrap never applied within it. The accent color falls back to the system AccentColor keyword;
+  // the UI continues to function.
+  // eslint-disable-next-line no-console
+  console.warn("FeatureOptions: Bootstrap stylesheet did not load within " + timeoutMs + "ms - accent color falling back to the system AccentColor keyword.");
 
   return false;
 };

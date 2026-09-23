@@ -9,6 +9,7 @@ import { describe, test } from "node:test";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
+import { configIndex } from "../selectors.mjs";
 import { createTestDom } from "../../ui.helpers.mjs";
 import { mountOptionsView } from "./options.mjs";
 
@@ -247,6 +248,28 @@ describe("mountOptionsView - checkbox click dispatch", () => {
 
     // Action should have been dispatched. Motion.Detect default is true; post-click state is unchecked.
     assert.deepEqual(store.state.configuredOptions, ["Disable.Motion.Detect"]);
+  });
+
+  test("a gesture reads the memoized configuration index the render pass resolved against rather than building one of its own", () => {
+
+    using dom = createTestDom();
+
+    // A device-scope enable with nothing configured above it, so unchecking the row finds no upstream entry and the transition writes an explicit disable.
+    const { configTable, store } = setup({ configuredOptions: ["Enable.Motion.Detect.dev-a"], scope: { controllerId: null, deviceId: "dev-a", kind: "device" } });
+    const motion = configTable.querySelector("details[data-category='Motion']");
+
+    motion.open = true;
+    motion.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    /* Plant a global entry in the memoized index alone, while the configuration itself still carries none. An index the handler built for itself from the
+     * configuration cannot see it, and the unchecked row would write the explicit disable. The memoized index reports an upstream entry, so the same gesture
+     * clears the row back to inheritance instead...so the outcome that lands names the index the handler read.
+     */
+    configIndex(store.state).set("motion.detect", { enabled: true });
+
+    motion.querySelector("#Motion\\.Detect").click();
+
+    assert.deepEqual(store.state.configuredOptions, [], "the gesture cleared the row, which only the memoized index could have told it to do");
   });
 
   test("a value commit on an enabled row replaces the value", () => {

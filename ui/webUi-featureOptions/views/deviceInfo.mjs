@@ -88,7 +88,7 @@ export const defaultIdentityFields = (device) => [
  * @param {import("../state.mjs").Device | undefined} args.device - The device to render stats for, or undefined for global view.
  * @param {HTMLElement} args.panel - The container element.
  */
-export const defaultInfoPanel = ({ device, panel }) => {
+const defaultInfoPanel = ({ device, panel }) => {
 
   if(!device) {
 

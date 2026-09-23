@@ -11,9 +11,7 @@ import {
   buildRecoveryButton,
   captureCategoryStates,
   createElement,
-  setCategoryExpanded,
-  showToast,
-  swapMenuClasses
+  setCategoryExpanded
 } from "./utils.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -200,90 +198,6 @@ describe("setCategoryExpanded", () => {
     setCategoryExpanded(details, false);
 
     assert.equal(details.open, false);
-  });
-});
-
-describe("swapMenuClasses", () => {
-
-  // The menu button shape the helper operates on: an element carrying whichever half of the Bootstrap active/inactive pair it currently wears.
-  function makeMenuButton(id, initialClass) {
-
-    const button = document.createElement("button");
-
-    button.id = id;
-    button.classList.add(initialClass);
-    document.body.appendChild(button);
-
-    return button;
-  }
-
-  test("removes the outgoing class and adds the incoming one", () => {
-
-    using dom = createTestDom();
-
-    const button = makeMenuButton("menuSettings", "btn-primary");
-
-    swapMenuClasses("menuSettings", "btn-primary", "btn-elegant");
-
-    assert.equal(button.classList.contains("btn-primary"), false, "the outgoing class must be removed");
-    assert.equal(button.classList.contains("btn-elegant"), true, "the incoming class must be added");
-  });
-
-  test("is a silent no-op when the page does not carry the button", () => {
-
-    using dom = createTestDom();
-
-    // A plugin's markup declares which menu surfaces it offers, so a paint aimed at a button the markup omits has nothing to do. The helper must return rather than
-    // throw, which is what lets a plugin that leaves a menu surface out run the same paint code as one that carries it.
-    assert.doesNotThrow(() => swapMenuClasses("menuSettings", "btn-primary", "btn-elegant"));
-  });
-});
-
-describe("showToast", () => {
-
-  test("inserts a toast alert after the feature-status-bar mount point with the given message", () => {
-
-    using dom = createTestDom();
-
-    const statusBar = document.createElement("div");
-
-    statusBar.id = "featureStatusBar";
-    document.body.appendChild(statusBar);
-
-    showToast("Configuration saved");
-
-    const toast = statusBar.nextElementSibling;
-
-    assert.ok(toast, "showToast must insert an alert immediately after the status bar");
-    assert.equal(toast.getAttribute("role"), "alert");
-    assert.ok(toast.classList.contains("alert"));
-    assert.ok(toast.classList.contains("alert-success"), "default variant is alert-success");
-    assert.ok(toast.innerHTML.includes("Configuration saved"));
-  });
-
-  test("custom variant class is honored via the second argument", () => {
-
-    using dom = createTestDom();
-
-    const statusBar = document.createElement("div");
-
-    statusBar.id = "featureStatusBar";
-    document.body.appendChild(statusBar);
-
-    showToast("Fatal error", "alert-danger");
-
-    const toast = statusBar.nextElementSibling;
-
-    assert.ok(toast.classList.contains("alert-danger"), "custom variant class must be applied instead of the default alert-success");
-  });
-
-  test("is a silent no-op when the feature-status-bar is absent from the document", () => {
-
-    // Defensive: call sites that fire toasts from lifecycle handlers may execute during transitions when the status bar is not mounted. The helper must short-circuit
-    // rather than throw.
-    using dom = createTestDom();
-
-    assert.doesNotThrow(() => showToast("Nothing to show"));
   });
 });
 

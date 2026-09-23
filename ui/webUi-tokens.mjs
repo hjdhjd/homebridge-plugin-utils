@@ -6,9 +6,8 @@
 
 /**
  * Register the design-tokens effect. Adopts a constructable stylesheet declaring every `--fo-*` CSS custom property the rest of the webUI references (font family,
- * font scale, spacing scale, layout, radii, motion, accent colors, surfaces, borders, text, form controls, interactive states, specific colors). A supplied
- * AbortSignal makes cleanup automatic - aborting removes the stylesheet from `document.adoptedStyleSheets` - and with none the stylesheet stays adopted for the life
- * of the document.
+ * font scale, spacing scale, layout, radii, motion, accent colors, surfaces, borders, text, form controls, interactive states, specific colors). The stylesheet
+ * stays adopted for the life of the document, which is the life of the page whose tokens it declares.
  *
  * Stylistic rules the tokens encode:
  *
@@ -20,33 +19,18 @@
  *      right value automatically. A future third theme (high-contrast, brand variant) joins by adding a third selector block; no consumer rules change.
  *
  * The normal entry point is `webUi.registerTheming`, which composes this effect with the page theme whose rules read these tokens and holds both for the life of
- * the page. A direct call is for bespoke composition, where the caller owns the ordering and the lifetime itself.
+ * the page. A direct call is for bespoke composition, where the caller owns the ordering.
  *
  * Adopted synchronously - token declarations are static and have no I/O dependencies, so the stylesheet is ready by the time the call returns. Must run before any
  * consumer (the page theme, the options-view skin, or any inline style using `var(--fo-*)`) references a token. `webUi.registerTheming` guarantees that for the
  * page theme by registering this effect first, and the feature-options boot registers its skin after that same call.
- *
- * @param {Object} [args]
- * @param {AbortSignal} [args.signal] - Lifecycle signal. Aborting releases the stylesheet from the document. Absent means the stylesheet is held for the life of the
- *                                      document, which is how the page-lifetime registration holds it.
  */
-export const registerTokensEffect = ({ signal = undefined } = {}) => {
-
-  if(signal?.aborted) {
-
-    return;
-  }
+export const registerTokensEffect = () => {
 
   const stylesheet = new CSSStyleSheet();
 
   stylesheet.replaceSync(buildTokenCss());
   document.adoptedStyleSheets = [ ...document.adoptedStyleSheets, stylesheet ];
-
-  signal?.addEventListener("abort", () => {
-
-    // Release the stylesheet. Filter-rebuild rather than mutate to preserve the array's identity contract across consumers.
-    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== stylesheet);
-  }, { once: true });
 };
 
 // Assemble the full token CSS. Grouped by category with a section comment per group so the file reads as the design vocabulary it represents. Within a scale

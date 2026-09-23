@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-theming.test.mjs: Unit tests for the page theme effect - its lifecycle, the color-scheme application, the page base stylesheet, and the page kit - and
- * for the menu-tab paint that wears the page kit's menu classes.
+ * ui/webUi-theming.test.mjs: Unit tests for the page theme effect - its setup, its accent probe, the host routes it follows, the page base stylesheet, and the page
+ * kit - and for the menu-tab paint that wears the page kit's menu classes.
  */
 "use strict";
 
@@ -53,9 +53,7 @@ const postThemeUpdate = (data = { isDark: true, theme: "dark", type: "theme-upda
 // takes it through baseCss below, so the two readings share one adoption.
 const baseSheet = async () => {
 
-  const controller = new AbortController();
-
-  await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
+  await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 } });
 
   return document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
 };
@@ -84,33 +82,17 @@ describe("registerThemeEffect - synchronous setup", () => {
     using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
-    const controller = new AbortController();
 
-    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 } });
 
     assert.equal(document.adoptedStyleSheets.length, before + 1, "stylesheet adopted");
-  });
-
-  test("with no signal the effect applies the host's mode and is held for the life of the document", async () => {
-
-    using dom = createTestDom();
-
-    const before = document.adoptedStyleSheets.length;
-
-    // The page-lifetime registration passes no signal, because nothing ends the page before its document does.
-    await registerThemeEffect({ host: fakeHost("dark"), probe: { timeoutMs: 0 } });
-
-    assert.equal(document.adoptedStyleSheets.length, before + 1, "the stylesheet is adopted with no lifecycle to release it");
-    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "and the host's mode is applied");
   });
 
   test("applies color-scheme on :root from the host's reported lighting mode", async () => {
 
     using dom = createTestDom();
 
-    const controller = new AbortController();
-
-    await registerThemeEffect({ host: fakeHost("dark"), probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host: fakeHost("dark"), probe: { timeoutMs: 0 } });
 
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "dark");
     assert.equal(document.documentElement.classList.contains("fo-dark"), true);
@@ -120,9 +102,7 @@ describe("registerThemeEffect - synchronous setup", () => {
 
     using dom = createTestDom();
 
-    const controller = new AbortController();
-
-    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 } });
 
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "light");
     assert.equal(document.documentElement.classList.contains("fo-dark"), false);
@@ -132,66 +112,28 @@ describe("registerThemeEffect - synchronous setup", () => {
 
     using dom = createTestDom();
 
-    const controller = new AbortController();
-
-    await registerThemeEffect({ host: fakeHost("auto"), probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host: fakeHost("auto"), probe: { timeoutMs: 0 } });
 
     assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "no color-scheme set");
     assert.equal(document.documentElement.classList.contains("fo-dark"), false);
   });
 });
 
-describe("registerThemeEffect - lifecycle", () => {
+describe("registerThemeEffect - the background accent probe", () => {
 
-  test("aborting the signal releases the stylesheet", async () => {
-
-    using dom = createTestDom();
-
-    const before = document.adoptedStyleSheets.length;
-    const controller = new AbortController();
-
-    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
-    assert.equal(document.adoptedStyleSheets.length, before + 1);
-
-    controller.abort();
-    assert.equal(document.adoptedStyleSheets.length, before, "stylesheet released");
-  });
-
-  test("aborting clears the color-scheme, fo-dark class, and accent overrides it set on :root", async () => {
+  test("the registration's own probe writes the host's Bootstrap accent into the accent tokens once Bootstrap has applied", async () => {
 
     using dom = createTestDom();
 
-    const controller = new AbortController();
+    seedBootstrapProbeShim();
 
-    // Register in dark mode so applyColorScheme sets both color-scheme and the fo-dark class; stamp accent overrides directly (the probe is skipped via
-    // timeoutMs: 0) so the teardown has every kind of :root mutation to undo.
-    await registerThemeEffect({ host: fakeHost("dark"), probe: { timeoutMs: 0 }, signal: controller.signal });
-    document.documentElement.style.setProperty("--fo-accent-bg", "rgb(1, 2, 3)");
-    document.documentElement.style.setProperty("--fo-accent-fg", "rgb(4, 5, 6)");
+    // A real readiness wait rather than the timeoutMs: 0 opt-out, so the probe runs on the path a page takes: the wait finds Bootstrap applied, and the probe reads
+    // the accent off it. The registration resolves before the probe, which runs in the background, so the flush is what lets it land.
+    await registerThemeEffect({ host: fakeHost("light"), probe: { intervalMs: 1, timeoutMs: 500 } });
+    await flush();
 
-    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "dark", "precondition: dark applied");
-    assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: fo-dark set");
-
-    controller.abort();
-
-    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "color-scheme cleared on teardown");
-    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "fo-dark class removed on teardown");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), "", "accent-bg override cleared on teardown");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-fg"), "", "accent-fg override cleared on teardown");
-  });
-
-  test("a pre-aborted signal does not adopt anything", async () => {
-
-    using dom = createTestDom();
-
-    const before = document.adoptedStyleSheets.length;
-    const controller = new AbortController();
-
-    controller.abort();
-    await registerThemeEffect({ host: fakeHost("light"), probe: { timeoutMs: 0 }, signal: controller.signal });
-
-    assert.equal(document.adoptedStyleSheets.length, before);
-    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), BOOTSTRAP_PROBE_ACCENT, "the accent background is the probed Bootstrap color");
+    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-fg"), "rgb(255, 255, 255)", "and the accent foreground is its text color");
   });
 });
 
@@ -204,9 +146,8 @@ describe("registerThemeEffect - following the host's theme signals", () => {
     seedBootstrapProbeShim();
 
     const host = flippableHost("light");
-    const controller = new AbortController();
 
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 } });
     await flush();
 
     assert.equal(document.documentElement.classList.contains("fo-dark"), false, "precondition: the page registered in light mode");
@@ -230,9 +171,8 @@ describe("registerThemeEffect - following the host's theme signals", () => {
     seedBootstrapProbeShim();
 
     const host = flippableHost("light");
-    const controller = new AbortController();
 
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 } });
     await flush();
 
     document.documentElement.style.removeProperty("--fo-accent-bg");
@@ -254,9 +194,8 @@ describe("registerThemeEffect - following the host's theme signals", () => {
     seedBootstrapProbeShim();
 
     const host = flippableHost("dark");
-    const controller = new AbortController();
 
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 } });
     await flush();
 
     assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: the page registered in dark mode");
@@ -281,12 +220,11 @@ describe("registerThemeEffect - following the host's theme signals", () => {
     seedBootstrapProbeShim();
 
     const host = flippableHost("dark");
-    const controller = new AbortController();
 
     // The page loads into a frame the host has already retinted dark, so the class is on the body before anything is watching it.
     document.body.classList.add("dark-mode");
 
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 } });
     await flush();
 
     assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: the page registered in dark mode");
@@ -310,9 +248,8 @@ describe("registerThemeEffect - following the host's theme signals", () => {
     seedBootstrapProbeShim();
 
     const host = flippableHost("light");
-    const controller = new AbortController();
 
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 } });
     await flush();
 
     const afterRegistration = host.reads;
@@ -333,9 +270,8 @@ describe("registerThemeEffect - following the host's theme signals", () => {
     seedBootstrapProbeShim();
 
     const host = flippableHost("light");
-    const controller = new AbortController();
 
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
+    await registerThemeEffect({ host, probe: { timeoutMs: 0 } });
     await flush();
 
     const afterRegistration = host.reads;
@@ -371,11 +307,9 @@ describe("registerThemeEffect - following the host's theme signals", () => {
       return realMatchMedia.call(window, query);
     };
 
-    const controller = new AbortController();
-
     try {
 
-      await registerThemeEffect({ host: flippableHost("dark"), probe: { timeoutMs: 0 }, signal: controller.signal });
+      await registerThemeEffect({ host: flippableHost("dark"), probe: { timeoutMs: 0 } });
       await flush();
     } finally {
 
@@ -384,117 +318,6 @@ describe("registerThemeEffect - following the host's theme signals", () => {
 
     assert.deepEqual(queries, [], "the effect never constructs a media query");
     assert.equal(document.documentElement.classList.contains("fo-dark"), true, "precondition: the effect did run and did theme the page");
-  });
-
-  test("teardown disconnects the class observer, so a later body-class change reaches nothing", async () => {
-
-    using dom = createTestDom();
-
-    seedBootstrapProbeShim();
-
-    const host = flippableHost("light");
-    const controller = new AbortController();
-
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
-    await flush();
-
-    // The control that makes the silence after teardown attributable: without proving the observer delivered first, its later quiet could mean it was never
-    // constructed at all.
-    document.body.classList.add("dark-mode");
-    await flush();
-
-    const whileLive = host.reads;
-
-    assert.ok(whileLive > 0, "precondition: the observer is live and a body-class change reaches the follower");
-
-    controller.abort();
-    document.body.classList.remove("dark-mode");
-    await flush();
-
-    assert.equal(host.reads, whileLive, "a body-class change after teardown reaches nothing");
-  });
-
-  test("an abort during the initial mode read tears down cleanly and leaves no observer behind", async () => {
-
-    using dom = createTestDom();
-
-    seedBootstrapProbeShim();
-
-    const before = document.adoptedStyleSheets.length;
-    const initialRead = Promise.withResolvers();
-    const host = flippableHost("dark");
-
-    // The first read never answers until this test says so, which is what holds the effect open at its one await. Every later read answers at once, so the routes
-    // below are free to run while the registration is still parked.
-    host.userCurrentLightingMode = () => {
-
-      host.reads += 1;
-
-      return (host.reads === 1) ? initialRead.promise : Promise.resolve(host.mode);
-    };
-
-    const controller = new AbortController();
-    const registration = registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
-
-    await flush();
-
-    assert.equal(host.reads, 1, "precondition: the initial read is in flight");
-    assert.equal(document.adoptedStyleSheets.length, before + 1, "precondition: the sheet is adopted before that read settles");
-
-    // The observer-liveness precondition. Without it the disconnect assertion at the end passes identically when the observer was never constructed, which is
-    // exactly the misordering this row exists to catch.
-    document.body.classList.add("dark-mode");
-    await flush();
-
-    assert.equal(host.reads, 2, "precondition: the class observer is already live while the initial read is still parked");
-
-    controller.abort();
-    initialRead.resolve("dark");
-
-    // Awaiting the registration is the no-throw assertion: a teardown that raced the read resuming would surface here.
-    await registration;
-    await flush();
-
-    assert.equal(document.adoptedStyleSheets.length, before, "the sheet is released");
-    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "the dark class is gone");
-    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "the color-scheme is gone");
-
-    const afterTeardown = host.reads;
-
-    document.body.classList.remove("dark-mode");
-    await flush();
-
-    assert.equal(host.reads, afterTeardown, "and the observer was disconnected - a post-teardown class change reaches nothing");
-  });
-
-  test("a follow already in flight when the teardown lands cannot put the theme back afterwards", async () => {
-
-    using dom = createTestDom();
-
-    seedBootstrapProbeShim();
-
-    const host = flippableHost("light");
-    const controller = new AbortController();
-
-    await registerThemeEffect({ host, probe: { timeoutMs: 0 }, signal: controller.signal });
-    await flush();
-
-    // Park the follow's own read, then announce a change: the follower is now suspended between reading the mode and writing it.
-    const followRead = Promise.withResolvers();
-
-    host.userCurrentLightingMode = () => followRead.promise;
-    postThemeUpdate();
-    await flush();
-
-    controller.abort();
-    followRead.resolve("dark");
-    await flush();
-
-    // A write that raced the teardown would put the theme back on a document the effect had already promised to leave untouched.
-    assert.equal(document.documentElement.style.getPropertyValue("color-scheme"), "", "no color-scheme survived the teardown");
-    assert.equal(document.documentElement.classList.contains("fo-dark"), false, "no dark class survived it");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-bg"), "", "no accent background survived it");
-    assert.equal(document.documentElement.style.getPropertyValue("--fo-accent-fg"), "", "no accent foreground survived it");
   });
 });
 

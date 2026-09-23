@@ -16,9 +16,8 @@ describe("registerTokensEffect", () => {
     using dom = createTestDom();
 
     const before = document.adoptedStyleSheets.length;
-    const controller = new AbortController();
 
-    registerTokensEffect({ signal: controller.signal });
+    registerTokensEffect();
 
     assert.equal(document.adoptedStyleSheets.length, before + 1, "one stylesheet adopted");
   });
@@ -27,9 +26,7 @@ describe("registerTokensEffect", () => {
 
     using dom = createTestDom();
 
-    const controller = new AbortController();
-
-    registerTokensEffect({ signal: controller.signal });
+    registerTokensEffect();
 
     const stylesheet = document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
     const text = [...stylesheet.cssRules].map((rule) => rule.cssText).join("\n");
@@ -42,52 +39,11 @@ describe("registerTokensEffect", () => {
     assert.match(text, /--fo-opacity-disabled:\s*0\.5/);
   });
 
-  test("aborting the signal releases the stylesheet from the document", () => {
-
-    using dom = createTestDom();
-
-    const before = document.adoptedStyleSheets.length;
-    const controller = new AbortController();
-
-    registerTokensEffect({ signal: controller.signal });
-    assert.equal(document.adoptedStyleSheets.length, before + 1);
-
-    controller.abort();
-    assert.equal(document.adoptedStyleSheets.length, before, "stylesheet released on abort");
-  });
-
-  test("with no signal the stylesheet is adopted and held for the life of the document", () => {
-
-    using dom = createTestDom();
-
-    const before = document.adoptedStyleSheets.length;
-
-    // The page-lifetime registration passes no signal, because nothing ends the page before its document does.
-    registerTokensEffect();
-
-    assert.equal(document.adoptedStyleSheets.length, before + 1, "the stylesheet is adopted with no lifecycle to release it");
-  });
-
-  test("a pre-aborted signal does not adopt the stylesheet at all", () => {
-
-    using dom = createTestDom();
-
-    const before = document.adoptedStyleSheets.length;
-    const controller = new AbortController();
-
-    controller.abort();
-    registerTokensEffect({ signal: controller.signal });
-
-    assert.equal(document.adoptedStyleSheets.length, before, "no adoption against an aborted signal");
-  });
-
   test("dark-mode token block redeclares colors under :root.fo-dark", () => {
 
     using dom = createTestDom();
 
-    const controller = new AbortController();
-
-    registerTokensEffect({ signal: controller.signal });
+    registerTokensEffect();
 
     const stylesheet = document.adoptedStyleSheets[document.adoptedStyleSheets.length - 1];
     const text = [...stylesheet.cssRules].map((rule) => rule.cssText).join("\n");

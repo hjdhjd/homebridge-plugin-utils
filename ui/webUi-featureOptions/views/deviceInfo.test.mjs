@@ -4,13 +4,13 @@
  */
 "use strict";
 
-import { defaultInfoPanel, mountDeviceInfoView } from "./deviceInfo.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "../state.mjs";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
 import { createTestDom } from "../../ui.helpers.mjs";
+import { mountDeviceInfoView } from "./deviceInfo.mjs";
 
 const CATALOG = {
 
@@ -22,7 +22,23 @@ const CATALOG = {
 const DEVICE = { firmwareRevision: "1.2.3", manufacturer: "Acme", model: "X100", name: "Device A", serialNumber: "dev-a" };
 const DEVICE_B = { firmwareRevision: "4.5.6", manufacturer: "Acme", model: "X200", name: "Device B", serialNumber: "dev-b" };
 
-describe("defaultInfoPanel", () => {
+// Mount the view with no plugin renderer, so the framework's own default panel draws, against a loaded store listing the supplied devices. The selection starts at the
+// global view, and each test moves it where it needs it.
+const mountDefaultPanel = ({ devices, root }) => {
+
+  const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+
+  store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
+  store.dispatch({ controllerId: null, type: "devices:requested" });
+  store.dispatch({ controllerId: null, devices, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+  mountDeviceInfoView({ root, signal: new AbortController().signal, store });
+
+  return store;
+};
+
+const selectDevice = (store, deviceId) => store.dispatch({ origin: "user", scope: { controllerId: null, deviceId, kind: "device" }, type: "scope:changed" });
+
+describe("mountDeviceInfoView - the default panel", () => {
 
   test("renders a four-column grid with firmware/serial/model/manufacturer for a populated device", () => {
 
@@ -30,7 +46,7 @@ describe("defaultInfoPanel", () => {
 
     const root = document.createElement("div");
 
-    defaultInfoPanel({ device: DEVICE, panel: root });
+    selectDevice(mountDefaultPanel({ devices: [DEVICE], root }), "dev-a");
 
     const items = [...root.querySelectorAll(".stat-item")];
 
@@ -50,7 +66,7 @@ describe("defaultInfoPanel", () => {
     const root = document.createElement("div");
 
     root.textContent = "stale";
-    defaultInfoPanel({ device: undefined, panel: root });
+    mountDefaultPanel({ devices: [DEVICE], root });
 
     assert.equal(root.textContent, "");
   });
@@ -61,7 +77,7 @@ describe("defaultInfoPanel", () => {
 
     const root = document.createElement("div");
 
-    defaultInfoPanel({ device: { name: "Bare", serialNumber: "bare-1" }, panel: root });
+    selectDevice(mountDefaultPanel({ devices: [{ name: "Bare", serialNumber: "bare-1" }], root }), "bare-1");
 
     const values = [...root.querySelectorAll(".stat-value")].map((s) => s.textContent);
 

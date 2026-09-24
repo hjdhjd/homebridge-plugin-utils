@@ -6,9 +6,9 @@
 /**
  * Shared test helpers for the webUI test suite, anchored by three foundational primitives:
  *
- *   - {@link createTestDom} - builds a Happy-DOM window, installs `document` / `window` / `HTMLElement` / `Event` / `CSSStyleSheet` / `getComputedStyle` as globals,
- *     and returns a `Disposable` handle whose `Symbol.dispose` restores the previous globals and closes the window. Matches the `using dom = createTestDom()`
- *     idiom from `src/` so UI test bodies read the same way their backend counterparts do.
+ *   - {@link createTestDom} - builds a Happy-DOM window, installs the DOM globals `INSTALLED_DOM_GLOBALS` names onto `globalThis`, and returns a `Disposable` handle
+ *     whose `Symbol.dispose` restores the previous globals and closes the window. Matches the `using dom = createTestDom()` idiom from `src/` so UI test bodies
+ *     read the same way their backend counterparts do.
  *   - {@link createSkeletonFeatureOptionsDom} - seeds the document with the exact element tree the `webUi` / `webUiFeatureOptions` orchestrators look up by id
  *     (`configTable`, `controllersContainer`, `devicesContainer`, `search`, page containers, menu buttons, etc.), laid out the way a real consuming shell lays it
  *     out. A single source of truth so every test that needs the full skeleton gets the same shape without copy-pasting, global-only reveal tests included - the

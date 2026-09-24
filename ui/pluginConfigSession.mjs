@@ -7,11 +7,10 @@
 /**
  * PluginConfigSession - the single session-scoped accessor to the persisted plugin configuration, holding a coherent replica of the host config.
  *
- * The webUI needs to read its plugin configuration at several lifecycle points (routing, the first-run flow, the feature-options page) and to write it at two
- * (first-run credential capture, feature-option saves). Left to themselves, each of those sites would call `homebridge.getPluginConfig` independently, at least two
- * would call `homebridge.updatePluginConfig` independently, and each writer would pair its own bare `homebridge.savePluginConfig` with it - several conduits to the
- * same host config, each free to read it at a different moment and to drift from the others. This owner collapses that to one: every read, every stage, and every
- * save of the host config goes through this single accessor, so the held array is the one copy the session reasons about.
+ * The webUI reads and writes its plugin configuration from several places in its lifecycle. Left to themselves, each of those sites would call the host's config
+ * endpoints on its own, and each writer would pair its own bare `homebridge.savePluginConfig` with its write - several conduits to the same host config, each free
+ * to read it at a different moment and to drift from the others. This owner collapses that to one: the host config is read only through {@link sync}, staged only
+ * through {@link commit}, and saved only through {@link persist}, whichever caller holds the session, so the held array is the one copy the session reasons about.
  *
  * The host config is the ultimate source of truth; this class is not a second source but the one correct accessor to the first, holding a replica that is coherent
  * as of its last reference-advancing operation. The held replica advances only through {@link sync} (the read-direction advance, re-reading the host config) and
@@ -28,11 +27,9 @@
  *
  * const session = await PluginConfigSession.open({ host: homebridge, name: "My Platform" });
  *
- * if(!session.platform.controllers?.length) {
- *
- *   await session.commit({ controllers: [ { address, password, username } ] });
- *   await session.persist();
- * }
+ * // Stage a change onto the primary platform entry, then save it. A caller that leaves the save to the user's own Save button stops after the commit.
+ * await session.commit({ controllers });
+ * await session.persist();
  */
 export class PluginConfigSession {
 
@@ -130,9 +127,9 @@ export class PluginConfigSession {
    * Save the host's staged configuration to disk. Every configuration save funnels through this method, completing the set of acts the session owns: {@link sync}
    * reads the host config, {@link commit} stages an edit into it, and this writes what is staged out to disk.
    *
-   * Saving is its own method rather than an option on {@link commit} because staging and saving are separate acts that callers decide between: every consumer runs a
-   * liveness check after staging and skips the save when its deadline has passed, leaving the edit staged for the user's own save to pick up. A commit that also
-   * saved would leave nowhere for that decision to happen.
+   * Saving is its own method rather than an option on {@link commit} because staging and saving are separate acts with separate owners. A caller that stages an
+   * edit on the user's behalf, such as the feature-options persist drain, leaves the save to the user's own Save button, while `commitConfig` stages a plugin's
+   * configuration change and then saves it. A commit that also saved would take that decision away from every caller that leaves it to the user.
    *
    * A thin conduit by construction: it advances neither the replica nor the write generation, because saving persists what is already staged host-side and changes
    * nothing the session holds. Nor does it check that anything was staged - the host saves whatever its in-memory config currently holds, and the session cannot know

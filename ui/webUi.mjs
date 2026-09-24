@@ -19,7 +19,7 @@ const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the pl
 
 /**
  * @typedef {Object} FirstRunContext
- * @property {(patch: Object) => Promise<void>} [commit] - Persist a patch to the primary platform-config entry. Supplied only to `onSubmit` (the one write hook).
+ * @property {(patch: Object) => Promise<void>} [commit] - Stage a patch onto the primary platform-config entry. Supplied only to `onSubmit` (the one write hook).
  * @property {Object} config - The primary platform-config entry, injected so the hook is a pure function of its input rather than reaching for the config itself.
  */
 
@@ -291,8 +291,9 @@ export class webUi {
 
       run: async () => {
 
-        // onSubmit is the one write hook: it validates credentials and persists them. It receives both the current config and a `commit` bound to the session's
-        // single write path, so the hook owns the shape of the write (it knows credentials live under the controllers array) while the session owns persistence.
+        // onSubmit is the one write hook: it validates the credentials and stages them. It receives both the current config and a `commit` bound to the session's
+        // single write path, so the hook owns the shape of the write (it knows credentials live under the controllers array) while the session owns the write
+        // itself. The save is the user's, through the Save button this flow enables at the end of the handoff.
         if(!(await this.#processHandler(this.#firstRun.onSubmit, { commit: (patch) => this.#session.commit(patch), config: this.#session.platform }))) {
 
           return;
@@ -459,7 +460,7 @@ export class webUi {
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
     // flow returns true on a fresh config (no valid credentials yet), and a plugin without one keeps the default `() => false` gate and lands straight on feature
     // options - the right destination for a device-discovery plugin even on a brand-new install. The session has already seeded the minimum shape, so the first-run
-    // flow can persist credentials on submit without a separate eager write here.
+    // flow can stage credentials on submit without a separate eager write here.
     if(!(await this.#processHandler(this.#firstRun.isRequired, { config: this.#session.platform }))) {
 
       document.getElementById("menuWrapper").style.display = "inline-flex";

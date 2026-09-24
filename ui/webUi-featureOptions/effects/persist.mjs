@@ -7,6 +7,7 @@
 import { MUTATING_ACTIONS } from "../state.mjs";
 import { delay } from "../../webUi-liveness.mjs";
 import { effect } from "../store.mjs";
+import { errorMessage } from "../../webUi-errors.mjs";
 import { modelLoaded } from "../selectors.mjs";
 
 /**
@@ -175,10 +176,9 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
 
         store.dispatch({ error, type: "persist:failed" });
 
-        // Surface the failure via the host's toast channel so the user sees an actionable indication that their last edit did not reach the host. The single
-        // toast-emission path keeps the user-facing notification policy in one place; effects elsewhere that dispatch persist:failed have the same path
-        // available through this effect's subscription.
-        host.toast?.error?.(error?.message ?? String(error), "config-persist");
+        // Surface the failure through the host's toast channel, so the user sees that their last edit did not reach the host. This is the one place the drain
+        // announces a final failure, and its text reads through errorMessage, the rule every webUI surface shares for turning a thrown value into words.
+        host.toast?.error?.(errorMessage(error), "config-persist");
 
         return;
       }

@@ -77,12 +77,12 @@ describe("webUiFeatureOptions - connection-error view", () => {
     assert.equal(codeElement.textContent, "Connection refused: 192.0.2.1:1883",
       "the carried connection-failure message must surface verbatim in the error display");
 
-    // The connection-error view owns the header reveal: it reveals #headerInfo itself when it renders the error block, so the error is visible without the orchestrator
-    // running its success-path revealRegions(). Every other region stays hidden - the user has no devices to navigate to, and views never self-reveal on mount; only
-    // the orchestrator's revealRegions() call does that.
+    // The connection-error view owns the error display, content and reveal together: it reveals #headerInfo itself when it renders the error block. The boot's
+    // coordinated reveal shows the rest of the page, and a boot that lands on connection-error returns before that reveal, so every other region stays hidden - the
+    // user has no devices to navigate to, and no view reveals its own region on mount.
     assert.equal(skeleton.headerInfo.style.display, "", "the connection-error view must reveal the header so the error display is visible");
     assert.equal(skeleton.sidebar.style.display, "none", "sidebar must be hidden during connection-error display");
-    assert.equal(skeleton.search.style.display, "none", "the search panel must stay hidden during connection-error display - the view no longer self-reveals");
+    assert.equal(skeleton.search.style.display, "none", "the search panel must stay hidden during connection-error display, because its view never reveals itself");
 
     orchestrator.cleanup();
   });

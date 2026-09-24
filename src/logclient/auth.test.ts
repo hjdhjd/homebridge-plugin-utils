@@ -7,6 +7,8 @@ import { describe, test } from "node:test";
 import { settle, waitUntil } from "../testing/index.ts";
 import type { LogClientCredentials } from "./types.ts";
 import assert from "node:assert/strict";
+import { formatErrorMessage } from "../util.ts";
+import { inspect } from "node:util";
 
 // The connection target every test reuses. The auth flow builds `http://localhost:8581/api/auth/...` from these.
 const TARGET = { host: "localhost", port: 8581 };
@@ -253,6 +255,53 @@ describe("acquireToken - actionable, token-safe errors", () => {
 
     assert.ok(error instanceof LogAuthError);
     assert.doesNotMatch(error.message, /super-secret-password/, "the error message must never echo the credential material");
+  });
+
+  test("never repeats an unreadable success body in the failure or anything it carries", async () => {
+
+    const cases: readonly { readonly body: string; readonly message: string }[] = [
+
+      // This body stays short and opens with a character JSON cannot open with, because the platform parser quotes a body of that length whole...so this row fails
+      // if the parser's error ever reaches the failure.
+      {
+
+        body: "SECRET-BODY-TEXT",
+        message: "No-auth authentication succeeded but returned an unreadable response body: The response body is not valid JSON."
+      },
+      {
+
+        body: "{\"access_token\": \"SECRET-BODY-TEXT",
+        message: "No-auth authentication succeeded but returned an unreadable response body: The response body is not valid JSON at line 1, column 35."
+      }
+    ];
+
+    for(const { body, message } of cases) {
+
+      const { fetch } = fakeFetch(() => new Response(body, { status: 200 }));
+
+      // eslint-disable-next-line no-await-in-loop
+      const error = await acquireToken({ kind: "noauth" }, { ...TARGET, fetch }).catch((e: unknown) => e);
+
+      assert.ok(error instanceof LogAuthError);
+      assert.equal(error.kind, "permanent");
+      assert.equal(error.message, message);
+      assert.doesNotMatch(formatErrorMessage(error), /SECRET-BODY-TEXT/, "the rendered failure must never repeat the response body");
+      assert.doesNotMatch(inspect(error, { depth: Infinity }), /SECRET-BODY-TEXT/, "nothing the failure carries may hold the response body");
+    }
+  });
+
+  test("never carries a well-formed success body that holds no access token", async () => {
+
+    // The token sits under a key the client does not read, so the body is well-formed and still carries it.
+    const { fetch } = fakeFetch(() => jsonResponse({ token: "SECRET-BODY-TEXT" }));
+
+    const error = await acquireToken({ kind: "noauth" }, { ...TARGET, fetch }).catch((e: unknown) => e);
+
+    assert.ok(error instanceof LogAuthError);
+    assert.equal(error.kind, "permanent");
+    assert.equal(error.message, "No-auth authentication succeeded but returned no access token.");
+    assert.doesNotMatch(formatErrorMessage(error), /SECRET-BODY-TEXT/, "the rendered failure must never repeat the response body");
+    assert.doesNotMatch(inspect(error, { depth: Infinity }), /SECRET-BODY-TEXT/, "nothing the failure carries may hold the response body");
   });
 
   test("isPermanentAuthError returns false for a non-auth error", () => {

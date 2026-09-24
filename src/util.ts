@@ -16,23 +16,24 @@ import { systemClock } from "./clock.ts";
 
 /* HomeKit's naming rule, stated once as the character classes it is built from, so validateName() and sanitizeName() read one definition and cannot drift apart. A
  * name starts with a letter or number, ends with a letter, number, or period, and in between holds only letters, numbers, spaces, and HomeKit's permitted punctuation.
- * Each is the body of a character class, composed into the patterns below. A one-character name is its own start and end, so a single letter or number is a complete
- * name.
+ * No character in a name may be pictographic, a letter Unicode also marks pictographic included, so the letter-and-number class subtracts every pictograph and every
+ * class below is built on it: the validator and the sanitizer read the exclusion from the same classes rather than from a check of their own. Each constant is a
+ * whole class in the v flag's set notation, which is what lets the patterns below nest, subtract, and negate them. A one-character name is its own start and end, so
+ * a single letter or number is a complete name.
  */
-const NAME_START_CHARACTERS = "\\p{L}\\p{N}";
-const NAME_END_CHARACTERS = NAME_START_CHARACTERS + ".";
-const NAME_CHARACTERS = NAME_START_CHARACTERS + "\\-\"'.,#& ";
+const NAME_START_CHARACTERS = "[[\\p{L}\\p{N}]--\\p{Extended_Pictographic}]";
+const NAME_END_CHARACTERS = "[" + NAME_START_CHARACTERS + "\\.]";
+const NAME_CHARACTERS = "[" + NAME_START_CHARACTERS + "\\-\"'.,#& ]";
 
 // Validates a name against HomeKit's naming conventions. Compiled once at module scope since this sits on the fast path of sanitizeName(). The end class is optional
 // after the start class, which is what lets one character that may both start and end a name stand alone.
-const VALID_HOMEKIT_NAME = new RegExp("^(?!.*\\p{Extended_Pictographic})(?!.* {2})(?=^[" + NAME_START_CHARACTERS + "](?:.*[" + NAME_END_CHARACTERS + "])?$)[" +
-  NAME_CHARACTERS + "]+$", "u");
+const VALID_HOMEKIT_NAME = new RegExp("^(?!.* {2})(?=^" + NAME_START_CHARACTERS + "(?:.*" + NAME_END_CHARACTERS + ")?$)" + NAME_CHARACTERS + "+$", "v");
 
 // The sanitizer's passes, each the inverse of one part of the rule above: every character a name may not hold anywhere, the run of characters a name may not start
 // with, and the run of characters a name may not end with. Stripping each whole run, rather than a single character, is what lets the result satisfy the validator.
-const NAME_DISALLOWED = new RegExp("[^" + NAME_CHARACTERS + "]", "gu");
-const NAME_INVALID_START = new RegExp("^[^" + NAME_START_CHARACTERS + "]+", "u");
-const NAME_INVALID_END = new RegExp("[^" + NAME_END_CHARACTERS + "]+$", "u");
+const NAME_DISALLOWED = new RegExp("[^" + NAME_CHARACTERS + "]", "gv");
+const NAME_INVALID_START = new RegExp("^[^" + NAME_START_CHARACTERS + "]+", "v");
+const NAME_INVALID_END = new RegExp("[^" + NAME_END_CHARACTERS + "]+$", "v");
 
 // The line and column V8 reports for a JSON syntax error, which close its message whenever it computes a position. The rest of that message can quote the text
 // around the failure, and a JSON file is where a stored password or token lives, so parseJson() reads only this position out of it and never repeats the message

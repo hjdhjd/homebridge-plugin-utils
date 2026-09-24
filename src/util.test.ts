@@ -3543,8 +3543,14 @@ describe("validateName", () => {
 
   test("rejects names containing emoji", () => {
 
-    // The `(?!.*\p{Extended_Pictographic})` lookahead is the emoji-exclusion guard - any pictographic code point anywhere in the name fails the match.
+    // An emoji falls outside every character class a name may hold, so one anywhere in the name fails the match.
     assert.equal(validateName("Rocket \u{1F680}"), false);
+  });
+
+  test("rejects a letter that is also pictographic", () => {
+
+    // U+2139 is a letter Unicode also marks pictographic, so a name's classes refuse it only because they subtract every pictograph.
+    assert.equal(validateName("Info \u{2139}"), false);
   });
 
   test("rejects names containing disallowed punctuation", () => {
@@ -3641,6 +3647,34 @@ describe("sanitizeName", () => {
 
     // Pictographic code points fall through the character-class replacement to a space, which is then trimmed out from the ends.
     assert.equal(sanitizeName("Rocket \u{1F680} Lamp"), "Rocket Lamp");
+  });
+
+  test("strips a letter that is also pictographic, so the result satisfies validateName", () => {
+
+    // U+2139 is a letter Unicode also marks pictographic. The disallowed pass negates the same classes the validator matches, and those classes subtract every
+    // pictograph, so the letter is stripped wherever it sits, in the form an emoji keyboard types too, and the answer is a name the validator accepts or no name at all.
+    const rows: readonly (readonly [ string, string ])[] = [
+
+      [ "Front \u{2139} Door", "Front Door" ],
+      [ "\u{2139} Test", "Test" ],
+      [ "Test \u{2139}", "Test" ],
+      [ "A\u{2139}", "A" ],
+      [ "\u{2139}", "" ],
+      [ "\u{2139}\u{FE0F} Info", "Info" ],
+      [ "Info \u{2139}\u{FE0F}", "Info" ],
+      [ "\u{1F600} Lamp", "Lamp" ],
+      [ "Garage \u{A9} Door", "Garage Door" ],
+      [ "Test|Switch", "Test Switch" ],
+      [ "Front Door", "Front Door" ]
+    ];
+
+    for(const [ input, expected ] of rows) {
+
+      const answer = sanitizeName(input);
+
+      assert.equal(answer, expected, "sanitizing " + JSON.stringify(input));
+      assert.ok((answer === "") || validateName(answer), "the answer for " + JSON.stringify(input) + " is a name the validator accepts or no name at all");
+    }
   });
 
   test("produces a HomeKit-valid result from a messy input", () => {

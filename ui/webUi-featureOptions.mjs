@@ -655,7 +655,9 @@ export class webUiFeatureOptions {
    *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
    *   6. Register the page's theming through the orchestrator's wiring (once for the page, not once per cycle), then fire the options-skin, persist, and keyboard
-   *      effects. The theming registration's I/O - the lighting-mode read and the Bootstrap probe - runs in the background.
+   *      effects and the edit-hook effect, which calls the plugin's edit hooks after a mutation changes the configured options. Attach the document
+   *      visibilitychange and window blur listeners, which drain a pending edit when the page is hidden or loses focus - the blur listener first commits a value
+   *      input that still holds focus. The theming registration's I/O - the lighting-mode read and the Bootstrap probe - runs in the background.
    *   7. Once controllers resolves: hold it to the hook contract, then check the error it carries - a wrong-shaped result and a reported connection failure both
    *      land on the connection-error view and return, so the no-controllers helper text can never stand in for an unreachable controller or a hook that answered
    *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return. Both of those surfaces take the frame
@@ -663,13 +665,15 @@ export class webUiFeatureOptions {
    *   8. In the device-bearing modes, select the initial controller (the same transient controller scope a sidebar click dispatches), then record and pre-fire its
    *      devices fetch (a `devices:requested` mints its sequence) so it overlaps with the feature catalog. Device-only mode has no controller to select and stays on
    *      global; global-only mode skips the step entirely - it fetches no devices.
-   *   9. Once the feature catalog resolves: build the catalog and dispatch model:loaded - the mounted views transition off their loading placeholder and render.
+   *   9. Once the feature catalog resolves: build the catalog, throw through assertChoiceSources when it names a choice source no resolver backs, and dispatch
+   *      model:loaded - the mounted views transition off their loading placeholder and render. Then call the plugin's onLoaded hook, with no await between the
+   *      dispatch and the call.
    *  10. Global-only mode ends here: after the theme settles it clears #headerInfo (the header view that reclaims it in the other modes never mounts), clears the boot
-   *      affordance, and reveals the reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once devices resolve,
-   *      dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure
-   *      into the connection-error transition; the orchestrator gates its follow-ups on that verdict - a superseded outcome or a connection-error status clears the
-   *      affordance and returns without revealing, otherwise it carries the selection on to the controller-as-device entry when the mode and the device list call
-   *      for that.
+   *      affordance, and reveals the reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once the device
+   *      fetch settles, dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds
+   *      a fetch failure into the connection-error transition. A connection-error status, whichever fetch left it, clears the affordance and returns without
+   *      revealing. Otherwise an outcome that applied carries the selection on to the controller-as-device entry when the mode and the device list call for that,
+   *      and a superseded one leaves the selection to the fetch that superseded it.
    *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
@@ -690,8 +694,9 @@ export class webUiFeatureOptions {
     document.getElementById("pageSupport").style.display = "none";
     document.getElementById("pageFeatureOptions").style.display = "block";
 
-    // Tear down any prior show() cycle first. hide() is now async (it flushes any pending edit from the prior cycle before aborting), so we await it: a re-show via
-    // the menu or the connection-error retry must drain the previous cycle's debounced edit before this cycle's store replaces it.
+    // Tear down any prior show() cycle first. hide() flushes any pending edit from the prior cycle and waits for a coordinated write in flight, each under a bound,
+    // before it aborts that cycle, so we await it: a re-show via the menu or the connection-error retry must drain the previous cycle's debounced edit before this
+    // cycle's store replaces it.
     await this.hide();
 
     /* The last act before the new cycle is minted, and its placement is the rule rather than a preference: a later show() entered while this one waited on the
@@ -1062,26 +1067,10 @@ export class webUiFeatureOptions {
         site: "devices"
       });
 
-      // Clearing the affordance and rendering the failure are one terminal action, so they go through the staleness guard together. A cycle superseded while parked on
-      // this await reaches this catch after the cycle that replaced it has installed an affordance of its own, and its own was retired by its abort listener the moment
-      // it was superseded - so a dead cycle has nothing of its own left to clear here, and clearing unguarded would take the live page's frame away on its behalf.
-      this.#unlessStale({ run: () => {
-
-        this.#removeBootAffordance();
-
-        this.#store.dispatch({
-
-          controllerId: initialController?.serialNumber ?? null,
-          devices: [],
-          error: errorMessage(err),
-          guidance,
-          headline,
-          seq: devicesSeq,
-          type: "devices:loaded"
-        });
-      }, signal });
-
-      return;
+      // A rejection becomes the outcome a hook that reports its own failure returns, so both travel the one dispatch and the one set of follow-ups below. A failure
+      // the reducer drops as superseded then ends the boot exactly as a superseded success does. The abort check after this block guards both, so a cycle superseded
+      // while parked here returns there without touching the affordance or the store its successor owns.
+      outcome = { devices: [], error: errorMessage(err), guidance, headline };
     }
 
     if(signal.aborted) {
@@ -1111,21 +1100,17 @@ export class webUiFeatureOptions {
       type: "devices:loaded"
     });
 
-    // Gate every follow-up on the reducer's own verdict: my outcome applied only when the sequence I carried is the one the reducer recorded. A controller click that
-    // raced this initial fetch would have superseded it - its outcome owns the store, and this stale continuation must neither reveal the page over it nor overwrite
-    // its scope.
-    if(this.#store.state.devicesAppliedSeq !== devicesSeq) {
+    // The reducer's own verdict on this outcome: it applied only when the sequence it carried is the one the reducer recorded. A fetch that superseded it, such as
+    // the selection refetch a coordinated write issues while the boot is still out, owns the device list and the selection, so the verdict gates the one follow-up
+    // below that writes scope. It does not gate the reveal: every view renders from the store whichever fetch filled it, so the page is revealed into the winning
+    // fetch's outcome, and while that fetch is still out the page shows the busy table a sidebar click shows during its own fetch.
+    const applied = this.#store.state.devicesAppliedSeq === devicesSeq;
 
-      this.#removeBootAffordance();
-
-      return;
-    }
-
-    // My outcome applied and it turned the store to connection-error: a selected controller whose probe reported a failure. The failure message travelled back on the
-    // DeviceListResult rather than through a separate request, and the reducer folded it into the connection-error transition. The connection-error view reveals
-    // #headerInfo itself when it renders the error block (it is the sole owner of the error display, content and reveal together), so the orchestrator only returns
-    // here. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and the success-path revealRegions() never runs on this
-    // branch - because the user has no devices to navigate to.
+    // The store stands on connection-error: a selected controller whose probe reported a failure, carried by this outcome or by a fetch that superseded it. The
+    // failure message travelled back on the DeviceListResult rather than through a separate request, and the reducer folded it into the connection-error transition.
+    // The connection-error view reveals #headerInfo itself when it renders the error block (it is the sole owner of the error display, content and reveal together),
+    // so the orchestrator only returns here. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and the reveal below never
+    // runs on this branch - because the user has no devices to navigate to.
     if(this.#store.state.status.kind === "connection-error") {
 
       this.#removeBootAffordance();
@@ -1141,7 +1126,7 @@ export class webUiFeatureOptions {
      * reveal below changes for those: the notice lives inside the config table's region, so it appears with the page rather than ahead of it, and the search
      * panel's bars settled during the dispatch above.
      */
-    if(initialController !== null) {
+    if(applied && (initialController !== null)) {
 
       completeControllerSelection({ controllerId: initialController.serialNumber, store: this.#store });
     }
@@ -1786,9 +1771,9 @@ export class webUiFeatureOptions {
   /**
    * The staleness chokepoint: run an action only while the cycle it belongs to is still the live one.
    *
-   * Every bounded await now settles - that is the whole point of the deadline - which is exactly what makes this necessary. A cycle that was superseded while it waited
-   * still reaches its own catch, and the store it would reach for is the field the NEXT show() reassigned. Routing every late outcome through one guard, closured over
-   * its own cycle's signal, is what keeps a dead cycle's failure from painting an error over a page that has already rendered.
+   * Every bounded await settles - that is the whole point of the deadline - which is exactly what makes this necessary. A cycle that was superseded while it waited
+   * still reaches its own catch, and the store it would reach for is the field the NEXT show() reassigned. Routing every catch that acts on a late failure through one
+   * guard, closured over its own cycle's signal, is what keeps a dead cycle's failure from painting an error over a page that has already rendered.
    *
    * It is a method rather than a discipline for the same reason: an inline `if(signal.aborted)` at each catch is a rule that has to be remembered at every future
    * failure path, while a single chokepoint is a rule the code enforces.

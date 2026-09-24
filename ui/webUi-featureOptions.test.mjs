@@ -664,10 +664,10 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 describe("webUiFeatureOptions.show - a controller click racing the initial device fetch", () => {
 
   // The staleness contract end-to-end: the reducer's fetch sequence is the fetch identity, so a controller click made while show()'s own initial fetch is still in
-  // flight owns the store, and show()'s superseded outcome neither reveals the page over the click's state nor overwrites its scope. The initial controller's fetch is
-  // gated so it stays parked while the click's (ungated) fetch resolves and applies; releasing the initial fetch afterward exercises the reducer dropping the stale
-  // outcome and show() gating its follow-ups on `devicesAppliedSeq`.
-  test("a controller click during the initial fetch wins - show()'s superseded outcome neither reveals over it nor overwrites its scope", async () => {
+  // flight owns the store, and show()'s superseded outcome writes no scope over the click's while the boot still reveals the page into the click's state. The
+  // initial controller's fetch is gated so it stays parked while the click's (ungated) fetch resolves and applies; releasing the initial fetch afterward exercises
+  // the reducer dropping the stale outcome and show() gating its selection completion on `devicesAppliedSeq`.
+  test("a controller click during the initial fetch wins - show()'s superseded outcome keeps the click's scope and reveals the page into it", async () => {
 
     using dom = createTestDom();
 
@@ -719,20 +719,84 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
       "the click's controller scope must be the active selection");
     assert.ok(skeleton.devicesContainer.querySelector(".nav-link.active") === null, "and no device link is active, since the click's list named no controller row");
 
-    // Release the initial CTRL-A fetch. Its outcome carries the superseded sequence, so the reducer drops it and show() returns on the `devicesAppliedSeq` gate.
+    // Release the initial CTRL-A fetch. Its outcome carries the superseded sequence, so the reducer drops it and show() skips the selection completion its
+    // `devicesAppliedSeq` verdict gates.
     releaseInitial();
     await showPromise;
     await flush();
 
-    // show()'s stale outcome never landed: DEV-A did not render, DEV-B still owns the sidebar and the selection, and the reveal bailed (the sidebar stays hidden
-    // because show() returned before revealRegions - the click owns presentation, not the superseded initial flow).
+    // show()'s stale outcome never landed: DEV-A did not render, and DEV-B still owns the sidebar and the selection.
     assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-A']") === null, "show()'s superseded outcome must not render its device (DEV-A)");
     assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='DEV-B']"), "the click's device must remain after the stale outcome dropped");
     assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-B']").classList.contains("active"), true,
       "show()'s initial scope dispatch must not overwrite the click's selection");
     assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='CTRL-A']").classList.contains("active"), false,
       "and the superseded controller is not the selection");
-    assert.equal(skeleton.sidebar.style.display, "none", "the reveal bail: show() returned before revealRegions on its superseded outcome");
+    assert.equal(skeleton.sidebar.style.display, "", "the boot still reveals the page, into the state the click's outcome left");
+
+    // The reveal is recorded as well as shown: the takeover view restores a released card's regions only once the store records the reveal.
+    const handle = orchestrator.takeover(document.createElement("section"));
+
+    assert.equal(skeleton.optionsContainer.style.display, "none", "precondition: the card holds the content area");
+
+    handle.release();
+
+    assert.equal(skeleton.optionsContainer.style.display, "", "and its release restores the regions, because the boot recorded its reveal");
+
+    orchestrator.cleanup();
+  });
+
+  test("a click whose list names its controller row keeps that selection when show()'s superseded continuation lands", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig(), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Each list leads with its controller's own row, which isController names, so a fetch that applies carries its selection onto that row. That is what gives a
+    // stale continuation something to write: the row the store holds is CTRL-B's, and completing CTRL-A's selection over it would name CTRL-A as its controller.
+    const initialGate = Promise.withResolvers();
+    const listOf = (serialNumber) => [
+
+      { firmwareRevision: "1.0", manufacturer: "Acme", model: "Hub", name: serialNumber, serialNumber },
+      { firmwareRevision: "1.0", manufacturer: "Acme", model: "Cam", name: "Camera", serialNumber: serialNumber + "-CAM" }
+    ];
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "" }),
+      getDevices: async (controller) => {
+
+        if(controller.serialNumber === "CTRL-A") {
+
+          await initialGate.promise;
+        }
+
+        return { devices: listOf(controller.serialNumber), error: "" };
+      },
+      ui: { isController: (device) => !device.serialNumber.endsWith("-CAM") }
+    });
+
+    const showPromise = orchestrator.show(await openTestSession());
+    const controllerLink = (serial) => skeleton.controllersContainer.querySelector("[data-navigation='controller'][data-device-serial='" + serial + "']");
+
+    (await waitFor(() => controllerLink("CTRL-B"), { message: "the nav must mount the CTRL-B link while the initial fetch is gated" })).click();
+    await flush();
+
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-B",
+      "precondition: the click carried its selection onto CTRL-B's own row");
+
+    initialGate.resolve();
+    await showPromise;
+    await flush();
+
+    assert.equal(controllerLink("CTRL-B").classList.contains("active"), true, "the click's controller keeps the selection");
+    assert.equal(controllerLink("CTRL-A").classList.contains("active"), false, "and show()'s superseded continuation writes no selection of its own over it");
+    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-B",
+      "so the selection still rests on CTRL-B's own row");
 
     orchestrator.cleanup();
   });

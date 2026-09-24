@@ -1071,6 +1071,128 @@ describe("webUiFeatureOptions.commitConfig - the selection after an establishmen
   });
 });
 
+describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fetch", () => {
+
+  /* Start a boot whose device fetches are all held, and issue a write once its model has loaded, which is the window a plugin's onLoaded hook or a takeover card
+   * writes from. The write establishes the page in place, and the establishment's selection refetch is a second device fetch for the boot's own controller that
+   * supersedes the boot's. Both fetches stay held, so each row chooses which lands first and how it lands.
+   */
+  const raceBoot = async (page) => {
+
+    const fetches = [];
+
+    page.hooks.onDevices = ({ answer }) => {
+
+      const { promise, reject, resolve } = Promise.withResolvers();
+
+      fetches.push({ answer, reject, resolve });
+
+      return promise;
+    };
+
+    const booted = page.orchestrator.show(await openTestSession());
+
+    await waitFor(() => page.state.loaded === 1, { message: "the boot to load its model while its device fetch is held" });
+
+    assert.deepEqual(await page.orchestrator.commitConfig(() => ({ controllers: [CONTROLLER_A] })), { kind: "committed" }, "precondition: the write landed");
+
+    await waitFor(() => fetches.length === 2, { message: "the establishment's selection refetch to be outstanding beside the boot's own fetch" });
+
+    return { boot: fetches[0], booted, refetch: fetches[1] };
+  };
+
+  // A device the boot's own answer carries and the refetch's does not, so the sidebar says whose list the store holds.
+  const STALE = { firmwareRevision: "2.0", manufacturer: "Acme", model: "Cam", name: "Garage", serialNumber: "CTRL-A-GARAGE-CAM" };
+
+  const activeDevice = (page) => page.skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial");
+
+  test("the boot's superseded outcome reveals the page onto the refetch still in flight, and the refetch completes the selection when it lands", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    const { boot, booted, refetch } = await raceBoot(page);
+
+    boot.resolve({ ...boot.answer, devices: [ ...boot.answer.devices, STALE ] });
+    await booted;
+    await flush();
+
+    assert.equal(page.skeleton.sidebar.style.display, "", "the boot reveals the page although the refetch that superseded it is still out");
+    assert.equal(tableHeld(page.skeleton), true, "onto the busy table a sidebar click shows while its own fetch is out");
+
+    refetch.resolve(refetch.answer);
+    await flush();
+
+    assert.equal(tableHeld(page.skeleton), false, "the refetch landing settles the table");
+    assert.ok(page.skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-CAM']"), "the sidebar carries the refetch's list");
+    assert.ok(page.skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-GARAGE-CAM']") === null, "and not the boot's superseded one");
+    assert.equal(activeDevice(page), "CTRL-A", "the refetch carries the selection onto the controller's own row");
+    assert.ok(page.skeleton.pageFeatureOptions.querySelector(".progress-bar-striped") === null, "no boot affordance remains on the page");
+
+    const handle = page.orchestrator.takeover(document.createElement("section"));
+
+    handle.release();
+
+    assert.equal(page.skeleton.optionsContainer.style.display, "", "a released card's regions come straight back, because the boot recorded its reveal");
+  });
+
+  test("a refetch that fails after the boot's superseded reveal shows its error with the sidebar standing", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    const { boot, booted, refetch } = await raceBoot(page);
+
+    boot.resolve(boot.answer);
+    await booted;
+    await flush();
+
+    refetch.reject(new Error("Controller unreachable."));
+    await flush();
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to connect to the controller\./, "the refetch's failure renders in the header");
+    assert.equal(page.skeleton.sidebar.style.display, "", "beside the sidebar the boot revealed, as a sidebar click's failure after the boot renders");
+  });
+
+  test("a refetch that failed before the boot's superseded outcome lands leaves the boot on the connection-error frame", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    const { boot, booted, refetch } = await raceBoot(page);
+
+    refetch.reject(new Error("Controller unreachable."));
+    await flush();
+
+    boot.resolve(boot.answer);
+    await booted;
+    await flush();
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to connect to the controller\./, "the store's standing failure is what the page shows");
+    assert.equal(page.skeleton.sidebar.style.display, "none", "with the rest of the page hidden, as for a boot whose own fetch failed");
+    assert.ok(page.skeleton.pageFeatureOptions.querySelector(".progress-bar-striped") === null, "and no boot affordance left over it");
+  });
+
+  test("a boot fetch that rejects after the refetch has landed still reveals the page the refetch filled", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    const { boot, booted, refetch } = await raceBoot(page);
+
+    refetch.resolve(refetch.answer);
+    await flush();
+
+    boot.reject(new Error("Controller unreachable."));
+    await booted;
+    await flush();
+
+    assert.equal(page.skeleton.sidebar.style.display, "", "the boot's dropped failure reveals the page as a dropped success does");
+    assert.doesNotMatch(page.skeleton.headerInfo.textContent, /Unable to/, "with no failure shown, because the store holds the refetch's clean outcome");
+    assert.equal(activeDevice(page), "CTRL-A", "and the selection the refetch completed");
+  });
+});
+
 describe("webUiFeatureOptions.commitConfig - the caller's own bugs and the page's own edges", () => {
 
   test("a call before the first show() rejects, and one after cleanup() still writes and saves", async () => {

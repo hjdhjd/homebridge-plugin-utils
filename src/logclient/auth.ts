@@ -21,9 +21,9 @@
  *
  * @module
  */
+import { formatErrorMessage, parseJson } from "../util.ts";
 import type { EndpointTarget } from "./endpoints.ts";
 import type { LogClientCredentials } from "./types.ts";
-import { formatErrorMessage } from "../util.ts";
 import { httpBaseUrl } from "./endpoints.ts";
 
 // The auth API returns these status codes for a genuine credential or precondition problem: 401 (wrong username/password, or the no-auth path used against a server not
@@ -136,13 +136,16 @@ interface TokenRequest {
 // Read a token out of a successful auth response body. The server returns `{ access_token, token_type: "Bearer", expires_in }`; we need only `access_token`. A 2xx
 // response whose body is missing or malformed is treated as a permanent failure, because a server that answers a valid request with an unparseable success body will
 // not behave differently on retry - the contract is broken, not the moment.
+//
+// This body is the one that carries the token, so it is parsed through parseJson(), which reports a malformed document by where it failed and never by what it
+// says. The platform parser's own error can quote the text around the failure, and that text can be the token itself.
 async function readAccessToken(response: Response, pathLabel: string): Promise<string> {
 
   let body: unknown;
 
   try {
 
-    body = await response.json();
+    body = parseJson({ subject: "The response body", text: await response.text() });
   } catch(error: unknown) {
 
     throw new LogAuthError(pathLabel + " succeeded but returned an unreadable response body: " + formatErrorMessage(error) + ".", { cause: error, kind: "permanent" });
@@ -150,9 +153,11 @@ async function readAccessToken(response: Response, pathLabel: string): Promise<s
 
   const token = isRecord(body) ? body["access_token"] : undefined;
 
+  // The body is deliberately not attached as the cause. It is the response that carries the token, so a token the server placed under another key would travel
+  // with this error to anything that inspects it.
   if(typeof token !== "string") {
 
-    throw new LogAuthError(pathLabel + " succeeded but returned no access token.", { cause: body, kind: "permanent" });
+    throw new LogAuthError(pathLabel + " succeeded but returned no access token.", { kind: "permanent" });
   }
 
   return token;

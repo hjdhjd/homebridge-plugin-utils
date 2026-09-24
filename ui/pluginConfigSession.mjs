@@ -106,7 +106,7 @@ export class PluginConfigSession {
    * resolves. Every configuration write funnels through this method; it is the write-direction counterpart of {@link sync}.
    *
    * Transactional by construction: the next array is built and written before it replaces the held reference, so a rejected write throws without moving the session
-   * off its last-good state. Callers that need to surface the failure (the persist effect's rollback path) catch the rejection; the session itself stays consistent
+   * off its last-good state. Callers that need to surface the failure (the staging effect's rollback path) catch the rejection; the session itself stays consistent
    * either way.
    *
    * @param {Object} patch - Fields to merge onto the primary platform entry (e.g. `{ controllers }` or `{ options }`). The primary entry's other fields are preserved.
@@ -128,7 +128,7 @@ export class PluginConfigSession {
    * reads the host config, {@link commit} stages an edit into it, and this writes what is staged out to disk.
    *
    * Saving is its own method rather than an option on {@link commit} because staging and saving are separate acts with separate owners. A caller that stages an
-   * edit on the user's behalf, such as the feature-options persist drain, leaves the save to the user's own Save button, while `commitConfig` stages a plugin's
+   * edit on the user's behalf, such as the feature-options staging drain, leaves the save to the user's own Save button, while `commitConfig` stages a plugin's
    * configuration change and then saves it. A commit that also saved would take that decision away from every caller that leaves it to the user.
    *
    * A thin conduit by construction: it advances neither the replica nor the write generation, because saving persists what is already staged host-side and changes

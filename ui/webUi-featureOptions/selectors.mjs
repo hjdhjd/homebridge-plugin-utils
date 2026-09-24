@@ -61,18 +61,18 @@ export const editsHeld = (state) => {
  * Report whether an option edit is outstanding against the host. Pure helper - one-line read of the two facts that answer it, not memoized.
  *
  * Two situations count and they are the same question asked a moment apart: the store carries an edit the page has not written (configuredOptions has moved off
- * the anchor), or the page is writing one (the write lifecycle is persisting). A caller that must act on the configuration as the host holds it - a coordinated
+ * the anchor), or the page is writing one (the write lifecycle is staging). A caller that must act on the configuration as the host holds it - a coordinated
  * write, which has to drain the user's edits before it composes - asks this before it acts, because either situation means the host's copy is about to change.
  *
- * The persist effect's own dirty checks ask the narrower question, and deliberately keep asking it: each of those is deciding whether there is anything to write
+ * The staging effect's own dirty checks ask the narrower question, and deliberately keep asking it: each of those is deciding whether there is anything to write
  * on this iteration, which an in-flight write does not answer for.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {boolean} True while an edit is unwritten or in flight, false when the store and the host agree.
  */
-export const persistPending = (state) => {
+export const stagingPending = (state) => {
 
-  return (state.configuredOptions !== state.persistedAnchor) || (state.write.kind === "persisting");
+  return (state.configuredOptions !== state.stagedAnchor) || (state.write.kind === "staging");
 };
 
 /**
@@ -297,7 +297,7 @@ export const scopingControllerId = memoize({
  * Precedence is the whole of the rule, evaluated top to bottom. A standing `connection-error` wins over everything: that view has taken the frame and owns the message,
  * and the table beneath it would be offering the options of a controller that never confirmed it could be reached. Next comes the notice, which is a
  * per-controller-view presentation rather than a page state, which is why it is derived from the device facts here rather than carried as a status variant an unrelated
- * persist would destroy. Everything else is the ordinary table.
+ * stage would destroy. Everything else is the ordinary table.
  *
  * The notice is what a settled controller view presents when the controller has no scoping identity. The row `ui.isController` names IS the controller's identity
  * on this page, so a controller whose landed list holds no such row has nothing that controller-scope entries could be keyed by...offering the table there would

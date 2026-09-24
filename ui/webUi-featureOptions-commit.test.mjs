@@ -244,7 +244,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
 
     optionRow(page.skeleton, "Motion", "Motion.Detect").click();
 
-    // The edit is inside the persist debounce and has reached no host yet, which is the state the call has to resolve before it composes.
+    // The edit is inside the staging debounce and has reached no host yet, which is the state the call has to resolve before it composes.
     assert.equal(page.fake.observed.updatedConfigs.length, 0, "precondition: nothing has been written yet");
 
     const composed = [];
@@ -541,7 +541,7 @@ describe("webUiFeatureOptions.commitConfig - the revert target", () => {
   });
 
   /* The page's side of the drain's rescued failure: a write the host refused, superseded by an edit before the refusal surfaced, ends with the store on its
-   * anchor and the write lifecycle answered rather than parked at `persisting` forever. The persist effect's own suite proves the drain swallows that failure;
+   * anchor and the write lifecycle answered rather than parked at `staging` forever. The staging effect's own suite proves the drain swallows that failure;
    * this row proves what the page owes afterwards, because a coordinated write refuses to start against a claim it thinks is still in flight. The revert is what
    * takes the store back to the array it loaded, so it also shows the revert itself writing nothing: two writes reach the host, the refused edit and the
    * coordinated write, and never a third one for the revert.

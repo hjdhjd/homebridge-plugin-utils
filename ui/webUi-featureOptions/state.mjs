@@ -17,8 +17,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     carries different data, so merging them into a flat record would smear the guarantees across two fields and force consumers to recover the kind via
  *     predicates.
  *   - {@link LifecycleStatus} - `loading` | `ready` | `connection-error`. The page-reachability pointer, carrying the full display copy when the connection broke.
- *   - {@link WriteLifecycle} - `idle` | `persisting` | `persist-error` | `committing`. What is happening to the configuration write, carrying the snapshot in
- *     flight or the error that ended one. Separate from the status because the facts co-occur: a save can be in flight, or have failed, while a controller
+ *   - {@link WriteLifecycle} - `idle` | `staging` | `staging-error` | `committing`. What is happening to the configuration write, carrying the snapshot in
+ *     flight or the error that ended one. Separate from the status because the facts co-occur: a write can be in flight, or have failed, while a controller
  *     cannot be reached.
  *   - {@link Catalog} - `CatalogIndex` (from featureOptions.ts) extended with plugin-provided validator callbacks and choice-source resolvers. Bundled as one
  *     value because the index, the validators, and the choice sources are plugin-provided immutable config moving together; splitting them would force every
@@ -55,11 +55,11 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `options:reset` - every configured option dropped (reset to defaults).
  *   - `model:reverted` - configuredOptions restored to the at-show() snapshot.
  *   - `filter:changed` - search query and/or filter mode updated.
- *   - `persist:started` - persist call entering flight; the write lifecycle becomes persisting, carrying the snapshot.
- *   - `persist:succeeded` - the host accepted the write; anchor updated, the write lifecycle returns to idle.
- *   - `persist:failed` - final-attempt failure (no superseding mutation); configuredOptions rolls back to anchor, the write lifecycle becomes persist-error.
+ *   - `staging:started` - staging call entering flight; the write lifecycle becomes staging, carrying the snapshot.
+ *   - `staging:succeeded` - the host accepted the write; anchor updated, the write lifecycle returns to idle.
+ *   - `staging:failed` - final-attempt failure (no superseding mutation); configuredOptions rolls back to anchor, the write lifecycle becomes staging-error.
  *   - `commit:started` - a coordinated configuration write is taking the store: the write lifecycle becomes committing and every option mutation is refused until
- *     it ends. Entry is conditional - a loaded model, an idle write lifecycle, and a store with nothing left to persist - and the reducer records its verdict in
+ *     it ends. Entry is conditional - a loaded model, an idle write lifecycle, and a store with nothing left to stage - and the reducer records its verdict in
  *     the write lifecycle for the dispatcher to read back.
  *   - `commit:failed` - the coordinated write ended without a model arriving to replace the page's own: the write lifecycle returns to idle and option mutations
  *     are accepted again. Carries no payload, since the caller reports its own failure and nothing in the store reads one.
@@ -144,15 +144,15 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  */
 
 /**
- * WriteLifecycle - What is happening to the configuration write. `idle` is a store with nothing in flight, `persisting` carries the snapshot a persist call is
- * writing, `persist-error` carries the error that ended one, and `committing` is a coordinated configuration write holding the store: option mutations are
+ * WriteLifecycle - What is happening to the configuration write. `idle` is a store with nothing in flight, `staging` carries the snapshot a staging call is
+ * writing, `staging-error` carries the error that ended one, and `committing` is a coordinated configuration write holding the store: option mutations are
  * refused for its duration, and it ends either with a model arriving to replace the page's own or with a {@link commit:failed}.
  *
- * Separate from {@link LifecycleStatus} because the facts co-occur and would otherwise overwrite each other. A save can be in flight, or can have failed, while
+ * Separate from {@link LifecycleStatus} because the facts co-occur and would otherwise overwrite each other. A write can be in flight, or can have failed, while
  * a controller cannot be reached - and a device fetch that recovers reachability says nothing at all about the write, so a single slot would have each
  * transition silently erase the other's answer.
  *
- * @typedef {{kind: "idle"} | {kind: "persisting", snapshot: readonly string[]} | {kind: "persist-error", error: Error} | {kind: "committing"}} WriteLifecycle
+ * @typedef {{kind: "idle"} | {kind: "staging", snapshot: readonly string[]} | {kind: "staging-error", error: Error} | {kind: "committing"}} WriteLifecycle
  */
 
 /**
@@ -192,12 +192,12 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * @property {"controller-based" | "device-only" | "global-only"} mode - Operating mode. Set once at model:loaded: "controller-based" when the plugin provided
  *   `getControllers`, "global-only" when it declared `globalOnly`, otherwise "device-only". In "global-only" the scope is locked to global for the page's life and the
  *   reducer refuses any other scope kind.
- * @property {readonly string[]} persistedAnchor - The last state the host accepted. Updated on every successful persist; restored to configuredOptions on a final
- *                                                  persist failure (memory then matches what the host holds).
  * @property {boolean} revealed - Whether this page cycle's coordinated reveal has shown the page. Page-lifecycle state like `takeover`: the fresh store every show()
  *   builds starts unrevealed, and the reveal is the one act that sets it. Until then the regions are the boot's to show, so a takeover that ends first leaves them for
  *   that reveal rather than showing them early.
  * @property {Scope} scope - Selection pointer (DU).
+ * @property {readonly string[]} stagedAnchor - The last state the host accepted. Updated on every successful stage; restored to configuredOptions on a final
+ *                                               staging failure (memory then matches what the host holds).
  * @property {LifecycleStatus} status - Page-reachability pointer (DU).
  * @property {boolean} takeover - Whether a plugin currently holds the page's main-content area, with the framework's own regions there stepped aside and the
  *   plugin's node standing in their place. Page-lifecycle state and never configuration: no option-mutating action touches it, nothing persisted reads it, and the
@@ -358,8 +358,8 @@ export const controllerNoticeCopy = ({ devicesListed }) => devicesListed ?
  */
 export const initialState = () => {
 
-  // Share a single empty-array reference across every array-typed option field so the persist effect's "are we dirty?" check (configuredOptions === persistedAnchor)
-  // returns true at registration time and does not trigger a spurious initial persist. After model:loaded, each field is set to the loaded array's reference; the
+  // Share a single empty-array reference across every array-typed option field so the staging effect's "are we dirty?" check (configuredOptions === stagedAnchor)
+  // returns true at registration time and does not trigger a spurious initial stage. After model:loaded, each field is set to the loaded array's reference; the
   // guarantee is preserved.
   const empty = [];
 
@@ -378,9 +378,9 @@ export const initialState = () => {
     filter: { mode: "all", query: "" },
     initialOptions: empty,
     mode: "device-only",
-    persistedAnchor: empty,
     revealed: false,
     scope: { kind: "global" },
+    stagedAnchor: empty,
     status: { kind: "loading" },
     takeover: false,
     write: { kind: "idle" }
@@ -388,13 +388,13 @@ export const initialState = () => {
 };
 
 /* The action types that mutate the configured options, named here once so every subscriber that cares about a real edit - the page's plugin-hook effect and
- * the persist effect's own dirty check - reads this one list rather than restating it, and so the refusal set below extends it rather than respelling it.
+ * the staging effect's own dirty check - reads this one list rather than restating it, and so the refusal set below extends it rather than respelling it.
  */
 export const MUTATING_ACTIONS = [ "model:reverted", "option:cleared", "option:set", "options:reset" ];
 
 /* The actions a coordinated configuration write refuses while it holds the store, named here once so the refusal and the arms below cannot drift apart.
  *
- * Every member but `option:armed` mutates the configuration, and an edit accepted mid-write would start a persist drain whose whole-array commit either races the
+ * Every member but `option:armed` mutates the configuration, and an edit accepted mid-write would start a staging drain whose whole-array commit either races the
  * coordinated write or lands after it and writes the pre-write options back over what that write just staged. `option:armed` is in the set for a different
  * reason: arming changes no option and starts no drain, but it opens an edit gesture, and no edit gesture begins while the store is held...which is the same
  * reason {@link commit:started} disarms on entry. `option:disarmed` is deliberately outside the set - standing a row down ends a gesture rather than beginning
@@ -436,7 +436,7 @@ const refuseWrite = (state, error) => {
 export const reducer = (state, action) => {
 
   // A coordinated configuration write holds the store for its duration, so an option mutation arriving inside that window is answered by returning the state
-  // reference untouched - every subscriber reads a no-op, and the persist effect's dirty check finds configuredOptions still equal to the anchor and starts
+  // reference untouched - every subscriber reads a no-op, and the staging effect's dirty check finds configuredOptions still equal to the anchor and starts
   // nothing. The rule sits ahead of the switch rather than inside each arm because it is one answer about the store as a whole; see {@link HELD_ACTIONS} for
   // which actions it covers and why each is in the set.
   if((state.write.kind === "committing") && HELD_ACTIONS.has(action.type)) {
@@ -476,7 +476,7 @@ export const reducer = (state, action) => {
       const holdsRequestController = holdsController({ controllers: action.controllers, id: state.devicesRequest?.controllerId ?? null });
       const holdsScopeController = holdsController({ controllers: action.controllers, id: (state.scope.kind === "global") ? null : state.scope.controllerId });
 
-      /* A model arrives: catalog, configuredOptions, mode, controllers populated. The persistence anchor seeds from the just-loaded options (pre-mutation the
+      /* A model arrives: catalog, configuredOptions, mode, controllers populated. The staged anchor seeds from the just-loaded options (pre-mutation the
        * loaded array IS what the host holds). The initial snapshot - the revert target - takes `action.initialOptions` if the dispatcher supplied it (orchestrator
        * re-shows that detected set-equal options carry the original snapshot forward), otherwise falls back to the loaded options.
        *
@@ -499,8 +499,8 @@ export const reducer = (state, action) => {
         devicesRequest: holdsRequestController ? state.devicesRequest : null,
         initialOptions: action.initialOptions ?? action.configuredOptions,
         mode: action.mode,
-        persistedAnchor: action.configuredOptions,
         scope: holdsScopeController ? state.scope : { kind: "global" },
+        stagedAnchor: action.configuredOptions,
         status: (state.status.kind === "loading") ? { kind: "ready" } : state.status,
         write: { kind: "idle" }
       };
@@ -699,7 +699,7 @@ export const reducer = (state, action) => {
       // Wipe every configured option. A fresh empty array is what makes reference equality report the change, and a configuration that was already empty has no
       // change to report, so it keeps the reference it holds: the wipe and the nothing-to-wipe case are told apart by whether anything was configured, which is
       // what lets every subscriber reading reference equality treat a redundant reset as the no-op it is. The initial snapshot and the anchor are untouched -
-      // revert and persist failure still have their respective rollback targets. Disarming happens either way, because standing a row down is the arm's other
+      // revert and staging failure still have their respective rollback targets. Disarming happens either way, because standing a row down is the arm's other
       // job and is independent of whether the wipe found anything to remove.
       return { ...state, armedOption: null, configuredOptions: state.configuredOptions.length ? [] : state.configuredOptions };
     }
@@ -726,49 +726,47 @@ export const reducer = (state, action) => {
       };
     }
 
-    case "persist:started": {
+    case "staging:started": {
 
-      // The write lifecycle moves to persisting, carrying the snapshot that is in flight. Subscribers (status bar) can show a "saving" affordance and read the
-      // snapshot when they need to know what is pending. Reachability is a separate fact and keeps its reference, so a save entering flight over a controller the
-      // page could not reach leaves that error standing for the view that owns it.
-      return { ...state, write: { kind: "persisting", snapshot: action.snapshot } };
+      // The write lifecycle moves to staging, carrying the snapshot that is in flight. Reachability is a separate fact and keeps its reference, so a stage entering
+      // flight over a controller the page could not reach leaves that error standing for the view that owns it.
+      return { ...state, write: { kind: "staging", snapshot: action.snapshot } };
     }
 
-    case "persist:succeeded": {
+    case "staging:succeeded": {
 
       // The in-flight snapshot was accepted by the host. Promote it to the anchor so any subsequent rollback (after a future failure) restores to this state, and
       // return the write lifecycle to idle.
-      return { ...state, persistedAnchor: action.snapshot, write: { kind: "idle" } };
+      return { ...state, stagedAnchor: action.snapshot, write: { kind: "idle" } };
     }
 
-    case "persist:failed": {
+    case "staging:failed": {
 
       // Final-attempt failure with no superseding mutation. Roll configuredOptions back to the last state the host accepted so memory matches it, and move the
-      // write lifecycle to persist-error so subscribers (status bar / toast emitter) can surface the failure. The rollback is a configuration mutation, so it
-      // disarms too.
-      return { ...state, armedOption: null, configuredOptions: state.persistedAnchor, write: { error: action.error, kind: "persist-error" } };
+      // write lifecycle to staging-error, carrying the error that ended the stage. The rollback is a configuration mutation, so it disarms too.
+      return { ...state, armedOption: null, configuredOptions: state.stagedAnchor, write: { error: action.error, kind: "staging-error" } };
     }
 
     case "commit:started": {
 
       /* A coordinated configuration write is asking for the store, and every entry condition has to hold before it gets it. A model must be loaded, because a
-       * placeholder store has no configuration worth bracketing; no write may be under way, because a persist already in flight or a hold already taken has its
+       * placeholder store has no configuration worth bracketing; no write may be under way, because a stage already in flight or a hold already taken has its
        * own claim on what the store holds; and configuredOptions must still equal the anchor, because a dirty store has an edit the page has not written yet and
        * a coordinated write would strand it. A condition failing returns the state reference untouched, and the dispatcher reads `write.kind` back as the
        * verdict - the same shape a device fetch's dispatcher reads `devicesAppliedSeq` for - so the entry rule is stated here once and nowhere else.
        *
-       * A recorded `persist-error` is not a claim and does not refuse. The rollback that produced it left configuredOptions equal to the anchor with nothing in
+       * A recorded `staging-error` is not a claim and does not refuse. The rollback that produced it left configuredOptions equal to the anchor with nothing in
        * flight, so such a store is as ready for a coordinated write as an idle one; what it carries is a failure the user has already been shown, and only a
-       * later edit or a fresh model ever clears it. Refusing on it would let one failed save turn away every coordinated write for the rest of the session.
+       * later edit or a fresh model ever clears it. Refusing on it would let one failed stage turn away every coordinated write for the rest of the session.
        *
-       * What a lifecycle read does and does not say is worth being exact about: it reflects the last persist transition the store was told about, and a drain
-       * still waiting out its debounce has dispatched nothing yet. A caller therefore drains the persist effect first and only then dispatches this action.
+       * What a lifecycle read does and does not say is worth being exact about: it reflects the last staging transition the store was told about, and a drain
+       * still waiting out its debounce has dispatched nothing yet. A caller therefore drains the staging effect first and only then dispatches this action.
        *
        * The entry also disarms. An armed row is an edit in progress, and the hold ends it rather than leaving a live-looking input the reducer would refuse to
        * take a value from.
        */
-      if((state.catalog === EMPTY_CATALOG) || [ "committing", "persisting" ].includes(state.write.kind) ||
-        (state.configuredOptions !== state.persistedAnchor)) {
+      if((state.catalog === EMPTY_CATALOG) || [ "committing", "staging" ].includes(state.write.kind) ||
+        (state.configuredOptions !== state.stagedAnchor)) {
 
         return state;
       }

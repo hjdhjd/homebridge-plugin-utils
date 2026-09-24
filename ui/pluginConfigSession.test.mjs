@@ -69,13 +69,13 @@ describe("PluginConfigSession.open", () => {
     assert.equal(session.entries.length, 1, "entries must mirror the loaded array");
   });
 
-  test("seeds the platform name on an empty config without persisting it", async () => {
+  test("seeds the platform name on an empty config without staging it", async () => {
 
     const host = makeHost({ config: [] });
     const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
 
     assert.deepEqual(session.platform, { name: "MyPlugin" }, "the primary entry must be seeded with the platform name");
-    assert.equal(host.writes.length, 0, "open must not eagerly persist the seed");
+    assert.equal(host.writes.length, 0, "open must not eagerly stage the seed");
   });
 
   test("preserves an existing primary entry's name rather than overwriting it", async () => {
@@ -89,14 +89,14 @@ describe("PluginConfigSession.open", () => {
 
 describe("PluginConfigSession.commit", () => {
 
-  test("merges a patch onto the primary entry, preserves siblings, and persists the whole array", async () => {
+  test("merges a patch onto the primary entry, preserves siblings, and stages the whole array", async () => {
 
     const host = makeHost({ config: [ { controllers: [{ address: "a" }], name: "P", platform: "MyPlugin" }, { name: "Sibling" } ] });
     const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
 
     await session.commit({ options: ["Enable.Motion"] });
 
-    assert.equal(host.writes.length, 1, "commit must persist exactly once");
+    assert.equal(host.writes.length, 1, "commit must stage exactly once");
     assert.deepEqual(host.writes[0], [
 
       { controllers: [{ address: "a" }], name: "P", options: ["Enable.Motion"], platform: "MyPlugin" },
@@ -215,7 +215,7 @@ describe("PluginConfigSession.sync", () => {
 
     assert.deepEqual(session.platform, { name: "MyPlugin" }, "sync() against an emptied host must re-seed the primary entry with the platform name");
     assert.equal(session.entries.length, 1, "the re-seeded replica must hold exactly one bare entry");
-    assert.equal(host.writes.length, 0, "sync() must not eagerly persist the re-seeded shape");
+    assert.equal(host.writes.length, 0, "sync() must not eagerly stage the re-seeded shape");
   });
 
   test("a rejected getPluginConfig() during sync() throws and leaves the prior replica intact", async () => {

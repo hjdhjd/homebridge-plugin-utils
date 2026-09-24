@@ -35,7 +35,7 @@ function makeWebUiHarness({ name = "TestPlatform", config = [], firstRun, lighti
 
   // Default: replace the inner orchestrator's show/hide with tracking stubs so we can assert call ordering without driving the full feature-options pipeline. The
   // original methods stay on the prototype - we only replace the per-instance bindings, so leaks across tests cannot occur. The `unstubbed` opt-out drives the REAL
-  // feature-options pipeline (so a real sync()/persist drain runs): used by the reconciliation-ordering tests that must observe the actual sync-before-show and
+  // feature-options pipeline (so a real sync()/staging drain runs): used by the reconciliation-ordering tests that must observe the actual sync-before-show and
   // flush-before-schemaform orderings rather than a stub's call record. In that mode we seed the Bootstrap probe shim so the theme effect's `.d-none` probe resolves
   // promptly rather than timing out.
   if(unstubbed) {
@@ -157,7 +157,7 @@ describe("webUi.show - feature-options routing", () => {
 
 describe("webUi.show - first-run routing", () => {
 
-  test("with empty config and a required first-run, shows the first-run page without eagerly persisting a seed", async () => {
+  test("with empty config and a required first-run, shows the first-run page without eagerly staging a seed", async () => {
 
     const onStart = () => true;
     const onSubmit = () => true;
@@ -167,10 +167,10 @@ describe("webUi.show - first-run routing", () => {
 
     await harness.ui.show();
 
-    // Empty config + a required first-run: the session seeds the platform name in memory so a later submit persists a well-formed block, but the orchestrator
-    // does not eagerly persist that seed - nothing reaches the host until the user actually submits credentials. The first-run page is shown and the save button
+    // Empty config + a required first-run: the session seeds the platform name in memory so a later submit stages a well-formed block, but the orchestrator
+    // does not eagerly stage that seed - nothing reaches the host until the user actually submits credentials. The first-run page is shown and the save button
     // is disabled until the flow completes.
-    assert.equal(harness.fake.observed.updatedConfigs.length, 0, "the held seed must not be eagerly persisted before the user submits");
+    assert.equal(harness.fake.observed.updatedConfigs.length, 0, "the held seed must not be eagerly staged before the user submits");
     assert.equal(harness.skeleton.pageFirstRun.style.display, "block", "the first-run page must be visible after the orchestrator routes to first-run");
     assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "the save button must be disabled until the user completes the first-run flow");
   });
@@ -512,7 +512,7 @@ describe("webUi.show - menu listener idempotence across repeated launches", () =
 
 describe("webUi - tab-switch reconciliation ordering (real feature-options pipeline)", () => {
 
-  // These tests drive the REAL inner feature-options pipeline (the harness `unstubbed` mode) so an actual sync()/persist drain runs. They lock in the orderings
+  // These tests drive the REAL inner feature-options pipeline (the harness `unstubbed` mode) so an actual sync()/staging drain runs. They lock in the orderings
   // the reconciliation depends on, observed through the host call log: the page re-reads the config before rendering (sync-before-show), and a pending edit is
   // flushed to the host before the Settings schema form renders (flush-before-schemaform). A stub's call record cannot express these orderings, so the real
   // pipeline is required here.
@@ -524,7 +524,7 @@ describe("webUi - tab-switch reconciliation ordering (real feature-options pipel
     options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
   };
 
-  // Settle real time past the persist debounce (300ms) and let the drain + reducer dispatches resolve. Used after a toggle that should produce a persist, and after a
+  // Settle real time past the staging debounce (300ms) and let the drain + reducer dispatches resolve. Used after a toggle that should produce a stage, and after a
   // tab switch whose awaited flush should have drained.
   async function settle() {
 
@@ -545,7 +545,7 @@ describe("webUi - tab-switch reconciliation ordering (real feature-options pipel
     await harness.ui.show();
     await settle();
 
-    // Stage a pending edit through the rendered DOM: expand the Motion category, toggle Detect off. This dispatches option:set, which the persist effect debounces.
+    // Stage a pending edit through the rendered DOM: expand the Motion category, toggle Detect off. This dispatches option:set, which the staging effect debounces.
     harness.skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
     await flushPending();
 
@@ -677,7 +677,7 @@ describe("webUi - first-run handler normalization", () => {
 
     // A plugin that supplies no firstRun flow keeps the default `isRequired = () => false` gate. On a brand-new (empty) install there is nothing to set up, so the
     // orchestrator routes straight to the feature-options view rather than a vestigial first-run page - the right destination for a device-discovery plugin. The held
-    // seed is not eagerly persisted; the first real save writes a well-formed block.
+    // seed is not eagerly staged; the first real commit stages a well-formed block.
     using harness = makeWebUiHarness({ name: "MyPlugin" });
 
     await harness.ui.show();

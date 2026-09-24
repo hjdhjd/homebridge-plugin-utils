@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webUi-featureOptions/effects/persist.mjs: The persistence effect for the feature options webUI.
+ * webUi-featureOptions/effects/staging.mjs: The staging effect for the feature options webUI.
  */
 "use strict";
 
@@ -12,36 +12,36 @@ import { modelLoaded } from "../selectors.mjs";
 
 /**
  * Debounce window for coalescing rapid mutations before writing to the host. 300ms sits below the instant-feel ceiling - a single click feels immediate from the user's
- * perspective (a 300ms persist completes invisibly while the next click is being decided) - yet above the burst-coalescing floor, so a rapid sequence of mutations
+ * perspective (a 300ms stage completes invisibly while the next click is being decided) - yet above the burst-coalescing floor, so a rapid sequence of mutations
  * (the user dragging a slider, batching reset/revert through multiple controllers) collapses into a single write rather than one write per mutation.
  */
 const DEBOUNCE_MS = 300;
 
 /**
- * Register the persistence effect on a store.
+ * Register the staging effect on a store.
  *
- * Coalesces, serializes, and rolls back option persistence:
+ * Coalesces, serializes, and rolls back the staging of option edits:
  *
  *   - **Coalescing**: every mutation that changes `configuredOptions` enters this effect through a single dirty flag (`pending`). The drain loop reads the flag at
- *     each iteration and re-enters when it is set, so rapid mutations collapse into one persist of the latest state. The debounce on top of the drain absorbs
+ *     each iteration and re-enters when it is set, so rapid mutations collapse into one stage of the latest state. The debounce on top of the drain absorbs
  *     burst-mutation patterns (drag/keystroke) without queueing multiple writes.
- *   - **Serialization**: a single drain promise (`inFlight`) is held while a persist call is in flight. Concurrent mutations only set `pending = true`; the drain
- *     loop picks up the latest state at its next iteration. No two persist calls can be in flight against the host at the same time.
- *   - **Rollback**: a final-iteration failure (no superseding mutation) dispatches `persist:failed`, which the reducer translates into restoring
- *     `configuredOptions` to the last-known-good `persistedAnchor`. Intermediate-iteration failures (a mutation rescued the user's intent) are swallowed because
+ *   - **Serialization**: a single drain promise (`inFlight`) is held while a staging call is in flight. Concurrent mutations only set `pending = true`; the drain
+ *     loop picks up the latest state at its next iteration. No two staging calls can be in flight against the host at the same time.
+ *   - **Rollback**: a final-iteration failure (no superseding mutation) dispatches `staging:failed`, which the reducer translates into restoring
+ *     `configuredOptions` to the last-known-good `stagedAnchor`. Intermediate-iteration failures (a mutation rescued the user's intent) are swallowed because
  *     the next iteration will retry with the newer state; the user's most recent action is what matters.
  *
  * The dispatch sequence per iteration:
  *
- *   1. `persist:started` with the snapshot being written. The write lifecycle transitions to `persisting`; the status bar can show a "saving" affordance.
+ *   1. `staging:started` with the snapshot being written. The write lifecycle transitions to `staging`, carrying that snapshot.
  *   2. `session.commit({ options })` is awaited - the session merges the options onto its primary entry, preserves siblings, writes to the host, and advances its
  *      held reference only on success.
- *   3. Success: `persist:succeeded` with the snapshot. The write lifecycle returns to `idle`; the anchor advances to this snapshot.
- *   4. Failure with no superseding mutation: `persist:failed` with the error. The write lifecycle transitions to `persist-error`; the reducer rolls
+ *   3. Success: `staging:succeeded` with the snapshot. The write lifecycle returns to `idle`; the anchor advances to this snapshot.
+ *   4. Failure with no superseding mutation: `staging:failed` with the error. The write lifecycle transitions to `staging-error`; the reducer rolls
  *      `configuredOptions` back to the anchor.
  *   5. Failure with a superseding mutation: the error is swallowed; the loop continues with the newer state.
  *   6. A swallowed failure whose superseding edit returned the options to the anchor: the next iteration finds nothing to write, and answers that swallowed
- *      write's `persist:started` with a `persist:succeeded` carrying the anchor, so the lifecycle ends at `idle` rather than at a `persisting` nothing answers.
+ *      write's `staging:started` with a `staging:succeeded` carrying the anchor, so the lifecycle ends at `idle` rather than at a `staging` nothing answers.
  *
  * The effect is registered with the page-level signal. Aborting the signal cleanly tears down the listener; an in-flight `updatePluginConfig` call cannot itself
  * be aborted (the Homebridge bridge does not accept an `AbortSignal`), but the drain checks `signal.aborted` after every await and bails before dispatching any
@@ -53,17 +53,17 @@ const DEBOUNCE_MS = 300;
  *
  * @param {Object} args
  * @param {{toast?: {error?: (message: string, id: string) => void}}} args.host - The Homebridge bridge, used only for the failure toast channel.
- * @param {{commit: (patch: Object) => Promise<void>}} args.session - The config session; option saves persist through its single write path.
+ * @param {{commit: (patch: Object) => Promise<void>}} args.session - The config session; option edits stage through its single write path.
  * @param {AbortSignal} args.signal - The lifecycle signal. Aborting tears down the effect.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store the effect subscribes against.
  * @returns {{flush: () => Promise<void>}} A handle whose `flush()` drains any pending edit to the host now; called at the page's navigate-away / browser-exit edges.
  */
-export const registerPersistEffect = ({ host, session, signal, store }) => {
+export const registerStagingEffect = ({ host, session, signal, store }) => {
 
   // The drain-state variables below encode the irreducible coordination this pattern requires:
   //
   //   - `inFlight`: the in-flight drain promise. When non-null, the drain loop is active; subsequent mutations only set `pending` and return.
-  //   - `pending`: the dirty flag. Set by every subscribed mutation; cleared by the drain loop at the top of each iteration. Setting it during an in-flight persist
+  //   - `pending`: the dirty flag. Set by every subscribed mutation; cleared by the drain loop at the top of each iteration. Setting it during an in-flight stage
   //     is the signal "your current snapshot is already stale; iterate again with the newer state."
   //   - `debounceAbort`: the abort controller for the window the drain is currently waiting out. Each iteration that waits mints its own and composes that
   //     controller's signal with the effect's lifecycle signal into the wait, so the window ends on a page teardown or on a flush() and on nothing else.
@@ -105,7 +105,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
         try {
 
           // The debounce itself is the loop's intentional serialization point - each iteration must wait the debounce window before sampling state again. Same
-          // exception applies as the persist call below: this await is the point.
+          // exception applies as the staging call below: this await is the point.
           // eslint-disable-next-line no-await-in-loop
           await delay(DEBOUNCE_MS, AbortSignal.any([ debounceAbort.signal, signal ]));
         } catch {
@@ -122,34 +122,34 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
       }
 
       // In-loop dirty check. The effect-fn dirty check below does NOT gate the flush path (flush() bypasses the fn and starts the drain directly), so the drain must
-      // re-test here: once a just-committed edit advances `persistedAnchor` to match `configuredOptions`, there is nothing left to write, and we break rather than
+      // re-test here: once a just-committed edit advances `stagedAnchor` to match `configuredOptions`, there is nothing left to write, and we break rather than
       // looping again on a now-clean store. This also skips a redundant write when an edit was reverted back to the anchor within the debounce window.
-      if(store.state.configuredOptions === store.state.persistedAnchor) {
+      if(store.state.configuredOptions === store.state.stagedAnchor) {
 
         /* One route reaches this break with a write still in flight as far as the store is concerned: a commit the host rejected was rescued by a superseding edit,
-         * which took the swallow-on-pending path below without answering that write's `persist:started`, and the edit returned the options to the anchor. The
-         * lifecycle would otherwise sit at `persisting` for the store's life with nothing running, which a coordinated write's entry rule reads as a claim and
+         * which took the swallow-on-pending path below without answering that write's `staging:started`, and the edit returned the options to the anchor. The
+         * lifecycle would otherwise sit at `staging` for the store's life with nothing running, which a coordinated write's entry rule reads as a claim and
          * refuses forever. The anchor is what the host holds and what the store holds, and nothing is in flight, so the action that states exactly that is a
          * success carrying the anchor as its snapshot. No toast goes with it: the user's own edit made the failure moot.
          */
-        if(store.state.write.kind === "persisting") {
+        if(store.state.write.kind === "staging") {
 
-          store.dispatch({ snapshot: store.state.persistedAnchor, type: "persist:succeeded" });
+          store.dispatch({ snapshot: store.state.stagedAnchor, type: "staging:succeeded" });
         }
 
         break;
       }
 
-      // Capture the configuredOptions reference (not a spread copy). Reference preservation matters: when the persist succeeds with no superseding mutation,
-      // `persistedAnchor` becomes this same reference, so the next `pending` check at the effect's fn sees `configuredOptions === persistedAnchor` and skips.
+      // Capture the configuredOptions reference (not a spread copy). Reference preservation matters: when the stage succeeds with no superseding mutation,
+      // `stagedAnchor` becomes this same reference, so the next `pending` check at the effect's fn sees `configuredOptions === stagedAnchor` and skips.
       const snapshot = store.state.configuredOptions;
 
-      store.dispatch({ snapshot, type: "persist:started" });
+      store.dispatch({ snapshot, type: "staging:started" });
 
       try {
 
-        // Sequential awaits are the point: the drain serializes persists so concurrent mutations cannot race at the host. The eslint rule's concern (parallelizing
-        // independent work) does not apply - each iteration's persist is the only legitimate I/O the drain should be running at any moment. The session owns the
+        // Sequential awaits are the point: the drain serializes stages so concurrent mutations cannot race at the host. The eslint rule's concern (parallelizing
+        // independent work) does not apply - each iteration's stage is the only legitimate I/O the drain should be running at any moment. The session owns the
         // payload shape (primary entry + siblings) and the write; we hand it only the options delta.
         // eslint-disable-next-line no-await-in-loop
         await session.commit({ options: snapshot });
@@ -159,10 +159,10 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
           return;
         }
 
-        store.dispatch({ snapshot, type: "persist:succeeded" });
+        store.dispatch({ snapshot, type: "staging:succeeded" });
       } catch(error) {
 
-        // A mutation arrived during the persist call - swallow the error and let the next iteration retry with the newer state. The user's most recent intent is
+        // A mutation arrived during the staging call - swallow the error and let the next iteration retry with the newer state. The user's most recent intent is
         // what matters; an intermediate failure that the next iteration rescues need not surface to the user.
         if(pending) {
 
@@ -174,11 +174,11 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
           return;
         }
 
-        store.dispatch({ error, type: "persist:failed" });
+        store.dispatch({ error, type: "staging:failed" });
 
         // Surface the failure through the host's toast channel, so the user sees that their last edit did not reach the host. This is the one place the drain
         // announces a final failure, and its text reads through errorMessage, the rule every webUI surface shares for turning a thrown value into words.
-        host.toast?.error?.(errorMessage(error), "config-persist");
+        host.toast?.error?.(errorMessage(error), "config-staging");
 
         return;
       }
@@ -190,11 +190,11 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
     events: MUTATING_ACTIONS,
     fn: () => {
 
-      // Reference-equality dirty check: when configuredOptions matches the anchor, there is nothing new to persist. Handles both the registration-time immediate
+      // Reference-equality dirty check: when configuredOptions matches the anchor, there is nothing new to stage. Handles both the registration-time immediate
       // call (initial state shares one empty-array reference across every options-array field) and any genuine no-op mutation that produced the same reference
       // (e.g., an option:cleared against an option that did not exist - applyClearOption returns the input reference unchanged, so the reducer's spread preserves
       // configuredOptions).
-      if(store.state.configuredOptions === store.state.persistedAnchor) {
+      if(store.state.configuredOptions === store.state.stagedAnchor) {
 
         return;
       }
@@ -211,8 +211,8 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
       // macrotask, so none of them can preempt the queued `inFlight.finally` microtask and strand a `pending` edit in the gap between the drain returning and its
       // `finally` clearing `inFlight`. A flush() landing in that same gap needs no such rule, because it cannot strand anything: it never sets `pending`, so it takes
       // the already-in-flight branch, skips the dirty check that branch guards, and awaits an already-settled promise without draining. Nothing is lost, because a
-      // drain that reached its `finally` with the lifetime still live left nothing to write - a succeeded persist advanced the anchor to the snapshot, the in-loop
-      // dirty check broke on an already-clean store, and the reducer's persist:failed rollback restores configuredOptions to the anchor. The one exit that can leave
+      // drain that reached its `finally` with the lifetime still live left nothing to write - a succeeded stage advanced the anchor to the snapshot, the in-loop
+      // dirty check broke on an already-clean store, and the reducer's staging:failed rollback restores configuredOptions to the anchor. The one exit that can leave
       // the store dirty is the unloaded-model refusal above, and a fresh drain refuses it identically. Reset `flushing` here too so it never outlives the drain it
       // belongs to.
       inFlight = drain().finally(() => {
@@ -238,7 +238,7 @@ export const registerPersistEffect = ({ host, session, signal, store }) => {
 
     if(!inFlight) {
 
-      if(store.state.configuredOptions === store.state.persistedAnchor) {
+      if(store.state.configuredOptions === store.state.stagedAnchor) {
 
         flushing = false;
 

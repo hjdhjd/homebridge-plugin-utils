@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webUi-featureOptions/effects/persist.test.mjs: Unit tests for the persistence effect.
+ * webUi-featureOptions/effects/staging.test.mjs: Unit tests for the staging effect.
  */
 "use strict";
 
@@ -10,7 +10,7 @@ import { FeatureOptionsStore } from "../store.mjs";
 import { PluginConfigSession } from "../../pluginConfigSession.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
-import { registerPersistEffect } from "./persist.mjs";
+import { registerStagingEffect } from "./staging.mjs";
 
 const CATEGORIES = [{ description: "Motion Options", name: "Motion" }];
 const OPTIONS = { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] };
@@ -28,9 +28,9 @@ const CATALOG = {
 
 const PLATFORM = { name: "MyPlugin Platform", platform: "MyPlugin" };
 
-// Helper: build a store seeded with the canonical "ready" state and register the persist effect against a config session backed by a fake host. The fake host's
+// Helper: build a store seeded with the canonical "ready" state and register the staging effect against a config session backed by a fake host. The fake host's
 // `updatePluginConfig` records every payload and lets each test choose to resolve immediately, defer, or reject; its `getPluginConfig` seeds the session with the
-// canonical platform entry, so the session's commit rebuilds the same `[{ ...PLATFORM, options }]` payload from the options delta the persist effect hands it. Tests
+// canonical platform entry, so the session's commit rebuilds the same `[{ ...PLATFORM, options }]` payload from the options delta the staging effect hands it. Tests
 // get an inspection surface for both the dispatched store events and the host calls. Async because opening the session reads the host config once. `loaded: false`
 // withholds the model:loaded dispatch, leaving the store in the placeholder state a page holds when its model never arrives - the input the model-load boundary
 // tests need, and the only thing that option changes about the rig.
@@ -42,7 +42,7 @@ const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = tr
 
   const store = new FeatureOptionsStore({
 
-    initialState: { ...initialState(), configuredOptions, persistedAnchor: configuredOptions },
+    initialState: { ...initialState(), configuredOptions, stagedAnchor: configuredOptions },
     reducer
   });
 
@@ -91,7 +91,7 @@ const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = tr
   };
 
   // Record every event the store dispatches for inspection.
-  for(const type of [ "persist:started", "persist:succeeded", "persist:failed" ]) {
+  for(const type of [ "staging:started", "staging:succeeded", "staging:failed" ]) {
 
     store.addEventListener(type, (event) => events.push({ detail: event.detail, type: event.type }));
   }
@@ -99,28 +99,28 @@ const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = tr
   const session = await PluginConfigSession.open({ host, name: PLATFORM.name });
 
   // Capture the effect's flush handle so the flush tests can drain the pending edit at the navigate-away edge.
-  const { flush } = registerPersistEffect({ host, session, signal: controller.signal, store });
+  const { flush } = registerStagingEffect({ host, session, signal: controller.signal, store });
 
   return { abort: () => controller.abort(), defer: () => ({ reject: (err) => reject(err), resolve: () => release() }), events, flush, host, store, updates };
 };
 
-// Await 350ms of real time so the effect's real 300ms debounce window elapses and its drain settles before the assertions run. The persist effect runs
+// Await 350ms of real time so the effect's real 300ms debounce window elapses and its drain settles before the assertions run. The staging effect runs
 // `delay(300, signal)` inside its drain loop, so genuine waits must advance real time past that window rather than merely draining microtasks.
 const flush = () => new Promise((resolve) => setTimeout(resolve, 350));
 
-describe("registerPersistEffect - initial registration", () => {
+describe("registerStagingEffect - initial registration", () => {
 
-  test("does not trigger a persist when configuredOptions matches the anchor (initial state)", async () => {
+  test("does not trigger a stage when configuredOptions matches the anchor (initial state)", async () => {
 
     const { events, updates } = await setup({ configuredOptions: [] });
 
     await flush();
 
-    assert.equal(updates.length, 0, "no persist call");
-    assert.equal(events.length, 0, "no persist events dispatched");
+    assert.equal(updates.length, 0, "no staging call");
+    assert.equal(events.length, 0, "no staging events dispatched");
   });
 
-  test("does not trigger a persist immediately after model:loaded (configuredOptions and anchor share the same reference)", async () => {
+  test("does not trigger a stage immediately after model:loaded (configuredOptions and anchor share the same reference)", async () => {
 
     const { events, updates } = await setup({ configuredOptions: ["Enable.Motion.Detect"] });
 
@@ -131,9 +131,9 @@ describe("registerPersistEffect - initial registration", () => {
   });
 });
 
-describe("registerPersistEffect - happy path", () => {
+describe("registerStagingEffect - happy path", () => {
 
-  test("a single mutation triggers a debounced persist with the new options", async () => {
+  test("a single mutation triggers a debounced stage with the new options", async () => {
 
     const { events, store, updates } = await setup();
 
@@ -143,12 +143,12 @@ describe("registerPersistEffect - happy path", () => {
 
     assert.equal(updates.length, 1);
     assert.deepEqual(updates[0], [{ ...PLATFORM, options: ["Disable.Motion.Detect"] }]);
-    assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:succeeded" ]);
-    assert.equal(store.state.persistedAnchor, store.state.configuredOptions, "anchor advances to the persisted snapshot - reference equality preserved");
+    assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:succeeded" ]);
+    assert.equal(store.state.stagedAnchor, store.state.configuredOptions, "anchor advances to the staged snapshot - reference equality preserved");
     assert.equal(store.state.status.kind, "ready");
   });
 
-  test("rapid mutations within the debounce window coalesce into a single persist of the latest state", async () => {
+  test("rapid mutations within the debounce window coalesce into a single stage of the latest state", async () => {
 
     const { store, updates } = await setup();
 
@@ -162,7 +162,7 @@ describe("registerPersistEffect - happy path", () => {
     assert.deepEqual(updates[0][0].options, ["Disable.Motion.Detect"], "latest state wins");
   });
 
-  test("subsequent persist of a no-op clearOption (same reference) does not trigger a new persist", async () => {
+  test("subsequent stage of a no-op clearOption (same reference) does not trigger a new stage", async () => {
 
     const { events, store, updates } = await setup({ configuredOptions: ["Enable.Motion.Detect"] });
 
@@ -172,14 +172,14 @@ describe("registerPersistEffect - happy path", () => {
 
     await flush();
 
-    assert.equal(updates.length, 0, "no-op clear did not trigger a persist");
+    assert.equal(updates.length, 0, "no-op clear did not trigger a stage");
     assert.equal(events.length, 0);
   });
 });
 
-describe("registerPersistEffect - concurrent mutations during in-flight persist", () => {
+describe("registerStagingEffect - concurrent mutations during an in-flight stage", () => {
 
-  test("mutations during a persist coalesce into a second persist after the first completes", async () => {
+  test("mutations during a stage coalesce into a second stage after the first completes", async () => {
 
     let release;
     let callCount = 0;
@@ -215,38 +215,38 @@ describe("registerPersistEffect - concurrent mutations during in-flight persist"
       }
     };
 
-    for(const type of [ "persist:started", "persist:succeeded", "persist:failed" ]) {
+    for(const type of [ "staging:started", "staging:succeeded", "staging:failed" ]) {
 
       store.addEventListener(type, (event) => events.push({ detail: event.detail, type: event.type }));
     }
 
     const session = await PluginConfigSession.open({ host, name: PLATFORM.name });
 
-    registerPersistEffect({ host, session, signal: controller.signal, store });
+    registerStagingEffect({ host, session, signal: controller.signal, store });
 
     store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
 
-    // Wait past debounce so the first persist enters flight.
+    // Wait past debounce so the first stage enters flight.
     await flush();
 
-    assert.equal(updates.length, 1, "first persist is in flight");
+    assert.equal(updates.length, 1, "first stage is in flight");
 
     // Mutation during in-flight call. The effect sets pending=true but does NOT start a second drain.
     store.dispatch({ args: { enabled: true, option: "Motion.Detect" }, type: "option:set" });
 
-    // Release the first persist.
+    // Release the first stage.
     release();
 
     // Two debounces back-to-back can take ~600ms total. Wait long enough.
     await new Promise((resolve) => setTimeout(resolve, 700));
 
-    assert.equal(updates.length, 2, "second persist runs after the first completes");
-    assert.deepEqual(updates[1][0].options, ["Enable.Motion.Detect"], "second persist sends the latest state (the second mutation re-enabled the option)");
-    assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:succeeded", "persist:started", "persist:succeeded" ]);
+    assert.equal(updates.length, 2, "second stage runs after the first completes");
+    assert.deepEqual(updates[1][0].options, ["Enable.Motion.Detect"], "second stage sends the latest state (the second mutation re-enabled the option)");
+    assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:succeeded", "staging:started", "staging:succeeded" ]);
   });
 });
 
-describe("registerPersistEffect - a coordinated configuration write", () => {
+describe("registerStagingEffect - a coordinated configuration write", () => {
 
   test("an option mutation refused while the write holds the store starts no drain", async () => {
 
@@ -263,7 +263,7 @@ describe("registerPersistEffect - a coordinated configuration write", () => {
     await flush();
 
     assert.equal(updates.length, 0, "nothing reached the host");
-    assert.equal(events.length, 0, "and no persist event was dispatched");
+    assert.equal(events.length, 0, "and no staging event was dispatched");
 
     // The same gesture once the hold lifts, so the row cannot pass by the effect simply being dead.
     store.dispatch({ type: "commit:failed" });
@@ -276,9 +276,9 @@ describe("registerPersistEffect - a coordinated configuration write", () => {
   });
 });
 
-describe("registerPersistEffect - failure path", () => {
+describe("registerStagingEffect - failure path", () => {
 
-  test("a final-attempt failure dispatches persist:failed and rolls configuredOptions back to the anchor", async () => {
+  test("a final-attempt failure dispatches staging:failed and rolls configuredOptions back to the anchor", async () => {
 
     const { events, store, updates } = await setup({ behavior: "reject" });
 
@@ -287,13 +287,13 @@ describe("registerPersistEffect - failure path", () => {
     await flush();
 
     assert.equal(updates.length, 1);
-    assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:failed" ]);
-    assert.equal(store.state.write.kind, "persist-error");
-    assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "rollback: configuredOptions reverts to the anchor reference");
+    assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:failed" ]);
+    assert.equal(store.state.write.kind, "staging-error");
+    assert.equal(store.state.configuredOptions, store.state.stagedAnchor, "rollback: configuredOptions reverts to the anchor reference");
     assert.deepEqual(store.state.configuredOptions, []);
   });
 
-  test("an intermediate failure rescued by a later mutation is swallowed - the second persist's outcome is what surfaces", async () => {
+  test("an intermediate failure rescued by a later mutation is swallowed - the second stage's outcome is what surfaces", async () => {
 
     let callCount = 0;
     const events = [];
@@ -332,14 +332,14 @@ describe("registerPersistEffect - failure path", () => {
       }
     };
 
-    for(const type of [ "persist:started", "persist:succeeded", "persist:failed" ]) {
+    for(const type of [ "staging:started", "staging:succeeded", "staging:failed" ]) {
 
       store.addEventListener(type, (event) => events.push({ detail: event.detail, type: event.type }));
     }
 
     const session = await PluginConfigSession.open({ host, name: PLATFORM.name });
 
-    registerPersistEffect({ host, session, signal: controller.signal, store });
+    registerStagingEffect({ host, session, signal: controller.signal, store });
 
     store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
 
@@ -355,7 +355,7 @@ describe("registerPersistEffect - failure path", () => {
 
     await new Promise((res) => setTimeout(res, 350));
 
-    assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:started", "persist:succeeded" ],
+    assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:started", "staging:succeeded" ],
       "intermediate failure swallowed - only the second iteration's succeeded surfaces");
     assert.equal(store.state.status.kind, "ready");
   });
@@ -384,14 +384,14 @@ describe("registerPersistEffect - failure path", () => {
       }
     };
 
-    for(const type of [ "persist:started", "persist:succeeded", "persist:failed" ]) {
+    for(const type of [ "staging:started", "staging:succeeded", "staging:failed" ]) {
 
       store.addEventListener(type, (event) => events.push({ detail: event.detail, type: event.type }));
     }
 
     const session = await PluginConfigSession.open({ host, name: PLATFORM.name });
 
-    registerPersistEffect({ host, session, signal: controller.signal, store });
+    registerStagingEffect({ host, session, signal: controller.signal, store });
 
     store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
 
@@ -401,28 +401,28 @@ describe("registerPersistEffect - failure path", () => {
 
     /* Two mutations during that write, which is what puts the store in the state this row exists for. The first is a genuine edit, so it marks the drain dirty and
      * the refusal below is swallowed rather than surfaced. The second returns the options to the array the anchor holds, so the iteration that follows the swallow
-     * finds nothing left to write and never answers the swallowed write's persist:started on its own.
+     * finds nothing left to write and never answers the swallowed write's staging:started on its own.
      */
     store.dispatch({ args: { enabled: true, option: "Motion.Detect" }, type: "option:set" });
     store.dispatch({ type: "model:reverted" });
 
-    assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "precondition: the revert left the store clean by reference");
-    assert.equal(store.state.write.kind, "persisting", "precondition: the refused write is still open as far as the store knows");
+    assert.equal(store.state.configuredOptions, store.state.stagedAnchor, "precondition: the revert left the store clean by reference");
+    assert.equal(store.state.write.kind, "staging", "precondition: the refused write is still open as far as the store knows");
 
     release();
 
     await flush();
 
     assert.equal(updates.length, 1, "the rescued refusal is never retried - there is nothing left to write");
-    assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:succeeded" ], "the swallowed write's started is answered rather than left open");
-    assert.equal(store.state.write.kind, "idle", "so the lifecycle ends idle rather than at a persisting nothing will ever answer");
-    assert.equal(store.state.persistedAnchor, store.state.configuredOptions, "and the anchor still names what the host holds");
+    assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:succeeded" ], "the swallowed write's started is answered rather than left open");
+    assert.equal(store.state.write.kind, "idle", "so the lifecycle ends idle rather than at a staging nothing will ever answer");
+    assert.equal(store.state.stagedAnchor, store.state.configuredOptions, "and the anchor still names what the host holds");
   });
 });
 
-describe("registerPersistEffect - lifecycle", () => {
+describe("registerStagingEffect - lifecycle", () => {
 
-  test("aborting the signal stops the effect from triggering further persists", async () => {
+  test("aborting the signal stops the effect from triggering further stages", async () => {
 
     const { abort, store, updates } = await setup();
 
@@ -432,7 +432,7 @@ describe("registerPersistEffect - lifecycle", () => {
 
     await flush();
 
-    assert.equal(updates.length, 0, "post-abort mutation does not trigger a persist");
+    assert.equal(updates.length, 0, "post-abort mutation does not trigger a stage");
   });
 
   test("aborting the signal mid-drain prevents post-call dispatches against the torn-down view", async () => {
@@ -443,26 +443,26 @@ describe("registerPersistEffect - lifecycle", () => {
 
     await flush();
 
-    // persist:started already dispatched. updatePluginConfig is hanging.
-    assert.deepEqual(events.map((e) => e.type), ["persist:started"]);
+    // staging:started already dispatched. updatePluginConfig is hanging.
+    assert.deepEqual(events.map((e) => e.type), ["staging:started"]);
 
     abort();
     defer().resolve();
 
     await flush();
 
-    // No persist:succeeded - the post-await abort check bailed.
-    assert.deepEqual(events.map((e) => e.type), ["persist:started"], "no further events dispatched after abort");
+    // No staging:succeeded - the post-await abort check bailed.
+    assert.deepEqual(events.map((e) => e.type), ["staging:started"], "no further events dispatched after abort");
   });
 });
 
-describe("registerPersistEffect - flush (navigate-away drain)", () => {
+describe("registerStagingEffect - flush (navigate-away drain)", () => {
 
-  // flush() is the navigate-away drain: it drives any debounced-but-unwritten edit to disk NOW, skipping the debounce wait, while preserving single-writer
+  // flush() is the navigate-away drain: it drives any debounced-but-unwritten edit to the host NOW, skipping the debounce wait, while preserving single-writer
   // serialization and coalescing. These tests assert the single-writer mechanism (loop on pending || flushing, in-loop dirty check, flushing reset in every drain
   // finally) against the failure modes the pre-mortem enumerates.
 
-  test("flush() within the debounce window persists the pending edit exactly once (no 300ms wait)", async () => {
+  test("flush() within the debounce window stages the pending edit exactly once (no 300ms wait)", async () => {
 
     const { events, flush, store, updates } = await setup();
 
@@ -472,10 +472,10 @@ describe("registerPersistEffect - flush (navigate-away drain)", () => {
 
     await flush();
 
-    assert.equal(updates.length, 1, "flush() must persist exactly once - the pending edit, not zero (dropped) and not twice (double-write)");
+    assert.equal(updates.length, 1, "flush() must stage exactly once - the pending edit, not zero (dropped) and not twice (double-write)");
     assert.deepEqual(updates[0], [{ ...PLATFORM, options: ["Disable.Motion.Detect"] }], "the single write must carry the toggled options");
-    assert.deepEqual(events.map((e) => e.type), [ "persist:started", "persist:succeeded" ], "exactly one persist lifecycle, completed");
-    assert.equal(store.state.persistedAnchor, store.state.configuredOptions, "the anchor advanced to the flushed snapshot");
+    assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:succeeded" ], "exactly one staging lifecycle, completed");
+    assert.equal(store.state.stagedAnchor, store.state.configuredOptions, "the anchor advanced to the flushed snapshot");
   });
 
   test("flush() on a clean store is a no-op and does not leak flushing=true into the next mutation's debounce", async () => {
@@ -487,7 +487,7 @@ describe("registerPersistEffect - flush (navigate-away drain)", () => {
 
     assert.equal(updates.length, 0, "flush() on a clean store must not write");
 
-    // The anti-leak assertion (pre-mortem 1): if flush() had left flushing=true, the next mutation's drain would skip the debounce and persist immediately. Toggle,
+    // The anti-leak assertion (pre-mortem 1): if flush() had left flushing=true, the next mutation's drain would skip the debounce and stage immediately. Toggle,
     // then check synchronously (no wait) that NO write has happened yet - proving the edit is still being debounced, i.e. flushing did not leak.
     store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
 
@@ -496,8 +496,8 @@ describe("registerPersistEffect - flush (navigate-away drain)", () => {
     // And after the debounce, it does land normally.
     await flush();
 
-    assert.equal(updates.length, 1, "the debounced toggle persists once after its window elapses");
-    assert.deepEqual(updates[0][0].options, ["Disable.Motion.Detect"], "the post-flush toggle persisted the right options");
+    assert.equal(updates.length, 1, "the debounced toggle stages once after its window elapses");
+    assert.deepEqual(updates[0][0].options, ["Disable.Motion.Detect"], "the post-flush toggle staged the right options");
   });
 
   test("flush() while a commit is in flight awaits that commit and does not start a second write", async () => {
@@ -546,7 +546,7 @@ describe("registerPersistEffect - flush (navigate-away drain)", () => {
 
     await flush();
 
-    assert.equal(updates.length, 1, "flush() persisted the edit once");
+    assert.equal(updates.length, 1, "flush() staged the edit once");
 
     // Abort after the flush already drained the edit. A subsequent flush() must not re-commit (the store is clean - the anchor advanced), and the aborted signal
     // stops any further drain regardless.
@@ -554,11 +554,11 @@ describe("registerPersistEffect - flush (navigate-away drain)", () => {
 
     await flush();
 
-    assert.equal(updates.length, 1, "flush() after abort must not re-commit an already-persisted, now-clean edit");
+    assert.equal(updates.length, 1, "flush() after abort must not re-commit an already-staged, now-clean edit");
   });
 });
 
-describe("registerPersistEffect - model-load boundary", () => {
+describe("registerStagingEffect - model-load boundary", () => {
 
   // The write path's floor: a store whose model never loaded holds placeholder state, and the options it would write describe nothing the user configured. These
   // lock in the refusal at the drain - the one point both start-sites pass through - across the page states an unloaded store can be sitting in when a write is
@@ -569,7 +569,7 @@ describe("registerPersistEffect - model-load boundary", () => {
     const { flush, store, updates } = await setup({ configuredOptions: ["Enable.Motion.Detect"], loaded: false });
 
     // A mutation against the placeholder state forks configuredOptions off the anchor, so the effect sees a dirty store and starts the drain. What that drain
-    // would commit is the placeholder's own emptiness, landing on disk as an erasure of whatever the user had saved. The seeded configuration is what makes the
+    // would commit is the placeholder's own emptiness, landing on the host as an erasure of whatever the user had saved. The seeded configuration is what makes the
     // reset a real change: a reset of nothing keeps its reference and never reaches the drain at all, which would leave this refusal unexercised.
     store.dispatch({ type: "options:reset" });
 
@@ -616,7 +616,7 @@ describe("registerPersistEffect - model-load boundary", () => {
   });
 });
 
-describe("registerPersistEffect - a reset with nothing configured", () => {
+describe("registerStagingEffect - a reset with nothing configured", () => {
 
   // The reducer's reset arm hands back the configured options it was given when there is nothing to wipe, so the effect's own dirty check finds the store clean
   // and no drain starts. The write this row proves absent would have carried the same empty configuration the host already holds.
@@ -625,13 +625,13 @@ describe("registerPersistEffect - a reset with nothing configured", () => {
 
     const { flush, store, updates } = await setup();
 
-    assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "pre-condition: a loaded store with nothing configured is clean");
+    assert.equal(store.state.configuredOptions, store.state.stagedAnchor, "pre-condition: a loaded store with nothing configured is clean");
 
     store.dispatch({ type: "options:reset" });
 
     await flush();
 
-    assert.equal(store.state.configuredOptions, store.state.persistedAnchor, "the reset left the configuration exactly where it was");
+    assert.equal(store.state.configuredOptions, store.state.stagedAnchor, "the reset left the configuration exactly where it was");
     assert.equal(updates.length, 0, "so nothing reached the host");
   });
 });

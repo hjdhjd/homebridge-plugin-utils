@@ -370,7 +370,7 @@ export class webUi {
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the schema form so any debounced-but-unwritten option edit is flushed into Homebridge's in-memory config model
    * first - the Settings form then renders against the flushed config rather than a stale snapshot. The reveal and the spinner are {@link #runEntryPoint}'s settle
-   * work, so they land on every path and nothing strands the user on a spinner. The flush drain's own failure surfaces via `persist:failed`'s
+   * work, so they land on every path and nothing strands the user on a spinner. The flush drain's own failure surfaces via `staging:failed`'s
    * toast rather than as a rejection here, and a rejection that contract rules out reaches the boundary's default toast with the tab painted regardless.
    *
    * @returns {Promise<void>}
@@ -405,7 +405,7 @@ export class webUi {
    *
    * Awaits `featureOptions.hide()` BEFORE revealing the support page so any debounced-but-unwritten option edit is flushed first, matching the Settings path. The
    * reveal and the spinner are {@link #runEntryPoint}'s settle work, so they land on every path. The flush drain's own failure surfaces via
-   * `persist:failed`'s toast rather than as a rejection here, and a rejection that contract rules out reaches the boundary's default toast with the tab painted
+   * `staging:failed`'s toast rather than as a rejection here, and a rejection that contract rules out reaches the boundary's default toast with the tab painted
    * regardless.
    *
    * @returns {Promise<void>}
@@ -499,7 +499,7 @@ export class webUi {
    * failures a retry can repair (the config read, the controller and device lists, the feature catalog) into the connection-error view, and lets a catalog fault - a
    * picker source with no resolver - and a caller-supplied loaded-model hook that throws go straight through, because each is the plugin's own code and no retry
    * could repair it. Without the boundary each of those would vanish into the dropped promise. #showSettings and #showSupport hand the boundary their navigate-away
-   * flush, and it reveals the next tab and drains the spinner on every path (the flush drain's own failure surfaces via persist:failed's toast).
+   * flush, and it reveals the next tab and drains the spinner on every path (the flush drain's own failure surfaces via staging:failed's toast).
    *
    * @private
    */

@@ -84,11 +84,11 @@ async function flush() {
   }
 }
 
-// Wait long enough for the persist effect's 300ms debounce window to expire AND any subsequent persist call / rollback dispatch to settle. Used after any user
-// action that should produce (or NOT produce) a persist call - a fixed wall-clock wait is the right primitive here because the test's interest is in the
-// post-debounce settled state, not in observing the persist's individual lifecycle events. 400ms covers the debounce plus headroom for a synchronous persist
+// Wait long enough for the staging effect's 300ms debounce window to expire AND any subsequent staging call / rollback dispatch to settle. Used after any user
+// action that should produce (or NOT produce) a staging call - a fixed wall-clock wait is the right primitive here because the test's interest is in the
+// post-debounce settled state, not in observing the stage's individual lifecycle events. 400ms covers the debounce plus headroom for a synchronous staging
 // resolve + reducer dispatch.
-async function settlePersist() {
+async function settleStaging() {
 
   await new Promise((resolve) => setTimeout(resolve, 400));
   await flush();
@@ -624,7 +624,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     orchestrator.cleanup();
   });
 
-  test("a sync failure records zero config writes - the persist effect never fires on the failure path", async () => {
+  test("a sync failure records zero config writes - the staging effect never fires on the failure path", async () => {
 
     using dom = createTestDom();
 
@@ -648,12 +648,12 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 
     const writesBefore = fake.observed.updatedConfigs.length;
 
-    // Fail the re-sync, then let the whole failure path settle well past the persist debounce window. The persist effect is registered only after the sync succeeds, so
+    // Fail the re-sync, then let the whole failure path settle well past the staging debounce window. The staging effect is registered only after the sync succeeds, so
     // on the failure path it is never even registered - the write path (updatePluginConfig, recorded in observed.updatedConfigs) must stay untouched.
     fake.getPluginConfig = async () => { throw new Error("host read failed"); };
 
     await orchestrator.show(session);
-    await settlePersist();
+    await settleStaging();
 
     assert.equal(fake.observed.updatedConfigs.length, writesBefore, "the sync-failure path must record zero config writes");
 
@@ -1181,7 +1181,7 @@ describe("webUiFeatureOptions - the boot window", () => {
    * user gesture landing twice - a double click on the menu - and it must produce one page. What makes the window real is that hide() is awaited: without an entry
    * generation both entries come out of the same teardown and both mint a cycle, leaving the first cycle's store, effects, and listeners standing unaborted behind
    * the second's. The counters are the observation, and the edit at the end is what proves the cycle that stood is the live
-   * one rather than a torn-down winner: an aborted cycle's persist effect drops the edit and nothing reaches the host at all.
+   * one rather than a torn-down winner: an aborted cycle's staging effect drops the edit and nothing reaches the host at all.
    */
   test("two show() entries inside one teardown window mint one cycle between them", async () => {
 
@@ -1207,9 +1207,9 @@ describe("webUiFeatureOptions - the boot window", () => {
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await settlePersist();
+    await settleStaging();
 
-    assert.equal(fake.observed.updatedConfigs.length, 1, "the standing cycle's persist effect is live, and its one write is the only one the host saw");
+    assert.equal(fake.observed.updatedConfigs.length, 1, "the standing cycle's staging effect is live, and its one write is the only one the host saw");
 
     orchestrator.cleanup();
   });
@@ -1413,7 +1413,7 @@ describe("webUiFeatureOptions disposal (Symbol.dispose / Symbol.asyncDispose)", 
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // Stage a pending edit: expand Motion, toggle Detect off. The edit enters the persist effect's 300ms debounce and is NOT yet committed. We deliberately do NOT
+    // Stage a pending edit: expand Motion, toggle Detect off. The edit enters the staging effect's 300ms debounce and is NOT yet committed. We deliberately do NOT
     // settle the debounce, so the only path by which the edit can reach the host is the async disposer's flush.
     skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
 
@@ -1463,12 +1463,12 @@ describe("webUiFeatureOptions disposal (Symbol.dispose / Symbol.asyncDispose)", 
 
     const committedBefore = fake.observed.updatedConfigs.length;
 
-    // Synchronous disposal aborts the page signal WITHOUT flushing. The persist debounce is bound to that signal, so the abort cancels it and the drain bails before
+    // Synchronous disposal aborts the page signal WITHOUT flushing. The staging debounce is bound to that signal, so the abort cancels it and the drain bails before
     // committing. This is the documented forced-teardown trade the async disposer above exists to avoid.
     orchestrator[Symbol.dispose]();
 
     // Give any (incorrectly) surviving debounce a full window to fire; the edit must NOT reach the host.
-    await settlePersist();
+    await settleStaging();
 
     assert.equal(fake.observed.updatedConfigs.length, committedBefore,
       "[Symbol.dispose] must not flush - the debounced edit is dropped when the page signal aborts");
@@ -1851,12 +1851,12 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
   });
 });
 
-describe("webUiFeatureOptions - config persistence", () => {
+describe("webUiFeatureOptions - config staging", () => {
 
-  test("changing an option value and persisting the config reflects the new option entry in the homebridge updatePluginConfig record", async () => {
+  test("changing an option value and staging the config reflects the new option entry in the homebridge updatePluginConfig record", async () => {
 
     // End-to-end: user toggles an option, the options view dispatches an option mutation (option:set / option:cleared); the reducer recomputes configuredOptions and
-    // the persist effect drains it to homebridge.updatePluginConfig. We seed a clean config, render, simulate a checkbox toggle + change event, and assert the
+    // the staging effect drains it to homebridge.updatePluginConfig. We seed a clean config, render, simulate a checkbox toggle + change event, and assert the
     // captured update contains the new option.
     using dom = createTestDom();
 
@@ -1888,16 +1888,16 @@ describe("webUiFeatureOptions - config persistence", () => {
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await settlePersist();
+    await settleStaging();
 
-    // The orchestrator should have persisted the change. `observed.updatedConfigs` collects every updatePluginConfig call on the fake bridge.
+    // The orchestrator should have staged the change. `observed.updatedConfigs` collects every updatePluginConfig call on the fake bridge.
     assert.ok(fake.observed.updatedConfigs.length > 0, "toggling a checkbox must produce at least one updatePluginConfig call");
 
     const lastUpdate = fake.observed.updatedConfigs.at(-1);
 
     assert.ok(Array.isArray(lastUpdate));
     assert.ok(lastUpdate[0]?.options?.includes("Disable.Motion.Detect"),
-      "disabling the default-on Motion.Detect must emit a Disable.Motion.Detect entry in the persisted options");
+      "disabling the default-on Motion.Detect must emit a Disable.Motion.Detect entry in the staged options");
 
     orchestrator.cleanup();
   });
@@ -1907,9 +1907,9 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
 
   // Two destructive user actions live on the status bar: "Reset to Defaults" wipes every configured option, returning the model to its declared defaults; "Revert
   // to Saved" rolls back any in-session edits to the configuredOptions snapshot taken at show() time. Both run as event-delegated clicks on the reset button group
-  // and must persist via homebridge.updatePluginConfig, refresh the rendered view, and surface a toast acknowledging the action.
+  // and must stage via homebridge.updatePluginConfig, refresh the rendered view, and surface a toast acknowledging the action.
 
-  test("clicking the reset-defaults button wipes every configured option and persists the empty list", async () => {
+  test("clicking the reset-defaults button wipes every configured option and stages the empty list", async () => {
 
     using dom = createTestDom();
 
@@ -1944,15 +1944,15 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
     assert.ok(resetDefaults, "the reset-defaults button must reveal after the toggle click");
 
     resetDefaults.click();
-    await settlePersist();
+    await settleStaging();
 
-    // The flow mutates the model, re-renders, and schedules a persist of the empty options array via the drain. Reset/revert emit no separate success toast: a
-    // toast could claim "done" before the persist confirms under coalescing, so the visible UI change (configTable cleared) is the user's sole confirmation.
+    // The flow mutates the model, re-renders, and schedules a stage of the empty options array via the drain. Reset/revert emit no separate success toast: a
+    // toast could claim "done" before the stage confirms under coalescing, so the visible UI change (configTable cleared) is the user's sole confirmation.
     // Failure surfaces via the drain's runDetached toast.
     const lastUpdate = fake.observed.updatedConfigs.at(-1);
 
     assert.ok(lastUpdate, "reset-defaults must produce at least one updatePluginConfig call");
-    assert.deepEqual(lastUpdate[0].options, [], "reset-defaults must persist an empty options array");
+    assert.deepEqual(lastUpdate[0].options, [], "reset-defaults must stage an empty options array");
 
     orchestrator.cleanup();
   });
@@ -1978,25 +1978,25 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
     await flush();
 
     // Expand the Motion category to materialize its rows under the lazy-rendering contract, then perform the in-session edit: toggle Motion.Detect off, which adds
-    // Disable.Motion.Detect to the persisted options.
+    // Disable.Motion.Detect to the staged options.
     skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
 
     const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
 
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
-    await settlePersist();
+    await settleStaging();
 
-    // Sanity check: the edit landed in a persisted update.
+    // Sanity check: the edit landed in a staged update.
     assert.ok(fake.observed.updatedConfigs.some((cfg) => cfg[0].options.includes("Disable.Motion.Detect")),
-      "the in-session toggle must have produced an intermediate persisted update");
+      "the in-session toggle must have produced an intermediate staged update");
 
     // Open the reset group, then click "Revert to Saved".
     document.querySelector("button[data-action='reset-toggle']").click();
     await flush();
 
     document.querySelector("button[data-action='reset-revert']").click();
-    await settlePersist();
+    await settleStaging();
 
     const lastUpdate = fake.observed.updatedConfigs.at(-1);
 
@@ -2004,14 +2004,14 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
       "revert must restore the configuredOptions snapshot captured at the initial show()");
 
     // No success toast on revert (or reset) - the visible UI change (Motion.Detect's row snapping back to its default-checked state) IS the user's confirmation,
-    // and removing the toast eliminates the "toast claims done before persist confirms" honesty hole that an awaited-gating approach would re-introduce.
+    // and removing the toast eliminates the "toast claims done before the stage confirms" honesty hole that an awaited-gating approach would re-introduce.
 
     orchestrator.cleanup();
   });
 
-  test("reset-toggle alone (without choosing a destructive action) does not persist any change", async () => {
+  test("reset-toggle alone (without choosing a destructive action) does not stage any change", async () => {
 
-    // The reveal-and-cancel ergonomic. Clicking the toggle, then clicking it again (collapsing back), should leave the persisted config untouched. We use the
+    // The reveal-and-cancel ergonomic. Clicking the toggle, then clicking it again (collapsing back), should leave the staged config untouched. We use the
     // observed.updatedConfigs count as the witness.
     using dom = createTestDom();
 
@@ -2043,7 +2043,7 @@ describe("webUiFeatureOptions - reset and revert flows", () => {
     await flush();
 
     assert.equal(fake.observed.updatedConfigs.length, updatesBefore,
-      "no destructive action chosen; the persisted config must be untouched");
+      "no destructive action chosen; the staged config must be untouched");
 
     orchestrator.cleanup();
   });
@@ -2392,9 +2392,9 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
 
 describe("webUiFeatureOptions - detached-operation error contract", () => {
 
-  // Option persistence is fire-and-forget: a checkbox change dispatches an option mutation that the persist effect's coalescing drain writes to disk via
-  // session.commit (homebridge.updatePluginConfig). A final failure with no superseding mutation dispatches persist:failed - the reducer rolls configuredOptions
-  // back to the persisted anchor - and the effect surfaces the error through the host's single "config-persist" toast channel. When the page signal has aborted
+  // Option staging is fire-and-forget: a checkbox change dispatches an option mutation that the staging effect's coalescing drain stages through
+  // session.commit (homebridge.updatePluginConfig). A final failure with no superseding mutation dispatches staging:failed - the reducer rolls configuredOptions
+  // back to the staged anchor - and the effect surfaces the error through the host's single "config-staging" toast channel. When the page signal has aborted
   // (lifecycle teardown), the drain bails before dispatching or toasting, so a teardown-shaped failure stays silent. These tests cover both branches by rejecting
   // the fake's updatePluginConfig.
 
@@ -2428,7 +2428,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
     // Snapshot the toast log AFTER show() so the assertion only sees the rejection we induce, not anything the boot path may have toasted.
     const toastsBefore = fake.observed.toasts.length;
 
-    // Expand the Motion category, then toggle the Motion.Detect checkbox to dispatch an option mutation, which the persist effect's drain writes via updatePluginConfig.
+    // Expand the Motion category, then toggle the Motion.Detect checkbox to dispatch an option mutation, which the staging effect's drain writes via updatePluginConfig.
     document.querySelector("details[data-category='Motion'] summary").click();
 
     const motionCheckbox = document.querySelector("[id='Motion.Detect']");
@@ -2436,14 +2436,14 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await settlePersist();
+    await settleStaging();
 
     const induced = fake.observed.toasts.slice(toastsBefore);
 
     assert.equal(induced.length, 1, "exactly one toast must surface the rejection");
     assert.equal(induced[0].variant, "error", "the toast must be an error variant - users distinguish error toasts from informational ones");
     assert.equal(induced[0].message, failure.message, "the toast message must carry the original error.message for the user");
-    assert.equal(induced[0].title, "config-persist", "the toast title must name the failing operation so the user sees which action did not complete");
+    assert.equal(induced[0].title, "config-staging", "the toast title must name the failing operation so the user sees which action did not complete");
 
     orchestrator.cleanup();
   });
@@ -2492,13 +2492,13 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
   });
 });
 
-describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persistence", () => {
+describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for staging", () => {
 
-  // Every mutation path (checkbox toggle, reset-to-defaults, revert-to-saved) applies optimistically by dispatching an option mutation, and the persist effect awaits
-  // the host write through the session's commit method. On a final-attempt failure the effect dispatches persist:failed, which the reducer rolls back by restoring
-  // configuredOptions to the last-persisted anchor; the editedConfig view (derived from the session) follows it, and the failure surfaces via the host's toast channel.
+  // Every mutation path (checkbox toggle, reset-to-defaults, revert-to-saved) applies optimistically by dispatching an option mutation, and the staging effect awaits
+  // the host write through the session's commit method. On a final-attempt failure the effect dispatches staging:failed, which the reducer rolls back by restoring
+  // configuredOptions to the last-staged anchor; the editedConfig view (derived from the session) follows it, and the failure surfaces via the host's toast channel.
 
-  test("a failed checkbox-change persist rolls back the model to the pre-mutation snapshot", async () => {
+  test("a failed checkbox-change stage rolls back the model to the pre-mutation snapshot", async () => {
 
     using dom = createTestDom();
 
@@ -2511,7 +2511,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
 
     fake.updatePluginConfig = async () => {
 
-      throw new Error("simulated persistence failure");
+      throw new Error("simulated staging failure");
     };
 
     using homebridgeInstall = installHomebridge(fake);
@@ -2523,7 +2523,7 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // Pre-condition: the at-show() configuredOptions snapshot. We toggle a checkbox; the persistence will fail; the rollback should restore this exact array.
+    // Pre-condition: the at-show() configuredOptions snapshot. We toggle a checkbox; the stage will fail; the rollback should restore this exact array.
     const preMutationOptions = [...orchestrator.editedConfig[0].options];
 
     skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
@@ -2533,15 +2533,15 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await settlePersist();
+    await settleStaging();
 
     assert.deepEqual(orchestrator.editedConfig[0].options, preMutationOptions,
-      "rollback must restore editedConfig.options to the pre-mutation snapshot after persistence fails");
+      "rollback must restore editedConfig.options to the pre-mutation snapshot after staging fails");
 
     orchestrator.cleanup();
   });
 
-  test("a failed reset-to-defaults persist rolls back the model to the pre-reset snapshot", async () => {
+  test("a failed reset-to-defaults stage rolls back the model to the pre-reset snapshot", async () => {
 
     using dom = createTestDom();
 
@@ -2564,25 +2564,25 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
 
     const preMutationOptions = [...orchestrator.editedConfig[0].options];
 
-    // Now make persistence fail. The next reset will hit the rollback path.
+    // Now make staging fail. The next reset will hit the rollback path.
     fake.updatePluginConfig = async () => {
 
-      throw new Error("simulated persistence failure during reset");
+      throw new Error("simulated staging failure during reset");
     };
 
     document.querySelector("button[data-action='reset-toggle']").click();
     await flush();
 
     document.querySelector("button[data-action='reset-defaults']").click();
-    await settlePersist();
+    await settleStaging();
 
     assert.deepEqual(orchestrator.editedConfig[0].options, preMutationOptions,
-      "rollback must restore the pre-reset configuredOptions after persistence fails - the destructive action is fully reversed");
+      "rollback must restore the pre-reset configuredOptions after staging fails - the destructive action is fully reversed");
 
     orchestrator.cleanup();
   });
 
-  test("a failed revert-to-saved persist rolls back the model to the in-session edited state", async () => {
+  test("a failed revert-to-saved stage rolls back the model to the in-session edited state", async () => {
 
     using dom = createTestDom();
 
@@ -2602,31 +2602,31 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // In-session edit: toggle Motion.Detect off via the orchestrator's event delegation so the persist completes and the in-session state is committed in memory.
+    // In-session edit: toggle Motion.Detect off via the orchestrator's event delegation so the stage completes and the in-session state is committed in memory.
     skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
 
     const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
 
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
-    await settlePersist();
+    await settleStaging();
 
     const inSessionOptions = [...orchestrator.editedConfig[0].options];
 
     assert.ok(inSessionOptions.includes("Disable.Motion.Detect"),
-      "pre-condition: the in-session edit was persisted to editedConfig before the revert attempt");
+      "pre-condition: the in-session edit was staged to editedConfig before the revert attempt");
 
-    // Make the revert's persist fail. The rollback should restore inSessionOptions (the user's mid-session state).
+    // Make the revert's stage fail. The rollback should restore inSessionOptions (the user's mid-session state).
     fake.updatePluginConfig = async () => {
 
-      throw new Error("simulated persistence failure during revert");
+      throw new Error("simulated staging failure during revert");
     };
 
     document.querySelector("button[data-action='reset-toggle']").click();
     await flush();
 
     document.querySelector("button[data-action='reset-revert']").click();
-    await settlePersist();
+    await settleStaging();
 
     assert.deepEqual(orchestrator.editedConfig[0].options, inSessionOptions,
       "rollback must restore the in-session edits when revert-to-saved fails - the user's pre-revert state is preserved");
@@ -2634,10 +2634,10 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
     orchestrator.cleanup();
   });
 
-  // Proving the masterclass property of the drain: concurrent mutations cannot cause memory/disk divergence. The drain serializes persists and coalesces in-flight
-  // dirty state, so if an earlier persist fails but a subsequent one succeeds, the user's intent reaches disk and no rollback fires - the drain swallows the
+  // Proving the masterclass property of the drain: concurrent mutations cannot cause memory/host divergence. The drain serializes stages and coalesces in-flight
+  // dirty state, so if an earlier stage fails but a subsequent one succeeds, the user's intent reaches the host and no rollback fires - the drain swallows the
   // intermediate failure because a superseding iteration is pending. This is the property the per-mutation rollback pattern could NOT provide.
-  test("concurrent mutations preserve both intents on disk when the earlier persist fails but the later succeeds", async () => {
+  test("concurrent mutations preserve both intents at the host when the earlier stage fails but the later succeeds", async () => {
 
     using dom = createTestDom();
 
@@ -2660,10 +2660,10 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
     skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
     skeleton.configTable.querySelector("details[data-category='Audio'] summary").click();
 
-    // Install a controllable persistence: the first call awaits a gate (so we can interleave a second mutation), then fails. The second call resolves normally.
-    // Each call records its payload to `observed.updatedConfigs` BEFORE the await so the test can assert what each iteration tried to persist.
+    // Install a controllable staging call: the first call awaits a gate (so we can interleave a second mutation), then fails. The second call resolves normally.
+    // Each call records its payload to `observed.updatedConfigs` BEFORE the await so the test can assert what each iteration tried to stage.
     let resolveFirst;
-    const firstPersist = new Promise((resolve) => { resolveFirst = resolve; });
+    const firstStage = new Promise((resolve) => { resolveFirst = resolve; });
     let callCount = 0;
 
     fake.updatePluginConfig = async (next) => {
@@ -2673,23 +2673,23 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
 
       if(callCount === 1) {
 
-        await firstPersist;
+        await firstStage;
 
-        throw new Error("simulated transient persistence failure");
+        throw new Error("simulated transient staging failure");
       }
     };
 
-    // Mutation A: toggle Motion.Detect off. This fires the drain; the first persist call hangs on `firstPersist` (we wait past the debounce window so the call
+    // Mutation A: toggle Motion.Detect off. This fires the drain; the first staging call hangs on `firstStage` (we wait past the debounce window so the call
     // actually fires, then proceed with the second mutation).
     const motionCheckbox = skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
 
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // Wait past the debounce so the first updatePluginConfig call actually fires (and hangs on firstPersist).
+    // Wait past the debounce so the first updatePluginConfig call actually fires (and hangs on firstStage).
     await new Promise((resolve) => setTimeout(resolve, 350));
 
-    // Mutation B: while the first persist is still hanging, toggle Audio.Volume on. The drain's dirty flag is now set; the in-flight iteration will fail, but
+    // Mutation B: while the first stage is still hanging, toggle Audio.Volume on. The drain's dirty flag is now set; the in-flight iteration will fail, but
     // the drain will iterate again with the combined state instead of rolling back.
     const audioCheckbox = skeleton.configTable.querySelector("[id='row-Audio.Volume'] input[type='checkbox']");
 
@@ -2697,28 +2697,28 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
     audioCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
     await flush();
 
-    // Toast surface BEFORE we release the failing persist - we want to confirm at the end that NO toast fired despite the intermediate failure.
+    // Toast surface BEFORE we release the failing stage - we want to confirm at the end that NO toast fired despite the intermediate failure.
     const toastsBeforeRelease = fake.observed.toasts.length;
 
-    // Release the first persist (which fails). The drain catches, sees dirty=true, swallows the error, and iterates again with the combined state. The second
-    // iteration debounces again before issuing its persist, so we wait past that window plus the resolve.
+    // Release the first stage (which fails). The drain catches, sees dirty=true, swallows the error, and iterates again with the combined state. The second
+    // iteration debounces again before issuing its stage, so we wait past that window plus the resolve.
     resolveFirst();
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    // Assert: both mutations reached disk, no rollback, no toast. The drain's superseding iteration carried Audio.Volume forward. The Audio.Volume entry carries
+    // Assert: both mutations reached the host, no rollback, no toast. The drain's superseding iteration carried Audio.Volume forward. The Audio.Volume entry carries
     // its defaultValue suffix ("Enable.Audio.Volume.50") so the assertion uses a prefix match.
-    const lastPersisted = fake.observed.updatedConfigs.at(-1)?.[0]?.options ?? [];
+    const lastStaged = fake.observed.updatedConfigs.at(-1)?.[0]?.options ?? [];
 
-    assert.ok(lastPersisted.includes("Disable.Motion.Detect"),
-      "the final persist must include the Motion.Detect toggle - the drain carried it forward through the failed first iteration");
-    assert.ok(lastPersisted.some((entry) => entry.startsWith("Enable.Audio.Volume")),
-      "the final persist must include the Audio.Volume toggle - the drain coalesced both mutations into the superseding iteration");
+    assert.ok(lastStaged.includes("Disable.Motion.Detect"),
+      "the final stage must include the Motion.Detect toggle - the drain carried it forward through the failed first iteration");
+    assert.ok(lastStaged.some((entry) => entry.startsWith("Enable.Audio.Volume")),
+      "the final stage must include the Audio.Volume toggle - the drain coalesced both mutations into the superseding iteration");
 
-    assert.deepEqual(orchestrator.editedConfig[0].options, lastPersisted,
-      "memory must match disk - the drain's anchor update on success keeps memory and disk in lockstep");
+    assert.deepEqual(orchestrator.editedConfig[0].options, lastStaged,
+      "memory must match the host - the drain's anchor update on success keeps memory and the host in lockstep");
 
     assert.equal(fake.observed.toasts.length, toastsBeforeRelease,
-      "no toast must fire for the intermediate failure - a later successful persist supersedes it and the user's intent was preserved");
+      "no toast must fire for the intermediate failure - a later successful stage supersedes it and the user's intent was preserved");
 
     orchestrator.cleanup();
   });
@@ -2726,16 +2726,16 @@ describe("webUiFeatureOptions - optimistic-apply + rollback-on-failure for persi
 
 describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
 
-  // Fire-and-forget persistence runs through the persist effect's coalescing drain, which holds the page-level abort signal (#pageAbort.signal) and re-checks it after
+  // Fire-and-forget staging runs through the staging effect's coalescing drain, which holds the page-level abort signal (#pageAbort.signal) and re-checks it after
   // each await. A cleanup() that races with the async drain aborts that signal, so the post-await work bails rather than dispatching against a torn-down view. These
   // tests prove that contract by interleaving cleanup() between a destructive action and the underlying I/O's resolution.
 
-  test("cleanup() during a reset whose persist fails suppresses the rollback's re-render", async () => {
+  test("cleanup() during a reset whose stage fails suppresses the rollback's re-render", async () => {
 
-    // The signal-aware guard lives in the drain's failure path: when a persist fails AND no superseding mutation is pending, the drain re-checks the page signal
-    // before dispatching persist:failed (the action the reducer turns into a rollback of configuredOptions to persistedAnchor, which the options view re-renders). A
-    // cleanup() during the in-flight persist marks the page aborted, so the drain returns without dispatching - the orchestrator does not touch a torn-down DOM. This
-    // test proves that contract by pausing the persist, cleanup()ing while it's in flight, then releasing it as a rejection. The observable: no re-render happens after
+    // The signal-aware guard lives in the drain's failure path: when a stage fails AND no superseding mutation is pending, the drain re-checks the page signal
+    // before dispatching staging:failed (the action the reducer turns into a rollback of configuredOptions to stagedAnchor, which the options view re-renders). A
+    // cleanup() during the in-flight stage marks the page aborted, so the drain returns without dispatching - the orchestrator does not touch a torn-down DOM. This
+    // test proves that contract by pausing the stage, cleanup()ing while it's in flight, then releasing it as a rejection. The observable: no re-render happens after
     // cleanup, so configTable stays cleared.
     using dom = createTestDom();
 
@@ -2746,7 +2746,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
-    // Pause-then-fail updatePluginConfig. The pause lets us interleave cleanup() between the persist starting and its failure.
+    // Pause-then-fail updatePluginConfig. The pause lets us interleave cleanup() between the stage starting and its failure.
     let releaseUpdate;
     const updateGate = new Promise((resolve) => { releaseUpdate = resolve; });
 
@@ -2754,7 +2754,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
 
       await updateGate;
 
-      throw new Error("simulated persistence failure mid-cleanup");
+      throw new Error("simulated staging failure mid-cleanup");
     };
 
     using homebridgeInstall = installHomebridge(fake);
@@ -2766,20 +2766,20 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // Open the reset group, then click reset-defaults. The drain starts, the persist hangs on the gate.
+    // Open the reset group, then click reset-defaults. The drain starts, the stage hangs on the gate.
     document.querySelector("button[data-action='reset-toggle']").click();
     await flush();
     document.querySelector("button[data-action='reset-defaults']").click();
     await flush();
 
-    // Cleanup mid-flight. The page signal aborts. The drain's persist is still hanging.
+    // Cleanup mid-flight. The page signal aborts. The drain's stage is still hanging.
     orchestrator.cleanup();
 
     // Capture the configTable state right after cleanup. cleanup() routes through hide() which leaves the configTable empty.
     const childCountAfterCleanup = skeleton.configTable.children.length;
 
-    // Release the paused persist as a failure. The drain catches, sees no superseding mutation, then re-checks the aborted page signal and returns before dispatching
-    // persist:failed - so no rollback re-render fires. The configTable must stay exactly as cleanup() left it.
+    // Release the paused stage as a failure. The drain catches, sees no superseding mutation, then re-checks the aborted page signal and returns before dispatching
+    // staging:failed - so no rollback re-render fires. The configTable must stay exactly as cleanup() left it.
     releaseUpdate();
     await flush();
 
@@ -2862,7 +2862,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
       "post-cleanup devices fetch must not mutate the devices container - the signal-aborted check stopped devices:loaded from dispatching");
   });
 
-  test("cleanup() during a revert whose persist fails suppresses the rollback's re-render", async () => {
+  test("cleanup() during a revert whose stage fails suppresses the rollback's re-render", async () => {
 
     // Same shape as the cleanup-during-reset test - revert routes through the same drain + rollback path, so the same signal-aware guard applies.
     using dom = createTestDom();
@@ -2881,7 +2881,7 @@ describe("webUiFeatureOptions - signal-aware fire-and-forget tails", () => {
 
       await updateGate;
 
-      throw new Error("simulated persistence failure mid-cleanup");
+      throw new Error("simulated staging failure mid-cleanup");
     };
 
     using homebridgeInstall = installHomebridge(fake);
@@ -2950,7 +2950,7 @@ describe("webUiFeatureOptions - revert snapshot survives a re-show with set-equa
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // Trigger a revert. The persisted options after revert reveal which snapshot the orchestrator carried into the second show: initial order (snapshot preserved)
+    // Trigger a revert. The staged options after revert reveal which snapshot the orchestrator carried into the second show: initial order (snapshot preserved)
     // or reversed order (snapshot was overwritten).
     const toggleBtn = document.querySelector("button[data-action='reset-toggle']");
 
@@ -2964,21 +2964,21 @@ describe("webUiFeatureOptions - revert snapshot survives a re-show with set-equa
     assert.ok(revertBtn, "reset-revert button must be visible after the toggle click");
 
     revertBtn.click();
-    await settlePersist();
+    await settleStaging();
 
     assert.ok(fake.observed.updatedConfigs.length > 0,
       "revert must have invoked updatePluginConfig at least once - if this fails the chain broke before the model write");
 
-    const persisted = fake.observed.updatedConfigs.at(-1)[0].options;
+    const staged = fake.observed.updatedConfigs.at(-1)[0].options;
 
-    assert.deepEqual(persisted, initialOrder,
+    assert.deepEqual(staged, initialOrder,
       "re-show with set-equal-but-reordered options must preserve the original snapshot - revert restores the first show's order, not the reload's");
 
     orchestrator.cleanup();
   });
 
   /* The other half of what the snapshot is: not just which options it carries, but which array. The orchestrator holds the loaded options array itself as the
-   * revert target, and the store seeds both configuredOptions and persistedAnchor from that same array, so a revert taken before anything has been saved returns
+   * revert target, and the store seeds both configuredOptions and stagedAnchor from that same array, so a revert taken before anything has been staged returns
    * the store to the reference its anchor already holds. The drain's clean-store check reads exactly that agreement and writes nothing. Were the target a copy,
    * the check would compare two arrays that can never match by reference and every such revert would write the host the configuration it already has.
    */
@@ -3056,12 +3056,12 @@ describe("webUiFeatureOptions - boundary coercion of malformed config", () => {
 describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-end)", () => {
 
   // End-to-end tests proving the global -> controller -> device inheritance contract holds across the orchestrator's full navigation surface. Each test seeds
-  // a multi-tier configuration, walks real user actions (clicks on nav links and checkboxes), and asserts both the rendered DOM and the persisted-config state
+  // a multi-tier configuration, walks real user actions (clicks on nav links and checkboxes), and asserts both the rendered DOM and the staged-config state
   // at each step. These are the integration-level proof for the contract; the unit-level versions live in `webUi-featureOptions/rendering.test.mjs`, which exercises
   // the pure rendering factories (initial render and tri-state transitions) in isolation.
 
   // Fixture serials. The harness builds its controller and device objects from these constants, tests construct configuredOptions strings that reference them,
-  // and assertions read them back when checking the persisted state. Hoisting to describe scope makes them the single source of truth for the fixture's
+  // and assertions read them back when checking the staged state. Hoisting to describe scope makes them the single source of truth for the fixture's
   // identity - changing a serial here propagates everywhere consistently, so a future refactor cannot leave half the suite pointing at the old value.
   const CONTROLLER_SERIAL = "CTRL-001";
   const DEVICE_A_SERIAL = "DEV-001";
@@ -3146,9 +3146,9 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     link.click();
   }
 
-  // Read the latest options array persisted via homebridge.updatePluginConfig. Returns null when nothing has been persisted yet, which is itself a useful
-  // assertion target for "the operation should not have triggered a persistence call."
-  function latestPersistedOptions(fake) {
+  // Read the latest options array staged via homebridge.updatePluginConfig. Returns null when nothing has been staged yet, which is itself a useful
+  // assertion target for "the operation should not have triggered a staging call."
+  function latestStagedOptions(fake) {
 
     return fake.observed.updatedConfigs.at(-1)?.[0]?.options ?? null;
   }
@@ -3174,7 +3174,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     assert.equal(checkbox.readOnly, true, "inherited rows are readOnly to mark the indeterminate state");
   });
 
-  test("from the controller view, clicking an indeterminate checkbox persists a controller-scope override and preserves the global entry", async () => {
+  test("from the controller view, clicking an indeterminate checkbox stages a controller-scope override and preserves the global entry", async () => {
 
     // The override-at-controller path. The user is looking at the controller, sees the inherited global state, and clicks to override at the controller scope.
     // The model must write the controller-scoped Disable AND preserve `Enable.Motion.Detect` (the global) untouched - only the controller scope is being
@@ -3198,19 +3198,19 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     checkbox.indeterminate = false;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // Wait until the persistence pipeline has flushed the controller-scope Disable into the homebridge config. The persist effect's coalescing drain writes
-    // fire-and-forget, so waiting on the specific entry's presence is what the test actually cares about and surfaces a clearly-named failure if the persistence
+    // Wait until the staging pipeline has flushed the controller-scope Disable into the homebridge config. The staging effect's coalescing drain writes
+    // fire-and-forget, so waiting on the specific entry's presence is what the test actually cares about and surfaces a clearly-named failure if the stage
     // never lands.
     const expectedEntry = "Disable.Motion.Detect." + CONTROLLER_SERIAL;
 
-    await waitFor(() => latestPersistedOptions(harness.fake)?.includes(expectedEntry),
-      { message: "controller-scope override must reach the persisted config" });
+    await waitFor(() => latestStagedOptions(harness.fake)?.includes(expectedEntry),
+      { message: "controller-scope override must reach the staged config" });
 
-    const persisted = latestPersistedOptions(harness.fake);
+    const staged = latestStagedOptions(harness.fake);
 
-    assert.ok(persisted.includes(expectedEntry),
-      "the controller-scope override must be persisted - the click at the controller view writes to that scope");
-    assert.ok(persisted.includes("Enable.Motion.Detect"),
+    assert.ok(staged.includes(expectedEntry),
+      "the controller-scope override must be staged - the click at the controller view writes to that scope");
+    assert.ok(staged.includes("Enable.Motion.Detect"),
       "the original global entry must survive - only the controller scope was the target of the mutation");
   });
 
@@ -3292,15 +3292,15 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
     assert.equal(checkbox.checked, true, "starting state at the device: catalog default is true");
 
-    // Step 2: override Motion.Detect to disabled at the device scope. Browser toggle: checked=false, indeterminate=false. Wait until the persistence pipeline
-    // has flushed the device-scope Disable into the homebridge config - the persistence runs fire-and-forget via the persist effect's coalescing drain.
+    // Step 2: override Motion.Detect to disabled at the device scope. Browser toggle: checked=false, indeterminate=false. Wait until the staging pipeline
+    // has flushed the device-scope Disable into the homebridge config - the staging runs fire-and-forget via the staging effect's coalescing drain.
     checkbox.checked = false;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
 
     const expectedDeviceEntry = "Disable.Motion.Detect." + DEVICE_A_SERIAL;
 
-    await waitFor(() => latestPersistedOptions(harness.fake)?.includes(expectedDeviceEntry),
-      { message: "device-scope Disable must reach the persisted config" });
+    await waitFor(() => latestStagedOptions(harness.fake)?.includes(expectedDeviceEntry),
+      { message: "device-scope Disable must reach the staged config" });
 
     // Step 3: navigate to Global Options. The orchestrator re-renders the global view AND clears the devices sidebar (matching the production UX where global
     // is a top-of-hierarchy view with no device context). The device-scope entry stays in the model regardless. We expand the Motion category to materialize
@@ -3343,7 +3343,7 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
 
         return cb && (cb.checked === false) && (cb.indeterminate === false);
       },
-      { message: "device view after round-trip must render the persisted device-scope Disable (unchecked, not indeterminate)" }
+      { message: "device view after round-trip must render the staged device-scope Disable (unchecked, not indeterminate)" }
     );
 
     checkbox = harness.skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
@@ -3351,11 +3351,11 @@ describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-e
     assert.equal(checkbox.checked, false, "device view after round-trip: the device-scope Disable from step 2 still drives the rendered state");
     assert.equal(checkbox.indeterminate, false, "the entry is explicit at this scope, not inherited");
 
-    // Step 6: belt-and-suspenders. The persisted options must still carry the device-scope entry; no navigation-side cleanup should have silently dropped it.
-    const persisted = latestPersistedOptions(harness.fake);
+    // Step 6: belt-and-suspenders. The staged options must still carry the device-scope entry; no navigation-side cleanup should have silently dropped it.
+    const staged = latestStagedOptions(harness.fake);
 
-    assert.ok(persisted.includes(expectedDeviceEntry),
-      "the device-scope entry must remain in the persisted options array across navigations");
+    assert.ok(staged.includes(expectedDeviceEntry),
+      "the device-scope entry must remain in the staged options array across navigations");
   });
 
   // Scope-aware cache invalidation: the orchestrator drops cache entries only for views whose inherited state could have changed. A device-scope mutation only
@@ -4248,7 +4248,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
     assert.equal(fireCount, 1, "onOptionsEdited must fire while the page is live");
 
-    // cleanup() aborts the page signal. The hook was registered on that signal (the same one the persist and keyboard effects use), so its store subscription tears
+    // cleanup() aborts the page signal. The hook was registered on that signal (the same one the staging and keyboard effects use), so its store subscription tears
     // down along with the rest of the edit path. Re-driving the same toggle after the abort must not reach it.
     orchestrator.cleanup();
 
@@ -4261,7 +4261,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
     assert.equal(fireCount, 1, "onOptionsEdited must not fire after the lifecycle signal aborts");
   });
 
-  test("a config without onOptionsEdited edits without throwing and still persists", async () => {
+  test("a config without onOptionsEdited edits without throwing and still stages", async () => {
 
     using dom = createTestDom();
 
@@ -4276,7 +4276,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
     seedBootstrapProbeShim();
 
-    // No onOptionsEdited supplied: the optional-chained invocation must be a silent no-op, so the edit-and-persist path works exactly as it does for any consumer that
+    // No onOptionsEdited supplied: the optional-chained invocation must be a silent no-op, so the edit-and-stage path works exactly as it does for any consumer that
     // omits the hook.
     const orchestrator = new webUiFeatureOptions();
 
@@ -4291,12 +4291,12 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
     assert.doesNotThrow(() => checkbox.dispatchEvent(new Event("change", { bubbles: true })), "a mutation with no hook configured must not throw");
 
-    await settlePersist();
+    await settleStaging();
 
     const lastUpdate = fake.observed.updatedConfigs.at(-1);
 
     assert.ok(lastUpdate?.[0]?.options?.includes("Disable.Motion.Detect"),
-      "the edit must still persist to homebridge exactly as before, with no hook configured");
+      "the edit must still stage to homebridge exactly as before, with no hook configured");
 
     orchestrator.cleanup();
   });
@@ -4436,7 +4436,7 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
     await flush();
 
     document.querySelector("button[data-action='reset-defaults']").click();
-    await settlePersist();
+    await settleStaging();
 
     assert.equal(fireCount, 0, "a reset with nothing configured changed nothing, so the edit hook announced nothing");
     assert.equal(fake.observed.updatedConfigs.length, 0, "and no write reached the host either");
@@ -4662,7 +4662,7 @@ describe("webUiFeatureOptions - onListEntriesRemoved removal hook", () => {
         removalCount++;
 
         // The plugin's own write, asked for from inside the hook. commitConfig queues its body behind the dispatch that is running, and its own drain waits on
-        // the pending persist of this very edit, so the entry just reported removed reaches the host before this patch composes against it.
+        // the pending stage of this very edit, so the entry just reported removed reaches the host before this patch composes against it.
         pending ??= orchestrator.commitConfig(() => ({ controllers: [{ name: "Hub" }] }));
       }
     });
@@ -4674,14 +4674,14 @@ describe("webUiFeatureOptions - onListEntriesRemoved removal hook", () => {
 
     const result = await pending;
 
-    await settlePersist();
+    await settleStaging();
 
     assert.equal(result.kind, "committed", "the plugin's own write ran to completion");
     assert.equal(removalCount, 1, "and the establishment that followed it dispatched model:loaded, which neither hook subscribes to");
 
     const writes = fake.observed.updatedConfigs;
 
-    assert.ok(writes.length >= 2, "the edit's own persist and the plugin's write are two separate host calls");
+    assert.ok(writes.length >= 2, "the edit's own stage and the plugin's write are two separate host calls");
     assert.deepEqual(writes[0][0].options, ["Enable.Motion.Plates=b"], "the edit that triggered the hook reached the host first");
     assert.ok(writes.some((payload) => payload[0].controllers?.length === 1), "and the plugin's patch composed against it afterwards");
 
@@ -6296,7 +6296,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
 
     window.dispatchEvent(new Event("blur"));
 
-    await settlePersist();
+    await settleStaging();
 
     const lastUpdate = fake.observed.updatedConfigs.at(-1);
 
@@ -6348,7 +6348,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
 
     window.dispatchEvent(new Event("blur"));
 
-    await settlePersist();
+    await settleStaging();
 
     const lastUpdate = fake.observed.updatedConfigs.at(-1);
 
@@ -6381,7 +6381,7 @@ describe("webUiFeatureOptions - the pre-Save force-commit reaches every value co
 
     window.dispatchEvent(new Event("blur"));
 
-    assert.equal(fake.observed.updatedConfigs.length, before, "nothing was committed and nothing was persisted");
+    assert.equal(fake.observed.updatedConfigs.length, before, "nothing was committed and nothing was staged");
   });
 });
 
@@ -7141,7 +7141,7 @@ describe("webUiFeatureOptions - takeover", () => {
 
     handle.release();
 
-    await settlePersist();
+    await settleStaging();
 
     assert.equal(fake.observed.updatedConfigs.length, writesBefore, "taking the content area is not a configuration edit, so nothing reaches the host for it");
 

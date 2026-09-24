@@ -2,7 +2,7 @@
  *
  * ui/webUi-featureOptions-events.test.mjs: Tests for the event delegation that lives in the views (options / search / nav) and the keyboard effect, plus the
  * orchestrator's own window-blur commit-and-flush handler. Companion to webUi-featureOptions.test.mjs - that file asserts the show/hide/render/nav lifecycle,
- * this one asserts the click / change / input / keydown routes that dispatch user actions into the store, which the reducer and the persistence effect then
+ * this one asserts the click / change / input / keydown routes that dispatch user actions into the store, which the reducer and the staging effect then
  * consume, along with the blur handler that commits and flushes a pending edit when focus leaves the page. Tests synthesize DOM events on the live
  * orchestrator instance after show() so the full delegation path runs end-to-end.
  */
@@ -22,10 +22,10 @@ async function flush() {
   await delay(10);
 }
 
-// Wait long enough for the persist effect's 300ms debounce window to expire and the resulting updatePluginConfig call (and any rollback dispatch) to settle.
-// Used after any user action that should produce (or NOT produce) a persist call - a fixed wall-clock wait is the right primitive because the test's interest is
-// in the post-debounce settled state, not in observing the persist's individual lifecycle events.
-async function settlePersist() {
+// Wait long enough for the staging effect's 300ms debounce window to expire and the resulting updatePluginConfig call (and any rollback dispatch) to settle.
+// Used after any user action that should produce (or NOT produce) a staging call - a fixed wall-clock wait is the right primitive because the test's interest is
+// in the post-debounce settled state, not in observing the stage's individual lifecycle events.
+async function settleStaging() {
 
   await delay(400);
 }
@@ -187,7 +187,7 @@ describe("webUiFeatureOptions event delegation - category toggle handler", () =>
 
 describe("webUiFeatureOptions event delegation - change handler", () => {
 
-  test("changing a checkbox dispatches the option-change pipeline and persists to homebridge", async () => {
+  test("changing a checkbox dispatches the option-change pipeline and stages to homebridge", async () => {
 
     using harness = await makeStartedOrchestrator();
 
@@ -198,11 +198,11 @@ describe("webUiFeatureOptions event delegation - change handler", () => {
     assert.ok(checkbox, "the Motion.Detect checkbox must exist");
 
     // Toggle the checkbox and dispatch the change event. The options view's change handler dispatches an option mutation (option:set / option:cleared); the reducer
-    // recomputes configuredOptions and the persist effect drains the change to disk via session.commit, which calls homebridge.updatePluginConfig.
+    // recomputes configuredOptions and the staging effect stages the change through session.commit, which calls homebridge.updatePluginConfig.
     checkbox.checked = false;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await settlePersist();
+    await settleStaging();
 
     // The orchestrator should have called updatePluginConfig at least once (post-change). The exact options array shape depends on FeatureOptions internals; we
     // verify only that a call landed - that locks in the change-handler -> updatePluginConfig wiring without coupling to the options serialization format.
@@ -214,7 +214,7 @@ describe("webUiFeatureOptions event delegation - change handler", () => {
     using harness = await makeStartedOrchestrator();
 
     // Synthesize a checkbox that has no surrounding `details[data-category]` ancestor. The change handler must short-circuit on the missing ancestor without throwing
-    // or trying to look up an option in an undefined category. We append a stray checkbox directly to the page, dispatch change, and verify the persistence layer
+    // or trying to look up an option in an undefined category. We append a stray checkbox directly to the page, dispatch change, and verify the staging layer
     // was untouched.
     const stray = document.createElement("input");
 
@@ -461,7 +461,7 @@ describe("webUiFeatureOptions event delegation - click forwarding via nav links"
 
 describe("webUiFeatureOptions event delegation - text input change re-dispatches as checkbox change", () => {
 
-  test("changing a value input fires the persistence pipeline by re-dispatching as the row's checkbox change", async () => {
+  test("changing a value input fires the staging pipeline by re-dispatching as the row's checkbox change", async () => {
 
     using harness = await makeStartedOrchestrator({
 
@@ -488,7 +488,7 @@ describe("webUiFeatureOptions event delegation - text input change re-dispatches
     valueInput.value = "9000";
     valueInput.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await settlePersist();
+    await settleStaging();
 
     assert.ok(harness.fake.observed.updatedConfigs.length > updatesBefore,
       "a text-input change must propagate to updatePluginConfig via the checkbox re-dispatch pipeline");
@@ -497,7 +497,7 @@ describe("webUiFeatureOptions event delegation - text input change re-dispatches
 
 describe("webUiFeatureOptions event delegation - window blur commits and flushes pending edits", () => {
 
-  test("a focused value input with an uncommitted value persists when focus leaves the page, with no change event ever fired", async () => {
+  test("a focused value input with an uncommitted value stages when focus leaves the page, with no change event ever fired", async () => {
 
     using harness = await makeStartedOrchestrator({
 
@@ -517,7 +517,7 @@ describe("webUiFeatureOptions event delegation - window blur commits and flushes
 
     /* The host-save gesture in miniature: the user types into the input and then clicks a control in the PARENT document, so the input never fires `change` -
      * moving focus to the parent does not reliably blur the iframe's own active element - and the only signal this window receives is its own `blur`. The wait
-     * afterwards is deliberately shorter than the persist debounce, because the flush half of the handler must skip that window: an edit that only lands after
+     * afterwards is deliberately shorter than the staging debounce, because the flush half of the handler must skip that window: an edit that only lands after
      * the debounce would lose the race with the host's save.
      */
     valueInput.focus();
@@ -528,11 +528,11 @@ describe("webUiFeatureOptions event delegation - window blur commits and flushes
 
     const staged = harness.fake.observed.updatedConfigs.at(-1);
 
-    assert.ok(staged, "the blur must have driven a persist without any change event");
+    assert.ok(staged, "the blur must have driven a stage without any change event");
     assert.ok(staged[0].options.includes("Enable.Network.Mtu=9000"), "the staged config must carry the value the input held when focus left the page");
   });
 
-  test("a focused masked value input persists on the same signal, since the commit finds it by class rather than by type", async () => {
+  test("a focused masked value input stages on the same signal, since the commit finds it by class rather than by type", async () => {
 
     using harness = await makeStartedOrchestrator({
 
@@ -560,11 +560,11 @@ describe("webUiFeatureOptions event delegation - window blur commits and flushes
 
     const staged = harness.fake.observed.updatedConfigs.at(-1);
 
-    assert.ok(staged, "the blur must have driven a persist for the masked field too");
+    assert.ok(staged, "the blur must have driven a stage for the masked field too");
     assert.ok(staged[0].options.includes("Enable.Network.Key=hunter2"), "the staged config must carry what the masked field held when focus left the page");
   });
 
-  test("an already-committed edit still inside the persist debounce is written the moment focus leaves the page", async () => {
+  test("an already-committed edit still inside the staging debounce is written the moment focus leaves the page", async () => {
 
     using harness = await makeStartedOrchestrator();
 
@@ -572,7 +572,7 @@ describe("webUiFeatureOptions event delegation - window blur commits and flushes
 
     const checkbox = harness.skeleton.configTable.querySelector("[id='row-Audio.Capture']").querySelector("input[type='checkbox']");
 
-    // Toggle the option - the edit commits into the store and enters the persist debounce - then pull focus from the page before that window can expire. The
+    // Toggle the option - the edit commits into the store and enters the staging debounce - then pull focus from the page before that window can expire. The
     // sub-debounce wait asserts that the flush wrote immediately rather than the debounce having elapsed on its own.
     checkbox.click();
     window.dispatchEvent(new Event("blur"));

@@ -27,7 +27,7 @@ const DEVICES_NOTICE_CLASS = "fo-devices-notice";
  *      option table with its persisted category-expansion state, a plugin's nothing-to-list notice, or nothing at all while a connection error owns the frame.
  *   3. **Lazy row materialization**: builds a category's row elements the first time that category needs them, which is either the user's own disclosure toggle or
  *      the first projection pass that finds the category open. A category nobody has opened carries no rows at all.
- *   4. **Per-row updates** on `option:set` / `option:cleared` / `options:reset` / `model:reverted` / `persist:failed`: walks the projection and re-derives each
+ *   4. **Per-row updates** on `option:set` / `option:cleared` / `options:reset` / `model:reverted` / `staging:failed`: walks the projection and re-derives each
  *      row's full state (tri-state, value-input, label color, visibility, dependency badge) in place through the shared `applyRowState` writer - attribute and class
  *      swaps on rows that already exist, run through the same writer construction uses, so no path can diverge from it. The walk first builds whatever rows an open
  *      category is missing, so what it derives is always the whole of what that category should be showing.
@@ -244,7 +244,7 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
   // every entry. The currently-mounted view re-renders in place via the projection walk; the cache rebuilds lazily on subsequent navigations.
   effect({
 
-    events: [ "model:reverted", "options:reset", "persist:failed" ],
+    events: [ "model:reverted", "options:reset", "staging:failed" ],
     fn: () => {
 
       if(store.state.status.kind === "loading") {

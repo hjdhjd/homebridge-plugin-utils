@@ -638,6 +638,32 @@ describe("mountOptionsView - modified-option highlight", () => {
   });
 });
 
+describe("mountOptionsView - a staging rollback", () => {
+
+  test("a staging failure's rollback re-derives the rolled-back row in place", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = setup();
+    const motion = configTable.querySelector("details[data-category='Motion']");
+
+    motion.open = true;
+    motion.dispatchEvent(new Event("toggle", { bubbles: false }));
+
+    const detectCheckbox = motion.querySelector("#Motion\\.Detect");
+
+    // Uncheck the default-on option: the store takes the edit, and the anchor still holds the configuration as it was loaded.
+    detectCheckbox.click();
+
+    assert.equal(detectCheckbox.checked, false, "precondition: the edit unchecked the row");
+
+    // The host refuses the stage. The reducer rolls the configuration back to the anchor, and the row has to read the anchor's state again.
+    store.dispatch({ error: new Error("The host refused the write."), type: "staging:failed" });
+
+    assert.equal(detectCheckbox.checked, true, "the rollback re-derives the row from the configuration the host holds");
+  });
+});
+
 describe("mountOptionsView - a controller's own options page", () => {
 
   // The page a controller click lands on for a plugin whose device list leads with the controller-as-device: one serial fills both scope slots, so everything

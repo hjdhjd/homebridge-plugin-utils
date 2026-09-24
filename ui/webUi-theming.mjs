@@ -258,7 +258,7 @@ const waitForBootstrap = async ({ intervalMs, timeoutMs }) => {
 
     try {
 
-      // The poll interval is the loop's intentional throttle - one probe per interval, not in a tight loop. Same exception as the persist drain: the await is the
+      // The poll interval is the loop's intentional throttle - one probe per interval, not in a tight loop. Same exception as the staging drain: the await is the
       // point of the iteration.
       // eslint-disable-next-line no-await-in-loop
       await delay(intervalMs, deadline);

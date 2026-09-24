@@ -69,7 +69,7 @@ describe("initialState", () => {
     assert.equal(state.status.kind, "loading");
     assert.deepEqual(state.configuredOptions, []);
     assert.deepEqual(state.initialOptions, []);
-    assert.deepEqual(state.persistedAnchor, []);
+    assert.deepEqual(state.stagedAnchor, []);
     assert.deepEqual(state.controllers, []);
     assert.deepEqual(state.devices, []);
     assert.deepEqual(state.scope, { kind: "global" });
@@ -102,7 +102,7 @@ describe("initialState", () => {
 
 describe("reducer - model:loaded", () => {
 
-  test("seeds catalog, configuredOptions, controllers, mode; sets initialOptions and persistedAnchor to the loaded options; transitions status to ready", () => {
+  test("seeds catalog, configuredOptions, controllers, mode; sets initialOptions and stagedAnchor to the loaded options; transitions status to ready", () => {
 
     const configuredOptions = ["Enable.Motion.Detect"];
     const controllers = [{ address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" }];
@@ -111,7 +111,7 @@ describe("reducer - model:loaded", () => {
     assert.equal(next.catalog, CATALOG);
     assert.equal(next.configuredOptions, configuredOptions, "configuredOptions reference preserved from the action - structural sharing");
     assert.equal(next.initialOptions, configuredOptions, "initialOptions seeded with the same reference for revert");
-    assert.equal(next.persistedAnchor, configuredOptions, "persistedAnchor seeded with the same reference for rollback");
+    assert.equal(next.stagedAnchor, configuredOptions, "stagedAnchor seeded with the same reference for rollback");
     assert.equal(next.mode, "controller-based");
     assert.equal(next.controllers, controllers);
     assert.deepEqual(next.status, { kind: "ready" });
@@ -167,11 +167,11 @@ describe("reducer - model:loaded establishes over a standing page", () => {
 
     const base = loadedState();
     const held = reducer(base, { type: "commit:started" });
-    const failed = reducer(base, { error: new Error("The host refused the write."), type: "persist:failed" });
+    const failed = reducer(base, { error: new Error("The host refused the write."), type: "staging:failed" });
     const reload = { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" };
 
     assert.deepEqual(reducer(held, reload).write, { kind: "idle" }, "a hold does not survive the load that ends it");
-    assert.deepEqual(reducer(failed, reload).write, { kind: "idle" }, "and neither does a failed persist, whose anchor is gone");
+    assert.deepEqual(reducer(failed, reload).write, { kind: "idle" }, "and neither does a failed stage, whose anchor is gone");
   });
 });
 
@@ -476,11 +476,11 @@ describe("reducer - devices:loaded", () => {
     // What is happening to the configuration write is its own field - a write in flight, or a write that failed - and a device list says nothing about either.
     // Loading is left alone from the other end: model:loaded is what declares the page ready.
     const base = loadedState();
-    const persisting = reducer(base, { snapshot: [], type: "persist:started" });
-    const persistError = reducer(base, { error: new Error("disk full"), type: "persist:failed" });
+    const staging = reducer(base, { snapshot: [], type: "staging:started" });
+    const stagingError = reducer(base, { error: new Error("disk full"), type: "staging:failed" });
 
-    assert.equal(requestThenLoad(persisting, { devices: DEVICES }).write, persisting.write, "a persist in flight survives a clean outcome by reference");
-    assert.equal(requestThenLoad(persistError, { devices: DEVICES }).write, persistError.write, "a failed persist survives a clean outcome by reference");
+    assert.equal(requestThenLoad(staging, { devices: DEVICES }).write, staging.write, "a stage in flight survives a clean outcome by reference");
+    assert.equal(requestThenLoad(stagingError, { devices: DEVICES }).write, stagingError.write, "a failed stage survives a clean outcome by reference");
     assert.equal(requestThenLoad(initialState(), { devices: DEVICES }).status.kind, "loading", "a loading status is not promoted to ready by a device outcome");
   });
 
@@ -772,9 +772,9 @@ describe("reducer - takeover", () => {
     const held = reducer(base, { type: "takeover:started" });
     const released = reducer(held, { type: "takeover:released" });
 
-    // Every slice a persist, a selector cache, or the search view keys on. A takeover that moved any of them would start a drain, invalidate a cache, or repaint a
+    // Every slice a stage, a selector cache, or the search view keys on. A takeover that moved any of them would start a drain, invalidate a cache, or repaint a
     // panel that nothing about the content area should reach.
-    for(const field of [ "catalog", "configuredOptions", "filter", "persistedAnchor", "scope" ]) {
+    for(const field of [ "catalog", "configuredOptions", "filter", "scope", "stagedAnchor" ]) {
 
       assert.equal(held[field], base[field], field + " comes through a start by reference");
       assert.equal(released[field], base[field], field + " comes through a release by reference");
@@ -850,7 +850,7 @@ describe("reducer - option:armed / option:disarmed", () => {
     assert.equal(reducer(armed, { args: { option: "Motion.Detect" }, type: "option:cleared" }).armedOption, null, "a clear disarms");
     assert.equal(reducer(armed, { type: "options:reset" }).armedOption, null, "a reset disarms");
     assert.equal(reducer(armed, { type: "model:reverted" }).armedOption, null, "a revert disarms");
-    assert.equal(reducer(armed, { error: new Error("boom"), type: "persist:failed" }).armedOption, null, "a persist rollback disarms");
+    assert.equal(reducer(armed, { error: new Error("boom"), type: "staging:failed" }).armedOption, null, "a staging rollback disarms");
     assert.equal(reducer(armed, { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" }).armedOption, null,
       "a selection move disarms");
     assert.equal(reducer(armed, { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" }).armedOption, null,
@@ -890,7 +890,7 @@ describe("reducer - option:cleared", () => {
 
 describe("reducer - options:reset", () => {
 
-  test("replaces configuredOptions with an empty array; initialOptions and persistedAnchor unchanged", () => {
+  test("replaces configuredOptions with an empty array; initialOptions and stagedAnchor unchanged", () => {
 
     const loaded = reducer(initialState(), {
 
@@ -900,7 +900,7 @@ describe("reducer - options:reset", () => {
 
     assert.deepEqual(next.configuredOptions, []);
     assert.equal(next.initialOptions, loaded.initialOptions, "initialOptions reference preserved - revert can still restore it");
-    assert.equal(next.persistedAnchor, loaded.persistedAnchor, "persistedAnchor reference preserved - rollback target unchanged");
+    assert.equal(next.stagedAnchor, loaded.stagedAnchor, "stagedAnchor reference preserved - rollback target unchanged");
   });
 
   test("a reset with nothing configured keeps the configuredOptions reference; a reset with something configured replaces it", () => {
@@ -974,56 +974,56 @@ describe("reducer - filter:changed", () => {
   });
 });
 
-describe("reducer - persist lifecycle", () => {
+describe("reducer - staging lifecycle", () => {
 
-  test("persist:started moves the write lifecycle to persisting and carries the snapshot", () => {
+  test("staging:started moves the write lifecycle to staging and carries the snapshot", () => {
 
     const snapshot = ["Enable.Motion.Detect"];
     const base = initialState();
 
     assert.deepEqual(base.write, { kind: "idle" }, "precondition: a fresh store has nothing in flight");
 
-    const next = reducer(base, { snapshot, type: "persist:started" });
+    const next = reducer(base, { snapshot, type: "staging:started" });
 
-    assert.equal(next.write.kind, "persisting");
+    assert.equal(next.write.kind, "staging");
     assert.equal(next.write.snapshot, snapshot);
     assert.equal(next.status, base.status, "reachability is a separate fact and keeps its reference");
   });
 
-  test("persist:succeeded promotes the snapshot to the anchor and returns the write lifecycle to idle", () => {
+  test("staging:succeeded promotes the snapshot to the anchor and returns the write lifecycle to idle", () => {
 
-    const persisting = reducer(initialState(), { snapshot: ["Enable.Motion.Detect"], type: "persist:started" });
-    const next = reducer(persisting, { snapshot: ["Enable.Motion.Detect"], type: "persist:succeeded" });
+    const staging = reducer(initialState(), { snapshot: ["Enable.Motion.Detect"], type: "staging:started" });
+    const next = reducer(staging, { snapshot: ["Enable.Motion.Detect"], type: "staging:succeeded" });
 
     assert.equal(next.write.kind, "idle");
-    assert.deepEqual(next.persistedAnchor, ["Enable.Motion.Detect"]);
-    assert.equal(next.status, persisting.status, "reachability keeps its reference");
+    assert.deepEqual(next.stagedAnchor, ["Enable.Motion.Detect"]);
+    assert.equal(next.status, staging.status, "reachability keeps its reference");
   });
 
-  test("persist:failed rolls configuredOptions back to the anchor and moves the write lifecycle to persist-error", () => {
+  test("staging:failed rolls configuredOptions back to the anchor and moves the write lifecycle to staging-error", () => {
 
     const initial = ["Enable.Motion.Detect"];
     const loaded = loadedState({ configuredOptions: initial });
 
-    // Simulate the optimistic-apply: mutate the model in memory, then persist failure rolls back.
+    // Simulate the optimistic-apply: mutate the model in memory, then staging failure rolls back.
     const mutated = reducer(loaded, { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
     const error = new Error("Disk write failed");
-    const failed = reducer(mutated, { error, type: "persist:failed" });
+    const failed = reducer(mutated, { error, type: "staging:failed" });
 
-    assert.equal(failed.configuredOptions, loaded.persistedAnchor, "configuredOptions reverts to the anchor reference");
-    assert.equal(failed.write.kind, "persist-error");
+    assert.equal(failed.configuredOptions, loaded.stagedAnchor, "configuredOptions reverts to the anchor reference");
+    assert.equal(failed.write.kind, "staging-error");
     assert.equal(failed.write.error, error);
     assert.equal(failed.status, mutated.status, "reachability keeps its reference");
   });
 });
 
 /* The lifecycles the state holds apart. Reachability answers whether the page can be reached; the write lifecycle answers what is happening to the configuration
- * write. They co-occur - a save can be in flight, or can have failed, while a controller cannot be reached - so these rows drive one while the other stands and
+ * write. They co-occur - a write can be in flight, or can have failed, while a controller cannot be reached - so these rows drive one while the other stands and
  * assert that neither transition reaches across.
  */
 describe("reducer - page reachability and the write lifecycle are independent", () => {
 
-  test("a persist action leaves a standing connection error in place by reference, while still promoting the anchor and rolling back", () => {
+  test("a staging action leaves a standing connection error in place by reference, while still promoting the anchor and rolling back", () => {
 
     const base = loadedState({ configuredOptions: ["Enable.Motion.Detect"] });
     const errored = requestThenLoad(base, { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
@@ -1031,22 +1031,22 @@ describe("reducer - page reachability and the write lifecycle are independent", 
     assert.equal(errored.status.kind, "connection-error", "precondition: the failed fetch raised the error");
 
     const snapshot = ["Enable.Audio.Volume.50"];
-    const started = reducer(errored, { snapshot, type: "persist:started" });
+    const started = reducer(errored, { snapshot, type: "staging:started" });
 
-    assert.equal(started.status, errored.status, "persist:started leaves the error in place by reference");
+    assert.equal(started.status, errored.status, "staging:started leaves the error in place by reference");
     assert.equal(started.write.snapshot, snapshot, "and carries the snapshot on the write lifecycle");
 
-    const succeeded = reducer(started, { snapshot, type: "persist:succeeded" });
+    const succeeded = reducer(started, { snapshot, type: "staging:succeeded" });
 
-    assert.equal(succeeded.status, errored.status, "persist:succeeded leaves it in place by reference");
-    assert.equal(succeeded.persistedAnchor, snapshot, "and still promotes the snapshot to the anchor");
+    assert.equal(succeeded.status, errored.status, "staging:succeeded leaves it in place by reference");
+    assert.equal(succeeded.stagedAnchor, snapshot, "and still promotes the snapshot to the anchor");
 
     const error = new Error("The host refused the write.");
     const mutated = reducer(errored, { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
-    const failed = reducer(mutated, { error, type: "persist:failed" });
+    const failed = reducer(mutated, { error, type: "staging:failed" });
 
-    assert.equal(failed.status, errored.status, "persist:failed leaves it in place by reference");
-    assert.equal(failed.configuredOptions, errored.persistedAnchor, "and still rolls configuredOptions back to the anchor");
+    assert.equal(failed.status, errored.status, "staging:failed leaves it in place by reference");
+    assert.equal(failed.configuredOptions, errored.stagedAnchor, "and still rolls configuredOptions back to the anchor");
     assert.equal(failed.write.error, error, "carrying the error on the write lifecycle");
   });
 
@@ -1056,8 +1056,8 @@ describe("reducer - page reachability and the write lifecycle are independent", 
     const writeStates = {
 
       committing: reducer(base, { type: "commit:started" }),
-      "persist-error": reducer(base, { error: new Error("The host refused the write."), type: "persist:failed" }),
-      persisting: reducer(base, { snapshot: [], type: "persist:started" })
+      staging: reducer(base, { snapshot: [], type: "staging:started" }),
+      "staging-error": reducer(base, { error: new Error("The host refused the write."), type: "staging:failed" })
     };
 
     for(const [ kind, state ] of Object.entries(writeStates)) {
@@ -1112,17 +1112,17 @@ describe("reducer - commit:started", () => {
 
     const base = loadedState();
     const unloaded = initialState();
-    const persisting = reducer(base, { snapshot: [], type: "persist:started" });
-    const persistError = reducer(base, { error: new Error("The host refused the write."), type: "persist:failed" });
+    const staging = reducer(base, { snapshot: [], type: "staging:started" });
+    const stagingError = reducer(base, { error: new Error("The host refused the write."), type: "staging:failed" });
     const dirty = reducer(base, { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
     const held = reducer(base, { type: "commit:started" });
 
-    assert.notEqual(dirty.configuredOptions, dirty.persistedAnchor, "precondition: the dirty store has an edit the page has not written yet");
+    assert.notEqual(dirty.configuredOptions, dirty.stagedAnchor, "precondition: the dirty store has an edit the page has not written yet");
 
     assert.equal(reducer(unloaded, { type: "commit:started" }), unloaded, "a placeholder store has no configuration worth bracketing");
-    assert.equal(reducer(persisting, { type: "commit:started" }), persisting, "a persist already in flight has its own claim");
-    assert.deepEqual(reducer(persistError, { type: "commit:started" }).write, { kind: "committing" },
-      "while a persist that failed is a record rather than a claim, so the hold is taken over it");
+    assert.equal(reducer(staging, { type: "commit:started" }), staging, "a stage already in flight has its own claim");
+    assert.deepEqual(reducer(stagingError, { type: "commit:started" }).write, { kind: "committing" },
+      "while a stage that failed is a record rather than a claim, so the hold is taken over it");
     assert.equal(reducer(dirty, { type: "commit:started" }), dirty, "a dirty store would strand the edit it is holding");
     assert.equal(reducer(held, { type: "commit:started" }), held, "and a hold already taken is not taken a second time");
   });
@@ -1210,10 +1210,10 @@ describe("reducer - commit:failed", () => {
   test("returns the state by reference from any other write state", () => {
 
     const base = loadedState();
-    const persisting = reducer(base, { snapshot: [], type: "persist:started" });
+    const staging = reducer(base, { snapshot: [], type: "staging:started" });
 
     assert.equal(reducer(base, { type: "commit:failed" }), base, "an idle store is not a hold this action ends");
-    assert.equal(reducer(persisting, { type: "commit:failed" }), persisting, "and neither is a persist in flight");
+    assert.equal(reducer(staging, { type: "commit:failed" }), staging, "and neither is a stage in flight");
   });
 });
 

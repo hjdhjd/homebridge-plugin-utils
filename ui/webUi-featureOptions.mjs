@@ -11,7 +11,7 @@ import { TAKEOVER_REGION_IDS, mountTakeoverView, releasedTakeover } from "./webU
 import { buildCatalogIndex, expandOption, removedListEntries } from "./featureOptions.js";
 import { completeControllerSelection, fetchControllerDevices, requestControllerDevices, settleControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
 import { errorMessage, toastError } from "./webUi-errors.mjs";
-import { modelLoaded, persistPending, selectedControllerId, selectedDeviceId } from "./webUi-featureOptions/selectors.mjs";
+import { modelLoaded, selectedControllerId, selectedDeviceId, stagingPending } from "./webUi-featureOptions/selectors.mjs";
 import { createElement } from "./webUi-featureOptions/utils.mjs";
 import { markHandled } from "./mark-handled.js";
 import { mountConnectionErrorView } from "./webUi-featureOptions/views/connectionError.mjs";
@@ -24,7 +24,7 @@ import { mountStatusPanelView } from "./webUi-featureOptions/views/statusPanel.m
 import { paintMenuTabs } from "./webUi-theming.mjs";
 import { registerKeyboardEffect } from "./webUi-featureOptions/effects/keyboard.mjs";
 import { registerOptionsSkinEffect } from "./webUi-featureOptions/effects/optionsSkin.mjs";
-import { registerPersistEffect } from "./webUi-featureOptions/effects/persist.mjs";
+import { registerStagingEffect } from "./webUi-featureOptions/effects/staging.mjs";
 
 /**
  * Upper bound on how long hide() will block waiting for the navigate-away flush to complete. This is a teardown safety cap, NOT a perf knob: the normal flush
@@ -194,14 +194,14 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   that mutation's `onOptionsEdited` call, exactly as a throwing {@link FeatureOptionsConfig.onOptionsEdited} already does; the store's `EventTarget` reports
  *   the exception as an uncaught error rather than returning it to the gesture that dispatched, and listeners registered after this effect still run.
  *   A call reports an edit the page has accepted, consistent with the rule that a state transition which is not an edit fires neither hook: a host that refuses
- *   the write leaves the store restored to the last configuration the host accepted, with the persist error surfaced and this hook not re-fired for the
+ *   the write leaves the store restored to the last configuration the host accepted, with the staging failure surfaced and this hook not re-fired for the
  *   rollback, so a consumer holding state derived from a reported removal reconciles it against editedConfig. This is a derived notification: the page keeps no
  *   copy of any list, so a consumer that needs to know what a list currently holds reads it fresh from editedConfig rather than accumulating this hook's own
  *   arguments over time. {@link webUiFeatureOptions#commitConfig}'s own in-place establishment dispatches `model:loaded`, which is not one of the events either
  *   hook subscribes to, so a plugin's own commitConfig call from inside this hook does not echo back into it. A removal that arrives through `model:loaded` - a
  *   commitConfig round trip establishing a new model from the host - fires neither this hook nor {@link FeatureOptionsConfig.onOptionsEdited}; only a dispatch
  *   of one of the events this shared effect subscribes to fires either hook. A plugin MAY call commitConfig from inside this hook: the write is queued behind
- *   the pending persist of the very edit that triggered the hook, so the entry this hook reports as removed has already reached the host by the time the
+ *   the pending stage of the very edit that triggered the hook, so the entry this hook reports as removed has already reached the host by the time the
  *   plugin's own write composes against it.
  * @property {() => void} [onLoaded] - Invoked once per show cycle immediately after that cycle's model has loaded: the catalog and the plugin's controllers are in
  *   the store, {@link webUiFeatureOptions.editedConfig} answers the live overlay, and the options view has rendered the catalog's categories - the page is
@@ -216,9 +216,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   the store and answers each of those actions with the configuration untouched, and an unheld mutation can reduce to a no-op in its own right - clearing an
  *   option nothing was configured under, or resetting a configuration that is already empty - and neither announces anything. Invoked once per mutation with no
  *   arguments and no debounce; a consumer that needs coalescing applies its own. A call reports an edit the page has accepted rather than one the host has
- *   stored: a host that refuses the write leaves the store restored to the last configuration the host accepted, with the persist error surfaced and this hook
+ *   stored: a host that refuses the write leaves the store restored to the last configuration the host accepted, with the staging failure surfaced and this hook
  *   not re-fired for the rollback, so a consumer holding state derived from an edit reconciles it against editedConfig. A plugin MAY call
- *   {@link webUiFeatureOptions#commitConfig} from inside the callback - the write is queued behind the pending persist of the very edit that triggered it.
+ *   {@link webUiFeatureOptions#commitConfig} from inside the callback - the write is queued behind the pending stage of the very edit that triggered it.
  * @property {Object} [sidebar] - Sidebar configuration options.
  * @property {string} [sidebar.controllerLabel="Controllers"] - Label for the controllers section.
  * @property {Function} [sidebar.deviceContent] - Synchronous hook supplying a device link's rendered content: `(device) => Node | string | null`. Invoked once per
@@ -295,7 +295,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 /**
  * webUiFeatureOptions - Lifecycle coordinator for the feature options webUI.
  *
- * Boots the reactive state container, registers this view's own effects (persist, options skin, keyboard) and mounts every view (header, device info, nav, search,
+ * Boots the reactive state container, registers this view's own effects (staging, options skin, keyboard) and mounts every view (header, device info, nav, search,
  * options, connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal: every
  * effect's subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically. Page theming is deliberately not
  * among them - its scope is `:root` and `body`, so it is registered through the page orchestrator's wiring and outlives every cycle this class tears down.
@@ -334,7 +334,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * await featureOptionsUI.show(session);
  *
- * // Later, when navigating away (persists any pending edit, then tears down):
+ * // Later, when navigating away (stages any pending edit, then tears down):
  * await featureOptionsUI.hide();
  */
 export class webUiFeatureOptions {
@@ -369,9 +369,9 @@ export class webUiFeatureOptions {
   // returns.
   #config;
 
-  // The persist effect's flush handle, captured when the effect is registered in show(). hide() awaits it (bounded) to drain any debounced-but-unwritten edit to disk
+  // The staging effect's flush handle, captured when the effect is registered in show(). hide() awaits it (bounded) to drain any debounced-but-unwritten edit to the host
   // before tearing the page down; the visibilitychange handler fires it best-effort on browser background/close. Recreated on every show(); nulled out on cleanup().
-  #flushPersist;
+  #flushStaging;
 
   // The page-level abort controller. Aborting it tears down every effect and every view in one operation. Recreated on every show(); nulled out on cleanup().
   #pageAbort;
@@ -380,7 +380,7 @@ export class webUiFeatureOptions {
    * flight. Its lifetime spans page cycles rather than belonging to one: it is written in the same synchronous turn as the session write it covers, cleared by the
    * issuing call when that write settles either way, read by the teardown's bounded wait, and touched by nothing else. It covers the COMMIT alone and never the
    * save, because sync() reads the host's in-memory model, which the commit has already updated, so the save to disk gates nothing the page reads. A commit the
-   * host never answers leaves this set for the instance's life and every later teardown then pays the full bound - the dead-bridge case the persist flush already
+   * host never answers leaves this set for the instance's life and every later teardown then pays the full bound - the dead-bridge case the staging flush already
    * pays the same bound for.
    */
   #pendingCommit;
@@ -400,7 +400,7 @@ export class webUiFeatureOptions {
   // it is absent - a directly-constructed instance, as every test call site is - no view subscribes and no resume timer ever runs.
   #resumeDetector;
 
-  // The plugin-config session, supplied by the orchestrator on show(). The single owner of the persisted config: the page reads its base config and persists option
+  // The plugin-config session, supplied by the orchestrator on show(). The single owner of the persisted config: the page reads its base config and stages option
   // edits through it. Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(), and re-used across show() cycles.
   #session;
 
@@ -418,8 +418,8 @@ export class webUiFeatureOptions {
   // (possibly reordered) options array preserves the original snapshot for revert-to-saved. The set-equality probe in show() is the boundary where this is decided.
   // Set on first model:loaded; updated only when the loaded options are NOT set-equal to the stored snapshot.
   //
-  // It holds the loaded array itself rather than a copy of it, because the store seeds `configuredOptions` and `persistedAnchor` from that same array: one
-  // reference shared by all three is what lets a revert made before any save land on the anchor by reference, leaving the persist drain nothing to write.
+  // It holds the loaded array itself rather than a copy of it, because the store seeds `configuredOptions` and `stagedAnchor` from that same array: one
+  // reference shared by all three is what lets a revert made before anything is staged land on the anchor by reference, leaving the staging drain nothing to write.
   #initialOptions;
 
   /* The guard that orders this instance's show() entries. Every entry starts an action on it, which retires the entry before it, and after its awaited teardown an
@@ -552,7 +552,7 @@ export class webUiFeatureOptions {
     this.#bootAffordance = null;
     this.#catalogPromise = null;
     this.#commitQueue = Promise.resolve();
-    this.#flushPersist = null;
+    this.#flushStaging = null;
     this.#pageAbort = null;
     this.#pendingCommit = null;
     this.#registerTheming = registerTheming;
@@ -654,7 +654,7 @@ export class webUiFeatureOptions {
    *      shows the retry affordance rather than stranding a blank frame; the sync also lands before getControllers and the options read below, so both see fresh config.
    *   5. Fire the plugin I/O requests in parallel: controllers (if configured) and the feature catalog. The plugin config is already held by the session, so there
    *      is no config fetch to overlap here - the base options come from the session's primary entry.
-   *   6. Register the page's theming through the orchestrator's wiring (once for the page, not once per cycle), then fire the options-skin, persist, and keyboard
+   *   6. Register the page's theming through the orchestrator's wiring (once for the page, not once per cycle), then fire the options-skin, staging, and keyboard
    *      effects and the edit-hook effect, which calls the plugin's edit hooks after a mutation changes the configured options. Attach the document
    *      visibilitychange and window blur listeners, which drain a pending edit when the page is hidden or loses focus - the blur listener first commits a value
    *      input that still holds focus. The theming registration's I/O - the lighting-mode read and the Bootstrap probe - runs in the background.
@@ -678,7 +678,7 @@ export class webUiFeatureOptions {
    *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
-   *        persisted config and the interface through which option edits are persisted.
+   *        persisted config and the interface through which option edits are staged.
    * @returns {Promise<void>}
    * @public
    */
@@ -770,15 +770,15 @@ export class webUiFeatureOptions {
     // page - several of its rules restyle Bootstrap classes a custom page may use for something else, so they have to be gone the moment the user navigates away.
     registerOptionsSkinEffect({ signal });
 
-    // Persist + keyboard effects: register early so they catch any dispatch from the moment model:loaded fires. The persist effect's reference-equality dirty
-    // check skips the immediate-run pass since configuredOptions and persistedAnchor share the same empty-array reference in the initial state. We capture the
-    // persist effect's flush handle so hide() (and the visibilitychange handler below) can drain a debounced-but-unwritten edit before the page tears down.
-    this.#flushPersist = registerPersistEffect({ host: homebridge, session, signal, store: this.#store })?.flush ?? null;
+    // Staging + keyboard effects: register early so they catch any dispatch from the moment model:loaded fires. The staging effect's reference-equality dirty
+    // check skips the immediate-run pass since configuredOptions and stagedAnchor share the same empty-array reference in the initial state. We capture the
+    // staging effect's flush handle so hide() (and the visibilitychange handler below) can drain a debounced-but-unwritten edit before the page tears down.
+    this.#flushStaging = registerStagingEffect({ host: homebridge, session, signal, store: this.#store })?.flush ?? null;
     registerKeyboardEffect({ signal, store: this.#store });
 
     /* Notify the plugin's optional edit hook after any option mutation has transitioned the store, so a consumer reading editedConfig from inside the callback
-     * sees the post-edit state. We subscribe to exactly the mutation events the persist effect writes to disk (see effects/persist.mjs); the two subscriptions
-     * must stay in lockstep, since every mutation the persist effect commits is one the consumer should hear about. The effect() immediate-run pass hands the
+     * sees the post-edit state. We subscribe to exactly the mutation events the staging effect stages (see effects/staging.mjs); the two subscriptions
+     * must stay in lockstep, since every mutation the staging effect stages is one the consumer should hear about. The effect() immediate-run pass hands the
      * body `undefined`, so we notify only on a real dispatch, never at registration before model:loaded. Registered on the page signal so teardown detaches it.
      *
      * A dispatch of one of those types is not by itself an edit, which is why the changed-reference test stands beside the action test. A coordinated
@@ -830,26 +830,26 @@ export class webUiFeatureOptions {
     });
 
     // Best-effort browser-exit flush. When the tab is backgrounded or closing while the page is still alive, drain any pending edit so it reaches the host's config
-    // model. This is fire-and-forget (the page is hidden/closing with no user present to see it, so an error toast the persist drain may raise on a failed final
+    // model. This is fire-and-forget (the page is hidden/closing with no user present to see it, so an error toast the staging drain may raise on a failed final
     // write lands unseen) and page-signal-keyed so it tears down with the cycle. The instant-hard-close residual (an async write cannot be guaranteed to complete
     // during an immediate unload) is documented and accepted.
     document.addEventListener("visibilitychange", () => {
 
       if(document.visibilityState === "hidden") {
 
-        void this.#flushPersist?.();
+        void this.#flushStaging?.();
       }
     }, { signal });
 
     /* Commit-and-flush when keyboard focus leaves the page. The page lives in the host's custom-UI iframe, and every host-side control - the Save button above all,
      * but Close and the restart affordance too - sits in the parent document, so acting on any of them begins by moving focus out of this window. Two edits are in
      * flight at exactly that moment and neither would otherwise reach the host in time: a value input still holding focus has never fired `change`, because moving
-     * focus to the parent document does not reliably blur the iframe's own active element, and an already-committed edit inside the persist debounce window has not
+     * focus to the parent document does not reliably blur the iframe's own active element, and an already-committed edit inside the staging debounce window has not
      * been written. Either one makes the host's Save write a config that silently omits the user's last edit.
      *
      * The window `blur` event is the signal this window receives for that boundary, and it fires on the focus shift - ahead of the click that completes on the
      * parent's button - so both halves land before the host acts: the focused value input is committed through the same change delegation every commit routes
-     * through, and the persist drain is then driven immediately, skipping its debounce. Element-level blurs never reach this listener (they do not bubble to the
+     * through, and the staging drain is then driven immediately, skipping its debounce. Element-level blurs never reach this listener (they do not bubble to the
      * window), so it fires only when focus genuinely leaves the page; a blur with nothing pending costs one no-op flush. The commit targets only a value input
      * inside the options table - the search field stages nothing and is deliberately outside this rule.
      */
@@ -857,7 +857,7 @@ export class webUiFeatureOptions {
 
       this.#commitFocusedValue();
 
-      void this.#flushPersist?.();
+      void this.#flushStaging?.();
     }, { signal });
 
     // Wait for controllers (if configured), bounded so a plugin hook that depends on a dead bridge cannot strand the page. The result carries the list and the connection
@@ -1359,14 +1359,14 @@ export class webUiFeatureOptions {
      *
      * It cannot spin. A refusal after a clean pending read means the reducer found something the read did not name - a dirty store, or a write in flight - and
      * the next iteration's pending read finds it and drains it, which is a real await every time. The two lifecycles a loaded store can rest at here are idle and
-     * a recorded failure, and the reducer's entry rule accepts both; a persisting one cannot survive the flush, which answers its own `persist:started` before it
+     * a recorded failure, and the reducer's entry rule accepts both; a staging one cannot survive the flush, which answers its own `staging:started` before it
      * returns.
      */
     for(;;) {
 
       const signal = this.#pageAbort?.signal;
       const store = this.#store;
-      const flush = this.#flushPersist;
+      const flush = this.#flushStaging;
       const live = Boolean(signal) && !signal.aborted;
 
       // No live cycle, or a cycle whose store has not loaded its model: there is nothing to drain and nothing to hold, so the call goes on to write unheld. The
@@ -1385,14 +1385,14 @@ export class webUiFeatureOptions {
       // A drain this call ran ended in a rollback, which put the user's last edit back the way the host has it. Writing the plugin's change over that store would
       // hide the fact that their edit did not land, so the call fails with the error instead. A failure on a store this call did not drain is one the user has
       // already been shown, on a store the rollback left clean, and is not this call's to report.
-      if((store === drained) && (store.state.write.kind === "persist-error")) {
+      if((store === drained) && (store.state.write.kind === "staging-error")) {
 
         return { error: store.state.write.error, kind: "failed" };
       }
 
       // Something is unwritten or in flight, so drain it through the cycle's own handle rather than the teardown's bounded race: a write still running is not
       // finished, and the composer must see what the user did. The cycle may be a different one by the time it returns, which is why the loop starts over.
-      if(persistPending(store.state)) {
+      if(stagingPending(store.state)) {
 
         // The drain is this iteration's whole purpose - the loop exists to serialize against it, which is exactly what the rule's blanket concern is not about.
         // eslint-disable-next-line no-await-in-loop
@@ -1624,8 +1624,8 @@ export class webUiFeatureOptions {
    * in-place establishment has neither, and what the two genuinely share is only this.
    *
    * The revert target a boundary move installs IS that array, not a copy of it, and the sharing is the design. The reducer seeds `configuredOptions` and
-   * `persistedAnchor` from the same array the dispatch below carries, so all three references agree: a revert made before any save since the load puts
-   * `configuredOptions` back to the very reference the anchor holds, the persist drain's clean-store check finds the two equal, and an edit the user took back
+   * `stagedAnchor` from the same array the dispatch below carries, so all three references agree: a revert made before anything is staged since the load puts
+   * `configuredOptions` back to the very reference the anchor holds, the staging drain's clean-store check finds the two equal, and an edit the user took back
    * writes nothing. A copy would hand that check two arrays it can never find equal by reference, and every such revert would write the host a configuration it
    * already has.
    *
@@ -1714,11 +1714,11 @@ export class webUiFeatureOptions {
   /**
    * Wait, bounded, for a coordinated write's commit to settle at the host.
    *
-   * The teardown's flush chokepoint is what reads it, so a commit already in flight when the page tears down is waited for under the same bound the persist flush
+   * The teardown's flush chokepoint is what reads it, so a commit already in flight when the page tears down is waited for under the same bound the staging flush
    * is, and a page cycle that follows a teardown therefore reads the host's configuration after that write rather than racing it.
    *
    * Two residuals come with that bound and neither is closed here. A host write stalled past it continues on its own and still lands, and the page stops blocking
-   * on it - the persist flush's own trade. And a commit issued AFTER the teardown has read this field is not waited for at all: it lands on its own, and the next
+   * on it - the staging flush's own trade. And a commit issued AFTER the teardown has read this field is not waited for at all: it lands on its own, and the next
    * cycle's configuration read answers with whatever the host holds when it runs. The same shape is what a `hide()` with no re-show - the Settings tab - meets,
    * where the Settings form reads the host's model as of when it opened.
    *
@@ -1875,8 +1875,8 @@ export class webUiFeatureOptions {
   }
 
   /**
-   * Drain any debounced-but-unwritten edit to disk, bounded so a stalled host write cannot hang teardown. Shared by every flushed-teardown path - currently
-   * `hide()` (navigate-away) and `[Symbol.asyncDispose]` (scope-exit) - because each must flush BEFORE the page signal is aborted: the persist drain guards on it, so
+   * Drain any debounced-but-unwritten edit to the host, bounded so a stalled host write cannot hang teardown. Shared by every flushed-teardown path - currently
+   * `hide()` (navigate-away) and `[Symbol.asyncDispose]` (scope-exit) - because each must flush BEFORE the page signal is aborted: the staging drain guards on it, so
    * aborting first (as the synchronous `cleanup()` does) would re-introduce the very edit-drop this exists to prevent. Races the flush against a non-rejecting
    * {@link FLUSH_TEARDOWN_TIMEOUT_MS} timeout - delay(ms) with no signal simply resolves after ms, so the race settles on whichever finishes first without ever
    * rejecting. On timeout the in-flight commit continues independently and still lands if the host recovers; under that host-stall trade the no-hang guarantee
@@ -1890,7 +1890,7 @@ export class webUiFeatureOptions {
    */
   async #flushPending() {
 
-    await Promise.race([ this.#flushPersist?.() ?? Promise.resolve(), delay(FLUSH_TEARDOWN_TIMEOUT_MS) ]);
+    await Promise.race([ this.#flushStaging?.() ?? Promise.resolve(), delay(FLUSH_TEARDOWN_TIMEOUT_MS) ]);
     await this.#awaitPendingCommit();
   }
 
@@ -1971,8 +1971,8 @@ export class webUiFeatureOptions {
   }
 
   /**
-   * Hide the feature options webUI - the navigate-away chokepoint. Flushes any pending edit to disk (see `#flushPending`), then visually hides the regions, then tears
-   * down. The flush precedes the teardown so a debounced-but-unwritten edit reaches the host before the page signal aborts.
+   * Hide the feature options webUI - the navigate-away chokepoint. Flushes any pending edit to the host (see `#flushPending`), then visually hides the regions, then
+   * tears down. The flush precedes the teardown so a debounced-but-unwritten edit reaches the host before the page signal aborts.
    *
    * Hiding covers the framework's own regions and every plugin-declared `data-fo-region` element together, so a plugin's chrome leaves the frame with the page rather
    * than floating alone over an emptied one. The plugin's markup is only hidden here, never emptied - the clear cycle stays off it entirely.
@@ -2017,7 +2017,7 @@ export class webUiFeatureOptions {
 
     this.#pageAbort?.abort();
     this.#pageAbort = null;
-    this.#flushPersist = null;
+    this.#flushStaging = null;
 
     const searchInput = document.getElementById("searchInput");
 

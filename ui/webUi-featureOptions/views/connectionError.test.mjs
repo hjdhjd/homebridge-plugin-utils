@@ -184,10 +184,19 @@ describe("mountConnectionErrorView - plugin slot", () => {
     const { store } = setup({ connectionErrorPanel: (bag) => bags.push(bag), controllers: CONTROLLERS });
 
     // The page's own sequence for a sidebar controller click whose fetch fails: the scope moves onto the clicked controller first, then the outcome lands through
-    // the request/outcome pairing the reducer gates, and its non-empty error is what the reducer folds into connection-error status.
+    // the request/outcome pairing the reducer gates, carrying the copy the shared fetch resolved, and its non-empty error moves the status to connection-error.
     store.dispatch({ origin: "user", scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
     store.dispatch({ controllerId: "ctrl-b", type: "devices:requested" });
-    store.dispatch({ controllerId: "ctrl-b", devices: [], error: "Controller unreachable.", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+    store.dispatch({
+
+      controllerId: "ctrl-b",
+      devices: [],
+      error: "Controller unreachable.",
+      guidance: "Verify the controller's connection details are correct, then retry.",
+      headline: "Unable to retrieve the device list.",
+      seq: store.state.devicesRequest.seq,
+      type: "devices:loaded"
+    });
 
     assert.equal(bags.length, 1, "the folded fetch failure rendered the error and invoked the hook");
     assert.ok(bags[0].controller === CONTROLLERS[1], "the bag carries the entry the plugin's getControllers hook produced");

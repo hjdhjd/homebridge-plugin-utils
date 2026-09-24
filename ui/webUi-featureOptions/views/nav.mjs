@@ -40,9 +40,9 @@ import { toastError } from "../../webUi-errors.mjs";
  * click against a bridge that never answers renders the failure instead of leaving the sidebar waiting on a device list forever. What belongs to the click itself
  * is the pair of decisions around that fetch: the optimistic scope ahead of it, and the selection that continues onto the controller-as-device row behind it.
  *
- * A reported failure may decorate itself with its own headline and guidance, which travel back on the same result and reach the outcome untouched - which failure
- * this was is the plugin's knowledge and how it renders is the reducer's. A rejection has no result to carry copy on, so its outcome falls back to this view's
- * configured guidance and the framework's headline, while a deadline expiry carries the copy table's own words for a plugin that stopped answering.
+ * A reported failure may decorate itself with its own headline and guidance, which travel back on the same result and win over the copy table's words field by
+ * field - which failure this was is the plugin's knowledge. A rejection has no result to carry copy on, so its outcome reads the copy table's devices row, with this
+ * view's configured guidance standing in for the table's, while a deadline expiry carries the table's own words for a plugin that stopped answering.
  *
  * @param {Object} args
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.
@@ -51,7 +51,7 @@ import { toastError } from "../../webUi-errors.mjs";
  * @param {(() => Node | string | null) | undefined} args.globalGlyph - Plugin-provided hook supplying the Global Options row's leading kind glyph, invoked once per
  *        sidebar build so each build renders a fresh node. A null or undefined return falls through to the framework's own globe.
  * @param {string} [args.failureGuidance] - The plugin's own guidance for a controller that cannot be reached, carried on this view's outcome dispatches so a click
- *        that fails reads the same way a boot that fails does. Absent leaves the reducer on the framework's shared controller-failure wording.
+ *        that fails reads the same way a boot that fails does. Absent leaves the copy table's own controller guidance.
  * @param {((controller: import("../state.mjs").Controller | null) =>
  *           Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>) | undefined} args.getDevices
  *        - Plugin-provided fetcher resolving a controller's DeviceListResult. Called on controller-link click.
@@ -447,7 +447,7 @@ const applyDevicesHighlight = (root, scope) => {
 
 // Handle a click on any nav link. Resolves the click target's `data-navigation` and dispatches the corresponding scope-change. Controller clicks additionally run
 // the shared controller fetch over the caller-supplied `getDevices` callback, which carries the failure's display copy on its outcome - whatever the result named,
-// and the plugin's controller-failure guidance beneath it - so a click that cannot reach its controller reads exactly as a boot that cannot.
+// over the copy table's words and the plugin's controller-failure guidance - so a click that cannot reach its controller reads exactly as a boot that cannot.
 const handleNavClick = async ({ deadlineSeconds, event, failureGuidance, getDevices, signal, store }) => {
 
   const navLink = event.target.closest(".nav-link[data-navigation]");

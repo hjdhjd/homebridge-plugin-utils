@@ -9,7 +9,7 @@ import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
 import { MUTATING_ACTIONS, connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
 import { TAKEOVER_REGION_IDS, mountTakeoverView, releasedTakeover } from "./webUi-featureOptions/views/takeover.mjs";
 import { buildCatalogIndex, expandOption, removedListEntries } from "./featureOptions.js";
-import { completeControllerSelection, fetchControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
+import { completeControllerSelection, fetchControllerDevices, requestControllerDevices, settleControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
 import { errorMessage, toastError } from "./webUi-errors.mjs";
 import { modelLoaded, persistPending, selectedControllerId, selectedDeviceId } from "./webUi-featureOptions/selectors.mjs";
 import { createElement } from "./webUi-featureOptions/utils.mjs";
@@ -130,9 +130,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * @property {string} [guidance] - What the user should do about THIS failure, read only when `error` is non-empty. It overrides the guidance the page would
  *   otherwise show - the plugin's own `ui.controllerFailureGuidance` where it supplied one, the framework's shared controller wording where it did not - so a
  *   plugin that can tell a bad credential from an unreachable address sends the user after the right thing in each case.
- * @property {string} [headline] - The failure's own headline, read only when `error` is non-empty, replacing the framework's connection-failure wording on the
- *   rendered error view. A rejection thrown out of the hook carries no display copy at all and keeps the framework's, which is what makes a hook that reports its
- *   failure and one that throws read identically until the plugin chooses otherwise.
+ * @property {string} [headline] - The failure's own headline, read only when `error` is non-empty, replacing the framework's device-list failure headline on the
+ *   rendered error view. A rejection thrown out of the hook carries no display copy of its own and reads the framework's headline, which is what makes a hook
+ *   that reports its failure without naming one and a hook that throws read identically until the plugin chooses otherwise.
  */
 
 /**
@@ -663,17 +663,18 @@ export class webUiFeatureOptions {
    *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return. Both of those surfaces take the frame
    *      from the boot affordance, which clears as they render.
    *   8. In the device-bearing modes, select the initial controller (the same transient controller scope a sidebar click dispatches), then record and pre-fire its
-   *      devices fetch (a `devices:requested` mints its sequence) so it overlaps with the feature catalog. Device-only mode has no controller to select and stays on
-   *      global; global-only mode skips the step entirely - it fetches no devices.
+   *      devices fetch through the shared device fetch's request phase (a `devices:requested` mints its sequence) so it overlaps with the feature catalog.
+   *      Device-only mode has no controller to select and stays on global; global-only mode skips the step entirely - it fetches no devices.
    *   9. Once the feature catalog resolves: build the catalog, throw through assertChoiceSources when it names a choice source no resolver backs, and dispatch
    *      model:loaded - the mounted views transition off their loading placeholder and render. Then call the plugin's onLoaded hook, with no await between the
    *      dispatch and the call.
    *  10. Global-only mode ends here: after the theme settles it clears #headerInfo (the header view that reclaims it in the other modes never mounts), clears the boot
-   *      affordance, and reveals the reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: once the device
-   *      fetch settles, dispatch devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds
-   *      a fetch failure into the connection-error transition. A connection-error status, whichever fetch left it, clears the affordance and returns without
-   *      revealing. Otherwise an outcome that applied carries the selection on to the controller-as-device entry when the mode and the device list call for that,
-   *      and a superseded one leaves the selection to the fetch that superseded it.
+   *      affordance, and reveals the reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: settle the device
+   *      fetch through the shared device fetch's settle phase, the one a sidebar click ends on, which bounds it and dispatches devices:loaded carrying the outcome
+   *      and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure into the connection-error transition. A
+   *      connection-error status, whichever fetch left it, clears the affordance and returns without revealing. Otherwise an outcome that applied carries the
+   *      selection on to the controller-as-device entry when the mode and the device list call for that, and a superseded one leaves the selection to the fetch that
+   *      superseded it.
    *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
@@ -907,10 +908,9 @@ export class webUiFeatureOptions {
     const initialController = controllers[0] ?? null;
 
     // The device machinery is inert in global-only mode: with scope locked to global there is no controller device to fetch or select, so the pre-fire here and the
-    // matching devices await, applied-sequence gate, and scope decision further down all sit on the device-bearing path. The global-only branch after the theme await
-    // returns before reaching them, so these bindings are read only when they were assigned.
-    let devicesSeq;
-    let devicesPromise;
+    // matching settle and scope decision further down all sit on the device-bearing path. The global-only branch after the theme await returns before reaching them,
+    // so this binding is read only when it was assigned.
+    let devicesRequest;
 
     /* In the device-bearing modes the boot is a click of the first controller, and it takes the click's shape exactly: select the controller, record the fetch at the
      * store's chokepoint, then fire it. One operation, one choreography. The selection ahead of the fetch is what carries the controller through a failure - the
@@ -932,9 +932,13 @@ export class webUiFeatureOptions {
         this.#store.dispatch({ origin: "boot", scope: { controllerId: initialController.serialNumber, kind: "controller" }, type: "scope:changed" });
       }
 
-      this.#store.dispatch({ controllerId: initialController?.serialNumber ?? null, type: "devices:requested" });
-      devicesSeq = this.#store.state.devicesRequest.seq;
-      devicesPromise = this.#devicesFor(initialController);
+      devicesRequest = requestControllerDevices({
+
+        controller: initialController,
+        controllerId: initialController?.serialNumber ?? null,
+        getDevices: (controller) => this.#devicesFor(controller),
+        store: this.#store
+      });
     }
 
     // Wait for the feature catalog. The accessor's own five-second bound is armed once, at the moment the read is first issued, so it is the bound that settles
@@ -1050,61 +1054,29 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // Wait for devices, bounded like every other host await. The fetch overlapped with config + features; typically already resolved by now. A failure folds into the
-    // devices:loaded outcome channel the nav view's click path already uses, carrying this site's own copy: the reducer drops it if a newer fetch superseded it, and
-    // otherwise renders the retry view saying what actually failed rather than the generic controller wording.
-    let outcome;
+    /* Settle the device fetch the pre-fire recorded, through the same settle a sidebar click and a post-write refetch end on, so a device failure reads the same
+     * whichever of them met it. The bound is armed here, like every other host await, and the outcome lands only once the model has loaded: that is what puts the
+     * controller entry in the store before a failure hands the plugin's connection-error panel its controller, and a boot that ends at an earlier failure never
+     * lands a device outcome over it.
+     *
+     * The verdict is the reducer's: this outcome applied, carrying no failure, only when the sequence it carried is the one the reducer recorded. A fetch that
+     * superseded it, such as the selection refetch a coordinated write issues while the boot is still out, owns the device list and the selection, so the verdict
+     * gates the one follow-up below that writes scope. It does not gate the reveal: every view renders from the store whichever fetch filled it, so the page is
+     * revealed into the winning fetch's outcome, and while that fetch is still out the page shows the busy table a sidebar click shows during its own fetch.
+     */
+    const applied = await settleControllerDevices({
 
-    try {
-
-      outcome = await withDeadline({ promise: devicesPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
-    } catch(err) {
-
-      const { guidance, headline } = connectionFailureCopy({
-
-        controllerFailureGuidance: this.#config.controllerFailureGuidance,
-        expired: err instanceof DeadlineExpiredError,
-        site: "devices"
-      });
-
-      // A rejection becomes the outcome a hook that reports its own failure returns, so both travel the one dispatch and the one set of follow-ups below. A failure
-      // the reducer drops as superseded then ends the boot exactly as a superseded success does. The abort check after this block guards both, so a cycle superseded
-      // while parked here returns there without touching the affordance or the store its successor owns.
-      outcome = { devices: [], error: errorMessage(err), guidance, headline };
-    }
+      deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS,
+      failureGuidance: this.#config.controllerFailureGuidance,
+      request: devicesRequest,
+      signal,
+      store: this.#store
+    });
 
     if(signal.aborted) {
 
       return;
     }
-
-    const { devices, error } = outcome;
-
-    /* The display copy travels along unconditionally, the way the nav view's click carries it: this is the dispatch a hook that REPORTS a failure travels through - an
-     * empty device list beside a non-empty error - and the reducer reads the copy only on the fold that error triggers, ignoring it entirely on a success. Carrying
-     * it here is what makes a boot that cannot reach its controller read exactly as a click that cannot, whichever way the hook reported it.
-     *
-     * The outcome's own copy is preferred over the configured guidance because the two answer different questions. The configured guidance speaks for every
-     * controller failure this plugin can have, while the outcome speaks for the one that just happened, so the more specific voice wins wherever the hook supplied
-     * one and the configured line remains what every other failure reads.
-     */
-    this.#store.dispatch({
-
-      controllerId: initialController?.serialNumber ?? null,
-      devices,
-      emptyMessage: outcome.emptyMessage,
-      error,
-      guidance: outcome.guidance ?? this.#config.controllerFailureGuidance,
-      headline: outcome.headline,
-      seq: devicesSeq,
-      type: "devices:loaded"
-    });
-
-    // The reducer's own verdict on this outcome: it applied only when the sequence it carried is the one the reducer recorded. A fetch that superseded it, such as
-    // the selection refetch a coordinated write issues while the boot is still out, owns the device list and the selection, so the verdict gates the one follow-up
-    // below that writes scope. It does not gate the reveal: every view renders from the store whichever fetch filled it, so the page is revealed into the winning
-    // fetch's outcome, and while that fetch is still out the page shows the busy table a sidebar click shows during its own fetch.
-    const applied = this.#store.state.devicesAppliedSeq === devicesSeq;
 
     // The store stands on connection-error: a selected controller whose probe reported a failure, carried by this outcome or by a fetch that superseded it. The
     // failure message travelled back on the DeviceListResult rather than through a separate request, and the reducer folded it into the connection-error transition.
@@ -2212,8 +2184,8 @@ export class webUiFeatureOptions {
   }
 
   // Resolve a controller's DeviceListResult, injecting the live platform config the plugin's getDevices needs to recover the controller's credentials. This is the
-  // single boundary every device fetch crosses - the initial fetch in show() and the on-click fetch in the nav view both route through it - and the config is read
-  // fresh from the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
+  // single boundary every device fetch crosses: whichever caller starts a fetch, the plugin's hook is read through this one guard. The config is read fresh from
+  // the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
   //
   /* The full rich contract is enforced here with a fail-fast guard: the hook must resolve an object carrying a `devices` array and a string `error`, and each
    * optional field it may decorate the outcome with must be a string where it is present at all. The string requirement is what guarantees every downstream reader

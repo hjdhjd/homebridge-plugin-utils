@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { completeControllerSelection, fetchControllerDevices } from "./deviceFetch.mjs";
+import { completeControllerSelection, fetchControllerDevices, requestControllerDevices, settleControllerDevices } from "./deviceFetch.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "../state.mjs";
 import { DeadlineExpiredError } from "../../webUi-liveness.mjs";
@@ -12,6 +12,7 @@ import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
 import { createTestDom } from "../../ui.helpers.mjs";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { mountConnectionErrorView } from "../views/connectionError.mjs";
 
 const CONTROLLERS = [
@@ -254,7 +255,7 @@ describe("fetchControllerDevices - failure copy", () => {
     assert.equal(store.state.status.guidance, "Retry once the plugin is responding again.", "the configured controller guidance is deliberately not used here");
   });
 
-  test("a rejection renders the shared controller headline and the configured guidance", async () => {
+  test("a rejection renders the copy table's device-list headline and the configured guidance", async () => {
 
     using dom = createTestDom();
 
@@ -271,9 +272,33 @@ describe("fetchControllerDevices - failure copy", () => {
       store
     });
 
-    assert.match(root.textContent, /Unable to connect to the controller/, "an ordinary rejection keeps the framework's shared controller headline");
+    assert.match(root.textContent, /Unable to retrieve the device list/, "an ordinary rejection reads the copy table's device-list headline");
     assert.match(root.textContent, /Open the controller editor on this page/, "with the plugin's own controller guidance beneath it");
-    assert.equal(store.state.status.headline, "Unable to connect to the controller.");
+    assert.equal(store.state.status.headline, "Unable to retrieve the device list.");
+  });
+
+  test("a reported failure naming only its own headline keeps the copy table's guidance, which the configured guidance replaces", async () => {
+
+    using dom = createTestDom();
+
+    const store = setup();
+    const root = mountError(store);
+
+    // The result names the failure it saw and says nothing about what to do, so each field resolves on its own: the result's headline, and beneath it the
+    // guidance the copy table gives every controller failure, which the plugin's configured guidance stands in for.
+    await fetchControllerDevices({
+
+      controllerId: "ctrl-a",
+      deadlineSeconds: 30,
+      failureGuidance: "Open the controller editor on this page.",
+      getDevices: () => Promise.resolve({ devices: [], error: "The controller refused the connection.", headline: "The controller rejected its credentials." }),
+      signal: new AbortController().signal,
+      store
+    });
+
+    assert.equal(store.state.status.headline, "The controller rejected its credentials.", "the result's own headline wins over the table's");
+    assert.equal(store.state.status.guidance, "Open the controller editor on this page.", "and the guidance it left unnamed comes from the table and the configuration");
+    assert.match(root.textContent, /The controller rejected its credentials\./, "which is what the view renders");
   });
 
   test("a deadline error thrown by the hook itself reads as an expiry, since that is what it says", async () => {
@@ -294,6 +319,60 @@ describe("fetchControllerDevices - failure copy", () => {
     });
 
     assert.match(root.textContent, /The plugin stopped responding while retrieving the device list/, "the copy follows the failure's kind, not where it was raised");
+  });
+});
+
+describe("requestControllerDevices and settleControllerDevices", () => {
+
+  test("the request records the fetch and fires the hook, and its outcome lands only when the settle runs", async () => {
+
+    const store = setup();
+    const seen = [];
+    const request = requestControllerDevices({
+
+      controller: CONTROLLERS[0],
+      controllerId: "ctrl-a",
+      getDevices: (controller) => {
+
+        seen.push(controller);
+
+        return Promise.resolve({ devices: DEVICES, error: "" });
+      },
+      store
+    });
+
+    assert.deepEqual(seen, [CONTROLLERS[0]], "the hook is called with the entry the request was handed, at the moment the fetch is recorded");
+    assert.deepEqual(store.state.devicesRequest, { controllerId: "ctrl-a", seq: request.seq }, "and the store holds the fetch as its pending request");
+
+    await flushImmediate();
+
+    assert.deepEqual(store.state.devices, [], "a fetch that has already answered lands nothing until it is settled");
+
+    const applied = await settleControllerDevices({ deadlineSeconds: 30, request, signal: new AbortController().signal, store });
+
+    assert.equal(applied, true, "the settle answers the reducer's verdict on its own outcome");
+    assert.deepEqual(store.state.devices, DEVICES, "and lands the list the fetch brought");
+  });
+
+  test("a hook that rejects before its settle begins raises no unhandled rejection, and the settle renders the failure", async () => {
+
+    // node:test fails a test whose turn produced an unhandled rejection, so the full macrotask turn below, with the fetch rejected and no settle attached yet, is
+    // this row's reading of the handled mark: the row completing green is what reports it.
+    const store = setup();
+    const request = requestControllerDevices({
+
+      controller: CONTROLLERS[0],
+      controllerId: "ctrl-a",
+      getDevices: () => Promise.reject(new Error("Controller unreachable.")),
+      store
+    });
+
+    await flushImmediate();
+
+    assert.equal(await settleControllerDevices({ deadlineSeconds: 30, request, signal: new AbortController().signal, store }), false,
+      "a rejected fetch is not a list to continue into");
+    assert.equal(store.state.status.kind, "connection-error", "the settle still observes the rejection and folds it into the failure transition");
+    assert.equal(store.state.status.message, "Controller unreachable.", "carrying the rejection's own message");
   });
 });
 

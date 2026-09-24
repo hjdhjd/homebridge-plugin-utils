@@ -897,7 +897,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
 
     page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
 
-    await waitFor(() => page.skeleton.headerInfo.textContent.includes("Unable to connect"), { message: "the error frame must render" });
+    await waitFor(() => page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), { message: "the error frame must render" });
 
     page.hooks.onDevices = null;
 
@@ -906,7 +906,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     await flush();
 
     assert.deepEqual(result, { kind: "committed" });
-    assert.ok(!page.skeleton.headerInfo.textContent.includes("Unable to connect"),
+    assert.ok(!page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"),
       "the write changed the configuration the error came from, so the frame is re-evaluated");
     assert.equal(page.state.loaded, 1, "through a fresh show cycle, which announces once");
   });
@@ -1150,7 +1150,7 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
     refetch.reject(new Error("Controller unreachable."));
     await flush();
 
-    assert.match(page.skeleton.headerInfo.textContent, /Unable to connect to the controller\./, "the refetch's failure renders in the header");
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to retrieve the device list\./, "the refetch's failure renders in the header");
     assert.equal(page.skeleton.sidebar.style.display, "", "beside the sidebar the boot revealed, as a sidebar click's failure after the boot renders");
   });
 
@@ -1168,7 +1168,7 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
     await booted;
     await flush();
 
-    assert.match(page.skeleton.headerInfo.textContent, /Unable to connect to the controller\./, "the store's standing failure is what the page shows");
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to retrieve the device list\./, "the store's standing failure is what the page shows");
     assert.equal(page.skeleton.sidebar.style.display, "none", "with the rest of the page hidden, as for a boot whose own fetch failed");
     assert.ok(page.skeleton.pageFeatureOptions.querySelector(".progress-bar-striped") === null, "and no boot affordance left over it");
   });

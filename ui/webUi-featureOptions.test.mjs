@@ -3700,7 +3700,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
 
     seedBootstrapProbeShim();
 
-    // The parity row: an undecorated failure is what every plugin resolved before the copy existed, and it must read exactly as it did then.
+    // An undecorated failure reads the copy table's device-list row with the plugin's configured guidance beneath it, exactly as a thrown failure does.
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
@@ -3711,7 +3711,7 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.match(skeleton.headerInfo.textContent, /Unable to connect to the controller\./, "the framework's shared headline stands where the outcome named none");
+    assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the device list\./, "the framework's device-list headline stands where the outcome named none");
     assert.match(skeleton.headerInfo.textContent, /Open the controller editor on this page\./,
       "and the plugin's configured guidance stands where the outcome named none");
 
@@ -5474,7 +5474,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     assert.ok(failure, "the expiry must render the connection-error view");
     assert.match(failure, /The plugin stopped responding while retrieving the device list\./, "the devices site's own expiry copy renders");
-    assert.doesNotMatch(failure, /Unable to connect to the controller\./, "a devices expiry must never masquerade as the shared controller-failure wording");
+    assert.doesNotMatch(failure, /Unable to retrieve the device list\./, "a devices expiry must never masquerade as the devices failure wording");
 
     orchestrator.cleanup();
   });
@@ -5622,6 +5622,51 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     orchestrator.cleanup();
   });
 
+  test("a getDevices hook that rejects while the catalog is still loading raises no unhandled rejection, and its failure renders once the model loads", async () => {
+
+    /* The boot fires the device fetch before it awaits the feature catalog and settles it only once the model has loaded, so a hook that rejects inside that window
+     * leaves a rejected promise with nothing attached to it until the settle begins. The request phase marks the fetch handled when it fires it, and the reading of
+     * that is indirect by nature: node:test fails a test whose turn produced an unhandled rejection, so the runner's own listener is this row's assertion.
+     */
+    using dom = createTestDom();
+
+    const { fake, homebridgeGuard, session, skeleton } = await arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    // The catalog read this row releases by hand, and a device hook that counts its calls so the row knows the rejection landed while the catalog was still out.
+    const catalog = Promise.withResolvers();
+    let deviceCalls = 0;
+
+    fake.request = (path) => (path === "/getOptions") ? catalog.promise : Promise.resolve(null);
+
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: () => {
+
+        deviceCalls += 1;
+
+        return Promise.reject(new Error("the device hook blew up"));
+      },
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    const showPromise = orchestrator.show(session);
+
+    // A full macrotask turn with the device fetch rejected and the boot still parked on the catalog - the turn an unhandled rejection would be reported on.
+    await flushImmediate();
+
+    assert.equal(deviceCalls, 1, "precondition: the boot fired the device fetch before the catalog answered");
+
+    catalog.resolve(FEATURES);
+    await showPromise;
+    await flush();
+
+    assert.match(failureTextIn(skeleton), /the device hook blew up/, "the rejection renders once the model has loaded");
+
+    orchestrator.cleanup();
+  });
+
   test("a SLOW-but-successful controllers hook, advanced short of the deadline, renders the full page", async (t) => {
 
     t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -5758,6 +5803,53 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     assert.ok(isFullyRendered(skeleton), "cycle two rendered the full page");
     assert.equal(failureTextIn(skeleton), null, "cycle one's late device failure must never reach the store cycle two owns");
+
+    orchestrator.cleanup();
+  });
+
+  test("cross-cycle guard: a superseded cycle's stalled device fetch never reveals the page ahead of the cycle that replaced it", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    // The first fetch hangs and the second is held by the row, so cycle two is parked on its own device fetch when cycle one's settle gives up on the supersession.
+    // Cycle one's settle dispatches nothing once its cycle is aborted, which leaves the boot's own abort check as the one thing between its stale continuation and
+    // the reveal: without it, that continuation would hand cycle two's still-loading frame to the page.
+    const second = Promise.withResolvers();
+    let fetches = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      getDevices: () => {
+
+        fetches += 1;
+
+        return (fetches === 1) ? hangingCall() : second.promise;
+      },
+      ui: { controllerRetryEnableDelayMs: 20 }
+    });
+
+    const stalledCycle = orchestrator.show(session);
+
+    await flush();
+
+    const liveCycle = orchestrator.show(session);
+
+    await stalledCycle;
+    await flush();
+
+    assert.equal(fetches, 2, "precondition: cycle two is parked on its own device fetch");
+    assert.equal(skeleton.sidebar.style.display, "none", "cycle one's stale continuation reveals nothing over the cycle that replaced it");
+
+    second.resolve({ devices: [], error: "" });
+    await liveCycle;
+    await flush();
+
+    assert.ok(isFullyRendered(skeleton), "and cycle two reveals the page itself once its own fetch settles");
 
     orchestrator.cleanup();
   });

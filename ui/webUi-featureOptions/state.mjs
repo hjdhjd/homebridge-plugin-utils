@@ -36,9 +36,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `devices:requested` - a device fetch is beginning: mints the next fetch sequence into state and records it as the pending request, so the outcome that
  *     eventually answers it can be told apart from a superseded one.
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
- *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error, taking the
- *     action's optional `guidance` / `headline` copy when the dispatcher supplied it and the shared controller-failure copy when it did not. The suppliers that reach
- *     that copy are the coordinator's bounded-await catch, which names the site that failed, and the plugin's own outcome, which names the failure it actually saw.
+ *     the pending request; a superseded or seq-less outcome is dropped at this chokepoint. A non-empty error also transitions status to connection-error, carrying the
+ *     `guidance` and `headline` the dispatcher resolved: the shared device fetch reads them from the copy table, and the plugin's own outcome copy wins field by
+ *     field where it named any.
  *     A clean outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry. A clean outcome
  *     that carried no devices and an `emptyMessage` also records that message, which is how a plugin says its controller is reachable with nothing to list.
  *   - `scope:changed` - selection pointer moved (global / controller / device), tagged with the `origin` of the move: `user` for a sidebar click, `boot` for the page
@@ -63,7 +63,8 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *     the write lifecycle for the dispatcher to read back.
  *   - `commit:failed` - the coordinated write ended without a model arriving to replace the page's own: the write lifecycle returns to idle and option mutations
  *     are accepted again. Carries no payload, since the caller reports its own failure and nothing in the store reads one.
- *   - `connection:error` - the config re-sync failed before the page could render; status becomes connection-error carrying the full display copy the view renders.
+ *   - `connection:error` - a bounded page await other than the device fetch failed before the page could render; status becomes connection-error carrying the
+ *     full display copy the view renders.
  *
  * The reducer is pure: `(state, action) => state`. Unchanged slices retain their reference across dispatches (structural sharing), so memoized selectors that
  * depend on a slice return cached results until that specific slice changes. Unknown action types throw - silently ignoring them would let typo bugs escape into
@@ -134,10 +135,10 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  * `connection-error` is a page whose controller did not answer. Drop a variant when it stops being a named reachability state; add one when a new one surfaces.
  *
  * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps each text slot
- * without hardcoding any prose. Each supplier (the reducer's fetch-failure transition on {@link devices:loaded} and the orchestrator's config-sync-failure
- * {@link connection:error} dispatch) carries copy appropriate to its failure. It stands until a clean device outcome applies - the evidence that a controller
- * is reachable again - or the page re-enters through `show()`. Nothing else clears it, so a view rendering against it can
- * treat it as the whole truth about the page's reachability for as long as it holds.
+ * without hardcoding any prose. The copy arrives on the action that sets the variant - {@link devices:loaded} for a device fetch and {@link connection:error} for
+ * every other failing await - resolved from the copy table by the dispatcher that met the failure. It stands until a clean device outcome applies - the evidence
+ * that a controller is reachable again - or the page re-enters through `show()`. Nothing else clears it, so a view rendering against it can treat it as the
+ * whole truth about the page's reachability for as long as it holds.
  *
  * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "connection-error", guidance: string, headline: string, message: string}} LifecycleStatus
  */
@@ -233,20 +234,11 @@ export const EMPTY_CATALOG = {
 // place would be naming one some consumers do not have. The wording therefore says what to verify and not where to go.
 const CONTROLLER_FAILURE_GUIDANCE = "Verify the controller's connection details are correct, then retry.";
 
-// The connection-error display copy for a controller fetch failure. The reducer supplies it at its one fetch-failure transition (on devices:loaded), so this
-// controller wording lives here rather than being hardcoded in the connection-error view, which maps every text slot from the status. The per-fetch failure
-// message travels back on the outcome and is layered on as `message`.
-const CONTROLLER_FAILURE_STATUS = {
-
-  guidance: CONTROLLER_FAILURE_GUIDANCE,
-  headline: "Unable to connect to the controller.",
-  kind: "connection-error"
-};
-
-// The connection-error display copy for every bounded await the page makes, keyed by the site that failed and then by whether the deadline elapsed or the request
-// itself failed. It lives beside CONTROLLER_FAILURE_STATUS because the two answer the same question - what does the user read when the page cannot go on - and a
-// single home is what keeps a devices expiry from silently wearing the controller-failure wording. The expiry variants matter for the same reason: "the plugin stopped
-// answering" and "the plugin answered with an error" call for different next steps, and only the failing site knows which happened.
+// The connection-error display copy for every bounded await the page makes, the device fetch included, keyed by the site that failed and then by whether the
+// deadline elapsed or the request itself failed. It is the one source of the page's own failure copy: every dispatcher that meets a failure resolves its words
+// here, a result that named its own headline or guidance winning field by field, so the connection-error view and the reducer hold no prose of their own and a
+// failure reads the same whichever dispatcher met it. The expiry variants matter for the same reason: "the plugin stopped answering" and "the plugin answered
+// with an error" call for different next steps, and only the failing site knows which happened.
 const CONNECTION_FAILURE_COPY = {
 
   controllers: {
@@ -573,18 +565,11 @@ export const reducer = (state, action) => {
       }
 
       // A non-empty error is the connection-failure signal: the outcome carried an empty device list and the per-fetch failure message alongside it, so the status
-      // moves to connection-error at this, the reducer's one fetch-failure transition, layering the message onto the failure copy. Scope is not touched here - a
-      // dispatcher moves the selection separately. The optional guidance and headline let a dispatcher name the failure it actually saw, which is how a bounded
-      // await's deadline expiry renders as itself rather than as a controller that answered with an error, and how a plugin that told a bad credential from an
-      // unreachable address sends the user after the right one; an outcome carrying neither keeps the shared controller-failure wording, which is what a sidebar
-      // controller click reads whenever the plugin says nothing more specific.
-      return { ...applied, status: {
-
-        ...CONTROLLER_FAILURE_STATUS,
-        guidance: action.guidance ?? CONTROLLER_FAILURE_STATUS.guidance,
-        headline: action.headline ?? CONTROLLER_FAILURE_STATUS.headline,
-        message: action.error
-      } };
+      // moves to connection-error at this, the reducer's one fetch-failure transition, carrying the copy the dispatcher resolved with the message layered onto it.
+      // Scope is not touched here - a dispatcher moves the selection separately. The copy is the dispatcher's to resolve, from the copy table with the outcome's own
+      // headline or guidance winning field by field, which is how a deadline expiry renders as itself and how a plugin that told a bad credential from an
+      // unreachable address sends the user after the right one, while the reducer holds no prose of its own.
+      return { ...applied, status: { guidance: action.guidance, headline: action.headline, kind: "connection-error", message: action.error } };
     }
 
     case "scope:changed": {
@@ -807,8 +792,8 @@ export const reducer = (state, action) => {
 
     case "connection:error": {
 
-      // The config re-sync failed before the page could render. The orchestrator dispatches this with the full display copy for the connection-error view (headline,
-      // guidance, message); the reducer's own fetch-failure transition on devices:loaded is the other supplier of this variant.
+      // A bounded page await other than the device fetch failed before the page could render. The orchestrator dispatches this with the full display copy for the
+      // connection-error view (headline, guidance, message), resolved from the copy table; the devices:loaded failure transition is the other route into this variant.
       return { ...state, status: { guidance: action.guidance, headline: action.headline, kind: "connection-error", message: action.message } };
     }
 

@@ -20,8 +20,10 @@ import { selectedController } from "../selectors.mjs";
  *
  * Renders:
  *
- *   - An error block whose headline, guidance, and message all come from the `connection-error` status. The caller - the reducer's fetch-failure transition or the
- *     orchestrator's config-sync-failure dispatch - supplies the full display copy, so this view maps the three text slots without hardcoding any prose.
+ *   - An error block whose headline, guidance, and message all come from the `connection-error` status, so this view maps the three text slots without
+ *     hardcoding any prose. The dispatcher that met the failure resolves that copy from the copy table, with a failing result's own words winning field by
+ *     field, and the reducer carries it as given: the shared device fetch for a device failure, and the orchestrator's failure dispatch for every other bounded
+ *     await.
  *   - A retry button, initially disabled, that becomes enabled after `retryDelayMs` milliseconds. The delay is a brief throttle so the user does not retry-bash a
  *     recovering controller.
  *   - A progress bar that fills during the retry-delay window so the user has visual feedback that the retry button is coming alive.

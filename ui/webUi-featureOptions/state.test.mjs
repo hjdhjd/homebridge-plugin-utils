@@ -400,18 +400,19 @@ describe("reducer - devices:loaded", () => {
     assert.equal(next, base, "a seq-less outcome drops against a null pending request, returning the identical state reference");
   });
 
-  test("an outcome carrying no copy overrides keeps the shared controller-failure wording - the sidebar click's path", () => {
+  test("a failed outcome that names no copy carries none, because the reducer holds no prose of its own", () => {
 
     const next = requestThenLoad(initialState(), { controllerId: "ctrl-a", devices: [], error: "Controller unreachable." });
 
-    assert.equal(next.status.headline, "Unable to connect to the controller.", "an outcome with no headline keeps the shared controller-failure headline");
-    assert.equal(next.status.guidance, "Verify the controller's connection details are correct, then retry.", "and the shared guidance with it");
+    assert.equal(next.status.kind, "connection-error", "the failure still transitions the status");
+    assert.equal(next.status.headline, undefined, "the headline is the dispatcher's to resolve, and this one named none");
+    assert.equal(next.status.guidance, undefined, "and so is the guidance");
   });
 
-  test("an outcome carrying copy overrides renders them instead, so a bounded await's failure reads as itself", () => {
+  test("a failed outcome carries exactly the copy its dispatcher resolved, so a bounded await's failure reads as itself", () => {
 
-    // The show() path supplies its own per-site copy so a device fetch that never answered does not masquerade as a controller that answered with an error. The
-    // reducer prefers what the dispatcher supplied and falls back to the shared constant only per-field.
+    // The shared device fetch resolves the copy for the failure it met, so a device fetch that never answered does not masquerade as a controller that answered
+    // with an error. The reducer takes that copy as it is given.
     const requested = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
     const next = reducer(requested, {
 
@@ -428,23 +429,6 @@ describe("reducer - devices:loaded", () => {
     assert.equal(next.status.headline, "The plugin stopped responding while retrieving the device list.", "the supplied headline is what renders");
     assert.equal(next.status.guidance, "Retry once the plugin is responding again.", "the supplied guidance is what renders");
     assert.equal(next.status.message, "The request did not complete within 30 seconds.", "the per-fetch message is still carried along as it always did");
-  });
-
-  test("copy overrides are preferred per-field, so a headline alone keeps the shared guidance", () => {
-
-    const requested = reducer(initialState(), { controllerId: "ctrl-a", type: "devices:requested" });
-    const next = reducer(requested, {
-
-      controllerId: "ctrl-a",
-      devices: [],
-      error: "boom",
-      headline: "Unable to retrieve the device list.",
-      seq: requested.devicesRequest.seq,
-      type: "devices:loaded"
-    });
-
-    assert.equal(next.status.headline, "Unable to retrieve the device list.", "the supplied headline applies");
-    assert.equal(next.status.guidance, "Verify the controller's connection details are correct, then retry.", "the absent guidance falls back to the shared constant");
   });
 
   test("a successful outcome ignores copy overrides entirely - they only ever decorate a failure", () => {

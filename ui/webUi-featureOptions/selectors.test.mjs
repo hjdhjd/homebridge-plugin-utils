@@ -5,7 +5,7 @@
 "use strict";
 
 import { ALL_CHOICES, buildCatalogIndex } from "../featureOptions.js";
-import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId,
+import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId, stagingPending,
   tablePresentation } from "./selectors.mjs";
 import { controllerNoticeCopy, initialState, reducer } from "./state.mjs";
 import { describe, test } from "node:test";
@@ -92,6 +92,68 @@ describe("modelLoaded", () => {
     const state = reducer(initialState(), { catalog: emptyContentCatalog, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
 
     assert.equal(modelLoaded(state), true, "an options-less plugin is a legitimately loaded model");
+  });
+});
+
+describe("stagingPending", () => {
+
+  // One edit on a loaded store, the gesture the staging effect writes: unchecking the default-on option moves the configuration off the anchor.
+  const editedState = () => reducer(loadedState(), { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+
+  // The same edit with its write in flight, carrying the snapshot the drain hands the host.
+  const writingState = () => {
+
+    const edited = editedState();
+
+    return reducer(edited, { snapshot: edited.configuredOptions, type: "staging:started" });
+  };
+
+  test("reads false on a freshly loaded store, whose configuration and anchor share one reference with no write open", () => {
+
+    const state = loadedState();
+
+    assert.equal(state.configuredOptions, state.stagedAnchor, "precondition: the load seeds the configuration and the anchor with one reference");
+    assert.equal(state.write.kind, "idle", "precondition: no write is open");
+    assert.equal(stagingPending(state), false, "a store holding exactly what it loaded has nothing outstanding against the host");
+  });
+
+  test("reads true once an edit moves the configuration off the anchor, before any write has started", () => {
+
+    const edited = editedState();
+
+    assert.notEqual(edited.configuredOptions, edited.stagedAnchor, "precondition: the edit moved the configuration off the anchor");
+    assert.equal(edited.write.kind, "idle", "precondition: no write has started");
+    assert.equal(stagingPending(edited), true, "an edit the page has not written yet is outstanding");
+  });
+
+  test("reads true while a write is open even when the configuration is back on the anchor", () => {
+
+    // The revert restores the at-show() snapshot, which the load seeded from the same array as the anchor, so the arrays agree by reference while the write the
+    // drain opened is still unanswered...the store a rescued refusal leaves until the drain answers that write.
+    const reverted = reducer(writingState(), { type: "model:reverted" });
+
+    assert.equal(reverted.configuredOptions, reverted.stagedAnchor, "precondition: the revert returned the configuration to the anchor by reference");
+    assert.equal(reverted.write.kind, "staging", "precondition: the write is still open");
+    assert.equal(stagingPending(reverted), true, "an open write is pending whatever the arrays say");
+  });
+
+  test("reads false once the write lands and the anchor adopts its snapshot", () => {
+
+    const writing = writingState();
+    const landed = reducer(writing, { snapshot: writing.write.snapshot, type: "staging:succeeded" });
+
+    assert.equal(landed.stagedAnchor, landed.configuredOptions, "precondition: the anchor adopted the snapshot, which is the configuration by reference");
+    assert.equal(landed.write.kind, "idle", "precondition: the write lifecycle is idle again");
+    assert.equal(stagingPending(landed), false, "a write the host accepted leaves nothing outstanding");
+  });
+
+  test("reads false after a refused write rolls the configuration back, because a recorded staging error is not a claim", () => {
+
+    const failed = reducer(writingState(), { error: new Error("The host refused the write."), type: "staging:failed" });
+
+    assert.equal(failed.configuredOptions, failed.stagedAnchor, "precondition: the rollback returned the configuration to the anchor");
+    assert.equal(failed.write.kind, "staging-error", "precondition: the lifecycle records the failure");
+    assert.equal(stagingPending(failed), false, "a rolled-back failure leaves nothing outstanding: the store again holds what the host holds");
   });
 });
 

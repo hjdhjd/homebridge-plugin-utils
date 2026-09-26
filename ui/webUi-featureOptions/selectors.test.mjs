@@ -5,8 +5,8 @@
 "use strict";
 
 import { ALL_CHOICES, buildCatalogIndex } from "../featureOptions.js";
-import { configIndex, modelLoaded, projection, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId, stagingPending,
-  tablePresentation } from "./selectors.mjs";
+import { configIndex, editsHeld, modelLoaded, projection, scopeCacheKey, scopingControllerId, selectedController, selectedControllerId, selectedDevice, selectedDeviceId,
+  stagingPending, tablePresentation } from "./selectors.mjs";
 import { controllerNoticeCopy, initialState, reducer } from "./state.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -56,6 +56,17 @@ const loadedState = ({ configuredOptions = [], controllers = [], devices = [], m
   return reducer(requested, { controllerId: null, devices, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
 };
 
+// One edit on a loaded store, the gesture the staging effect writes: unchecking the default-on option moves the configuration off the anchor.
+const editedState = () => reducer(loadedState(), { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+
+// The same edit with its write in flight, carrying the snapshot the drain hands the host.
+const writingState = () => {
+
+  const edited = editedState();
+
+  return reducer(edited, { snapshot: edited.configuredOptions, type: "staging:started" });
+};
+
 describe("modelLoaded", () => {
 
   test("reads false on a fresh state and true once model:loaded has installed a catalog", () => {
@@ -96,17 +107,6 @@ describe("modelLoaded", () => {
 });
 
 describe("stagingPending", () => {
-
-  // One edit on a loaded store, the gesture the staging effect writes: unchecking the default-on option moves the configuration off the anchor.
-  const editedState = () => reducer(loadedState(), { args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
-
-  // The same edit with its write in flight, carrying the snapshot the drain hands the host.
-  const writingState = () => {
-
-    const edited = editedState();
-
-    return reducer(edited, { snapshot: edited.configuredOptions, type: "staging:started" });
-  };
 
   test("reads false on a freshly loaded store, whose configuration and anchor share one reference with no write open", () => {
 
@@ -154,6 +154,91 @@ describe("stagingPending", () => {
     assert.equal(failed.configuredOptions, failed.stagedAnchor, "precondition: the rollback returned the configuration to the anchor");
     assert.equal(failed.write.kind, "staging-error", "precondition: the lifecycle records the failure");
     assert.equal(stagingPending(failed), false, "a rolled-back failure leaves nothing outstanding: the store again holds what the host holds");
+  });
+});
+
+describe("editsHeld", () => {
+
+  test("reads false on a freshly loaded store, whose write lifecycle is idle", () => {
+
+    const state = loadedState();
+
+    assert.equal(state.write.kind, "idle", "precondition: no write is open");
+    assert.equal(editsHeld(state), false, "an idle store holds no edits");
+  });
+
+  test("reads false while the staging drain's write is in flight, because the reducer still takes edits during a stage", () => {
+
+    const staging = writingState();
+
+    assert.equal(staging.write.kind, "staging", "precondition: the drain's write is open");
+    assert.equal(editsHeld(staging), false, "a stage in flight is the drain's own write, not a hold on the user's edits");
+  });
+
+  test("reads false after a refused stage records its error", () => {
+
+    const failed = reducer(writingState(), { error: new Error("The host refused the write."), type: "staging:failed" });
+
+    assert.equal(failed.write.kind, "staging-error", "precondition: the lifecycle records the failure");
+    assert.equal(editsHeld(failed), false, "a recorded staging error holds nothing: the rollback left the store ready for the next edit");
+  });
+
+  test("reads true once a coordinated write holds the store", () => {
+
+    const held = reducer(loadedState(), { type: "commit:started" });
+
+    assert.equal(held.write.kind, "committing", "precondition: the entry rule admitted the hold on a loaded, idle, clean store");
+    assert.equal(editsHeld(held), true, "a coordinated write holds every option edit for its duration");
+  });
+
+  test("reads false again once the coordinated write lifts its hold without a new model", () => {
+
+    const held = reducer(loadedState(), { type: "commit:started" });
+    const released = reducer(held, { type: "commit:failed" });
+
+    assert.equal(released.write.kind, "idle", "precondition: the hold lifted");
+    assert.equal(editsHeld(released), false, "the end of the hold releases the edits");
+  });
+});
+
+describe("scopeCacheKey", () => {
+
+  // One tag per variant of the scope union, the device variant twice: under a controller, and in device-only mode with no controller to name.
+  const GLOBAL = { kind: "global" };
+  const CONTROLLER = { controllerId: "ctrl-a", kind: "controller" };
+  const DEVICE = { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" };
+  const DEVICE_ONLY = { controllerId: null, deviceId: "dev-a", kind: "device" };
+
+  test("keys the global scope as global", () => {
+
+    assert.equal(scopeCacheKey(GLOBAL), "global", "the global view has one canonical key");
+  });
+
+  test("keys a controller scope by its serial", () => {
+
+    assert.equal(scopeCacheKey(CONTROLLER), "controller:ctrl-a", "a controller's view is keyed by the controller it names");
+  });
+
+  test("keys a device scope by its controller's serial and its own", () => {
+
+    assert.equal(scopeCacheKey(DEVICE), "device:ctrl-a/dev-a", "a device key carries its controller first, so a prefix match finds every device under it");
+  });
+
+  test("leaves the controller slot empty for a device in device-only mode", () => {
+
+    assert.equal(scopeCacheKey(DEVICE_ONLY), "device:/dev-a", "a device with no controller keeps the slot and leaves it empty");
+  });
+
+  test("gives every scope variant a distinct key", () => {
+
+    const keys = [ GLOBAL, CONTROLLER, DEVICE, DEVICE_ONLY ].map((scope) => scopeCacheKey(scope));
+
+    assert.equal(new Set(keys).size, keys.length, "no two views share a key");
+  });
+
+  test("throws on a scope kind outside the union rather than returning a key that could collide", () => {
+
+    assert.throws(() => scopeCacheKey({ kind: "unknown" }), { message: "scopeCacheKey: unknown scope kind.", name: "Error" }, "an unknown kind fails loudly");
   });
 });
 

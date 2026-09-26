@@ -106,29 +106,19 @@ export type AcquireServiceTarget<T extends Service = Service> = WithUUID<typeof 
 export type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => Characteristic);
 
 /**
- * The inputs {@link acquireService} creates or retrieves a service from: the accessory, the display name a newly created service takes, an optional
- * callback fired only on creation, the service type, and an optional subtype disambiguating more than one service of the same type.
+ * The inputs {@link findService} identifies a service by: the accessory, the service type, and an optional subtype disambiguating more than one service of the
+ * same type.
  *
- * @typeParam T - The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back.
+ * @typeParam T - The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back.
  *
  * @category Accessory
  */
-export interface AcquireServiceOptions<T extends Service = Service> {
+export interface FindServiceOptions<T extends Service = Service> {
 
   /**
    * The Homebridge accessory to check or modify.
    */
   readonly accessory: PlatformAccessory;
-
-  /**
-   * Name to be displayed to the end user for this service.
-   */
-  readonly name: string;
-
-  /**
-   * Optional callback invoked only when a new service is created, receiving the new service as its argument.
-   */
-  readonly onServiceCreate?: (svc: T) => void;
 
   /**
    * The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see
@@ -140,6 +130,27 @@ export interface AcquireServiceOptions<T extends Service = Service> {
    * Optional service subtype to uniquely identify the service.
    */
   readonly subtype?: string;
+}
+
+/**
+ * The inputs {@link acquireService} creates or retrieves a service from: everything {@link findService} identifies the service by, plus the display name a newly
+ * created service takes and an optional callback fired only on creation.
+ *
+ * @typeParam T - The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back.
+ *
+ * @category Accessory
+ */
+export interface AcquireServiceOptions<T extends Service = Service> extends FindServiceOptions<T> {
+
+  /**
+   * Name to be displayed to the end user for this service.
+   */
+  readonly name: string;
+
+  /**
+   * Optional callback invoked only when a new service is created, receiving the new service as its argument.
+   */
+  readonly onServiceCreate?: (svc: T) => void;
 }
 
 /**
@@ -163,6 +174,26 @@ export interface AcquireServiceResult<T extends Service = Service> {
 }
 
 /**
+ * Finds the service {@link acquireService} would create for the same type and subtype, and nothing else. A service matches when it carries the type's UUID and
+ * the same subtype, where an empty subtype and no subtype are one identity, as they are in HAP's own service identity. A lookup without a subtype therefore never
+ * answers a subtyped sibling of the same type. HAP's `getService` matches by type alone and ignores the subtype, which is why this module owns the lookup rather
+ * than delegating it.
+ *
+ * @typeParam T    - The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back.
+ * @param options - The accessory, the service type, and an optional subtype. See {@link FindServiceOptions}.
+ *
+ * @returns The matching service, or `undefined` when the accessory carries none.
+ *
+ * @category Accessory
+ */
+export function findService<T extends Service>({ accessory, serviceType, subtype }: FindServiceOptions<T>): T | undefined {
+
+  // The cast to `T` is sound because a service carrying the constructor's UUID and this subtype is one `new serviceType(name, subtype)` produced, whether this
+  // module created it or a caller using the same constructor did.
+  return accessory.services.find((service) => (service.UUID === serviceType.UUID) && ((service.subtype ?? "") === (subtype ?? ""))) as T | undefined;
+}
+
+/**
  * Reconciles a service's presence on an accessory in one call: creates it when it does not exist, or returns it unchanged when it does. Optionally
  * executes a callback to initialize a newly created service. For a newly created service, the various name characteristics are also set to the
  * specified name and added where necessary; re-acquiring an existing service returns it with its name characteristics untouched.
@@ -179,6 +210,9 @@ export interface AcquireServiceResult<T extends Service = Service> {
  * This method ensures that a newly created service's display name and available name characteristics are updated to the specified name; re-acquiring an
  * existing service leaves its name characteristics untouched, so a caller renaming an existing service calls {@link setServiceName} directly. If
  * `onServiceCreate` is provided, it will only be called for newly created services, not for existing ones.
+ *
+ * A call without a subtype on an accessory that carries only subtyped services of the type finds nothing to answer, and HAP refuses to add a subtype-less
+ * service beside a subtyped one, so the call throws HAP's refusal rather than answering a sibling as the subtype-less service.
  *
  * The `ConfiguredName` and `Name` characteristics are conditionally added or updated based on the type of service, in accordance with HomeKit requirements.
  *
@@ -210,9 +244,8 @@ export function acquireService<T extends Service>({ accessory, name, onServiceCr
   // setServiceName populates - same source string, same validation contract.
   const sanitized = sanitizeName(name);
 
-  // Find the service, if it exists. The cast back to `T` is sound because `getService` / `getServiceById` look up by the constructor's UUID brand, and the only
-  // service registered against that UUID is one this function (or a sibling caller using the same constructor) created - i.e., an instance of `T`.
-  let service = (subtype ? accessory.getServiceById(serviceType, subtype) : accessory.getService(serviceType)) as T | undefined;
+  // Find the service this call would create, if the accessory already carries it. The matching rule is findService's own.
+  let service = findService({ accessory, serviceType, subtype });
 
   if(!service) {
 
@@ -327,7 +360,7 @@ export type ValidServiceResult<T extends Service = Service> = AcquireServiceResu
  */
 export function validService<T extends Service>({ accessory, name, onServiceCreate, serviceType, subtype, validate }: ValidServiceOptions<T>): ValidServiceResult<T> {
 
-  const service = subtype ? accessory.getServiceById(serviceType, subtype) : accessory.getService(serviceType);
+  const service = findService({ accessory, serviceType, subtype });
 
   // Resolve `validate` against the current presence and remove the service when the validator votes false. The function-form receives the actual presence boolean so
   // callers can express add-if-missing semantics like `(has) => has || config.enableSwitch`.

@@ -12,8 +12,8 @@ import * as hap from "@homebridge/hap-nodejs";
 import type { Assert, Equal } from "./testing/index.ts";
 import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
 import type { PresenceReading, PresenceTransition, ValidCharacteristicOptions, ValidServiceOptions } from "./service.ts";
-import { acquireService, capabilityGate, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic, updateServices,
-  validCharacteristic, validService } from "./service.ts";
+import { acquireService, capabilityGate, findService, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic,
+  updateServices, validCharacteristic, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import { HAPStatus } from "./homebridge-enums.ts";
 import type { Nullable } from "./util.ts";
@@ -317,6 +317,22 @@ const _validServiceShapeExercises = (): void => {
   }
 };
 
+describe("findService", () => {
+
+  test("answers exactly the service a same-type, same-subtype acquisition would create, and never a subtyped sibling for a subtype-less lookup", () => {
+
+    // HAP accepts a subtype-less service only ahead of its subtyped siblings, so the fixture acquires it first, the order every accessory HAP builds carries.
+    const accessory = makeAccessory();
+    const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
+    const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), plain, "a lookup without a subtype must answer the subtype-less service");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch, subtype: "side" }), side, "a lookup with a subtype must answer the service carrying it");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch, subtype: "front" }), undefined, "a subtype no service carries must answer undefined");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch, subtype: "" }), plain, "an empty subtype is HAP's subtype-less identity");
+  });
+});
+
 describe("acquireService - creation path", () => {
 
   test("creates the service, adds it to the accessory, and invokes onServiceCreate exactly once", () => {
@@ -387,6 +403,22 @@ describe("acquireService - subtype handling", () => {
     const second = acquireService({ accessory, name: "Alpha 2", serviceType: hap.Service.Switch, subtype: "sub-alpha" });
 
     assert.equal(first.service, second.service, "re-acquisition with the same subtype must return the same instance");
+  });
+
+  test("a subtype-less acquisition beside only a subtyped service of the type never answers that sibling, and HAP refuses the subtype-less addition", () => {
+
+    // The exact lookup finds nothing to answer, so the creation reaches HAP, which refuses a subtype-less service once a subtyped one of the same type is present.
+    const accessory = makeAccessory();
+
+    acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+
+    let invocations = 0;
+
+    assert.throws(() => acquireService({ accessory, name: "Plain", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch }),
+      /without also defining a unique 'subtype' property/, "a subtype-less acquisition must not answer the subtyped sibling as its service");
+    assert.equal(invocations, 0, "HAP's refusal must leave the creation callback unfired");
+    assert.deepEqual(accessory.services.filter((service) => service.UUID === hap.Service.Switch.UUID).map((service) => service.subtype), ["side"],
+      "the subtyped sibling must stand alone and untouched");
   });
 });
 
@@ -634,6 +666,44 @@ describe("validService", () => {
     assert.equal(result.transition, "removed");
     assert.equal(accessory.getServiceById(hap.Service.Switch, "sub-a"), undefined, "matching-subtype service must be removed");
     assert.ok(accessory.getServiceById(hap.Service.Switch, "sub-b"), "non-matching-subtype service must remain");
+  });
+
+  test("a false verdict without a subtype answers absent beside only a subtyped service of the type, and the sibling still stands", () => {
+
+    const accessory = makeAccessory();
+    const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+    const result = validService({ accessory, name: "Plain", serviceType: hap.Service.Switch, validate: false });
+
+    assert.equal(result.transition, "absent", "a subtype-less verdict must not take the subtyped sibling for its service");
+    assert.equal(accessory.getServiceById(hap.Service.Switch, "side"), side, "the subtyped sibling must still stand");
+  });
+
+  test("a false verdict without a subtype removes only the subtype-less service when a subtyped sibling stands beside it", () => {
+
+    const accessory = makeAccessory();
+
+    acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
+
+    const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+    const result = validService({ accessory, name: "Plain", serviceType: hap.Service.Switch, validate: false });
+
+    assert.equal(result.transition, "removed");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), undefined, "the subtype-less service must be removed");
+    assert.equal(accessory.getServiceById(hap.Service.Switch, "side"), side, "the subtyped sibling must still stand");
+  });
+
+  test("a false verdict with a subtype removes only the subtyped service and leaves the subtype-less one standing", () => {
+
+    const accessory = makeAccessory();
+    const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
+
+    acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+
+    const result = validService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side", validate: false });
+
+    assert.equal(result.transition, "removed");
+    assert.equal(accessory.getServiceById(hap.Service.Switch, "side"), undefined, "the subtyped service must be removed");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), plain, "the subtype-less service must still stand");
   });
 });
 

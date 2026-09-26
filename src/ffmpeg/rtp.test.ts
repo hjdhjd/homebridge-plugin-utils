@@ -5,12 +5,13 @@
  * allocator behavior.
  */
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
+import type { PortReservation, RtpProbeSocket } from "./rtp.ts";
 import { RtpDemuxer, RtpPortAllocator } from "./rtp.ts";
 import { bindReceiver, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
 import { describe, test } from "node:test";
-import type { PortReservation } from "./rtp.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import { TestClock } from "../clock-double.ts";
+import { TestProbeSocketFactory } from "./rtp.helpers.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { waitUntil } from "../testing/index.ts";
@@ -715,10 +716,10 @@ describe("RtpPortAllocator - signal handling", () => {
     // Two-phase-commit rule: any reserve() call that does NOT return a live reservation must leave the allocator's pool unchanged. This covers the ports-leak
     // bug class structurally - the `DisposableStack.move()` commit point transfers ownership only on success, so every non-success exit path runs scope-bound
     // disposal on whatever was tentatively acquired. We exercise every failure mode black-box testing can reach: a pre-aborted signal, RangeError on invalid count,
-    // and a microtask-timed abort that lands during the first #acquirePort's await. The specific "abort lands between the two acquires" race window is structurally
-    // unreachable from outside the class (no async boundary between the two awaits in the fixed implementation), so we cannot target it deterministically. Code
-    // review plus the self-documenting `DisposableStack` pattern guard that specific path; the guarantee this test asserts guards the pool integrity across
-    // everything we CAN reach.
+    // and a microtask-timed abort. The package's own socket factory answers a bind inside the call, so that abort lands between the two acquires: the first port
+    // is already tentatively held when the second acquire's `throwIfAborted` throws, and the scope-bound release returns it to the pool. An abort inside a pending
+    // bind is reachable only through a factory whose binds answer later, which is why the scripted-factory rows in the retry and collision block exercise that
+    // rethrow rather than this row.
     const allocator = new RtpPortAllocator();
     const baseline = allocator.reservedCount;
 
@@ -736,7 +737,7 @@ describe("RtpPortAllocator - signal handling", () => {
     await assert.rejects(allocator.reserve({ count: 3 as unknown as 1 | 2 }));
     assert.equal(allocator.reservedCount, baseline, "RangeError path must not leak");
 
-    // Microtask-timed abort - fires during the first acquire, rejects before any port is added.
+    // Microtask-timed abort - takes effect between the two acquires, after the first port is tentatively held and before the second probe socket opens.
     for(let trial = 0; trial < 20; trial++) {
 
       const ctrl = new AbortController();
@@ -814,62 +815,135 @@ describe("PortReservation - disposal", () => {
 
 describe("RtpPortAllocator - retry and collision paths", () => {
 
-  // The retry / collision paths in `#acquirePort` are real production code for hosts under genuine port contention. From outside the class, exercising them
-  // deterministically is constrained by the architecture's commitment to encapsulation (no test-only hooks) and by the kernel's port-allocation strategy (modern
-  // kernels hand back fresh ports from a 32K-wide ephemeral range, so a collision against a small `#inUse` set is rare). The stress test below makes the collision
-  // statistically certain by holding hundreds of count=2 reservations - density rises quadratically in the pool size and the secondPort retry / `#inUse` collision
-  // branches both fire reliably long before the loop completes.
-  //
-  // Structurally unreachable from outside, and therefore covered by code review rather than tests:
-  //
-  //   - firstPort === null retry. Requires `bind(0)` itself to fail - a kernel-level socket error with no realistic trigger from a unit test.
-  //   - Bind failure on a specific port. Requires an external process to hold `firstPort + 1` AND the kernel to randomly hand us that exact firstPort.
-  //   - Max-attempts exhaustion. Requires 10 consecutive null returns; cumulative probability is essentially zero without seeding `#inUse` to densities that
-  //     would consume the entire ephemeral range.
-  test("dense pool exercises the secondPort retry and #inUse collision paths", async () => {
+  /* Every path the allocator can take under port contention has a row here. The probe-socket factory the allocator takes at construction is what makes each
+   * one deterministic: the double answers every bind with what the row scripted, so a refused bind, a collision with a port the pool already holds, a spent
+   * attempt budget, and an abort while a bind is pending are each set up directly rather than waited for on a crowded host. The ports are scripted and never
+   * bound, so their numbers are arbitrary. Every other allocator row binds real sockets through the default factory.
+   */
 
-    // Why this works: each successful count=2 reservation adds two ports to `#inUse`. After N successful reservations there are 2N ports in `#inUse`. The next
-    // reservation's secondPort attempt asks the OS for `firstPort + 1` - independent of our `#inUse` state - so the probability the kernel hands back a port that
-    // we are already tracking is roughly 2N / 32K. Summed across the loop the expected number of collisions is `sum(2k / 32K, k=0..N-1) ≈ N^2 / 32K`. At N = 300,
-    // expected collisions ≈ 2.7, giving P(at least one collision) ≈ 1 - exp(-2.7) ≈ 93%. The loop also exercises the random-port `continue` inside `#acquirePort`
-    // whenever the kernel randomly returns a port already in `#inUse` for the first acquire; that path is statistically similar to the secondPort case at the
-    // same density.
-    //
-    // The test asserts on `reservedCount`, not on which specific branches fired - we trust the coverage report to verify the branches were hit. The behavioral
-    // contract the test guards is the one a user cares about: the allocator returns N distinct, non-overlapping reservations even under contention.
-    const allocator = new RtpPortAllocator();
-    const reservations: PortReservation[] = [];
-    const target = 300;
+  // The allocator's attempt budget. The exhaustion rows assert it through the error's message, and the collision row scripts more collisions than it allows.
+  const ATTEMPT_BUDGET = 10;
 
-    try {
+  test("a refused random-port bind is retried on the next attempt, which reserves the port it binds", async () => {
 
-      for(let i = 0; i < target; i++) {
+    const probes = new TestProbeSocketFactory([ "refused", 50000 ]);
+    const allocator = new RtpPortAllocator({ socketFactory: probes.create });
 
-        // eslint-disable-next-line no-await-in-loop
-        reservations.push(await allocator.reserve({ count: 2 }));
+    await using reservation = await allocator.reserve();
+
+    assert.equal(reservation.port, 50000);
+    assert.equal(allocator.reservedCount, 1, "a refused bind must leave nothing in the pool");
+    assert.deepEqual(probes.binds, [ 0, 0 ]);
+  });
+
+  test("a refused sequential neighbor releases the first port, and the next attempt reserves a fresh pair", async () => {
+
+    const probes = new TestProbeSocketFactory([ 50000, "refused", 50010, 50011 ]);
+    const allocator = new RtpPortAllocator({ socketFactory: probes.create });
+
+    await using reservation = await allocator.reserve({ count: 2 });
+
+    assert.equal(reservation.port, 50010);
+    assert.equal(allocator.reservedCount, 2, "the first attempt's port must leave the pool when its neighbor is refused");
+    assert.deepEqual(probes.binds, [ 0, 50001, 0, 50011 ]);
+  });
+
+  test("a sequential neighbor the pool already holds fails the specific-port probe, and the held port survives the retry", async () => {
+
+    const probes = new TestProbeSocketFactory([ 50001, 50000, 50001, 50010, 50011 ]);
+    const allocator = new RtpPortAllocator({ socketFactory: probes.create });
+
+    await using held = await allocator.reserve();
+
+    const pair = await allocator.reserve({ count: 2 });
+
+    assert.equal(held.port, 50001);
+    assert.equal(pair.port, 50010);
+    assert.equal(allocator.reservedCount, 3, "the pool must hold the single port and the fresh pair, and nothing from the abandoned attempt");
+    assert.deepEqual(probes.binds, [ 0, 0, 50001, 0, 50011 ]);
+
+    await pair[Symbol.asyncDispose]();
+
+    assert.equal(allocator.reservedCount, 1, "releasing the pair must leave the held port in the pool");
+  });
+
+  test("a random-port bind that lands on a held port retries inside the same attempt, so collisions beyond the attempt budget still reserve", async () => {
+
+    // The first reservation holds 50000, and the second one's probes land on it for a full budget of binds before a fresh port arrives. Were a collision to
+    // spend an attempt, the budget would be gone before the fresh port.
+    const probes = new TestProbeSocketFactory([ 50000, ...Array.from({ length: ATTEMPT_BUDGET }, () => 50000), 50010 ]);
+    const allocator = new RtpPortAllocator({ socketFactory: probes.create });
+
+    await using held = await allocator.reserve();
+    await using reservation = await allocator.reserve();
+
+    assert.equal(held.port, 50000);
+    assert.equal(reservation.port, 50010);
+    assert.equal(allocator.reservedCount, 2);
+    assert.deepEqual(probes.binds, Array.from({ length: ATTEMPT_BUDGET + 2 }, () => 0));
+  });
+
+  test("an attempt budget spent on refused neighbors rejects with the exhaustion error and leaves the pool empty", async () => {
+
+    // Each attempt binds a fresh first port and is refused its neighbor, so every attempt holds a port that its retry has to release.
+    const probes = new TestProbeSocketFactory(Array.from({ length: ATTEMPT_BUDGET }, (_, attempt) => [ 50000 + (attempt * 10), "refused" ] as const).flat());
+    const allocator = new RtpPortAllocator({ socketFactory: probes.create });
+
+    await assert.rejects(allocator.reserve({ count: 2 }),
+      { message: "RtpPortAllocator: unable to reserve 2 consecutive ports after " + ATTEMPT_BUDGET.toString() + " attempts." });
+
+    assert.equal(allocator.reservedCount, 0, "every attempt's first port must leave the pool");
+    assert.equal(probes.binds.length, 2 * ATTEMPT_BUDGET);
+  });
+
+  test("an attempt budget spent on refused single-port binds rejects with the single-port exhaustion error and leaves the pool empty", async () => {
+
+    // Each attempt's one bind is refused, so no attempt holds a port, and the exhaustion error names the single-port form rather than a consecutive range.
+    const probes = new TestProbeSocketFactory(Array.from({ length: ATTEMPT_BUDGET }, () => "refused" as const));
+    const allocator = new RtpPortAllocator({ socketFactory: probes.create });
+
+    await assert.rejects(allocator.reserve(), { message: "RtpPortAllocator: unable to reserve a port after " + ATTEMPT_BUDGET.toString() + " attempts." });
+
+    assert.equal(allocator.reservedCount, 0, "a refused bind must leave nothing in the pool");
+    assert.deepEqual(probes.binds, Array.from({ length: ATTEMPT_BUDGET }, () => 0));
+  });
+
+  test("an abort while a probe bind is pending rejects with the signal's reason and leaves the pool empty", async () => {
+
+    // The double answers a bind on the next tick, so the abort below lands while the first probe waits for its answer. The package's own factory answers a bind
+    // inside the call, so only a factory whose binds answer later reaches this path.
+    const probes = new TestProbeSocketFactory([50000]);
+    const allocator = new RtpPortAllocator({ socketFactory: probes.create });
+    const controller = new AbortController();
+    const reason = new HbpuAbortError("shutdown");
+    const pending = allocator.reserve({ signal: controller.signal });
+
+    controller.abort(reason);
+
+    await assert.rejects(pending, (error: unknown) => error === reason);
+    assert.equal(allocator.reservedCount, 0);
+    assert.deepEqual(probes.binds, [0]);
+  });
+
+  test("an abort as the final attempt's probe opens rejects with the signal's reason rather than the exhaustion error", async () => {
+
+    // Every earlier attempt is refused, so the budget is spent by the time the final probe answers. The rethrow inside the probe is what surfaces the caller's
+    // reason here: were the aborted probe to report a refused bind instead, the loop would end on the exhaustion error.
+    const probes = new TestProbeSocketFactory([ ...Array.from({ length: ATTEMPT_BUDGET - 1 }, () => "refused" as const), 50000 ]);
+    const controller = new AbortController();
+    const reason = new HbpuAbortError("shutdown");
+    const allocator = new RtpPortAllocator({ socketFactory: (ipFamily): RtpProbeSocket => {
+
+      if(probes.binds.length === (ATTEMPT_BUDGET - 1)) {
+
+        controller.abort(reason);
       }
 
-      assert.equal(allocator.reservedCount, 2 * target,
-        target.toString() + " count=2 reservations must hold " + (2 * target).toString() + " distinct ports even when retries fire");
+      return probes.create(ipFamily);
+    } });
 
-      // Verify the ports are pairwise distinct - a retry that incorrectly committed a colliding port would surface here as a duplicate, not just as a coverage
-      // signal.
-      const allPorts = new Set<number>();
-
-      for(const reservation of reservations) {
-
-        allPorts.add(reservation.port);
-        allPorts.add(reservation.port + 1);
-      }
-
-      assert.equal(allPorts.size, 2 * target, "every reserved port must be distinct - retries must not commit a colliding pair");
-    } finally {
-
-      for(const reservation of reservations) {
-
-        // eslint-disable-next-line no-await-in-loop
-        await reservation[Symbol.asyncDispose]();
-      }
-    }
+    await assert.rejects(allocator.reserve({ signal: controller.signal }), (error: unknown) => error === reason);
+    assert.equal(allocator.reservedCount, 0);
+    assert.equal(probes.binds.length, ATTEMPT_BUDGET);
   });
 });

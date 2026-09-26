@@ -32,8 +32,10 @@
 import { HbpuAbortError, Watchdog, composeSignals, isTimeoutReason, markHandled, onAbort } from "../util.ts";
 import type { HomebridgePluginLogging, Nullable } from "../util.ts";
 import { createDgramSocket, loopbackAddress } from "../dgram-util.ts";
+import type { AddressInfo } from "node:net";
 import type { Clock } from "../clock.ts";
 import { DisposableStack } from "../disposable-stack.ts";
+import type { EventEmitter } from "node:events";
 import type { IpFamily } from "../dgram-util.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import { RtpPacketParser } from "./rtp-parser.ts";
@@ -494,6 +496,48 @@ export interface PortReservation extends AsyncDisposable {
 }
 
 /**
+ * The members {@link RtpPortAllocator} calls on a probe socket, which `node:dgram`'s own `Socket` satisfies structurally.
+ *
+ * The interface is narrow rather than the platform class because a double implements exactly these members, while the compiler proves that the real socket
+ * carries every one of them at the allocator's default factory. It extends the platform emitter because the allocator waits for each bind's answer, the
+ * `"listening"` or `"error"` event, through `events.once`.
+ *
+ * @category FFmpeg
+ */
+export interface RtpProbeSocket extends EventEmitter {
+
+  address(): AddressInfo;
+  bind(port: number): void;
+  close(): void;
+  unref(): void;
+}
+
+/**
+ * How {@link RtpPortAllocator} obtains a probe socket. It is asked once per bind the allocator attempts, with the family of the reservation being made.
+ *
+ * @param ipFamily - The address family of the reservation being made.
+ *
+ * @returns An unbound socket.
+ *
+ * @category FFmpeg
+ */
+export type RtpProbeSocketFactory = (ipFamily: IpFamily) => RtpProbeSocket;
+
+/**
+ * Construction-time options for {@link RtpPortAllocator}.
+ *
+ * @property socketFactory - Optional. How each probe socket is made, so a host can substitute the sockets the allocator binds. Defaults to the package's own
+ *                           {@link createDgramSocket}, whose sockets bind exclusively. A substitute answers exclusive sockets too, because the pool reads a
+ *                           granted bind as proof that the port was free.
+ *
+ * @category FFmpeg
+ */
+export interface RtpPortAllocatorInit {
+
+  readonly socketFactory?: RtpProbeSocketFactory;
+}
+
+/**
  * Registry that reserves consecutive UDP ports for FFmpeg-based RTP/RTCP sessions.
  *
  * The allocator itself is a plugin-singleton registry - it holds no OS resources of its own, only a `Set` of ports marked as in-use. Reservations are the scoped
@@ -528,6 +572,18 @@ export class RtpPortAllocator {
 
   // The pool of ports currently marked as in use. A `Set` because membership checks in the bind-retry loop need O(1), and the allocator never needs ordering.
   readonly #inUse = new Set<number>();
+
+  readonly #socketFactory: RtpProbeSocketFactory;
+
+  /**
+   * Create an allocator with an empty pool.
+   *
+   * @param init - Optional init options. See {@link RtpPortAllocatorInit}.
+   */
+  public constructor({ socketFactory = createDgramSocket }: RtpPortAllocatorInit = {}) {
+
+    this.#socketFactory = socketFactory;
+  }
 
   /**
    * The number of UDP ports currently held by live {@link PortReservation} handles. Exposed for operational diagnostics - a plugin that surfaces "how many
@@ -628,7 +684,7 @@ export class RtpPortAllocator {
 
       signal?.throwIfAborted();
 
-      const socket = createDgramSocket(ipFamily);
+      const socket = this.#socketFactory(ipFamily);
 
       // Exclude this probe socket from Node's reference counting so it never prevents the process from exiting while a reservation is pending.
       socket.unref();

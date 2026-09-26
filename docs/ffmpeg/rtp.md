@@ -251,8 +251,16 @@ await session.ports[Symbol.asyncDispose]();
 ##### Constructor
 
 ```ts
-new RtpPortAllocator(): RtpPortAllocator;
+new RtpPortAllocator(init?): RtpPortAllocator;
 ```
+
+Create an allocator with an empty pool.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | [`RtpPortAllocatorInit`](#rtpportallocatorinit) | Optional init options. See [RtpPortAllocatorInit](#rtpportallocatorinit). |
 
 ###### Returns
 
@@ -389,3 +397,99 @@ Construction-time options for [RtpDemuxer](#rtpdemuxer).
 | <a id="rtcpport"></a> `rtcpPort` | `number` | Required. The destination UDP port (on the loopback interface) for classified RTCP packets. Typically FFmpeg's RTCP input port. |
 | <a id="rtpport"></a> `rtpPort` | `number` | Required. The destination UDP port (on the loopback interface) for classified RTP packets. Typically FFmpeg's RTP input port. The heartbeat replay also targets this port - FFmpeg ignores the RTCP shape on its RTP input, but the arriving traffic keeps that input fed during quiet periods. |
 | <a id="signal-2"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the demuxer's internal controller. When the parent aborts, the demuxer tears down. |
+
+***
+
+### RtpPortAllocatorInit
+
+Construction-time options for [RtpPortAllocator](#rtpportallocator).
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="socketfactory"></a> `socketFactory?` | `readonly` | [`RtpProbeSocketFactory`](#rtpprobesocketfactory) | Optional. How each probe socket is made, so a host can substitute the sockets the allocator binds. Defaults to the package's own [createDgramSocket](../dgram-util.md#createdgramsocket), whose sockets bind exclusively. A substitute answers exclusive sockets too, because the pool reads a granted bind as proof that the port was free. |
+
+***
+
+### RtpProbeSocket
+
+The members [RtpPortAllocator](#rtpportallocator) calls on a probe socket, which `node:dgram`'s own `Socket` satisfies structurally.
+
+The interface is narrow rather than the platform class because a double implements exactly these members, while the compiler proves that the real socket
+carries every one of them at the allocator's default factory. It extends the platform emitter because the allocator waits for each bind's answer, the
+`"listening"` or `"error"` event, through `events.once`.
+
+#### Extends
+
+- `EventEmitter`
+
+#### Methods
+
+##### address()
+
+```ts
+address(): AddressInfo;
+```
+
+###### Returns
+
+`AddressInfo`
+
+##### bind()
+
+```ts
+bind(port): void;
+```
+
+###### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `port` | `number` |
+
+###### Returns
+
+`void`
+
+##### close()
+
+```ts
+close(): void;
+```
+
+###### Returns
+
+`void`
+
+##### unref()
+
+```ts
+unref(): void;
+```
+
+###### Returns
+
+`void`
+
+***
+
+### RtpProbeSocketFactory
+
+```ts
+type RtpProbeSocketFactory = (ipFamily) => RtpProbeSocket;
+```
+
+How [RtpPortAllocator](#rtpportallocator) obtains a probe socket. It is asked once per bind the allocator attempts, with the family of the reservation being made.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `ipFamily` | [`IpFamily`](../dgram-util.md#ipfamily) | The address family of the reservation being made. |
+
+#### Returns
+
+[`RtpProbeSocket`](#rtpprobesocket)
+
+An unbound socket.

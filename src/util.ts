@@ -800,8 +800,8 @@ export interface RepeatDemotedLog<Reason extends string = string> {
    * @param run      - The attempt itself, handed the logger it reports through.
    * @param reasonOf - Classifies what `run` answered: the tag for the reason the attempt failed, or `undefined` when it did not fail.
    *
-   * @returns Exactly what `run` returned: the value itself for a synchronous attempt, and for an asynchronous one a promise settling with the same value or the
-   *          same error.
+   * @returns What `run` returned: the value itself for a synchronous attempt, and for an asynchronous one a promise that fulfills with the same value. The attempt
+   *          throws or rejects with `run`'s own error or, when `reasonOf` throws, with the classifier's error.
    */
   readonly attempt: <T>(run: (log: HomebridgePluginLogging) => T, reasonOf: (result: Awaited<T>) => Reason | undefined) => T;
 }
@@ -883,10 +883,22 @@ export function repeatDemotedLog<Reason extends string = string>(base: Logger): 
       };
 
       // Classify the finished attempt, release its lines against what the last classified attempt failed with, and remember what this one answered. A success
-      // remembers `undefined`, so the next failure of the same kind reports in full again rather than arriving at debug.
+      // remembers `undefined`, so the next failure of the same kind reports in full again rather than arriving at debug. Classification is guarded here, so every
+      // path that settles, synchronous or asynchronous, treats a throwing classifier as a throw from `run`: when `reasonOf` throws, the attempt never classified
+      // itself, so its lines go out at their own levels and the remembered reason stays as it was.
       const settle = (result: Awaited<T>): void => {
 
-        const reason = reasonOf(result);
+        let reason: Reason | undefined;
+
+        try {
+
+          reason = reasonOf(result);
+        } catch(error) {
+
+          release(false);
+
+          throw error;
+        }
 
         release((reason !== undefined) && (reason === lastReason));
 
@@ -930,8 +942,8 @@ export function repeatDemotedLog<Reason extends string = string>(base: Logger): 
 
       if(result instanceof Promise) {
 
-        /* The assertion back to `T` is sound: `T` is the promise type `run` answered with, and the chained promise fulfills with that same value or rejects with
-         * that same error, so it settles exactly as the promise `run` returned does.
+        /* The assertion back to `T` is sound: `T` is the promise type `run` answered with, and the chained promise fulfills with that same value. It rejects with
+         * `run`'s own error or, when `reasonOf` throws, with the classifier's error, and a promise type says nothing about what it rejects with.
          */
         return result.then((value: Awaited<T>): Awaited<T> => {
 
@@ -946,17 +958,8 @@ export function repeatDemotedLog<Reason extends string = string>(base: Logger): 
         }) as T;
       }
 
-      try {
-
-        // A synchronous attempt has its settled value in hand, which is what `Awaited<T>` names for a `T` that is not a promise.
-        settle(result as Awaited<T>);
-      } catch(error) {
-
-        // `reasonOf` threw, so the attempt never classified itself and is treated exactly as a throw from `run` is.
-        release(false);
-
-        throw error;
-      }
+      // A synchronous attempt has its settled value in hand, which is what `Awaited<T>` names for a `T` that is not a promise.
+      settle(result as Awaited<T>);
 
       return result;
     }

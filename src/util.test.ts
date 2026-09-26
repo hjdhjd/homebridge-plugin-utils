@@ -2630,6 +2630,28 @@ describe("repeatDemotedLog", () => {
       "a throwing classifier must release at its own level and leave the remembered reason alone");
   });
 
+  test("a throwing classifier on an asynchronous attempt releases at own levels, rejects with the same error, and leaves the remembered reason untouched", async () => {
+
+    // The classification of an asynchronous attempt runs once its promise fulfills, through the same guarded call the synchronous path uses, so a throw from
+    // `reasonOf` there is handled exactly as a rejection from `run` is: the held line goes out in full and the memory stands across it.
+    await assertNoUnhandledRejections(async () => {
+
+      const base = capturingLog();
+      const failures = repeatDemotedLog(base);
+      const boom = new Error("the outcome could not be classified");
+
+      await failures.attempt(async (attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+      await assert.rejects(failures.attempt(async (attemptLog) => attemptLog.error("The classifier is about to fault."), () => { throw boom; }),
+        (error: unknown) => error === boom, "a throw from `reasonOf` on an asynchronous attempt must reject the attempt unchanged");
+
+      await failures.attempt(async (attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
+
+      assert.deepEqual(base.entries.map((entry) => entry.level), [ "error", "error", "debug" ],
+        "a throwing classifier on an asynchronous attempt must release at its own level and leave the remembered reason alone");
+    });
+  });
+
   test("an error or warn written after the attempt ended reaches the base logger immediately, at its own level", () => {
 
     // A callee that kept the logger past the attempt it was handed for must still be heard. No replay is coming to carry such a line, so it goes straight to the

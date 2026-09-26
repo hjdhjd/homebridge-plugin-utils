@@ -468,6 +468,30 @@ ffmpegVersionAtLeast(parts, 9);        // false - 8.1.2 < 9.0.0
 
 ***
 
+### parseAppleSiliconGeneration()
+
+```ts
+function parseAppleSiliconGeneration(model): number;
+```
+
+Parse a CPU model string, as `os.cpus()` reports it, into its Apple Silicon generation. The generation is the number after "Apple M", whatever follows it: a base
+chip reports its model with nothing after the digits ("Apple M3"), and a variant appends its name ("Apple M3 Pro", "Apple M2 Ultra"). Returns `0` for a model
+string that names no Apple Silicon chip, an Intel Mac's included - matching the class-level fallback.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `model` | `string` | A CPU model string from `os.cpus()`. |
+
+#### Returns
+
+`number`
+
+The Apple Silicon generation, or `0` when the model string names no Apple Silicon chip.
+
+***
+
 ### parseFfmpegCodecs()
 
 ```ts

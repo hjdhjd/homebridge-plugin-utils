@@ -1455,6 +1455,47 @@ async function abortableWait<T>(promise: Promise<T>, signal: AbortSignal): Promi
 
 ***
 
+### parseJson()
+
+```ts
+function parseJson(options): unknown;
+```
+
+Parse JSON text, reporting a malformed document by what it is and where it failed rather than by what it says.
+
+`JSON.parse` throws a `SyntaxError` whose message names no source and can quote the text around the failure. A JSON document is where a password or a
+long-lived token is typically stored, so a message that quoted it could carry a credential onto a terminal, into a log, or into a bug report. The error thrown here
+names the subject the caller describes, the line and column wherever the parser reports a position, and the remedy the caller supplies - and none of the text.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `remedy?`: `string`; `subject`: `string`; `text`: `string`; \} | The document and how to describe it. |
+| `options.remedy?` | `string` | Optional. The corrective action, as a complete sentence appended to the message. |
+| `options.subject` | `string` | What the text is, phrased to open the message: "The config file /home/me/.hblog.json". |
+| `options.text` | `string` | The JSON text to parse. |
+
+#### Returns
+
+`unknown`
+
+The parsed value.
+
+#### Throws
+
+`Error` naming `subject`, the failure's line and column when the parser reports one, and `remedy` when supplied, carrying no part of `text`.
+
+#### Example
+
+```ts
+const config = parseJson({ remedy: "Fix the file or remove it.", subject: "The config file " + path, text: await readFile(path, "utf8") });
+```
+
+A malformed file then throws: `The config file /home/me/.hblog.json is not valid JSON at line 3, column 3. Fix the file or remove it.`
+
+***
+
 ### prefixedLog()
 
 ```ts

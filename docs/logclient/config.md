@@ -15,9 +15,9 @@ side-effect-free. This module exports the following pieces:
 - [resolveConfigPath](#resolveconfigpath) - resolve the absolute config-file path, honoring the `HBLOG_CONFIG` environment override over the home-directory default
   ([DEFAULT\_CONFIG\_FILENAME](#default_config_filename)).
 - [loadConfigFile](#loadconfigfile) - read and parse the optional `~/.hblog.json`. A missing file resolves to `undefined` silently (the file is optional); a malformed file raises
-  a clear, actionable error; unknown keys are ignored; and a file whose permissions are group/other-readable triggers a single one-line warning recommending `chmod
-  600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`, and `warn` functions are injected so the loader is
-  unit-tested without touching the real filesystem.
+  a clear, actionable error that locates the failure without quoting any of the file; unknown keys are ignored; and a file whose permissions are group/other-readable
+  triggers a single one-line warning recommending `chmod 600`, because the file may carry a password or a long-lived token in plaintext. The `readFile`, `stat`,
+  and `warn` functions are injected so the loader is unit-tested without touching the real filesystem.
 - [resolveConnection](#resolveconnection) - a PURE merge of the configuration sources into one resolved connection, applying the precedence flags > environment > file > defaults.
   It performs no I/O of its own; the caller supplies the already-loaded file, the environment slice, and the parsed flags.
 
@@ -134,10 +134,11 @@ function loadConfigFile(path, options?): Promise<HblogConfigFile | undefined>;
 Load and parse the optional `~/.hblog.json` config file.
 
 The file is optional: when it does not exist (ENOENT) this resolves to `undefined` silently. Every other failure is thrown as a clear, actionable error naming the
-path: a non-ENOENT read failure (a permission or I/O fault), a file that cannot be parsed as JSON, or a file whose top-level value is not a JSON object. Recognized
-keys ([HblogConfigFile](#hblogconfigfile)) are picked out by type (a wrong-typed field is ignored, not coerced); any unknown key is ignored. As a security courtesy, if the file's
-permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted through the `warn` function, because the file
-may store a password or a long-lived token in plaintext.
+path: a non-ENOENT read failure (a permission or I/O fault), a file that cannot be parsed as JSON, or a file whose top-level value is not a JSON object. A parse
+failure is located by line and column wherever the parser reports a position, and no error carries any of the file's content, because that content is where a
+stored credential lives. Recognized keys ([HblogConfigFile](#hblogconfigfile)) are picked out by type (a wrong-typed field is ignored, not coerced); any unknown key is ignored.
+As a security courtesy, if the file's permissions allow group or other access (`mode & 0o077`), a single one-line warning recommending `chmod 600` is emitted
+through the `warn` function, because the file may store a password or a long-lived token in plaintext.
 
 #### Parameters
 

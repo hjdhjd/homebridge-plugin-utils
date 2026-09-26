@@ -72,7 +72,7 @@ Error.constructor
 
 ### AcquireTokenOptions
 
-Options accepted by [acquireToken](#acquiretoken): the connection target plus an injectable `fetch` implementation.
+Options accepted by [acquireToken](#acquiretoken): the connection target plus an injectable `fetch` implementation and an optional abort signal.
 
 #### Extends
 
@@ -85,6 +85,7 @@ Options accepted by [acquireToken](#acquiretoken): the connection target plus an
 | <a id="fetch"></a> `fetch?` | `readonly` | \{ (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; \} | The fetch implementation to use. Defaults to the global `fetch`. Injected so the auth flow is testable without a live server. | - |
 | <a id="host"></a> `host` | `readonly` | `string` | The hostname or IP of the homebridge-config-ui-x server. | [`EndpointTarget`](endpoints.md#endpointtarget).[`host`](endpoints.md#host) |
 | <a id="port"></a> `port` | `readonly` | `number` | The TCP port the server listens on. | [`EndpointTarget`](endpoints.md#endpointtarget).[`port`](endpoints.md#port) |
+| <a id="signal"></a> `signal?` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional abort signal forwarded to the login request. When it aborts, the request is cancelled wherever it stands - awaiting the server or reading its response - and the acquisition rejects with the signal's reason rather than an authentication failure. | - |
 | <a id="tls"></a> `tls?` | `readonly` | `boolean` | When `true`, use the secure (`https`) scheme; when `false` or omitted, plaintext (`http`). | [`EndpointTarget`](endpoints.md#endpointtarget).[`tls`](endpoints.md#tls) |
 
 ***
@@ -132,14 +133,15 @@ Dispatches on the credential discriminated union:
 - `noauth` - posts to `POST /api/auth/noauth`, which the server honors only when its UI is configured with `auth: "none"`.
 
 On failure it rejects with a [LogAuthError](#logautherror) whose `kind` classifies the failure as permanent (wrong credentials, OTP required, noauth disabled, broken success
-body) or transient (network fault, 5xx, 429), so the reconnect loop can fail fast on permanent failures and retry transient ones.
+body) or transient (network fault, 5xx, 429), so the reconnect loop can fail fast on permanent failures and retry transient ones. `options.signal` cancels a login in
+flight: the request is aborted and the acquisition rejects with the signal's reason, so a teardown never waits on the server and never reads as a failed login.
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `credentials` | [`LogClientCredentials`](types.md#logclientcredentials) | The credentials to authenticate with. See [LogClientCredentials](types.md#logclientcredentials). |
-| `options` | [`AcquireTokenOptions`](#acquiretokenoptions) | The connection target and the injectable `fetch` implementation. See [AcquireTokenOptions](#acquiretokenoptions). |
+| `options` | [`AcquireTokenOptions`](#acquiretokenoptions) | The connection target, the injectable `fetch` implementation, and the optional abort signal. See [AcquireTokenOptions](#acquiretokenoptions). |
 
 #### Returns
 
@@ -149,7 +151,7 @@ A promise resolving to the raw bearer token (the bare JWT, with no `Bearer` pref
 
 #### Throws
 
-[LogAuthError](#logautherror) on any authentication failure, classified permanent or transient.
+[LogAuthError](#logautherror) on any authentication failure, classified permanent or transient. Propagates `options.signal`'s reason when the signal aborts.
 
 ***
 

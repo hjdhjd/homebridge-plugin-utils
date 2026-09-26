@@ -191,13 +191,13 @@ dropped.
 function isLogLineStart(raw): boolean;
 ```
 
-Determine whether a raw log line begins a new Homebridge log entry - that is, whether it opens with a parseable bracketed timestamp.
+Determine whether a raw log line begins a new Homebridge log entry - that is, whether [parseLogLine](#parselogline) reads a recognizable timestamp from it.
 
 Every genuine entry the server emits starts with a `[timestamp]` field; a `[plugin]` bracket may or may not follow, because Homebridge's own core lines (for example
-`[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 ... is running`) carry a timestamp but no plugin prefix. Only the FIRST bracket is inspected: requiring a second `[plugin]`
-bracket would wrongly reject those core lines. A line that is not an entry start - the server's `Loading logs...` / `File: ...` seed preamble, a byte-truncated seed
-fragment, or a continuation line such as a stack frame or a wrapped object dump - has no leading parseable timestamp and returns `false`. ANSI is stripped first
-because the server wraps the timestamp in an SGR color, so the raw line begins with an escape sequence rather than the `[`.
+`[7/3/2026, 4:31:46 PM] Homebridge v1.11.3 ... is running`) carry a timestamp but no plugin prefix. The answer is defined by the parser rather than by a match of its
+own, so a line this calls an entry start is always one the parser gives a timestamp, and the answers cannot come to disagree. A line that is not an entry start - the
+server's `Loading logs...` / `File: ...` seed preamble, a byte-truncated seed fragment, or a continuation line such as a stack frame or a wrapped object dump - carries
+no recognizable leading timestamp and returns `false`, as does an entry whose timestamp is in a locale [parseLogTimestamp](#parselogtimestamp) does not read.
 
 #### Parameters
 
@@ -209,7 +209,7 @@ because the server wraps the timestamp in an SGR color, so the raw line begins w
 
 `boolean`
 
-`true` when the line opens with a parseable en-US timestamp bracket, `false` otherwise.
+`true` when the line opens an entry whose timestamp is a recognized en-US timestamp, `false` otherwise.
 
 ***
 
@@ -262,13 +262,15 @@ function parseLogLine(raw): LogRecord;
 
 Parse a single raw log line into a [LogRecord](types.md#logrecord).
 
-The `[timestamp] [Plugin Name] ` prefix is extracted from the ANSI-stripped text, and the remainder becomes the human-readable `message`. The severity level is read
-from the SGR color sequence that the server wraps around the MESSAGE - which means it appears AFTER the timestamp/plugin brackets, not at the start of the line: the
-timestamp (white) and plugin (cyan) carry their own colors, so reading the line's first color would always misclassify them as severity. We therefore scan for the
-severity color starting just past the plugin bracket. The original line is preserved verbatim in `raw`. A colored line that carries no severity color resolves to
-`level: "info"` (Homebridge's info convention), while a fully color-stripped line resolves to `level: null` because severity is genuinely unknown; a line with no
-bracketed prefix resolves to `timestamp: null` / `plugin: null`, a `message` equal to the full stripped line, and a level read from any severity color present
-anywhere in the (prefix-less) line.
+The entry prefix is extracted from the ANSI-stripped text - the `[timestamp] ` bracket and, on a plugin's lines, the `[Plugin Name] ` bracket after it - and the
+remainder becomes the human-readable `message`. The full two-bracket prefix opens an entry whatever locale its timestamp is written in, because that shape is
+distinctive on its own. A lone leading bracket is not - an encoder's tagged output or an inspected object dump opens with one too - so a single bracket opens an entry
+only when it holds a timestamp [parseLogTimestamp](#parselogtimestamp) recognizes, which is what Homebridge's own core lines carry. The severity level is read from the SGR color
+sequence that the server wraps around the MESSAGE - which means it appears AFTER the prefix brackets, not at the start of the line: the timestamp (white) and plugin
+(cyan) carry their own colors, so reading the line's first color would always misclassify them as severity. We therefore scan for the severity color starting just
+past the prefix's last bracket. The original line is preserved verbatim in `raw`. A colored entry that carries no severity color resolves to `level: "info"`
+(Homebridge's info convention), while a fully color-stripped entry resolves to `level: null` because severity is genuinely unknown; a line that opens no entry
+resolves to `timestamp: null` / `plugin: null`, a `message` equal to the full stripped line, and a level read from any severity color present anywhere in the line.
 
 #### Parameters
 

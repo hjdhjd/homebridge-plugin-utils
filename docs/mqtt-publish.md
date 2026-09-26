@@ -202,11 +202,14 @@ The order the terms are read in is what makes the classification correct rather 
   verbatim, so only the signals governing this publish can say whether it was cancelled. A genuine delivery failure that loses a race with an abort lands on the
   quiet path too, which is the intent: once teardown is under way, a string of delivery failures on the way out tells a reader nothing they can act on.
 - The thrown cancellation shapes come second, covering the rejection that arrives with neither signal reading aborted.
-- An offline refusal comes third. It is not a delivery fault, and it drops to debug because the outage that produced it is reported at error level by the client's
-  broker error line: on every retry while reconnection is armed, once and as final when reconnection is disabled, and before the first CONNACK the connection is
-  still being established, with its outcome reaching the log either way.
+- An offline refusal comes third. It is not a delivery fault, and it drops to debug because the client's broker error line already reports the outage that
+  produced it. That line reports a reason at error level the first time it appears; while reconnection is armed, each retry that fails for the same reason
+  replays at debug until the reason changes or a session is established, and when reconnection is disabled the one report is final. Before the first CONNACK the
+  connection is still being established, with its outcome reaching the log either way.
 
-Everything else is a genuine failure, and lands at error level naming the topic and the reason.
+Everything else is a genuine failure, and lands at error level naming the topic and the reason. The client's guarded path and the shipped double's counterpart
+both run this router inside a repeat-demoting attempt, so a genuine failure whose reason matches the one the previous attempt failed with replays at debug instead.
+[guardedPublishReason](#guardedpublishreason) owns the reason each failure is weighed by.
 
 #### Parameters
 

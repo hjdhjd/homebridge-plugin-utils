@@ -144,24 +144,6 @@ the field explicitly.
 
 `boolean`
 
-##### hardwareDownloadFilters
-
-###### Get Signature
-
-```ts
-get hardwareDownloadFilters(): string[];
-```
-
-Returns the platform-appropriate FFmpeg video filters needed to transfer hardware-decoded frames to system memory. When hardware decoding is active, decoded frames
-may reside on the GPU and require explicit download before CPU-based filters (crop, scale, format conversion) can operate on them. Returns an empty array when
-hardware decoding is disabled or when the platform handles the transfer implicitly (e.g. Raspberry Pi).
-
-###### Returns
-
-`string`[]
-
-An array of FFmpeg filter strings to prepend to a video filter chain, or an empty array if no transfer is needed.
-
 ##### log
 
 ###### Get Signature
@@ -316,27 +298,39 @@ const args = ffmpegOpts.streamEncoder(encoderOptions);
 ##### videoDecoder()
 
 ```ts
-videoDecoder(codec?): string[];
+videoDecoder(options?): string[];
 ```
 
 Returns the video decoder arguments to use for decoding video.
 
+Whether the decoder runs on hardware and where it leaves its frames depend on the whole pipeline - the source's codec, the hardware flags, and what consumes the
+frames next - so the decode args are built from the same pipeline description as the rest of the pipeline. The design rule is one object per pipeline, handed to
+every builder: a caller passes `videoDecoder` the very options object it gives `streamEncoder` or `recordEncoder`, and the decode and encode sides then cannot
+disagree about where the frames are. A pipeline that decodes on hardware and encodes on hardware keeps its frames on the GPU wherever its chain scales there. One
+that decodes on hardware and encodes in software - a snapshot, say, which passes `{ hardwareTranscoding: false, inputCodec }` - receives them in system memory, in
+the stream's own format, and so does a VideoToolbox pipeline whose caller-supplied filters run its chain on the CPU. A source the host's hardware decoder cannot
+take decodes in software, and the encoder side of the same pipeline uploads the frames it receives.
+
 ###### Parameters
 
-| Parameter | Type | Default value | Description |
-| ------ | ------ | ------ | ------ |
-| `codec` | `string` | `"h264"` | Optional. Codec to decode (`"av1"`, `"h264"` (default), or `"hevc"`; `"h265"` is accepted as an alias for `"hevc"`, and codec matching is case-insensitive). |
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | `Pick`\<[`VideoEncoderOptions`](#videoencoderoptions), \| `"hardwareDecoding"` \| `"hardwareTranscoding"` \| `"inputCodec"` \| `"videoFilters"`\> | Optional. The pipeline's description - typically the `VideoEncoderOptions` the caller hands its encoder. Its source codec, its hardware flags, and its caller-supplied filters decide whether the decoder runs on hardware and where it leaves its frames. Each flag resolves exactly as the encoders resolve it: an omitted flag takes the class config's value, and a flag the class config has turned off stays off. Omitting the object entirely describes an H.264 source in the pipeline the class config describes, with no caller filters. |
 
 ###### Returns
 
 `string`[]
 
-Array of FFmpeg command-line arguments for video decoding or an empty array if the codec isn't supported.
+Array of FFmpeg command-line arguments for video decoding, or an empty array when the pipeline decodes in software.
 
 ###### Example
 
 ```ts
-const args = ffmpegOpts.videoDecoder("h264");
+// A livestream: the decoder and the encoder read one pipeline description, source codec included.
+const args = [ ...ffmpegOpts.videoDecoder(encoderOptions), ...ffmpegOpts.streamEncoder(encoderOptions) ];
+
+// A snapshot, encoded in software: the decoder hands its frames over in system memory.
+const snapshotArgs = ffmpegOpts.videoDecoder({ hardwareTranscoding: false, inputCodec: "hevc" });
 ```
 
 ***
@@ -410,7 +404,7 @@ FfmpegOptions
 | ------ | ------ | ------ |
 | <a id="clock-1"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional time source for the callback timers every process built from these options, and every resource those processes compose, arm: the streaming health watchdog and the segment assembler's inter-segment watchdog. Left undefined, each of those falls back to `systemClock` on its own, so the options object carries the choice unresolved exactly as any other composer does. The clock lives here, beside `log` and `debug`, because these options ARE the per-session substrate a consumer configures once and every process, recording, and livestream is then built from, where an init carries per-construction lifetimes instead. The startup timeout and the codec probe are deadline signals rather than callback timers, and they draw those signals from this same clock, so a consumer's virtual clock drives every shape of time the process family arms. |
 | <a id="codecsupport"></a> `codecSupport` | [`FfmpegCodecs`](codecs.md#ffmpegcodecs) | FFmpeg codec capabilities and hardware support. |
-| <a id="crop"></a> `crop?` | \{ `height`: `number`; `width`: `number`; `x`: `number`; `y`: `number`; \} | Optional. Cropping rectangle for output video. Each of `width`, `height`, `x`, and `y` is a fraction of the source frame's corresponding dimension (0 to 1), not a pixel count or a percentage - `{ width: 1, height: 1, x: 0, y: 0 }` selects the full frame, `{ width: 0.5, height: 0.5, x: 0.25, y: 0.25 }` selects its centered quarter-area crop. |
+| <a id="crop"></a> `crop?` | \{ `height`: `number`; `width`: `number`; `x`: `number`; `y`: `number`; \} | Optional. Cropping rectangle for output video. Each of `width`, `height`, `x`, and `y` is a fraction of the source frame's corresponding dimension (0 to 1), not a pixel count or a percentage - `{ width: 1, height: 1, x: 0, y: 0 }` selects the full frame, `{ width: 0.5, height: 0.5, x: 0.25, y: 0.25 }` selects its centered quarter-area crop. Crop runs on the CPU, so with a crop configured a hardware decoder hands its frames over in system memory, and a hardware encode uploads the cropped frames. |
 | `crop.height` | `number` | - |
 | `crop.width` | `number` | - |
 | `crop.x` | `number` | - |
@@ -440,6 +434,7 @@ const encoderOptions: VideoEncoderOptions = {
   hardwareTranscoding: true,
   height: 1080,
   idrInterval: 2,
+  inputCodec: "hevc",
   inputFps: 30,
   level: H264Level.LEVEL4_0,
   profile: H264Profile.HIGH,
@@ -447,9 +442,9 @@ const encoderOptions: VideoEncoderOptions = {
   width: 1920
 };
 
-// Use with FfmpegOptions for transcoding or streaming.
+// Use with FfmpegOptions for transcoding or streaming. The decoder and the encoder read the same pipeline description.
 const ffmpegOpts = new FfmpegOptions(optionsConfig);
-const args = ffmpegOpts.streamEncoder(encoderOptions);
+const args = [ ...ffmpegOpts.videoDecoder(encoderOptions), ...ffmpegOpts.streamEncoder(encoderOptions) ];
 ```
 
 #### See
@@ -463,15 +458,16 @@ const args = ffmpegOpts.streamEncoder(encoderOptions);
 | ------ | ------ | ------ |
 | <a id="bitrate"></a> `bitrate` | `number` | Target video bitrate, in kilobits per second. |
 | <a id="fps"></a> `fps` | `number` | Target output frames per second. |
-| <a id="hardwaredecoding-1"></a> `hardwareDecoding?` | `boolean` | Optional. If `true`, the emitted encoder args assume the input stream has already been hardware-decoded (the GPU holds the frames). Used by the transfer-filter logic to decide between `hwupload`, `hwdownload`, or neither. Defaults to the resolved `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance. |
+| <a id="hardwaredecoding-1"></a> `hardwareDecoding?` | `boolean` | Optional. If `true`, the pipeline decodes on hardware wherever the host's hardware decoder can take `inputCodec`, and in software where it cannot. Together with `hardwareTranscoding` it decides where the decoded frames live: a hardware decode feeding a hardware encode keeps them on the GPU, and a hardware decode feeding a software encode hands them over in system memory. Defaults to the resolved `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance. |
 | <a id="hardwaretranscoding-1"></a> `hardwareTranscoding?` | `boolean` | Optional. If `true`, the emitted args select a hardware-accelerated encoder (`h264_videotoolbox` / `h264_qsv` / `h264_v4l2m2m`) and the matching filter pipeline. If `false`, the args fall back to the libx264 software encoder. Defaults to the resolved `FfmpegOptionsConfig.hardwareTranscoding` value on the owning `FfmpegOptions` instance. |
 | <a id="height"></a> `height` | `number` | Output video height, in pixels. |
 | <a id="idrinterval"></a> `idrInterval` | `number` | Interval (in seconds) between keyframes (IDR frames). |
+| <a id="inputcodec"></a> `inputCodec?` | `string` | Optional. Codec of the source stream the pipeline decodes: `"av1"`, `"h264"`, or `"hevc"` (`"h265"` is accepted as an alias for `"hevc"`, and matching is case-insensitive). The host's hardware decoder takes only some codecs - AV1 needs Apple Silicon M3 or newer with FFmpeg 8, or 11th-generation Intel silicon - and a source it cannot take, or a codec outside that list, decodes in software, so the encoder side needs the codec to know where the frames arrive. Defaults to `"h264"`. |
 | <a id="inputfps"></a> `inputFps` | `number` | Input (source) frames per second. |
 | <a id="level"></a> `level` | `H264Level` | H.264 profile level for output. |
 | <a id="profile"></a> `profile` | `H264Profile` | H.264 profile for output. |
 | <a id="smartquality"></a> `smartQuality?` | `boolean` | Optional. Enables variable-bitrate quality-constrained encoding on encoders that support it - libx264 (`-crf 20`), Apple Silicon VideoToolbox (`-q:v 90`), and Intel QSV (`-global_quality 20`). Intel VideoToolbox and v4l2m2m have no quality-constraint mode and always emit a fixed `-b:v` regardless. In all cases, `smartQuality` also adds `HOMEKIT_STREAMING_HEADROOM` to `-maxrate`, giving the encoder a narrow band of variation above the target bitrate. Defaults to `true`. |
-| <a id="videofilters"></a> `videoFilters?` | readonly `string`[] | Optional. Caller-supplied CPU-side video filters appended at the tail of the composed filter chain, in caller order. When the encoder's own chain leaves frames GPU-resident at that point, the encoder inserts its platform's download transfer first, so callers never reason about GPU residency. Omitted or empty means the chain is exactly the encoder's own. |
+| <a id="videofilters"></a> `videoFilters?` | readonly `string`[] | Optional. Caller-supplied CPU-side video filters, run in caller order after the encoder's own crop and scale filters. They always run in system memory - the encoder's chain brings frames there ahead of them and hands their output on to a hardware encoder - so callers never reason about GPU residency. On VideoToolbox they move the whole chain onto the CPU, down to where the decoder hands its frames over, so pass `videoDecoder` this same options object. Omitted or empty means the chain is exactly the encoder's own. |
 | <a id="width"></a> `width` | `number` | Output video width, in pixels. |
 
 ***

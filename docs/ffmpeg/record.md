@@ -33,7 +33,8 @@ The command-line hook values that differ per mode:
 | `separateAudioInputArgs` | `[]`                                       | Separate audio URL when configured      |
 | `audioInputIndex`        | `0`                                        | `0` or `1` (if separate audio)          |
 | `audioTarget`            | `recordingConfig.audioCodec` (transcoding) | `init.audio` when provided              |
-| `videoEncoderArgs`       | `options.recordEncoder(...)`               | `-codec:v copy`                         |
+| `videoDecoderArgs`       | `options.videoDecoder(pipeline)`           | `options.videoDecoder({ inputCodec })`  |
+| `videoEncoderArgs`       | `options.recordEncoder(pipeline)`          | `-codec:v copy`                         |
 | `fragmentArgs`           | `[]`                                       | `-frag_duration <segmentLength * 1000>` |
 | `metadataLabel`          | `"HKSV Event"`                             | `"Livestream Buffer"`                   |
 
@@ -1142,7 +1143,7 @@ filters, the hardware-acceleration flags, and the audio transcode decision - liv
 | <a id="probesize"></a> `probesize` | `number` | Number of bytes to analyze for stream information. Defaults to 5,000,000 bytes (mirrors FFmpeg's own default probesize). | - |
 | <a id="timeshift"></a> `timeshift` | `number` | Timeshift offset for event-based recording (in milliseconds). Defaults to 0. | - |
 | <a id="transcodeaudio"></a> `transcodeAudio` | `boolean` | Transcode audio to AAC. This can be set to false if the audio stream is already in AAC. Defaults to `true`. | - |
-| <a id="videofilters"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters and appended, in caller order, after the encoder's own scale and pixel-format chain. Defaults to none. | - |
+| <a id="videofilters"></a> `videoFilters` | `string`[] | Video filters for FFmpeg to process. These are passed as an array of filters and run, in caller order, after the encoder's own crop and scale filters, in system memory. Defaults to none. | - |
 | <a id="videostream-2"></a> `videoStream` | `number` | Video stream input to use, if the input contains multiple video streams. Defaults to `0` (the first video stream). | [`FMp4BaseOptions`](#fmp4baseoptions).[`videoStream`](#videostream) |
 
 ***

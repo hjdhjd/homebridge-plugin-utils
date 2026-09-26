@@ -12,8 +12,12 @@ Homebridge service helper utilities.
 
 ### AcquireServiceOptions
 
-The inputs [acquireService](#acquireservice) creates or retrieves a service from: the accessory, the display name a newly created service takes, an optional
-callback fired only on creation, the service type, and an optional subtype disambiguating more than one service of the same type.
+The inputs [acquireService](#acquireservice) creates or retrieves a service from: everything [findService](#findservice) identifies the service by, plus the display name a newly
+created service takes and an optional callback fired only on creation.
+
+#### Extends
+
+- [`FindServiceOptions`](#findserviceoptions)\<`T`\>
 
 #### Extended by
 
@@ -27,13 +31,13 @@ callback fired only on creation, the service type, and an optional subtype disam
 
 #### Properties
 
-| Property | Modifier | Type | Description |
-| ------ | ------ | ------ | ------ |
-| <a id="accessory"></a> `accessory` | `readonly` | `PlatformAccessory` | The Homebridge accessory to check or modify. |
-| <a id="name"></a> `name` | `readonly` | `string` | Name to be displayed to the end user for this service. |
-| <a id="onservicecreate"></a> `onServiceCreate?` | `readonly` | (`svc`) => `void` | Optional callback invoked only when a new service is created, receiving the new service as its argument. |
-| <a id="servicetype"></a> `serviceType` | `readonly` | [`AcquireServiceTarget`](#acquireservicetarget)\<`T`\> | The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see [AcquireServiceTarget](#acquireservicetarget). |
-| <a id="subtype"></a> `subtype?` | `readonly` | `string` | Optional service subtype to uniquely identify the service. |
+| Property | Modifier | Type | Description | Inherited from |
+| ------ | ------ | ------ | ------ | ------ |
+| <a id="accessory"></a> `accessory` | `readonly` | `PlatformAccessory` | The Homebridge accessory to check or modify. | [`FindServiceOptions`](#findserviceoptions).[`accessory`](#accessory-1) |
+| <a id="name"></a> `name` | `readonly` | `string` | Name to be displayed to the end user for this service. | - |
+| <a id="onservicecreate"></a> `onServiceCreate?` | `readonly` | (`svc`) => `void` | Optional callback invoked only when a new service is created, receiving the new service as its argument. | - |
+| <a id="servicetype"></a> `serviceType` | `readonly` | [`AcquireServiceTarget`](#acquireservicetarget)\<`T`\> | The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see [AcquireServiceTarget](#acquireservicetarget). | [`FindServiceOptions`](#findserviceoptions).[`serviceType`](#servicetype-1) |
+| <a id="subtype"></a> `subtype?` | `readonly` | `string` | Optional service subtype to uniquely identify the service. | [`FindServiceOptions`](#findserviceoptions).[`subtype`](#subtype-1) |
 
 ***
 
@@ -55,6 +59,31 @@ acquisition and a validated service that already existed or was just created are
 | ------ | ------ | ------ | ------ |
 | <a id="service"></a> `service` | `readonly` | `T` | The service [acquireService](#acquireservice) found or created. |
 | <a id="transition"></a> `transition` | `readonly` | `"attached"` \| `"kept"` | The transition this call performed to answer the service: `"attached"` when this call created it, `"kept"` when it already existed. |
+
+***
+
+### FindServiceOptions
+
+The inputs [findService](#findservice) identifies a service by: the accessory, the service type, and an optional subtype disambiguating more than one service of the
+same type.
+
+#### Extended by
+
+- [`AcquireServiceOptions`](#acquireserviceoptions)
+
+#### Type Parameters
+
+| Type Parameter | Default type | Description |
+| ------ | ------ | ------ |
+| `T` *extends* `Service` | `Service` | The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back. |
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="accessory-1"></a> `accessory` | `readonly` | `PlatformAccessory` | The Homebridge accessory to check or modify. |
+| <a id="servicetype-1"></a> `serviceType` | `readonly` | [`AcquireServiceTarget`](#acquireservicetarget)\<`T`\> | The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see [AcquireServiceTarget](#acquireservicetarget). |
+| <a id="subtype-1"></a> `subtype?` | `readonly` | `string` | Optional service subtype to uniquely identify the service. |
 
 ***
 
@@ -122,11 +151,11 @@ says it should exist, plus the verdict itself.
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="accessory-1"></a> `accessory` | `readonly` | `PlatformAccessory` | The Homebridge accessory to check or modify. | [`AcquireServiceOptions`](#acquireserviceoptions).[`accessory`](#accessory) |
+| <a id="accessory-2"></a> `accessory` | `readonly` | `PlatformAccessory` | The Homebridge accessory to check or modify. | [`AcquireServiceOptions`](#acquireserviceoptions).[`accessory`](#accessory) |
 | <a id="name-1"></a> `name` | `readonly` | `string` | Name to be displayed to the end user for this service. | [`AcquireServiceOptions`](#acquireserviceoptions).[`name`](#name) |
 | <a id="onservicecreate-1"></a> `onServiceCreate?` | `readonly` | (`svc`) => `void` | Optional callback invoked only when a new service is created, receiving the new service as its argument. | [`AcquireServiceOptions`](#acquireserviceoptions).[`onServiceCreate`](#onservicecreate) |
-| <a id="servicetype-1"></a> `serviceType` | `readonly` | [`AcquireServiceTarget`](#acquireservicetarget)\<`T`\> | The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see [AcquireServiceTarget](#acquireservicetarget). | [`AcquireServiceOptions`](#acquireserviceoptions).[`serviceType`](#servicetype) |
-| <a id="subtype-1"></a> `subtype?` | `readonly` | `string` | Optional service subtype to uniquely identify the service. | [`AcquireServiceOptions`](#acquireserviceoptions).[`subtype`](#subtype) |
+| <a id="servicetype-2"></a> `serviceType` | `readonly` | [`AcquireServiceTarget`](#acquireservicetarget)\<`T`\> | The type of service to instantiate or retrieve. Must be a HAP Service subclass with the standard `(displayName?, subtype?)` constructor; see [AcquireServiceTarget](#acquireservicetarget). | [`AcquireServiceOptions`](#acquireserviceoptions).[`serviceType`](#servicetype) |
+| <a id="subtype-2"></a> `subtype?` | `readonly` | `string` | Optional service subtype to uniquely identify the service. | [`AcquireServiceOptions`](#acquireserviceoptions).[`subtype`](#subtype) |
 | <a id="validate-1"></a> `validate` | `readonly` | `boolean` \| ((`hasService`) => `boolean`) | A boolean, or a predicate handed the service's current presence and answering whether it should exist. The predicate form is a synchronous verdict only: it neither adds nor removes the service itself, and the presence it is handed is the presence [acquireService](#acquireservice) then reads when the verdict says the service should exist. | - |
 
 ***
@@ -262,6 +291,9 @@ This method ensures that a newly created service's display name and available na
 existing service leaves its name characteristics untouched, so a caller renaming an existing service calls [setServiceName](#setservicename) directly. If
 `onServiceCreate` is provided, it will only be called for newly created services, not for existing ones.
 
+A call without a subtype on an accessory that carries only subtyped services of the type finds nothing to answer, and HAP refuses to add a subtype-less
+service beside a subtyped one, so the call throws HAP's refusal rather than answering a sibling as the subtype-less service.
+
 The `ConfiguredName` and `Name` characteristics are conditionally added or updated based on the type of service, in accordance with HomeKit requirements.
 
 #### Example
@@ -333,6 +365,37 @@ validService({ accessory, name: "Switch", serviceType: Service.Switch,
  - validService - consumes the returned predicate.
  - validCharacteristic - consumes the returned predicate for one characteristic on a service.
  - updatePresenceCharacteristic - the same asymmetry, applied to one characteristic's presence on a service.
+
+***
+
+### findService()
+
+```ts
+function findService<T>(options): T | undefined;
+```
+
+Finds the service [acquireService](#acquireservice) would create for the same type and subtype, and nothing else. A service matches when it carries the type's UUID and
+the same subtype, where an empty subtype and no subtype are one identity, as they are in HAP's own service identity. A lookup without a subtype therefore never
+answers a subtyped sibling of the same type. HAP's `getService` matches by type alone and ignores the subtype, which is why this module owns the lookup rather
+than delegating it.
+
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| `T` *extends* `Service` | The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back. |
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | [`FindServiceOptions`](#findserviceoptions)\<`T`\> | The accessory, the service type, and an optional subtype. See [FindServiceOptions](#findserviceoptions). |
+
+#### Returns
+
+`T` \| `undefined`
+
+The matching service, or `undefined` when the accessory carries none.
 
 ***
 

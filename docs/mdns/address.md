@@ -38,8 +38,9 @@ While a host's address is changing, the browser reports only its live addresses 
 set the instant the incoming one is cached, and this function sees the incoming address alone. The outgoing address surfaces here only when it is
 the host's last address of either family - nothing live to report - for the second its own hold keeps it reachable.
 
-A zoned candidate is dropped before anything else classifies it: a link-local address means nothing without the link it was heard on, and the zone a
-browser stamps onto one is this function's signal that the address is of that kind.
+A zoned candidate is dropped before anything else classifies it. This library dials through undici, which parses the origin as a WHATWG URL, and a URL
+has no syntax for an IPv6 zone ID: a zoned literal is refused as an invalid URL before any connection is attempted, even though Node's `net` module
+accepts one.
 
 #### Parameters
 

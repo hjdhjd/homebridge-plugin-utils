@@ -32,8 +32,10 @@ export function errorMessage(err) {
  * Surface an arbitrary thrown value as an error toast. Routes the value through {@link errorMessage} so the toast text stays useful regardless of what bubbled out.
  *
  * @param {*} err - The thrown value to surface.
+ * @param {*} [host=homebridge] - The bridge whose error toast shows the value. The shell's callers read the global bridge at call time, while a subsystem that
+ *   already injects its host passes that host through, so one route and one title serve every error toast in the webUI.
  */
-export function toastError(err) {
+export function toastError(err, host = homebridge) {
 
-  homebridge.toast.error(errorMessage(err), "Error");
+  host.toast.error(errorMessage(err), "Error");
 }

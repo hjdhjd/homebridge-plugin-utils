@@ -2394,11 +2394,11 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
 
   // Option staging is fire-and-forget: a checkbox change dispatches an option mutation that the staging effect's coalescing drain stages through
   // session.commit (homebridge.updatePluginConfig). A final failure with no superseding mutation dispatches staging:failed - the reducer rolls configuredOptions
-  // back to the staged anchor - and the effect surfaces the error through the host's single "config-staging" toast channel. When the page signal has aborted
-  // (lifecycle teardown), the drain bails before dispatching or toasting, so a teardown-shaped failure stays silent. These tests cover both branches by rejecting
-  // the fake's updatePluginConfig.
+  // back to the staged anchor - and the effect surfaces the error through the webUI's shared error toast. When the page signal has aborted (lifecycle teardown),
+  // the drain bails before dispatching or toasting, so a teardown-shaped failure stays silent. These tests cover both branches by rejecting the fake's
+  // updatePluginConfig.
 
-  test("a regular Error rejected by updatePluginConfig surfaces as a user-facing toast labelled with the operation", async () => {
+  test("a regular Error rejected by updatePluginConfig surfaces as the shared error toast carrying the error's message", async () => {
 
     using dom = createTestDom();
 
@@ -2443,7 +2443,7 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
     assert.equal(induced.length, 1, "exactly one toast must surface the rejection");
     assert.equal(induced[0].variant, "error", "the toast must be an error variant - users distinguish error toasts from informational ones");
     assert.equal(induced[0].message, failure.message, "the toast message must carry the original error.message for the user");
-    assert.equal(induced[0].title, "config-staging", "the toast title must name the failing operation so the user sees which action did not complete");
+    assert.equal(induced[0].title, "Error", "the toast title is the shared error toast's title, the same heading every other webUI failure shows");
 
     orchestrator.cleanup();
   });

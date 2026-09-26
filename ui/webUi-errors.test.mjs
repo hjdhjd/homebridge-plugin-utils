@@ -45,4 +45,15 @@ describe("toastError", () => {
       { message: "A bare string rejection.", title: "Error", variant: "error" }
     ], "each value is read through the shared rule and lands on the error channel with the error title");
   });
+
+  test("a subsystem that injects its host reaches the same toast and title through it", () => {
+
+    const calls = [];
+    const host = { toast: { error: (message, title) => calls.push({ message, title }) } };
+
+    // This row installs no bridge on the global, so the recorded call proves the injected host is the one the toast reaches.
+    toastError(new Error("The host refused the staged options."), host);
+
+    assert.deepEqual(calls, [{ message: "The host refused the staged options.", title: "Error" }], "the injected host shows the shared text under the shared title");
+  });
 });

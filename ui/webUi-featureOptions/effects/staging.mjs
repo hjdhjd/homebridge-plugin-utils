@@ -7,8 +7,8 @@
 import { MUTATING_ACTIONS } from "../state.mjs";
 import { delay } from "../../webUi-liveness.mjs";
 import { effect } from "../store.mjs";
-import { errorMessage } from "../../webUi-errors.mjs";
 import { modelLoaded } from "../selectors.mjs";
+import { toastError } from "../../webUi-errors.mjs";
 
 /**
  * Debounce window for coalescing rapid mutations before writing to the host. 300ms sits below the instant-feel ceiling - a single click feels immediate from the user's
@@ -52,7 +52,7 @@ const DEBOUNCE_MS = 300;
  * skips the debounce wait, never starts a parallel commit, and is a no-op when the store is already clean.
  *
  * @param {Object} args
- * @param {{toast?: {error?: (message: string, id: string) => void}}} args.host - The Homebridge bridge, used only for the failure toast channel.
+ * @param {{toast: {error: (message: string, title: string) => void}}} args.host - The Homebridge bridge, used only for the final failure's toast through toastError.
  * @param {{commit: (patch: Object) => Promise<void>}} args.session - The config session; option edits stage through its single write path.
  * @param {AbortSignal} args.signal - The lifecycle signal. Aborting tears down the effect.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store the effect subscribes against.
@@ -176,9 +176,9 @@ export const registerStagingEffect = ({ host, session, signal, store }) => {
 
         store.dispatch({ error, type: "staging:failed" });
 
-        // Surface the failure through the host's toast channel, so the user sees that their last edit did not reach the host. This is the one place the drain
-        // announces a final failure, and its text reads through errorMessage, the rule every webUI surface shares for turning a thrown value into words.
-        host.toast?.error?.(errorMessage(error), "config-staging");
+        // The drain announces its one final failure through the webUI's shared error toast, the same route and title as every other error surface, so the user
+        // sees that their last edit did not reach the host.
+        toastError(error, host);
 
         return;
       }

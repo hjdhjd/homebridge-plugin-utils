@@ -30,10 +30,10 @@ const PLATFORM = { name: "MyPlugin Platform", platform: "MyPlugin" };
 
 // Helper: build a store seeded with the canonical "ready" state and register the staging effect against a config session backed by a fake host. The fake host's
 // `updatePluginConfig` records every payload and lets each test choose to resolve immediately, defer, or reject; its `getPluginConfig` seeds the session with the
-// canonical platform entry, so the session's commit rebuilds the same `[{ ...PLATFORM, options }]` payload from the options delta the staging effect hands it. Tests
-// get an inspection surface for both the dispatched store events and the host calls. Async because opening the session reads the host config once. `loaded: false`
-// withholds the model:loaded dispatch, leaving the store in the placeholder state a page holds when its model never arrives - the input the model-load boundary
-// tests need, and the only thing that option changes about the rig.
+// canonical platform entry, so the session's commit rebuilds the same `[{ ...PLATFORM, options }]` payload from the options delta the staging effect hands it; and its
+// `toast.error` records every toast the drain raises. Tests get an inspection surface for the dispatched store events, the host calls, and those toasts. Async
+// because opening the session reads the host config once. `loaded: false` withholds the model:loaded dispatch, leaving the store in the placeholder state a page
+// holds when its model never arrives - the input the model-load boundary tests need, and the only thing that option changes about the rig.
 //
 // `configuredOptions` seeds the store's own starting state as well as the model:loaded dispatch, with the anchor seeded to match so the store starts clean. On
 // the loaded path the dispatch installs the same array over both fields and the seeding is invisible; on the unloaded path it is the only way to give a
@@ -60,6 +60,7 @@ const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = tr
 
   const updates = [];
   const events = [];
+  const toasts = [];
   const controller = new AbortController();
   let release;
   let reject;
@@ -67,6 +68,7 @@ const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = tr
   const host = {
 
     getPluginConfig: async () => [PLATFORM],
+    toast: { error: (message, title) => toasts.push({ message, title }) },
     updatePluginConfig: async (payload) => {
 
       updates.push(payload);
@@ -101,7 +103,7 @@ const setup = async ({ behavior = "resolve", configuredOptions = [], loaded = tr
   // Capture the effect's flush handle so the flush tests can drain the pending edit at the navigate-away edge.
   const { flush } = registerStagingEffect({ host, session, signal: controller.signal, store });
 
-  return { abort: () => controller.abort(), defer: () => ({ reject: (err) => reject(err), resolve: () => release() }), events, flush, host, store, updates };
+  return { abort: () => controller.abort(), defer: () => ({ reject: (err) => reject(err), resolve: () => release() }), events, flush, host, store, toasts, updates };
 };
 
 // Await 350ms of real time so the effect's real 300ms debounce window elapses and its drain settles before the assertions run. The staging effect runs
@@ -185,6 +187,7 @@ describe("registerStagingEffect - concurrent mutations during an in-flight stage
     let callCount = 0;
     const events = [];
     const updates = [];
+    const toasts = [];
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
     const controller = new AbortController();
 
@@ -201,6 +204,7 @@ describe("registerStagingEffect - concurrent mutations during an in-flight stage
     const host = {
 
       getPluginConfig: async () => [PLATFORM],
+      toast: { error: (message, title) => toasts.push({ message, title }) },
       updatePluginConfig: async (payload) => {
 
         callCount++;
@@ -280,7 +284,7 @@ describe("registerStagingEffect - failure path", () => {
 
   test("a final-attempt failure dispatches staging:failed and rolls configuredOptions back to the anchor", async () => {
 
-    const { events, store, updates } = await setup({ behavior: "reject" });
+    const { events, store, toasts, updates } = await setup({ behavior: "reject" });
 
     store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
 
@@ -291,6 +295,7 @@ describe("registerStagingEffect - failure path", () => {
     assert.equal(store.state.write.kind, "staging-error");
     assert.equal(store.state.configuredOptions, store.state.stagedAnchor, "rollback: configuredOptions reverts to the anchor reference");
     assert.deepEqual(store.state.configuredOptions, []);
+    assert.deepEqual(toasts, [{ message: "Disk write failed", title: "Error" }], "the drain's one final failure reaches the user through the shared error toast");
   });
 
   test("an intermediate failure rescued by a later mutation is swallowed - the second stage's outcome is what surfaces", async () => {
@@ -298,6 +303,7 @@ describe("registerStagingEffect - failure path", () => {
     let callCount = 0;
     const events = [];
     const updates = [];
+    const toasts = [];
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
     const controller = new AbortController();
     let release;
@@ -314,6 +320,7 @@ describe("registerStagingEffect - failure path", () => {
     const host = {
 
       getPluginConfig: async () => [PLATFORM],
+      toast: { error: (message, title) => toasts.push({ message, title }) },
       updatePluginConfig: async (payload) => {
 
         callCount++;
@@ -358,12 +365,14 @@ describe("registerStagingEffect - failure path", () => {
     assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:started", "staging:succeeded" ],
       "intermediate failure swallowed - only the second iteration's succeeded surfaces");
     assert.equal(store.state.status.kind, "ready");
+    assert.deepEqual(toasts, [], "a failure a newer edit rescued never reaches the user");
   });
 
   test("a swallowed failure whose superseding edits end on the saved options leaves the write lifecycle idle", async () => {
 
     const events = [];
     const updates = [];
+    const toasts = [];
     const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
     const controller = new AbortController();
     let release;
@@ -373,6 +382,7 @@ describe("registerStagingEffect - failure path", () => {
     const host = {
 
       getPluginConfig: async () => [PLATFORM],
+      toast: { error: (message, title) => toasts.push({ message, title }) },
       updatePluginConfig: async (payload) => {
 
         updates.push(payload);
@@ -417,6 +427,7 @@ describe("registerStagingEffect - failure path", () => {
     assert.deepEqual(events.map((e) => e.type), [ "staging:started", "staging:succeeded" ], "the swallowed write's started is answered rather than left open");
     assert.equal(store.state.write.kind, "idle", "so the lifecycle ends idle rather than at a staging nothing will ever answer");
     assert.equal(store.state.stagedAnchor, store.state.configuredOptions, "and the anchor still names what the host holds");
+    assert.deepEqual(toasts, [], "a failure a newer edit rescued never reaches the user");
   });
 });
 

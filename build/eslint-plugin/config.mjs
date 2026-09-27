@@ -201,15 +201,43 @@ const globalsUi = Object.fromEntries([ "clearInterval", "clearTimeout", "console
   "setInterval", "setTimeout", "window" ].map((key) => [ key, "readonly" ]));
 
 /**
+ * Node-environment globals: every global the Node runtime running the linter provides - `process`, `console`, `fetch`, `Buffer`, `setImmediate`, and the rest -
+ * read from `globalThis` as this module loads. Each is declared as `"readonly"` so `no-undef` accepts references without permitting reassignment.
+ *
+ * The runtime is the one source of truth for which globals Node provides, so the list follows the Node version that runs the lint rather than a hand-kept copy
+ * that goes stale as Node adds globals, and it needs no dependency to carry one. Only the names are read, never the values, so no lazily-initialized global is
+ * touched. The {@link config} builder applies it to the files its `node` option names rather than to every JavaScript file, because a browser-side module that
+ * accepted Node's names would stop `no-undef` from catching a reference that fails in the browser.
+ *
+ * Pass into the `languageOptions.globals` slot of a flat config block scoped to Node-run files.
+ */
+const globalsNode = Object.fromEntries(Object.getOwnPropertyNames(globalThis).map((key) => [ key, "readonly" ]));
+
+/**
+ * Rule preset for test, fixture, and helper files. Node's test runner registers each `describe()` and `test()` call as a side effect and awaits it itself, so
+ * the "await or explicitly void" convention `@typescript-eslint/no-floating-promises` enforces does not apply to a registration call. Encoding the test idiom
+ * once here spares every test file a per-line disable and every consumer a copy of the same block.
+ *
+ * Spread into the `rules:` slot of a flat config block scoped to test files.
+ */
+const testRules = {
+
+  "@typescript-eslint/no-floating-promises": "off"
+};
+
+/**
  * Build a ready-to-use ESLint flat config array. Consumers call this function and export default the result.
  *
- * Every option is optional and defaults to an empty array, mirrored by the destructuring defaults in the signature below. The JSDoc marks them optional with the
- * bracket form so the emitted declaration types each property as optional, matching how consumers actually call this - passing only the subset they need.
+ * Every option is optional, and every one but `tests` defaults to an empty array, mirrored by the destructuring defaults in the signature below. `tests` defaults to
+ * the family's test-file naming convention wherever the file lives, and an empty array opts out. The JSDoc marks them optional with the bracket form so the emitted
+ * declaration types each property as optional, matching how consumers actually call this - passing only the subset they need.
  *
  * @param {object} [options] - Configuration options.
  * @param {string[]} [options.ts] - Glob patterns for TypeScript files (strict + stylistic type-checked rules).
  * @param {string[]} [options.js] - Glob patterns for JavaScript files (disable-type-checked rules).
  * @param {string[]} [options.ui] - Glob patterns for browser UI files (adds browser globals).
+ * @param {string[]} [options.node] - Glob patterns for files that run under Node (linted, adds Node globals).
+ * @param {string[]} [options.tests] - Glob patterns for linted test, fixture, and helper files (adds test rule relaxations). Defaults to the family naming convention.
  * @param {string[]} [options.allowDefaultProject] - Globs passed to parserOptions.projectService.allowDefaultProject.
  * @param {string[]} [options.ignores] - Global ignore patterns (in addition to the hardcoded "dist" ignore on the common block).
  * @param {object[]} [options.extraConfigs] - Additional flat config objects appended to the output.
@@ -220,11 +248,13 @@ function config({
   extraConfigs = [],
   ignores = [],
   js = [],
+  node = [],
+  tests = [ "**/*.test.ts", "**/*.fixtures.ts", "**/*.helpers.ts", "**/*.test.mjs", "**/*.fixtures.mjs", "**/*.helpers.mjs" ],
   ts: tsFiles = [],
   ui = []
 } = {}) {
 
-  const allFiles = [ ...tsFiles, ...js, ...ui ];
+  const allFiles = [ ...tsFiles, ...js, ...ui, ...node ];
   const configs = [];
 
   // Global ignores block.
@@ -311,6 +341,34 @@ function config({
     });
   }
 
+  // Node globals block.
+  if(node.length > 0) {
+
+    configs.push({
+
+      files: node,
+
+      languageOptions: {
+
+        globals: { ...globalsNode }
+      }
+    });
+  }
+
+  // Test-file relaxations. In flat config a block's `files` globs also pick files out of a linted directory, so this block pairs every linted glob with every test
+  // glob in the form where a file must match both: the relaxation reaches only test files the preset already lints and never widens what gets linted. The pairing
+  // is empty when either list is, and the block sits ahead of the escape hatch so a consumer's own block still has the final word.
+  const testFiles = allFiles.flatMap((glob) => tests.map((test) => [ glob, test ]));
+
+  if(testFiles.length > 0) {
+
+    configs.push({
+
+      files: testFiles,
+      rules: { ...testRules }
+    });
+  }
+
   // Escape hatch for project-specific config blocks.
   configs.push(...extraConfigs);
 
@@ -320,4 +378,4 @@ function config({
 export default config;
 
 // Named exports for advanced customization or gradual migration.
-export { commonRules, config, globalsUi, jsRules, plugins, tsRules };
+export { commonRules, config, globalsNode, globalsUi, jsRules, plugins, testRules, tsRules };

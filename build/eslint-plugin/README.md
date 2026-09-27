@@ -12,14 +12,23 @@ import hbPluginUtils from "./build/eslint-plugin/index.mjs";
 
 export default hbPluginUtils({
 
-  ts: [ "src/**/*.ts" ],
   js: [ "build/**/*.mjs", "eslint.config.mjs" ],
+  node: [ "build/**/*.mjs", "eslint.config.mjs" ],
+  ts: [ "src/**/*.ts" ],
   ui: [ "ui/**/*.@(js|mjs)" ]
 });
 ```
 
 That single call returns a complete flat-config array: TypeScript rules scoped to `.ts` files, JavaScript rules scoped to `.mjs` files, the common
-`@hjdhjd/*` and `@stylistic/*` rule set applied everywhere, and webUI globals scoped to UI files.
+`@hjdhjd/*` and `@stylistic/*` rule set applied everywhere, webUI globals scoped to UI files, and Node globals scoped to the files that run under Node.
+
+The Node globals are read from the Node runtime that runs the linter, so they track that runtime's version with no hand-kept list. Like the `ui` globs, the
+`node` globs join the linted set, and the globals apply only to the files `node` names, never to every JavaScript file, so `no-undef` still catches a Node name
+in a browser-side module.
+
+Among the files the preset lints, test, fixture, and helper files get the `testRules` relaxations by the family naming convention: `*.test`, `*.fixtures`, and
+`*.helpers`, in `.ts` and `.mjs`, wherever they live. Pass `tests` to name a different set, or `tests: []` to opt out. The block pairs every test glob with every
+linted glob, so it never adds a file to the lint, and it sits ahead of `extraConfigs`, so a consumer's own block still has the final word.
 
 ## File layout
 
@@ -64,7 +73,9 @@ reaching into rule internals.
 | `commonRules` | `config.mjs` | Rule preset applied to every linted file regardless of language. |
 | `tsRules` | `config.mjs` | TypeScript-specific rule preset. |
 | `jsRules` | `config.mjs` | JavaScript-specific rule preset. |
+| `testRules` | `config.mjs` | Rule preset for test, fixture, and helper files. |
 | `globalsUi` | `config.mjs` | Browser-environment globals dictionary for webUI files. |
+| `globalsNode` | `config.mjs` | Node-environment globals dictionary, read from the running Node runtime, for files that run under Node. |
 
 Every named export has JSDoc on its source declaration.
 
@@ -152,7 +163,7 @@ The `config()` helper is the primary API for consumers who want the full opinion
 the opinions, import `plugin` from `index.mjs` and wire it into their own flat config directly:
 
 ```js
-import { plugin } from "homebridge-plugin-utils/build/eslint-plugin/index.mjs";
+import { plugin } from "homebridge-plugin-utils/eslint";
 
 export default [{
 

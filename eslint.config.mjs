@@ -8,40 +8,13 @@ export default hbPluginUtils({
 
   // Every linted file already belongs to a project declared in tsconfig.json's include list, so none need typescript-eslint's default-project fallback.
   allowDefaultProject: [],
-
-  // Test-file relaxation. Node's test runner registers `describe()` / `test()` calls as side-effects and awaits them itself, so the "await or explicitly void"
-  // convention from `no-floating-promises` does not apply at the register-and-move-on level. Disabling it inside both the TypeScript `src/` tests and the
-  // browser-shaped `ui/` tests encodes the test idiom as configuration, rather than scattering per-line disables through the test files. The `^_` ignore pattern
-  // for unused vars (supporting the `using _dom = createTestDom()` pattern for disposal-only bindings) now lives in the shared `tsRules` / `jsRules` because the
-  // same idiom applies in production `src/` code too (e.g., `using _abortRegistration = onAbort(...)` in `util.ts`), so a split test-only relaxation would be an
-  // artificial asymmetry.
-  extraConfigs: [ {
-
-    files: [ "src/**/*.test.ts", "src/**/*.fixtures.ts", "src/**/*.helpers.ts", "ui/**/*.test.mjs", "ui/**/*.fixtures.mjs", "ui/**/*.helpers.mjs" ],
-    rules: {
-
-      "@typescript-eslint/no-floating-promises": "off"
-    }
-  },
-
-  // Node-environment declaration. The build tooling under `build/` and the test-side files under `ui/` execute under Node rather than in a browser, so
-  // `no-undef` needs their host globals declared before it can accept the references they make. The shared preset supplies the browser vocabulary to
-  // everything matching the `ui` globs, and flat config merges `globals` across every block a file matches, so the test-side `ui/` files - which build a
-  // DOM and run it under the Node test runner - end up carrying both vocabularies at once.
-  {
-
-    files: [ "build/**/*.mjs", "ui/**/*.fixtures.mjs", "ui/**/*.helpers.mjs", "ui/**/*.test.mjs" ],
-    languageOptions: {
-
-      globals: {
-
-        process: "readonly",
-        setImmediate: "readonly",
-        structuredClone: "readonly"
-      }
-    }
-  } ],
   js: [ "build/**/*.mjs", "ui/**/*.@(js|mjs)", "eslint.config.mjs" ],
+
+  // The build tooling, this config file, and the test loader and test-side files under `ui/` run under Node rather than in a browser, so they take Node's
+  // globals. The test-side `ui/` files also match the `ui` globs, because they build a DOM and run it under the Node test runner, and flat config merges
+  // `globals` across every block a file matches, so they carry both vocabularies at once. The test-file relaxations come from the preset's `tests` default,
+  // which already names this package's test, fixture, and helper files.
+  node: [ "build/**/*.mjs", "eslint.config.mjs", "ui/**/*.fixtures.mjs", "ui/**/*.helpers.mjs", "ui/**/*.test.mjs", "ui/test-loader.mjs" ],
   ts: ["src/**/*.ts"],
   ui: ["ui/**/*.@(js|mjs)"]
 });

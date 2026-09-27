@@ -291,8 +291,18 @@ This method ensures that a newly created service's display name and available na
 existing service leaves its name characteristics untouched, so a caller renaming an existing service calls [setServiceName](#setservicename) directly. If
 `onServiceCreate` is provided, it will only be called for newly created services, not for existing ones.
 
-A call without a subtype on an accessory that carries only subtyped services of the type finds nothing to answer, and HAP refuses to add a subtype-less
-service beside a subtyped one, so the call throws HAP's refusal rather than answering a sibling as the subtype-less service.
+A call without a subtype on an accessory that already carries subtyped services of the type creates the subtype-less service beside them. HAP refuses a
+subtype-less service while any service of its type is on the accessory, yet accepts the same end state built in the other order, so the call makes room: it
+detaches the subtyped siblings, adds the new service, re-adds the same sibling instances, and restores every link list that named a sibling to its exact prior
+contents and order. When the new service cannot be added, including when HAP's service limit leaves no room for the siblings to follow it, the siblings and
+their links are restored before the error propagates, leaving the accessory as it was. `onServiceCreate` runs once the new service and every sibling are on
+the accessory.
+
+HomeKit keys a service's identity on its accessory, type, and subtype rather than on the object, so a re-added sibling keeps its instance ids, name,
+characteristics, and characteristic handlers, and the automations that reference it survive. The accessory's `primaryService` re-derives itself from a
+sibling's primary flag as the sibling is re-added. HAP's `removeService` clears every listener on the Service it detaches and re-installs only its own on the
+way back, so a listener a plugin attached directly to a sibling Service's own event emitter is lost and has to be attached again. `PlatformAccessory.addService`
+and `removeService` forward straight to the HAP accessory, so all of this holds for a platform accessory as it does for a bare HAP one.
 
 The `ConfiguredName` and `Name` characteristics are conditionally added or updated based on the type of service, in accordance with HomeKit requirements.
 

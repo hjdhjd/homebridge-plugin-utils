@@ -46,6 +46,7 @@
     "breadcrumbs.home": "Home"
   },
   "treatWarningsAsErrors": true,
+  "tsconfig": "tsconfig.build.json",
   "typeDeclarationFormat": "table",
   "useCodeBlocks": true,
   "validation": {

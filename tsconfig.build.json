@@ -1,7 +1,8 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * tsconfig.build.json: TypeScript project used by `tsc` to emit the published `dist/` output. Narrowly scoped to `src/` so the emit graph stays free of build scripts,
- * web UI assets, and root-level config files. The IDE-and-lint project declaration lives in `tsconfig.json` (broad include + `allowJs`).
+ * web UI assets, and root-level config files. TypeDoc reads this project too (see `typedoc.json`), so the generated API documentation comes from the same program as
+ * the shipped declarations. The IDE-and-lint project declaration lives in `tsconfig.json` (broad include + `allowJs`).
  */
 {
   "compilerOptions": {

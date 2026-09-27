@@ -16,6 +16,7 @@ import { acquireService, capabilityGate, findService, getServiceName, notRespond
   updateServices, validCharacteristic, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import { HAPStatus } from "./homebridge-enums.ts";
+import { IdentifierCache } from "@homebridge/hap-nodejs/dist/lib/model/IdentifierCache.js";
 import type { Nullable } from "./util.ts";
 import assert from "node:assert/strict";
 
@@ -198,6 +199,13 @@ function optionalCount(service: Service, slot: NamedCharacteristicSlot): number 
   return target ? service.optionalCharacteristics.filter((c) => c.UUID === target.UUID).length : 0;
 }
 
+// Whether two service lists name the same instances in the same order. Identity rather than structure is the point, because a restored link has to name the very
+// service it named before.
+function sameServices(actual: readonly Service[], expected: readonly Service[]): boolean {
+
+  return (actual.length === expected.length) && actual.every((service, index) => service === expected[index]);
+}
+
 /* The status-error class the notResponding tests inject, standing in for a plugin's `api.hap.HapStatusError`: an Error subclass carrying the numeric status it was
  * constructed with, which is what a refusal is read for. Declared here rather than imported so the suite keeps the same posture the module under test has - no
  * runtime edge to HAP for a class the library never imports - and so the injected shape is exactly the shape a plugin's own double has.
@@ -321,7 +329,8 @@ describe("findService", () => {
 
   test("answers exactly the service a same-type, same-subtype acquisition would create, and never a subtyped sibling for a subtype-less lookup", () => {
 
-    // HAP accepts a subtype-less service only ahead of its subtyped siblings, so the fixture acquires it first, the order every accessory HAP builds carries.
+    // The fixture acquires the subtype-less service first, the order HAP accepts on its own, so this row exercises the lookup alone and never acquireService's
+    // room-making.
     const accessory = makeAccessory();
     const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
     const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
@@ -405,20 +414,172 @@ describe("acquireService - subtype handling", () => {
     assert.equal(first.service, second.service, "re-acquisition with the same subtype must return the same instance");
   });
 
-  test("a subtype-less acquisition beside only a subtyped service of the type never answers that sibling, and HAP refuses the subtype-less addition", () => {
+  test("a subtype-less acquisition beside only a subtyped sibling creates its own service and leaves the same sibling instance standing beside it", () => {
 
-    // The exact lookup finds nothing to answer, so the creation reaches HAP, which refuses a subtype-less service once a subtyped one of the same type is present.
+    // The exact lookup finds nothing to answer, so the call creates the service, making room for it because HAP accepts a subtype-less service only while no
+    // service of its type is present. The callback reads the accessory at the moment it fires, which is what shows it runs after the sibling is back.
     const accessory = makeAccessory();
+    const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+    const seen: { plain: boolean; side: boolean }[] = [];
+    const { service: plain, transition } = acquireService({ accessory, name: "Plain", onServiceCreate: (svc) => {
 
-    acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+      seen.push({ plain: accessory.services.includes(svc), side: accessory.services.includes(side) });
+    }, serviceType: hap.Service.Switch });
 
+    assert.equal(transition, "attached", "a subtype-less creation beside a subtyped sibling must answer attached");
+    assert.deepEqual(seen, [{ plain: true, side: true }], "onServiceCreate must fire exactly once, with the new service and the sibling both on the accessory");
+    assert.equal(plain.subtype, undefined, "the created service must carry no subtype");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), plain, "the created service must be the accessory's subtype-less Switch");
+    assert.equal(accessory.getServiceById(hap.Service.Switch, "side"), side, "the sibling on the accessory must be the same instance it was before");
+  });
+});
+
+describe("acquireService - making room beside subtyped siblings", () => {
+
+  test("a sibling answers the same service and characteristic instance ids afterward, assigned through HAP's own identifier cache", () => {
+
+    /* HomeKit keys instance ids on the accessory, the service type, and the subtype rather than on the object, and HAP assigns them from one IdentifierCache when
+     * it publishes. Assigning through one cache before and after is the round trip a published accessory makes. The sibling is read back from the accessory
+     * rather than from the local binding, so ids left over on a detached object could not pass for ones HAP assigned. makeAccessory's accessory is a HAP
+     * Accessory underneath, and identifier assignment is a surface only HAP's own type carries, so the row reads it through that type.
+     */
+    const accessory = makeAccessory();
+    const hapAccessory = accessory as unknown as hap.Accessory;
+    const cache = new IdentifierCache("0E:4F:2A:11:C3:7D");
+    const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+    const ids = (service?: Service): Nullable<number>[] => service ? [ service.iid, ...service.characteristics.map((characteristic) => characteristic.iid) ] : [];
+
+    hapAccessory._assignIDs(cache);
+
+    const before = ids(side);
+    const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
+
+    hapAccessory._assignIDs(cache);
+
+    assert.ok(before.every((iid) => typeof iid === "number"), "precondition: HAP must have assigned the sibling and every characteristic an id");
+    assert.deepEqual(ids(accessory.getServiceById(hap.Service.Switch, "side")), before, "the sibling must answer the ids it had, service and characteristics alike");
+    assert.notEqual(plain.iid, side.iid, "the new service must take an instance id of its own");
+  });
+
+  test("every link list that names a sibling is restored to its exact contents and order, a sibling linking to another sibling included", () => {
+
+    // Detaching a service strips it from the links of every service still on the accessory, and re-linking through addLinkedService would append. The lamp's list
+    // interleaves a service outside the siblings, so a restoration that appended the siblings back would reorder it.
+    const accessory = makeAccessory();
+    const { service: first } = acquireService({ accessory, name: "First", serviceType: hap.Service.Switch, subtype: "first" });
+    const { service: second } = acquireService({ accessory, name: "Second", serviceType: hap.Service.Switch, subtype: "second" });
+    const { service: outlet } = acquireService({ accessory, name: "Outlet", serviceType: hap.Service.Outlet });
+    const { service: lamp } = acquireService({ accessory, name: "Lamp", serviceType: hap.Service.Lightbulb });
+
+    first.addLinkedService(lamp);
+    second.addLinkedService(first);
+    lamp.addLinkedService(first);
+    lamp.addLinkedService(outlet);
+    lamp.addLinkedService(second);
+
+    acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
+
+    assert.ok(sameServices(first.linkedServices, [lamp]), "a sibling's own link to a service outside the siblings must survive");
+    assert.ok(sameServices(second.linkedServices, [first]), "a sibling's link to another sibling must survive");
+    assert.ok(sameServices(lamp.linkedServices, [ first, outlet, second ]), "a link list naming siblings must survive in its exact order");
+  });
+
+  test("every subtyped sibling returns as the same instance under its own subtype", () => {
+
+    const accessory = makeAccessory();
+    const subtypes = [ "alpha", "beta", "gamma" ];
+    const siblings = subtypes.map((subtype) => acquireService({ accessory, name: subtype, serviceType: hap.Service.Switch, subtype }).service);
+    const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
+
+    for(const [ index, subtype ] of subtypes.entries()) {
+
+      assert.equal(findService({ accessory, serviceType: hap.Service.Switch, subtype }), siblings[index], "each sibling must be back as the same instance");
+    }
+
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), plain, "the new service must stand beside the siblings");
+    assert.equal(accessory.services.filter((service) => service.UUID === hap.Service.Switch.UUID).length, subtypes.length + 1,
+      "the accessory must carry the siblings and the new service, and no other service of the type");
+  });
+
+  test("a failed addition re-adds every sibling and restores every link before the same error propagates, and onServiceCreate never fires", (t) => {
+
+    const accessory = makeAccessory();
+    const { service: first } = acquireService({ accessory, name: "First", serviceType: hap.Service.Switch, subtype: "first" });
+    const { service: second } = acquireService({ accessory, name: "Second", serviceType: hap.Service.Switch, subtype: "second" });
+    const { service: lamp } = acquireService({ accessory, name: "Lamp", serviceType: hap.Service.Lightbulb });
+    const failure = new Error("Injected addition failure.");
     let invocations = 0;
 
+    second.addLinkedService(first);
+    lamp.addLinkedService(first);
+    lamp.addLinkedService(second);
+
+    // The room-making detaches through removeService, so the first addService call it makes is the new service's own. Failing exactly that one call leaves every
+    // re-add to HAP's real implementation.
+    t.mock.method(accessory, "addService", () => {
+
+      throw failure;
+    }, { times: 1 });
+
     assert.throws(() => acquireService({ accessory, name: "Plain", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch }),
-      /without also defining a unique 'subtype' property/, "a subtype-less acquisition must not answer the subtyped sibling as its service");
-    assert.equal(invocations, 0, "HAP's refusal must leave the creation callback unfired");
-    assert.deepEqual(accessory.services.filter((service) => service.UUID === hap.Service.Switch.UUID).map((service) => service.subtype), ["side"],
-      "the subtyped sibling must stand alone and untouched");
+      (error: unknown) => error === failure, "the addition's own error must propagate unchanged");
+    assert.equal(invocations, 0, "onServiceCreate must not fire when the addition fails");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), undefined, "the failed service must not be on the accessory");
+    assert.equal(accessory.getServiceById(hap.Service.Switch, "first"), first, "the first sibling must be back as the same instance");
+    assert.equal(accessory.getServiceById(hap.Service.Switch, "second"), second, "and so must the second");
+    assert.ok(sameServices(second.linkedServices, [first]), "the second sibling's link to the first must be restored");
+    assert.ok(sameServices(lamp.linkedServices, [ first, second ]), "the lamp's links must be restored in their exact order");
+  });
+
+  test("an accessory at HAP's service limit refuses the new service and keeps every service and link it carried", () => {
+
+    /* At the limit the new service still fits once the siblings are detached, and it is a sibling's re-add that finds no slot. The room-making takes the new
+     * service back off so every sibling returns, which is what keeps a full accessory from losing a sibling to an acquisition HAP could never have accepted.
+     */
+    const accessory = makeAccessory();
+    const { service: first } = acquireService({ accessory, name: "First", serviceType: hap.Service.Switch, subtype: "first" });
+    const { service: second } = acquireService({ accessory, name: "Second", serviceType: hap.Service.Switch, subtype: "second" });
+    let invocations = 0;
+
+    second.addLinkedService(first);
+
+    // Fill the accessory until HAP refuses another service, reading the limit from HAP's own refusal rather than restating it here.
+    assert.throws(() => {
+
+      for(let index = 0; ; index++) {
+
+        accessory.addService(new hap.Service.Outlet("Fill", "fill-" + index.toString()));
+      }
+    }, /Cannot add more than/, "the fixture must reach HAP's service limit");
+
+    const carried = [...accessory.services];
+
+    assert.throws(() => acquireService({ accessory, name: "Plain", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch }),
+      /Cannot add more than/, "HAP's service limit must propagate");
+    assert.equal(invocations, 0, "onServiceCreate must not fire when the service does not fit");
+    assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), undefined, "the new service must not be on the accessory");
+    assert.equal(accessory.services.length, carried.length, "the accessory must carry exactly as many services as before");
+    assert.ok(carried.every((service) => accessory.services.includes(service)), "every service the accessory carried must still be on it, each sibling included");
+    assert.ok(sameServices(second.linkedServices, [first]), "the second sibling's link to the first must be restored");
+  });
+
+  test("a sibling flagged primary is still the accessory's primary service afterward", () => {
+
+    // HAP types the accessory's primaryService field as private, so the row reads it through HAP's own bookkeeping: promoting another service demotes whichever
+    // service the accessory holds as primary, and it can demote the sibling only if the room-making left the sibling in that slot.
+    const accessory = makeAccessory();
+    const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+
+    side.setPrimaryService(true);
+
+    const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
+
+    assert.equal(side.isPrimaryService, true, "the sibling must still carry its primary flag");
+    assert.equal(plain.isPrimaryService, false, "the new service must not take the primary flag");
+
+    plain.setPrimaryService(true);
+
+    assert.equal(side.isPrimaryService, false, "promoting the new service must demote the sibling, which the accessory does only while it holds the sibling as primary");
   });
 });
 
@@ -676,6 +837,22 @@ describe("validService", () => {
 
     assert.equal(result.transition, "absent", "a subtype-less verdict must not take the subtyped sibling for its service");
     assert.equal(accessory.getServiceById(hap.Service.Switch, "side"), side, "the subtyped sibling must still stand");
+  });
+
+  test("a true verdict without a subtype beside only a subtyped sibling creates the subtype-less service through acquireService and keeps the sibling", () => {
+
+    const accessory = makeAccessory();
+    const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
+    let invocations = 0;
+    const result = validService({ accessory, name: "Plain", onServiceCreate: () => {
+
+      invocations++;
+    }, serviceType: hap.Service.Switch, validate: true });
+
+    assert.equal(result.transition, "attached", "a subtype-less verdict beside a subtyped sibling must create its own service");
+    assert.equal(result.service, findService({ accessory, serviceType: hap.Service.Switch }), "the created service must be the accessory's subtype-less Switch");
+    assert.equal(invocations, 1, "onServiceCreate must fire exactly once on the creating path");
+    assert.equal(accessory.getServiceById(hap.Service.Switch, "side"), side, "the subtyped sibling must still stand as the same instance");
   });
 
   test("a false verdict without a subtype removes only the subtype-less service when a subtyped sibling stands beside it", () => {

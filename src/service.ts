@@ -194,6 +194,75 @@ export function findService<T extends Service>({ accessory, serviceType, subtype
 }
 
 /**
+ * Adds a newly constructed service to an accessory, making room first when HAP would otherwise refuse it. HAP rejects a subtype-less service while any
+ * service of the same type is on the accessory, yet accepts that end state built in the other order, so a subtype-less service joining subtyped siblings goes
+ * on while the siblings are briefly detached. The same sibling instances go back on afterward, and every link list that named one of them is restored to its
+ * exact prior contents and order, whether or not the addition succeeds.
+ *
+ * @param accessory - The accessory receiving the service.
+ * @param service   - The newly constructed service to add. The caller has already established that the accessory carries no subtype-less service of its type.
+ *
+ * @internal
+ */
+function addServiceMakingRoom(accessory: PlatformAccessory, service: Service): void {
+
+  // A subtyped service, or one with no service of its type beside it, passes HAP's check as things stand, so it is added directly and pays for nothing more.
+  // Every service of the type found here is a subtyped sibling, since the caller found no subtype-less match.
+  const siblings = service.subtype ? [] : accessory.services.filter((existing) => existing.UUID === service.UUID);
+
+  if(!siblings.length) {
+
+    accessory.addService(service);
+
+    return;
+  }
+
+  // Snapshot every link list that names a sibling before anything is detached. HAP strips a removed service from the links of every service still on the
+  // accessory, a sibling that links to another sibling included, so a snapshot taken after the first removal would already be missing entries.
+  const links = accessory.services.filter((linker) => linker.linkedServices.some((linked) => siblings.includes(linked)))
+    .map((linker) => ({ linked: [...linker.linkedServices], linker }));
+
+  for(const sibling of siblings) {
+
+    accessory.removeService(sibling);
+  }
+
+  // Siblings go back through HAP's own addService, which re-installs HAP's event wiring on each one and re-derives the accessory's primaryService from its flag.
+  // A sibling already back on the accessory is skipped, so the failure path below can run this again without adding anything twice.
+  const reattach = (): void => {
+
+    for(const sibling of siblings) {
+
+      if(!accessory.services.includes(sibling)) {
+
+        accessory.addService(sibling);
+      }
+    }
+  };
+
+  try {
+
+    accessory.addService(service);
+    reattach();
+  } catch(error) {
+
+    // Either HAP refused the new service, or it went on and took the last slot HAP's service limit allows, leaving a sibling nowhere to go. Taking the new service
+    // back off answers both, since removeService ignores a service the accessory does not carry, and the siblings then return to the accessory as it was.
+    accessory.removeService(service);
+    reattach();
+
+    throw error;
+  } finally {
+
+    // Restore each link list in place. Re-linking through addLinkedService would append, reordering any list that also names services outside the siblings.
+    for(const { linked, linker } of links) {
+
+      linker.linkedServices.splice(0, linker.linkedServices.length, ...linked);
+    }
+  }
+}
+
+/**
  * Reconciles a service's presence on an accessory in one call: creates it when it does not exist, or returns it unchanged when it does. Optionally
  * executes a callback to initialize a newly created service. For a newly created service, the various name characteristics are also set to the
  * specified name and added where necessary; re-acquiring an existing service returns it with its name characteristics untouched.
@@ -211,8 +280,18 @@ export function findService<T extends Service>({ accessory, serviceType, subtype
  * existing service leaves its name characteristics untouched, so a caller renaming an existing service calls {@link setServiceName} directly. If
  * `onServiceCreate` is provided, it will only be called for newly created services, not for existing ones.
  *
- * A call without a subtype on an accessory that carries only subtyped services of the type finds nothing to answer, and HAP refuses to add a subtype-less
- * service beside a subtyped one, so the call throws HAP's refusal rather than answering a sibling as the subtype-less service.
+ * A call without a subtype on an accessory that already carries subtyped services of the type creates the subtype-less service beside them. HAP refuses a
+ * subtype-less service while any service of its type is on the accessory, yet accepts the same end state built in the other order, so the call makes room: it
+ * detaches the subtyped siblings, adds the new service, re-adds the same sibling instances, and restores every link list that named a sibling to its exact prior
+ * contents and order. When the new service cannot be added, including when HAP's service limit leaves no room for the siblings to follow it, the siblings and
+ * their links are restored before the error propagates, leaving the accessory as it was. `onServiceCreate` runs once the new service and every sibling are on
+ * the accessory.
+ *
+ * HomeKit keys a service's identity on its accessory, type, and subtype rather than on the object, so a re-added sibling keeps its instance ids, name,
+ * characteristics, and characteristic handlers, and the automations that reference it survive. The accessory's `primaryService` re-derives itself from a
+ * sibling's primary flag as the sibling is re-added. HAP's `removeService` clears every listener on the Service it detaches and re-installs only its own on the
+ * way back, so a listener a plugin attached directly to a sibling Service's own event emitter is lost and has to be attached again. `PlatformAccessory.addService`
+ * and `removeService` forward straight to the HAP accessory, so all of this holds for a platform accessory as it does for a bare HAP one.
  *
  * The `ConfiguredName` and `Name` characteristics are conditionally added or updated based on the type of service, in accordance with HomeKit requirements.
  *
@@ -271,7 +350,9 @@ export function acquireService<T extends Service>({ accessory, name, onServiceCr
 
     setServiceName(service, sanitized);
 
-    accessory.addService(service);
+    // The addition makes room when a subtype-less service joins subtyped siblings, so the service onServiceCreate receives is on the accessory with every
+    // sibling back beside it.
+    addServiceMakingRoom(accessory, service);
 
     if(onServiceCreate) {
 

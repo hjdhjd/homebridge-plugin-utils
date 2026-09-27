@@ -34,7 +34,7 @@ narrow enough that tests can assert against it with `deepEqual` while carrying t
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="level"></a> `level` | `"warn"` \| `"error"` \| `"debug"` \| `"info"` | The severity the log method was called at. |
+| <a id="level"></a> `level` | `"debug"` \| `"error"` \| `"warn"` \| `"info"` | The severity the log method was called at. |
 | <a id="message"></a> `message` | `string` | The message passed to the log method. |
 | <a id="params"></a> `params` | `unknown`[] | The remaining arguments passed to the log method alongside `message`. |
 
@@ -447,7 +447,7 @@ reconnect handlers: a path that logs its warning on every attempt satisfies a pr
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `entries` | readonly [`TestLogEntry`](#testlogentry)[] | The captured entries to search. |
-| `level` | `"warn"` \| `"error"` \| `"debug"` \| `"info"` | The severity to restrict the count to. |
+| `level` | `"debug"` \| `"error"` \| `"warn"` \| `"info"` | The severity to restrict the count to. |
 | `substring` | `string` | The text to look for in the rendered line. |
 
 #### Returns
@@ -481,7 +481,7 @@ answers "one more line after the reconnect" without standing up a second logger,
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `entries` | readonly [`TestLogEntry`](#testlogentry)[] | The captured entries to search. |
-| `level` | `"warn"` \| `"error"` \| `"debug"` \| `"info"` | The severity to restrict the search to. |
+| `level` | `"debug"` \| `"error"` \| `"warn"` \| `"info"` | The severity to restrict the search to. |
 | `substring` | `string` | The text to look for in the rendered line. |
 
 #### Returns

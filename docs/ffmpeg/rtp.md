@@ -375,7 +375,7 @@ Construction-time options for [RtpPortAllocator.reserve](#reserve).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="count-1"></a> `count?` | `1` \| `2` | Optional. The number of consecutive UDP ports to reserve. `1` yields a single port, `2` yields the reserved port plus the next port so FFmpeg's "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`. |
+| <a id="count-1"></a> `count?` | `2` \| `1` | Optional. The number of consecutive UDP ports to reserve. `1` yields a single port, `2` yields the reserved port plus the next port so FFmpeg's "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`. |
 | <a id="ipfamily-1"></a> `ipFamily?` | [`IpFamily`](../dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
 | <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional caller [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). Cancels in-flight bind-retry attempts. If the signal aborts while `reserve()` is still looking for consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. |
 

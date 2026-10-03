@@ -1158,13 +1158,15 @@ export const mountStatusPanelView = ({ config, resumeDetector, root, signal, sto
   };
 
   // Re-render on selection changes. The loading guard skips the pre-model mount pass (the orchestrator mounts every view before model:loaded, so an immediate-run
-  // pass would render against the loading placeholder); the sibling deviceInfo view carries the same guard.
+  // pass would render against the loading placeholder); the sibling deviceInfo view carries the same guard. A controller list arriving without a model moves the
+  // selected device only by moving the selection or the device list, so it re-renders when one of them moved and costs a reference comparison otherwise.
   effect({
 
-    events: [ "scope:changed", "devices:loaded", "model:loaded" ],
-    fn: () => {
+    events: [ "controllers:loaded", "scope:changed", "devices:loaded", "model:loaded" ],
+    fn: (action, previous) => {
 
-      if(store.state.status.kind === "loading") {
+      if((store.state.status.kind === "loading") ||
+        ((action?.type === "controllers:loaded") && (previous.scope === store.state.scope) && (previous.devices === store.state.devices))) {
 
         return;
       }

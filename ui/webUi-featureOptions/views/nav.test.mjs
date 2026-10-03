@@ -962,3 +962,54 @@ describe("mountNavView - the Global Options row", () => {
     assert.equal(globalIn(rootControllers).classList.contains("active"), false, "and moving the scope off global deactivates it");
   });
 });
+
+// A controller list arriving without a model can move the selection and the device list through the reducer's reconciliation, and the sidebar has to follow it
+// on the same arrival rather than on whatever dispatch happens to come next.
+describe("mountNavView - a controller list arriving without a model", () => {
+
+  // Select controller A, land its device list, and select the first device on it - the sidebar state a user leaves after a controller click and a device click.
+  const onDeviceOfA = (store) => {
+
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+    store.dispatch({ controllerId: "ctrl-a", devices: DEVICES, error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+  };
+
+  test("an arrival that drops the selected controller takes its devices off the sidebar and moves the highlight to Global Options", () => {
+
+    using dom = createTestDom();
+
+    const { rootControllers, rootDevices, store } = setup();
+
+    onDeviceOfA(store);
+
+    assert.ok(rootDevices.querySelector(".nav-link.active[data-device-serial='dev-a']"), "precondition: the device is listed and selected");
+
+    store.dispatch({ controllers: [CONTROLLERS[1]], type: "controllers:loaded" });
+
+    assert.equal(rootDevices.querySelectorAll(".nav-link").length, 0, "the departed controller's devices left the sidebar on the arrival itself");
+    assert.ok(rootControllers.querySelector("[data-navigation='global']").classList.contains("active"), "and the highlight moved to where the selection fell");
+  });
+
+  test("a proven rename moves the highlight onto the new key and keeps the device rows exactly as built", () => {
+
+    using dom = createTestDom();
+
+    const { rootControllers, rootDevices, store } = setup();
+
+    onDeviceOfA(store);
+
+    const row = rootDevices.querySelector("[data-device-serial='dev-a']");
+
+    store.dispatch({ controllers: [ { ...CONTROLLERS[0], serialNumber: "ctrl-a2" }, CONTROLLERS[1] ], rename: { from: "ctrl-a", to: "ctrl-a2" },
+      type: "controllers:loaded" });
+
+    const renamedLink = rootControllers.querySelector("[data-device-serial='ctrl-a2']");
+
+    assert.ok(renamedLink.classList.contains("active"), "the controller's highlight follows it onto the new key");
+    assert.ok(renamedLink.classList.contains("context"), "and so does the outline that marks whose devices are listed");
+    assert.ok(rootDevices.querySelector("[data-device-serial='dev-a']") === row, "the device list itself was carried, so its rows were never rebuilt");
+    assert.ok(row.classList.contains("active"), "and the selected device keeps its highlight");
+  });
+});

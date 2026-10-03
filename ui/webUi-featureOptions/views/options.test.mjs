@@ -2077,7 +2077,7 @@ describe("mountOptionsView - picker arming and abandonment", () => {
 
 describe("mountOptionsView - a controller refresh and a device switch re-derive a resolved list", () => {
 
-  test("a controllers-only refresh re-renders the row in place, with focus and node identity intact", () => {
+  test("a controller-list refresh that moves nothing the table presents re-renders the row in place, with focus and node identity intact", () => {
 
     using dom = createTestDom();
 
@@ -2100,7 +2100,21 @@ describe("mountOptionsView - a controller refresh and a device switch re-derive 
     const focusedBefore = document.activeElement;
     const rowBefore = configTable.querySelector("[id='row-Pick.TypesUnset']");
 
+    /* Watch the table's own children - the category shells a render detaches into the cache and puts back. Focus and node identity survive a detach and reattach
+     * in the test DOM, so the record of removed shells is the one observation that tells the in-place walk from a full render. The picker's own members are
+     * rebuilt inside the row by design, which is why the watch stops at the table's direct children.
+     */
+    const shellWatch = new window.MutationObserver(() => {});
+
+    shellWatch.observe(configTable, { childList: true });
+
     store.dispatch({ controllers: [{ name: "new", serialNumber: "ctrl-a" }], type: "controllers:loaded" });
+
+    const removedShells = shellWatch.takeRecords().flatMap((record) => [...record.removedNodes]);
+
+    shellWatch.disconnect();
+
+    assert.equal(removedShells.length, 0, "no category shell left the table, so the arrival never detached and rebuilt the view");
 
     assert.deepEqual([...pickerControl(configTable, "TypesUnset").querySelectorAll(".fo-choice-checkbox")].map((b) => b.value), ["new"],
       "the refreshed controller gives the source a different list to offer");
@@ -2261,5 +2275,212 @@ describe("mountOptionsView - the list editor", () => {
 
     assert.deepEqual(store.state.configuredOptions, ["Enable.Pick.Plates=a,b,typed-not-entered"],
       "the pending text came along with the entries rather than being dropped");
+  });
+});
+
+/* A controller list arriving without a model. The reducer reconciles the facts that name a controller, and these rows assert what the view does with the state it
+ * keeps under controller keys of its own - the DOM cache and the persisted category expansion - and that the surface follows whatever the reconciliation moved.
+ * The persisted expansion records a collapsed category as true, so `{ Motion: false }` is a view the user left with Motion open.
+ */
+describe("mountOptionsView - a controller list arriving without a model", () => {
+
+  const STORAGE_KEY = "homebridge-test-plugin-category-states";
+  const CONTROLLER_A = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+  const CONTROLLER_B = { address: "10.0.0.2", name: "Controller B", serialNumber: "ctrl-b" };
+  const RENAMED_A = { address: "10.0.0.9", name: "Controller A", serialNumber: "ctrl-a2" };
+  const RENAME_A = { from: "ctrl-a", to: "ctrl-a2" };
+  const DEVICE_A = { firmwareRevision: "1", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" };
+
+  // Mount the view over a controller-based page holding controllers A and B, with the persisted category expansion seeded first.
+  const mount = (persisted = {}) => {
+
+    window.localStorage.clear();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
+
+    const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+    const configTable = document.createElement("div");
+    const controller = new AbortController();
+
+    configTable.id = "configTable";
+    document.body.appendChild(configTable);
+
+    store.dispatch({
+
+      catalog: CONTROLLER_ROW_CATALOG, configuredOptions: [], controllers: [ CONTROLLER_A, CONTROLLER_B ], mode: "controller-based", type: "model:loaded"
+    });
+    store.dispatch({ origin: "boot", scope: { kind: "global" }, type: "scope:changed" });
+
+    mountOptionsView({ configTable, platform: () => "test-plugin", signal: controller.signal, store });
+
+    return { configTable, store };
+  };
+
+  // Land a controller's device list the way a completed fetch does, then select the controller's own row - the view a user rests on after a controller click.
+  const visitControllerRow = (store, controllerId) => {
+
+    store.dispatch({ controllerId, type: "devices:requested" });
+    store.dispatch({ controllerId, devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+    store.dispatch({ origin: "user", scope: { controllerId, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+  };
+
+  const motion = (configTable) => configTable.querySelector("details[data-category='Motion']");
+
+  const persisted = () => JSON.parse(window.localStorage.getItem(STORAGE_KEY));
+
+  test("an arrival that drops the selected controller re-renders the table as the view the selection fell back to", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = mount({ "device:ctrl-a/dev-a": { Audio: true, Motion: false }, global: { Audio: true, Motion: true } });
+
+    visitControllerRow(store, "ctrl-a");
+
+    assert.equal(motion(configTable).open, true, "precondition: the controller's own view restored its expansion");
+
+    store.dispatch({ controllers: [CONTROLLER_B], type: "controllers:loaded" });
+
+    assert.deepEqual(store.state.scope, { kind: "global" }, "precondition: the reducer returned the selection to global");
+    assert.equal(motion(configTable).open, false, "the table now shows the global view, with the global view's own expansion");
+  });
+
+  test("a controller that leaves the list takes its cached views with it, so a key that returns is built fresh", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = mount();
+
+    visitControllerRow(store, "ctrl-a");
+
+    const cachedA = motion(configTable);
+
+    visitControllerRow(store, "ctrl-b");
+
+    const cachedB = motion(configTable);
+
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
+
+    // Controller A leaves and comes back. A plugin that keys controllers by address hands a returning key to whatever is configured there next.
+    store.dispatch({ controllers: [CONTROLLER_B], type: "controllers:loaded" });
+    store.dispatch({ controllers: [ CONTROLLER_A, CONTROLLER_B ], type: "controllers:loaded" });
+
+    visitControllerRow(store, "ctrl-b");
+
+    assert.ok(motion(configTable) === cachedB, "a controller the list held throughout is restored from the cache by identity");
+
+    visitControllerRow(store, "ctrl-a");
+
+    assert.ok(motion(configTable) !== cachedA, "while the returning key is built fresh rather than served the departed controller's table");
+  });
+
+  test("a proven rename carries the selected view's expansion and its mounted table onto the new key", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = mount({ "device:ctrl-a/dev-a": { Audio: true, Motion: false } });
+
+    visitControllerRow(store, "ctrl-a");
+
+    const before = motion(configTable);
+
+    assert.equal(before.open, true, "precondition: the controller's own view restored its expansion");
+
+    store.dispatch({ controllers: [ RENAMED_A, CONTROLLER_B ], rename: RENAME_A, type: "controllers:loaded" });
+
+    assert.deepEqual(store.state.scope, { controllerId: "ctrl-a2", deviceId: "dev-a", kind: "device" }, "precondition: the selection moved with the rename");
+    assert.ok(motion(configTable) === before, "the view on screen is the same table, now standing under the new key");
+    assert.equal(motion(configTable).open, true, "with the categories as the user left them");
+    assert.deepEqual(persisted()["device:ctrl-a2/dev-a"], { Audio: true, Motion: false }, "the expansion is persisted under the new key");
+    assert.ok(!("device:ctrl-a/dev-a" in persisted()), "and nothing is left under the old one");
+  });
+
+  test("a proven rename carries a controller's expansion the user is not looking at, drops its cached views, and leaves a departed controller's alone", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = mount({
+
+      "controller:ctrl-a": { Motion: false },
+      "device:ctrl-a/dev-a": { Audio: false, Motion: false },
+      "device:ctrl-b/dev-a": { Motion: false }
+    });
+
+    visitControllerRow(store, "ctrl-a");
+
+    const cachedA = motion(configTable);
+
+    store.dispatch({ origin: "user", scope: { kind: "global" }, type: "scope:changed" });
+    store.dispatch({ controllers: [ RENAMED_A, CONTROLLER_B ], rename: RENAME_A, type: "controllers:loaded" });
+
+    const after = persisted();
+
+    assert.deepEqual(after["device:ctrl-a2/dev-a"], { Audio: false, Motion: false }, "a renamed controller the user is not looking at keeps its expansion");
+    assert.deepEqual(after["controller:ctrl-a2"], { Motion: false }, "for its controller view as well as its device views");
+    assert.ok(!("device:ctrl-a/dev-a" in after) && !("controller:ctrl-a" in after), "and nothing is left under the old key");
+    assert.deepEqual(after["device:ctrl-b/dev-a"], { Motion: false }, "another controller's entries are untouched");
+
+    visitControllerRow(store, "ctrl-a2");
+
+    assert.ok(motion(configTable) !== cachedA, "the old key's cached table was dropped rather than served under the new key");
+    assert.equal(motion(configTable).open, true, "and the fresh one opens with the carried expansion");
+
+    // Controller B leaves without a rename. Its expansion stays where it is, for the day a controller under that key returns.
+    store.dispatch({ controllers: [RENAMED_A], type: "controllers:loaded" });
+
+    assert.deepEqual(persisted()["device:ctrl-b/dev-a"], { Motion: false }, "a controller that merely left the list keeps its persisted expansion");
+  });
+
+  test("a model load that proves a rename carries the expansion too, and the rebuilt table opens with it", () => {
+
+    using dom = createTestDom();
+
+    const { configTable, store } = mount({ "device:ctrl-a/dev-a": { Audio: true, Motion: false } });
+
+    visitControllerRow(store, "ctrl-a");
+    store.dispatch({
+
+      catalog: CONTROLLER_ROW_CATALOG,
+      configuredOptions: [],
+      controllers: [ RENAMED_A, CONTROLLER_B ],
+      mode: "controller-based",
+      rename: RENAME_A,
+      type: "model:loaded"
+    });
+
+    assert.deepEqual(store.state.scope, { controllerId: "ctrl-a2", deviceId: "dev-a", kind: "device" }, "precondition: the selection moved with the rename");
+    assert.equal(motion(configTable).open, true, "the table the load rebuilt restores the expansion carried to the new key");
+    assert.ok(!("device:ctrl-a/dev-a" in persisted()), "and nothing is left under the old one");
+  });
+
+  test("a busy controller view never outlives the arrival: a departure lifts it, and a rename moves it to the new key until that key's list lands", () => {
+
+    using dom = createTestDom();
+
+    const departing = mount();
+
+    departing.store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    departing.store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+
+    assert.equal(departing.configTable.classList.contains("fo-options-busy"), true, "precondition: a first visit with its fetch outstanding is busy");
+
+    departing.store.dispatch({ controllers: [CONTROLLER_B], type: "controllers:loaded" });
+
+    assert.equal(departing.configTable.classList.contains("fo-options-busy"), false, "a departure returns the selection to global, which is never busy");
+
+    departing.configTable.remove();
+
+    const { configTable, store } = mount();
+
+    store.dispatch({ origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+    store.dispatch({ controllers: [ RENAMED_A, CONTROLLER_B ], rename: RENAME_A, type: "controllers:loaded" });
+
+    assert.equal(store.state.devicesRequest, null, "precondition: the fetch asked of the old key was cleared");
+    assert.equal(configTable.classList.contains("fo-options-busy"), true, "the renamed controller has no list yet, so its table stays inert");
+
+    // The refetch each public path issues for a selection the rename carried.
+    store.dispatch({ controllerId: "ctrl-a2", type: "devices:requested" });
+    store.dispatch({ controllerId: "ctrl-a2", devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    assert.equal(configTable.classList.contains("fo-options-busy"), false, "and the new key's list landing lifts the window");
   });
 });

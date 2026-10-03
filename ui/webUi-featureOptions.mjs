@@ -6,7 +6,7 @@
 
 import { DeadlineExpiredError, createActionGuard, delay, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
-import { MUTATING_ACTIONS, connectionFailureCopy, initialState, reducer } from "./webUi-featureOptions/state.mjs";
+import { MUTATING_ACTIONS, connectionFailureCopy, initialState, reconciledControllerId, reducer } from "./webUi-featureOptions/state.mjs";
 import { TAKEOVER_REGION_IDS, mountTakeoverView, releasedTakeover } from "./webUi-featureOptions/views/takeover.mjs";
 import { buildCatalogIndex, expandOption, removedListEntries } from "./featureOptions.js";
 import { completeControllerSelection, fetchControllerDevices, requestControllerDevices, settleControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
@@ -158,8 +158,8 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   The same `panel` identity arrives on every render of one mount, so plugin content persists across error re-renders, and `signal` carries the same per-mount
  *   semantics as `infoPanel` - one identity for the mount's life, aborted on navigate-away or teardown - so a hook that registers listeners keys its once-ness on
  *   that signal and scopes its registrations to it. The hook is re-invoked on every error render of a mount (a config-sync failure, a controller fetch failure,
- *   switching controllers while an error is showing), and a retry click reboots the page cycle through `show()`, so a failed retry re-invokes the hook in a fresh
- *   mount with a fresh panel and a fresh signal.
+ *   switching controllers while an error is showing), and a retry click re-enters the page through the boot `show()` runs, coming back on the controller that was
+ *   selected while the list it fetches still holds it, so a failed retry re-invokes the hook in a fresh mount with a fresh panel and a fresh signal.
  * @property {(args: { config: Object }) => Promise<ControllerListResult>} [getControllers] - Handler resolving the plugin's {@link ControllerListResult}.
  * @property {(controller: (Controller|null), args: { config: Object }) => Promise<DeviceListResult>} [getDevices] - Handler resolving a controller's
  *   {@link DeviceListResult}. Called with the selected controller and an options bag carrying the live platform config. The result is where a plugin says which
@@ -301,9 +301,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  * among them - its scope is `:root` and `body`, so it is registered through the page orchestrator's wiring and outlives every cycle this class tears down.
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
- * action without re-entering the whole show() cycle, `commitConfig()` writes a plugin's own configuration change through the page's session and re-establishes the
- * page on it, `takeover()` gives a plugin's own node the page's main-content area until it is released, `hide()` is the navigate-away (it flushes any pending edit,
- * then tears down), `cleanup()` is immediate
+ * action without re-entering the whole show() cycle and reconciles every fact that names a controller against the new list, `commitConfig()` writes a plugin's own
+ * configuration change through the page's session and re-establishes the page on it, in place or through a re-entry - each carrying the selection across a
+ * controller rename the caller declares - `takeover()` gives a plugin's own node the page's main-content area until it is released, `hide()` is the navigate-away
+ * (it flushes any pending edit, then tears down), `cleanup()` is immediate
  * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
  * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
  * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract carries the fuller vocabulary of the
@@ -677,12 +678,33 @@ export class webUiFeatureOptions {
    *      superseded it.
    *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
+   * A plugin's own call boots the page fresh, on the first controller in the device-bearing modes. The page's own re-entries go through the same boot with the
+   * page they replace handed over, so they come back on the controller that page had selected.
+   *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
    *        persisted config and the interface through which option edits are staged.
    * @returns {Promise<void>}
    * @public
    */
   async show(session) {
+
+    await this.#boot({ session });
+  }
+
+  /**
+   * One page cycle's boot, the sequence {@link show} documents. A plugin's `show()` inherits nothing; a re-entry inherits the controller list and the selection of
+   * the store it replaces, read at the moment the fresh store is minted, so the boot chooses the controller that selection lands on once its own list arrives.
+   *
+   * @param {Object} args
+   * @param {boolean} [args.inherit=false] - Whether the fresh store starts from the replaced store's controller list and selection.
+   * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The rename a coordinated write declared, which the boot's choice and its
+   *                                                                                     model load honor once the lists prove it. Only a commit's re-entry carries
+   *                                                                                     one.
+   * @param {import("./pluginConfigSession.mjs").PluginConfigSession} args.session - The config session the cycle boots on.
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #boot({ inherit = false, rename = undefined, session }) {
 
     // This entry's own action on the instance's show() guard, started before the first side effect below and read once more after the teardown.
     const entry = this.#showGuard.start();
@@ -720,8 +742,10 @@ export class webUiFeatureOptions {
     // Clear stale DOM from any prior cycle before the views start populating regions.
     clearContainers();
 
-    // Initialize the store with empty state. The reducer transitions through loading -> ready once model:loaded dispatches.
-    this.#store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+    // Initialize the store with its starting state. The reducer transitions through loading -> ready once model:loaded dispatches. A re-entry reads the store it
+    // replaces here, as the last thing before that store is let go, so a selection the user made while the teardown flushed is the one handed over, and it hands
+    // over whatever that store holds - a loaded page's list and selection, or the ones it inherited itself when its own boot failed before a model arrived.
+    this.#store = new FeatureOptionsStore({ initialState: initialState(inherit ? this.#store?.state : undefined), reducer });
 
     // Mount every view before any data loads. Each view registers its effects against the loading placeholder and yields until model:loaded fires, so mounting
     // here renders nothing yet - but the connection-error view exists from this point on, so a config-sync failure below renders its retry affordance instead of
@@ -733,11 +757,12 @@ export class webUiFeatureOptions {
     // views mount means every failure from here on has both the error view to render into and an affordance to hand the frame over to.
     this.#installBootAffordance(signal);
 
-    // Re-read the host config into the session before the page renders against it. show() is the single entry chokepoint (launch, first-run, the menu, and the
-    // connection-error retry), so re-syncing here makes "every show is fresh" an unconditional guarantee: an edit made in the Settings tab while this page was hidden
-    // is reflected on return rather than rendering against a frozen snapshot. The sync lands before getControllers reads session.platform and before the options read
-    // below, so both derive from the re-read config. A read failure routes into the already-mounted connection-error view rather than a bare toast: the store and
-    // views exist by now, so the page shows the retry affordance instead of stranding a blank frame.
+    // Re-read the host config into the session before the page renders against it. This boot is the single entry chokepoint - a plugin's show() on launch, first-run
+    // and the menu, and each of the page's own re-entries, the connection-error retry among them - so re-syncing here makes "every show is fresh" an unconditional
+    // guarantee: an edit made in the Settings tab while this page was hidden is reflected on return rather than rendering against a frozen snapshot. The sync lands
+    // before getControllers reads session.platform and before the options read below, so both derive from the re-read config. A read failure routes into the
+    // already-mounted connection-error view rather than a bare toast: the store and views exist by now, so the page shows the retry affordance instead of stranding
+    // a blank frame.
     try {
 
       await withDeadline({ promise: this.#session.sync(), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
@@ -905,15 +930,21 @@ export class webUiFeatureOptions {
       return;
     }
 
-    const initialController = controllers[0] ?? null;
+    /* Choose the controller the boot selects. A fresh page has no selection to keep and lands on the first controller. A re-entered page started from the
+     * selection of the page it replaced, and the model load below reconciles that selection against the list just fetched - but the choice has to be made now,
+     * ahead of that load, so the device fetch can overlap the catalog read. The reducer module's own query answers where that load is about to leave the
+     * selection, rename included, and the boot selects that controller; a selection the list cannot place, and a global one, land on the first controller.
+     */
+    const landedControllerId = reconciledControllerId({ arriving: controllers, rename, state: this.#store.state });
+    const initialController = controllers.find((controller) => controller.serialNumber === landedControllerId) ?? controllers[0] ?? null;
 
     // The device machinery is inert in global-only mode: with scope locked to global there is no controller device to fetch or select, so the pre-fire here and the
     // matching settle and scope decision further down all sit on the device-bearing path. The global-only branch after the theme await returns before reaching them,
     // so this binding is read only when it was assigned.
     let devicesRequest;
 
-    /* In the device-bearing modes the boot is a click of the first controller, and it takes the click's shape exactly: select the controller, record the fetch at the
-     * store's chokepoint, then fire it. One operation, one choreography. The selection ahead of the fetch is what carries the controller through a failure - the
+    /* In the device-bearing modes the boot is a click of the controller it chose, and it takes the click's shape exactly: select the controller, record the fetch at
+     * the store's chokepoint, then fire it. One operation, one choreography. The selection ahead of the fetch is what carries the controller through a failure - the
      * connection-error view hands its plugin panel the selected controller entry, so a boot that cannot reach the controller offers the same repair surface a click
      * that cannot reach it offers. Device-only mode has no controller to select and keeps the global scope the initial state already holds. The boot departs from
      * a click in the move's origin: the boot selects for the page rather than for a user, so its move is tagged as the boot's own, and the reducer knows
@@ -921,9 +952,9 @@ export class webUiFeatureOptions {
      *
      * The sequence, not the controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
      *
-     * One null-controller case survives by design: a catalog or bridge failure landing after this selection but before model:loaded populates the controllers list
-     * still hands the panel a null controller, because the selection resolves against a list that has not arrived. That failure belongs to the plugin bridge rather
-     * than to the controller, so offering no controller-repair surface is the honest rendering of it.
+     * One null-controller case survives by design: a catalog or bridge failure landing after this selection but before model:loaded still hands the panel a null
+     * controller, because the controller record is answered only once a model has loaded - before that, the list on hand is at best the one a re-entry inherited.
+     * That failure belongs to the plugin bridge rather than to the controller, so offering no controller-repair surface is the honest rendering of it.
      */
     if(!this.#config.globalOnly) {
 
@@ -975,13 +1006,15 @@ export class webUiFeatureOptions {
 
     // The revert-to-saved snapshot moves only when this load carries a different options set. It is preserved across show() / cleanup() cycles when the re-loaded
     // options are set-equal to the prior snapshot (the user reordered entries but did not save), so a revert after a re-show restores the original order rather
-    // than the reloaded one. The first show() has no snapshot to preserve and takes the just-loaded array.
+    // than the reloaded one. The first show() has no snapshot to preserve and takes the just-loaded array. A commit's re-entry carries its rename onto this load, so
+    // the reconciliation and the views' own carry of a renamed controller's state run here exactly as they do on an establishment in place.
     this.#establishModel({
 
       catalog,
       controllers,
       moveBoundary: !this.#initialOptions || !sameOptionsSet(this.#initialOptions, loadedOptions),
-      options: loadedOptions
+      options: loadedOptions,
+      rename
     });
 
     /* Announce the loaded model to the plugin. The dispatch above is the one place a cycle crosses from an empty page into a loaded one - every mode reaches it,
@@ -1110,15 +1143,21 @@ export class webUiFeatureOptions {
   /**
    * Refresh the controller sidebar in response to an explicit user action, without re-entering the full show() cycle.
    *
-   * A consumer calls this after a user action that could have changed the controller set - a controller added or removed through the plugin's own affordance - to
-   * repaint the sidebar's controller list against the current configuration. It re-syncs the session against the host config the way show() does before it reads
-   * controllers, so a refresh after a Settings-tab edit acts on the current config rather than a stale key, then re-invokes the configured getControllers hook. The
-   * freshness of the returned list is the consumer hook's concern: this method repaints whatever the hook resolves.
+   * A consumer calls this after a user action that could have changed the controller set - a controller added, removed, or re-addressed through the plugin's own
+   * affordance - to repaint the sidebar's controller list against the current configuration. It re-syncs the session against the host config the way show() does
+   * before it reads controllers, so a refresh after a Settings-tab edit acts on the current config rather than a stale key, then re-invokes the configured
+   * getControllers hook. The freshness of the returned list is the consumer hook's concern: this method repaints whatever the hook resolves.
    *
-   * This is the repaint for a plugin whose own action did not write the configuration's options - it replaces the controller list and touches nothing else, which
-   * is the whole of what it claims. A plugin that WRITES the configuration calls {@link webUiFeatureOptions#commitConfig} instead, which writes through the page's
-   * own session and re-establishes the entire model against what it wrote; repainting a list over a page whose options array the plugin has changed behind it is
-   * the exact shape that leaves the page holding a stale configuration.
+   * The list it installs is reconciled against every fact the page holds that names a controller, exactly as a model load reconciles its own: a selection the list
+   * can no longer place falls back to global, a departed controller's device list leaves with it, and a device fetch still pending against one is dropped. A caller
+   * whose action replaced a controller's sidebar key declares that as `rename`, and once the lists on either side prove it the page carries the selection, the
+   * loaded device list, and the view's own state for that controller onto the new key. On a page whose model has loaded, a selection the rename carried has its
+   * devices refetched under the new key, without the call waiting on it; a refresh that moved no selection fetches nothing, and neither does one over a page
+   * whose model never loaded, whose recovery belongs to its own retry.
+   *
+   * This is the repaint for a plugin whose own action did not write the configuration's options. A plugin that WRITES the configuration calls
+   * {@link webUiFeatureOptions#commitConfig} instead, which writes through the page's own session and re-establishes the entire model against what it wrote;
+   * repainting a list over a page whose options array the plugin has changed behind it is the exact shape that leaves the page holding a stale configuration.
    *
    * Contract:
    *
@@ -1142,14 +1181,25 @@ export class webUiFeatureOptions {
    *
    * A false return, in every case, means the view was left as it was; the caller relies on that to decide whether to surface its own no-controllers messaging.
    *
-   * The one outcome that is neither true nor false is a hook that answers in the wrong shape: that rejects with a TypeError naming the contract. It is not a
-   * connection failure and must not be reported as one - it is a bug in the caller's own hook, and the caller is the only party that can fix it.
+   * An outcome that is neither true nor false is a bug in the caller's own code, and rejects with a TypeError naming the contract it broke: a hook that answers in
+   * the wrong shape, or a `rename` in the wrong shape, which is refused before anything else happens. Such a rejection is not a connection failure and must not be
+   * reported as one - the caller is the only party that can fix it.
    *
+   * @param {Object} [options]
+   * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [options.rename] - The controller this call renames, as the sidebar key it had and the key
+   *                                                                                        it has now. The page carries every settled fact naming the old key onto
+   *                                                                                        the new one once the controller lists on either side of the call prove
+   *                                                                                        the rename, and ignores one they do not prove. Absent declares none.
    * @returns {Promise<boolean>} True when a non-empty controller list was loaded and the sidebar transitioned; false when the refresh left the view unchanged.
    * @throws {TypeError} When the configured getControllers hook resolves anything other than a {@link ControllerListResult}.
+   * @throws {TypeError} When `rename` is present and is not an object whose `from` and `to` are strings.
    * @public
    */
-  async refreshControllers() {
+  async refreshControllers({ rename = undefined } = {}) {
+
+    // A rename in the wrong shape is a bug in the call itself, refused ahead of everything else, the pre-store window included, so it surfaces however early the
+    // caller made it.
+    assertControllerRename(rename);
 
     // The pre-store window: a refresh dispatched before the first show() established the session and store has no sidebar to act on. Resolve false without touching
     // anything, so a consumer that wires its affordance before the first render simply gets a no-op.
@@ -1232,10 +1282,35 @@ export class webUiFeatureOptions {
       return false;
     }
 
-    // A non-empty list: dispatch the controllers-only refresh the nav view subscribes to. The reducer replaces state.controllers and the nav rebuilds the controllers
-    // container against it; the dispatch runs its subscribers synchronously, so the sidebar has transitioned by the time we report success. The staleness guard owns
-    // the verdict: a refresh whose cycle was superseded while it waited dispatches nothing and reports no change.
-    return this.#unlessStale({ run: () => this.#store.dispatch({ controllers, type: "controllers:loaded" }), signal });
+    // A non-empty list: dispatch the list arrival the nav view subscribes to. The reducer installs the list and reconciles every fact naming a controller against it,
+    // honoring the declared rename, and the nav rebuilds the controllers container; the dispatch runs its subscribers synchronously, so the sidebar has transitioned
+    // by the time we report success. The staleness guard owns the verdict: a refresh whose cycle was superseded while it waited dispatches nothing and reports no
+    // change.
+    const store = this.#store;
+    const before = selectedControllerId(store.state);
+
+    if(!this.#unlessStale({ run: () => store.dispatch({ controllers, rename, type: "controllers:loaded" }), signal })) {
+
+      return false;
+    }
+
+    /* A list arrival moves a selection onto another controller only through a rename the lists proved - every other move it makes is the fall back to global - so
+     * a selection that now names a different controller is one the rename carried, standing on a device list fetched from the old identity. It is refetched under
+     * the new key exactly as a coordinated write's establishment refetches, through the same refetch and the cycle's own signal, and not awaited: what the caller
+     * asked about is the list, which has already landed.
+     *
+     * The refetch runs only on a page whose model has loaded, the same page the establishment's refetch is limited to. A page without one has no device view to
+     * refresh: a boot still in flight owns its own device fetch, and a boot that ended before its model loaded owns the frame it left, where a clean outcome would
+     * lift a connection error over a page with nothing loaded under it.
+     */
+    const after = selectedControllerId(store.state);
+
+    if(modelLoaded(store.state) && (after !== null) && (after !== before)) {
+
+      void this.#refetchSelection({ controllerId: after, signal, store });
+    }
+
+    return true;
   }
 
   /**
@@ -1278,8 +1353,18 @@ export class webUiFeatureOptions {
    *     and a write that changed the configuration those failures came from deserves an honest re-evaluation. A consumer's verdict card mounted on a frame that
    *     re-enters is cleared by the re-entry, and the page coming up is the visible verdict.
    *   - An in-place establishment does not invoke `onLoaded`: that hook announces a show cycle, and this is not one.
-   *   - Two calls are caller bugs and reject before anything else happens, ahead of the queue: a composer that is not a function, and a call made before the
-   *     first `show()` has supplied a session. First-run code, which is the only code with nothing to call this on, writes through a session of its own.
+   *   - A `rename` declares that the write replaced a controller's sidebar key. It travels with its own call through the queue, and an in-place establishment
+   *     carries every settled fact naming the old key onto the new one once the controller lists before and after the write prove the rename: the selection
+   *     above all, whose devices the establishment's refetch then reads under the new key, while a user who moved to another controller while the write was
+   *     pending stays where they went. A re-entry carries it too. The fresh cycle starts from the controller list and selection of the page it replaces, so its
+   *     boot lands on the renamed controller once its own list proves the rename, and the persisted category expansion follows the controller to its new key. A
+   *     re-entry without a rename lands on the controller that was selected while the new list still holds it, and on the first controller otherwise. The rename
+   *     belongs to this call alone, so a retry after a re-entry that failed carries none. That retry lands on the renamed controller when the failed boot had
+   *     already selected it, which it has once its controller list has arrived, and on the first controller when the boot failed before that, because the
+   *     selection it hands over still names the old key. Wherever it lands, the persisted category expansion stays under the old key.
+   *   - A call that is a caller bug rejects before anything else happens, ahead of the queue: a composer that is not a function, a `rename` in the wrong shape,
+   *     and a call made before the first `show()` has supplied a session. First-run code, which is the only code with nothing to call this on, writes through a
+   *     session of its own.
    *
    * One residual is worth naming rather than closing. A host stalled longer than the teardown's bounded wait can let an abandoned commit land after a successor
    * cycle's own write and put a whole stale configuration back; that residual already exists for option edits, and with this method it can reach whatever else a
@@ -1288,19 +1373,27 @@ export class webUiFeatureOptions {
    *
    * @param {(platform: Object) => Object} compose - Synchronous composer receiving the live primary platform entry and returning the patch to merge onto it. The
    *                                                 entry is the composer's to read and not to edit: the page's store holds its options array by reference.
+   * @param {Object} [options]
+   * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [options.rename] - The controller this call renames, as the sidebar key it had and the key
+   *                                                                                        it has now. The page carries every settled fact naming the old key onto
+   *                                                                                        the new one once the controller lists on either side of the call prove
+   *                                                                                        the rename, and ignores one they do not prove. Absent declares none.
    * @returns {Promise<CommitConfigResult>} What became of the write, and what the page did about it.
    * @throws {TypeError} When `compose` is not a function.
+   * @throws {TypeError} When `rename` is present and is not an object whose `from` and `to` are strings.
    * @throws {Error} When no `show()` has supplied the page's configuration session yet.
    * @public
    */
-  async commitConfig(compose) {
+  async commitConfig(compose, { rename = undefined } = {}) {
 
-    // The two caller bugs, refused ahead of the queue so neither waits on a write that has nothing to do with it and neither can be mistaken for an outcome the
-    // page produced. Both name the contract they broke, because the only party that can fix either is the one that wrote the call.
+    // The caller bugs, refused ahead of the queue so none waits on a write that has nothing to do with it and none can be mistaken for an outcome the page
+    // produced. Each names the contract it broke, because the only party that can fix it is the one that wrote the call.
     if(typeof compose !== "function") {
 
       throw new TypeError("commitConfig requires a composer function: (platform) => patch, returning the fields to merge onto the primary platform entry.");
     }
+
+    assertControllerRename(rename);
 
     if(!this.#session) {
 
@@ -1309,7 +1402,7 @@ export class webUiFeatureOptions {
 
     // Join the chain, then replace its tail with this call's settlement whatever that turns out to be. The tail never rejects, so a composer that threw or a host
     // that refused a write leaves the next call waiting on a settled promise rather than on a rejection it would inherit.
-    const run = this.#commitQueue.then(() => this.#runCommit(compose));
+    const run = this.#commitQueue.then(() => this.#runCommit({ compose, rename }));
 
     this.#commitQueue = run.catch(() => undefined);
 
@@ -1324,11 +1417,14 @@ export class webUiFeatureOptions {
    * observed, and every later read of the page in this call compares against that rather than against whatever is live at the moment - a successor cycle's fresh
    * signal would pass a staleness check it should fail.
    *
-   * @param {(platform: Object) => Object} compose - The caller's composer, already validated.
+   * @param {Object} args
+   * @param {(platform: Object) => Object} args.compose - The caller's composer, already validated.
+   * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The caller's rename, already validated, which the establishment carries
+   *                                                                                     in place or through the re-entry.
    * @returns {Promise<CommitConfigResult>} What became of the write.
    * @private
    */
-  async #runCommit(compose) {
+  async #runCommit({ compose, rename = undefined }) {
 
     // A value control the user typed into and has not committed has fired no `change` yet, so the store does not carry what is on screen. Commit it now, once,
     // ahead of the drain that follows, so the user's own last keystroke is written rather than destroyed by the hold. Never inside the loop below: re-dispatching
@@ -1475,17 +1571,20 @@ export class webUiFeatureOptions {
 
     if(cycleLive && held && (observedStore.state.status.kind === "ready")) {
 
-      return this.#establishInPlace({ before, observedSignal, observedStore, releaseHold, result, session });
+      return this.#establishInPlace({ before, observedSignal, observedStore, releaseHold, rename, result, session });
     }
 
     /* Everything else with a live observed cycle re-enters the boot: a store whose model never loaded (the error card a failed sync or controller fetch left), or
      * a loaded page standing on the connection-error frame. The write changed the very configuration those failures came from, so a fresh boot is the honest
      * re-evaluation of it - and the consumer's card on that frame is cleared by the re-entry, which makes the page coming up the visible verdict. A hold taken on
      * such a store needs no release: the fresh cycle discards that store along with its cycle.
+     *
+     * The rename goes into the re-entry. The fresh store starts from the controller list and selection this store holds, so the boot's choice and its model load
+     * prove the rename against the list the boot fetches, exactly as an establishment in place proves it against its own.
      */
     if(cycleLive) {
 
-      await this.#reshow();
+      await this.#reshow({ rename });
 
       return result;
     }
@@ -1508,12 +1607,15 @@ export class webUiFeatureOptions {
    * @param {AbortSignal} args.observedSignal - The signal of the cycle this call observed.
    * @param {import("./webUi-featureOptions/store.mjs").FeatureOptionsStore} args.observedStore - The store this call drained and holds.
    * @param {() => void} args.releaseHold - Releases this call's hold on that store.
+   * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The rename the call declared, which the establishment puts on its model
+   *                                                                                     load for the reducer to honor once the lists prove it, and hands to the
+   *                                                                                     re-entry when the fetch fails.
    * @param {CommitConfigResult} args.result - What became of the write, which every path here answers with unchanged.
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} args.session - The session the write went through.
    * @returns {Promise<CommitConfigResult>} The result it was handed.
    * @private
    */
-  async #establishInPlace({ before, observedSignal, observedStore, releaseHold, result, session }) {
+  async #establishInPlace({ before, observedSignal, observedStore, releaseHold, rename = undefined, result, session }) {
 
     // Refetch the controller list against the configuration the write produced, bounded and held to the hook contract exactly as the boot holds it. A page with no
     // hook carries the same empty stand-in show() carries, so the paths below read one shape whether or not the plugin has controllers at all.
@@ -1541,7 +1643,7 @@ export class webUiFeatureOptions {
      */
     if(!aborted && (!listing || listing.error.length || this.#noControllersConfigured(listing.controllers) || (observedStore.state.status.kind !== "ready"))) {
 
-      await this.#reshow();
+      await this.#reshow({ rename });
 
       return result;
     }
@@ -1552,7 +1654,7 @@ export class webUiFeatureOptions {
     const after = platformOptions(session);
 
     if(!this.#unlessStale({ run: () => this.#establishModel({ catalog: observedStore.state.catalog, controllers: listing.controllers,
-      moveBoundary: !sameOptionsSet(before, after), options: after }), signal: observedSignal })) {
+      moveBoundary: !sameOptionsSet(before, after), options: after, rename }), signal: observedSignal })) {
 
       releaseHold();
 
@@ -1560,7 +1662,8 @@ export class webUiFeatureOptions {
     }
 
     /* The establishment reconciles controllers and nothing else, so a device that left a controller the list still holds is still on the page. This refetch is
-     * what answers that, and it is deliberately not awaited: the result the caller is waiting for is about the write, which has already landed.
+     * what answers that, and it is deliberately not awaited: the result the caller is waiting for is about the write, which has already landed. It reads the
+     * selection after the load has landed, so a selection the load carried across a rename is refetched under its new key.
      */
     const controllerId = selectedControllerId(observedStore.state);
 
@@ -1573,7 +1676,8 @@ export class webUiFeatureOptions {
   }
 
   /**
-   * Refetch the selected controller's devices after an in-place establishment, and move the selection only if the list that lands no longer holds it.
+   * Refetch the selected controller's devices after an in-place establishment, or after a refresh whose rename carried the selection onto a new key, and move the
+   * selection only if the list that lands no longer holds it.
    *
    * No optimistic scope change precedes this fetch, which is what separates it from a sidebar click. The selection already stands, and a transient controller
    * scope would hand a plugin's panel hook an undefined device and tear down the card it is rendering into - where leaving the scope alone keeps the same device
@@ -1638,9 +1742,12 @@ export class webUiFeatureOptions {
    * @param {Object[]} args.controllers - The controller list this model carries.
    * @param {boolean} args.moveBoundary - Whether these options become the new revert-to-saved target.
    * @param {Object[]} args.options - The configured options this model carries.
+   * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The rename a coordinated write declared, carried on the load for the
+   *                                                                                     reducer to honor once the lists prove it. A boot declares one only when a
+   *                                                                                     commit's re-entry handed it over.
    * @private
    */
-  #establishModel({ catalog, controllers, moveBoundary, options }) {
+  #establishModel({ catalog, controllers, moveBoundary, options, rename = undefined }) {
 
     if(moveBoundary) {
 
@@ -1654,6 +1761,7 @@ export class webUiFeatureOptions {
       controllers,
       initialOptions: this.#initialOptions,
       mode: this.#config.globalOnly ? "global-only" : (this.#config.getControllers ? "controller-based" : "device-only"),
+      rename,
       type: "model:loaded"
     });
   }
@@ -1662,18 +1770,25 @@ export class webUiFeatureOptions {
    * Re-enter the page through a fresh `show()` cycle, surfacing a failure as a toast rather than as an unobserved rejection.
    *
    * Every re-entry the page offers goes through here: the connection-error view's retry, the sidebar refresh's re-entry, and a coordinated write landing on a
-   * frame the boot owns. `show()` owns teardown, so each of them flushes any pending edit through its own `hide()` before the page signal aborts - which is why
+   * frame the boot owns. The boot owns teardown, so each of them flushes any pending edit through its own `hide()` before the page signal aborts - which is why
    * none of them calls `cleanup()`, whose abort-without-flush is exactly the dropped write they avoid. The re-show never rejects, so a throw out of a re-entered
    * boot lands in the toast rather than replacing a result a caller has already computed.
    *
+   * Each of them comes back on the controller the page had selected, while the list the boot fetches still holds it. The re-entry hands the boot the store it
+   * replaces, so the fresh cycle starts from that store's controller list and selection, and the boot lands where its own list leaves that selection. A plugin's
+   * own `show()` is not a re-entry and hands over nothing.
+   *
+   * @param {Object} [args]
+   * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The rename a coordinated write declared, which only a commit's re-entry
+   *                                                                                     carries.
    * @returns {Promise<void>}
    * @private
    */
-  async #reshow() {
+  async #reshow({ rename = undefined } = {}) {
 
     try {
 
-      await this.show(this.#session);
+      await this.#boot({ inherit: true, rename, session: this.#session });
     } catch(err) {
 
       toastError(err);
@@ -2336,8 +2451,8 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
  *
  * Each caller routes the failure differently, and deliberately: show() catches it into the connection-error view, because no plugin code is on its call stack to
  * receive it, while refreshControllers lets it reach the caller that asked for the refresh and wrote the hook. A wrong shape answering a coordinated write's own
- * refetch - after that write has already landed - re-enters show(), which routes it to the retry view: the configuration changed whatever the hook answered, so
- * the page cannot be left standing on the model the write replaced.
+ * refetch - after that write has already landed - re-enters the page through the boot show() runs, which routes it to the retry view: the configuration changed
+ * whatever the hook answered, so the page cannot be left standing on the model the write replaced.
  */
 const assertControllerListResult = (result) => {
 
@@ -2350,6 +2465,19 @@ const assertControllerListResult = (result) => {
   }
 
   return result;
+};
+
+/* Enforce the shape of a declared controller rename at one site, for every public method that takes one. Absent is no declaration at all, and anything present must
+ * be a {@link ControllerRename}: an object whose `from` and `to` are strings. A rename in any other shape is a bug in the caller's own code, so it is raised where
+ * the call was made rather than left for the reducer's proof to ignore - a declaration that never matches anything would read as a page that silently declined to
+ * keep the user's selection, which is the very failure the declaration exists to prevent.
+ */
+const assertControllerRename = (rename) => {
+
+  if((rename !== undefined) && (!rename || (typeof rename !== "object") || (typeof rename.from !== "string") || (typeof rename.to !== "string"))) {
+
+    throw new TypeError("The rename option must be { from, to }: the controller's previous and current sidebar keys, each a string.");
+  }
 };
 
 // The session's saved options, as an array. Every read of them goes through here - the editing buffer's pre-model answer, the boot's model load, and a coordinated

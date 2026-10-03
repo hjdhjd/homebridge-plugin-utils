@@ -30,9 +30,11 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  *   - `model:loaded` - a model arrives: catalog, configuredOptions, controllers, mode are populated and the write lifecycle returns to idle. A `loading` status
  *     becomes ready; any other status keeps its reference, so an establishment over a standing page cannot take the frame from the view that owns it. Every fact
  *     naming a controller is reconciled against the list the load carries, so a controller that left it takes the selection, the loaded device list, and the
- *     pending fetch that named it along.
- *   - `controllers:loaded` - a controllers-only refresh, dispatched through the facade's public `refreshControllers()` entry point; the retry path re-runs the full
- *     `model:loaded`.
+ *     pending fetch that named it along - and a {@link ControllerRename} the load declares, once the two lists prove it, first carries the settled facts that
+ *     named the old key onto the new one.
+ *   - `controllers:loaded` - a controller list arriving without a model, dispatched through the facade's public `refreshControllers()` entry point; the retry path
+ *     re-runs the full `model:loaded`. It answers for the facts that name a controller exactly as `model:loaded` does, declared rename included, because every
+ *     list arrival runs the one reconciliation, and it leaves every other slice where it was.
  *   - `devices:requested` - a device fetch is beginning: mints the next fetch sequence into state and records it as the pending request, so the outcome that
  *     eventually answers it can be told apart from a superseded one.
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
@@ -131,14 +133,26 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  */
 
 /**
+ * ControllerRename - One controller key becoming another. The page keys a controller by the `serialNumber` its plugin's `getControllers` hook supplies, and a
+ * plugin that fills it from configuration - the controller's address, above all - replaces the key whenever a write edits that configuration. Nothing in the two
+ * lists says the departing key and the arriving one are the same controller, so a write that replaced one declares it, naming the key the controller had and the
+ * key it has now.
+ *
+ * The declaration is a claim about the write, and the controller lists on either side of it are the evidence: {@link renameHonored} is the one test of whether
+ * they prove it, and a rename they do not prove is ignored.
+ *
+ * @typedef {{from: string, to: string}} ControllerRename
+ */
+
+/**
  * LifecycleStatus - Whether the page can be reached, and nothing else. `loading` is the phase before a model arrives, `ready` is a page the user can work in, and
  * `connection-error` is a page whose controller did not answer. Drop a variant when it stops being a named reachability state; add one when a new one surfaces.
  *
  * The `connection-error` variant carries its full display copy - `headline`, `guidance`, and `message` - so the connection-error view maps each text slot
  * without hardcoding any prose. The copy arrives on the action that sets the variant - {@link devices:loaded} for a device fetch and {@link connection:error} for
  * every other failing await - resolved from the copy table by the dispatcher that met the failure. It stands until a clean device outcome applies - the evidence
- * that a controller is reachable again - or the page re-enters through `show()`. Nothing else clears it, so a view rendering against it can treat it as the
- * whole truth about the page's reachability for as long as it holds.
+ * that a controller is reachable again - or the page boots again onto a fresh store, through a plugin's `show()` or one of the page's own re-entries. Nothing
+ * else clears it, so a view rendering against it can treat it as the whole truth about the page's reachability for as long as it holds.
  *
  * @typedef {{kind: "loading"} | {kind: "ready"} | {kind: "connection-error", guidance: string, headline: string, message: string}} LifecycleStatus
  */
@@ -346,17 +360,46 @@ export const connectionFailureCopy = ({ controllerFailureGuidance = undefined, e
 export const controllerNoticeCopy = ({ devicesListed }) => devicesListed ?
   "Select a device to configure its options." : "This controller has no devices to configure.";
 
+// The selection a fresh store starts from when it replaces another: a controller selection as it stood, a device selection as its controller's - the device list
+// it was made from is not inherited - and global for anything that names no controller, which is device-only mode's device selection as much as global itself.
+const inheritedScope = (scope) => {
+
+  switch(scope?.kind) {
+
+    case "controller": {
+
+      return scope;
+    }
+
+    case "device": {
+
+      return (scope.controllerId === null) ? { kind: "global" } : { controllerId: scope.controllerId, kind: "controller" };
+    }
+
+    default: {
+
+      return { kind: "global" };
+    }
+  }
+};
+
 /**
  * Build the initial state. Status is `loading` and the write lifecycle is `idle`; every populated-at-runtime field is set to an empty array or default value. The
  * first {@link model:loaded} dispatch transitions every field to its loaded value in one atomic update.
  *
- * No constructor parameters because the variant data (mode, validators, configuredOptions) is not yet available at store-construction time - it arrives over the
- * wire from Homebridge's `getPluginConfig` + `request("/getOptions")` plus the plugin's optional `getControllers`. The orchestrator dispatches `model:loaded` once
- * those resolve.
+ * The variant data (mode, validators, configuredOptions) is not available at store-construction time - it arrives over the wire from Homebridge's
+ * `getPluginConfig` + `request("/getOptions")` plus the plugin's optional `getControllers`, and the orchestrator dispatches `model:loaded` once those resolve.
  *
+ * A page that re-enters hands over the store it replaces, and the fresh store starts from that store's controller list and selection and from nothing else of
+ * it, so the boot's `model:loaded` reconciles the selection against the list it fetched exactly as a load over a standing page does, a declared rename included.
+ * A device selection is inherited as its controller's selection, because the device list it was made from is not inherited, and a selection naming no
+ * controller is inherited as global. Starting values are not a list this page has loaded, so {@link selectedController} answers no controller record from them
+ * until a model arrives.
+ *
+ * @param {FeatureOptionsState} [replaced] - The state of the store a re-entry replaces, loaded or itself inherited. Absent for an entry that inherits nothing.
  * @returns {FeatureOptionsState} A fresh initial-state object.
  */
-export const initialState = () => {
+export const initialState = (replaced = undefined) => {
 
   // Share a single empty-array reference across every array-typed option field so the staging effect's "are we dirty?" check (configuredOptions === stagedAnchor)
   // returns true at registration time and does not trigger a spurious initial stage. After model:loaded, each field is set to the loaded array's reference; the
@@ -368,7 +411,7 @@ export const initialState = () => {
     armedOption: null,
     catalog: EMPTY_CATALOG,
     configuredOptions: empty,
-    controllers: [],
+    controllers: replaced?.controllers ?? [],
     devices: [],
     devicesAppliedSeq: 0,
     devicesControllerId: null,
@@ -379,7 +422,7 @@ export const initialState = () => {
     initialOptions: empty,
     mode: "device-only",
     revealed: false,
-    scope: { kind: "global" },
+    scope: inheritedScope(replaced?.scope),
     stagedAnchor: empty,
     status: { kind: "loading" },
     takeover: false,
@@ -402,9 +445,141 @@ export const MUTATING_ACTIONS = [ "model:reverted", "option:cleared", "option:se
  */
 const HELD_ACTIONS = new Set([ ...MUTATING_ACTIONS, "option:armed" ]);
 
-// Whether a controller list holds the controller a piece of state names. A null id names no controller at all - device-only mode carries one, and so does the
-// initial state - so it reads as held: there is nothing for a reconciliation to take away.
-const holdsController = ({ controllers, id }) => (id === null) || controllers.some((controller) => controller.serialNumber === id);
+/**
+ * Report whether a controller list holds the controller a piece of state names. A null id names no controller at all - device-only mode carries one, and so does
+ * the initial state - so it reads as held: there is nothing for a reconciliation to take away.
+ *
+ * This is the one membership test on the page. The reconciliation asks it of every fact that names a controller, and a view keeping state of its own under
+ * controller keys asks it of those keys, so the two cannot disagree about which controllers a list holds.
+ *
+ * @param {Object} args
+ * @param {readonly Controller[]} args.controllers - The controller list to look in.
+ * @param {string | null} args.id - The controller a piece of state names, as the sidebar keys it, or null when it names none.
+ * @returns {boolean} True when the list holds the controller or the id names none, false otherwise.
+ */
+export const holdsController = ({ controllers, id }) => (id === null) || controllers.some((controller) => controller.serialNumber === id);
+
+/**
+ * Report whether the controller lists on either side of a list arrival prove the rename it declares. A rename is honored only when the two keys differ, the
+ * standing list holds the old key and not the new one, and the arriving list holds the new key and not the old one. Each of those is evidence the write did what
+ * it claims, so a rename onto a key another entry already holds, a write that appended the new entry where it meant to replace the old one, and a declaration
+ * that no longer describes either list all fail one check and fall through to the plain reconciliation.
+ *
+ * This is the one statement of the rule. The reducer asks it of the state it is handed and the action it applies, and a view keeping state of its own under a
+ * controller's key asks it of the state its effect is handed and the same action, so the two can never disagree about whether a write renamed anything.
+ *
+ * @param {Object} args
+ * @param {readonly Controller[]} args.arriving - The controller list the action installs.
+ * @param {ControllerRename | undefined} args.rename - The rename the action declares, or undefined when it declares none.
+ * @param {readonly Controller[]} args.standing - The controller list the action replaces.
+ * @returns {boolean} True when the lists prove the rename, false when there is none or they do not.
+ */
+export const renameHonored = ({ arriving, rename, standing }) => {
+
+  if(!rename || (rename.from === rename.to)) {
+
+    return false;
+  }
+
+  return holdsController({ controllers: standing, id: rename.from }) && !holdsController({ controllers: standing, id: rename.to }) &&
+    holdsController({ controllers: arriving, id: rename.to }) && !holdsController({ controllers: arriving, id: rename.from });
+};
+
+/* The selection a list arrival leaves standing. A rename already proven carries a selection that named the old key onto the new one, its kind and any device
+ * kept, and the arriving list then keeps a selection whose controller it holds and sends any other back to global. A selection that neither moves keeps its
+ * exact reference. The reducer's reconciliation and the boot's own question about an inherited selection run this one rule, so the boot lands where the load
+ * leaves the selection.
+ *
+ * The arguments are positional because this runs on every list arrival and builds nothing for a selection that stays where it was.
+ */
+const reconcileScope = (scope, arriving, provenRename) => {
+
+  const carried = (provenRename && (scope.kind !== "global") && (scope.controllerId === provenRename.from)) ? { ...scope, controllerId: provenRename.to } : scope;
+
+  return holdsController({ controllers: arriving, id: (carried.kind === "global") ? null : carried.controllerId }) ? carried : { kind: "global" };
+};
+
+/**
+ * Report which controller a state's selection lands on once a controller list arrives, given the rename the arrival declares. It runs the reconciliation's own
+ * selection rule, so it answers exactly as a `model:loaded` or `controllers:loaded` carrying that list would leave the selection: on the controller it named when
+ * the list still holds it, on the new key when the lists prove a rename of it, and on no controller otherwise.
+ *
+ * A boot asks this at the moment it chooses its controller, which comes before its own `model:loaded` so that the device fetch can overlap the catalog read. A
+ * fresh store that inherited a replaced page's list and selection therefore lands where that load is about to leave it, without a second statement of the rule.
+ *
+ * @param {Object} args
+ * @param {readonly Controller[]} args.arriving - The controller list arriving.
+ * @param {ControllerRename | undefined} args.rename - The rename the arrival declares, or undefined when it declares none.
+ * @param {FeatureOptionsState} args.state - The state the list arrives in, whose controller list and selection are the standing ones.
+ * @returns {string | null} The controller the selection lands on, as the sidebar keys it, or null when it lands on none.
+ */
+export const reconciledControllerId = ({ arriving, rename, state }) => {
+
+  const scope = reconcileScope(state.scope, arriving, renameHonored({ arriving, rename, standing: state.controllers }) ? rename : undefined);
+
+  return (scope.kind === "global") ? null : scope.controllerId;
+};
+
+/* Reconcile every fact in state that can name a controller against the list an action installs, each one independently and by serial. Every list-arriving action
+ * hands this the state object it has built, which is what keeps them from ever disagreeing about what a list arrival does to the selection, the loaded device
+ * list, and a pending fetch.
+ *
+ * A rename the lists prove is honored first, and it carries only settled facts. The selection's controller becomes the new key with its kind and any device kept,
+ * and the loaded device list changes owner with its own list and notice kept. A pending fetch is the one fact a rename never carries: it was asked of the old
+ * identity, so its outcome must not land under the new key, and the check below clears it because the old key has left the list. A fact naming any other key
+ * keeps its reference.
+ *
+ * Then the list answers for each fact on its own terms. A selection it cannot place falls back to global, a loaded device list whose owner is gone is emptied
+ * along with the nothing-to-list notice that described it, and a pending fetch for a departed controller is cleared so its late outcome falls to the existing
+ * sequence rule. A fact naming a controller the list holds keeps its exact reference. On a first load every one of these facts is still its initial value, or
+ * the selection a re-entry inherited, so the list decides it exactly as it decides any other.
+ *
+ * An arrival that moves nothing hands back the arm's own state object, so it allocates nothing beyond that object; one that moves a fact answers with a copy
+ * carrying what moved. The arguments are positional for the same reason, and the arm's object is never modified.
+ *
+ * The list is the whole of what a list-arriving action answers for. A device that left a controller the list still holds is a different question, and a device fetch is
+ * what answers it - which belongs to whoever dispatched the action.
+ */
+const reconcileControllerFacts = (state, next, rename) => {
+
+  const arriving = next.controllers;
+  const provenRename = renameHonored({ arriving, rename, standing: state.controllers }) ? rename : undefined;
+  const devicesControllerId = (provenRename && (state.devicesControllerId === provenRename.from)) ? provenRename.to : state.devicesControllerId;
+  const scope = reconcileScope(state.scope, arriving, provenRename);
+  const holdsDevicesController = holdsController({ controllers: arriving, id: devicesControllerId });
+  const holdsRequestController = holdsController({ controllers: arriving, id: state.devicesRequest?.controllerId ?? null });
+
+  if(holdsDevicesController && holdsRequestController && (devicesControllerId === state.devicesControllerId) && (scope === state.scope)) {
+
+    return next;
+  }
+
+  return {
+
+    ...next,
+    devices: holdsDevicesController ? state.devices : [],
+    devicesControllerId: holdsDevicesController ? devicesControllerId : null,
+    devicesEmptyMessage: holdsDevicesController ? state.devicesEmptyMessage : null,
+    devicesRequest: holdsRequestController ? state.devicesRequest : null,
+    scope
+  };
+};
+
+/**
+ * Report whether a transition moved a settled fact that names a controller: the selection, the loaded device list, the controller that owns it, or its
+ * nothing-to-list notice. A pending fetch is not among them - it is a request rather than a settled fact, and the busy state that reads it is re-derived on every
+ * path a surface takes.
+ *
+ * A list arrival moves these only through the reconciliation, and the reducer's structural sharing keeps every one it did not move at its exact reference, so a
+ * surface that renders from them asks this one question of the states either side of the arrival rather than spelling out the slices for itself. The states are
+ * positional because the comparison runs on every list arrival in every surface that asks it, and it allocates nothing.
+ *
+ * @param {FeatureOptionsState} previous - The state before the transition.
+ * @param {FeatureOptionsState} next - The state after it.
+ * @returns {boolean} True when any settled fact naming a controller moved, false when every one kept its reference.
+ */
+export const settledFactsMoved = (previous, next) => (previous.scope !== next.scope) || (previous.devices !== next.devices) ||
+  (previous.devicesControllerId !== next.devicesControllerId) || (previous.devicesEmptyMessage !== next.devicesEmptyMessage);
 
 /* Answer a write the engine refused by leaving the configuration exactly as it was. The engine turns away an address it cannot assign to the option asked for -
  * a device identifier carrying a period or an equals sign, or one whose composed address is another catalog option in its own right - and the page's identifiers
@@ -463,22 +638,13 @@ export const reducer = (state, action) => {
         throw new Error("FeatureOptionsState.reducer: model:loaded carried no catalog.");
       }
 
-      /* Reconcile every fact in state that can name a controller against the list this load carries, each one independently and by serial. A load over a standing
-       * page can remove the controller the user is looking at: a selection the list cannot place falls back to global, a loaded device list whose owner is gone is
-       * emptied along with the nothing-to-list notice that described it, and a pending fetch for a departed controller is cleared so its late outcome falls to the
-       * existing sequence rule. A fact naming a controller the list still holds keeps its reference. On a first load every one of these facts is still its initial
-       * value, so nothing moves.
+      /* A model arrives: catalog, configuredOptions, mode, controllers populated. A load over a standing page can remove or rename the controller the user is
+       * looking at, and a boot's first load can find a selection its page inherited, so every fact that names a controller is reconciled against the list this
+       * load carries, honoring the rename the load declares - through the reconciliation the list-only arm below shares (see {@link reconcileControllerFacts}).
        *
-       * The load carries a controller list, so controllers are the whole of what it can answer for. A device that left a controller the list still holds is a
-       * different question, and a device fetch is what answers it - which belongs to whoever dispatched this load.
-       */
-      const holdsDevicesController = holdsController({ controllers: action.controllers, id: state.devicesControllerId });
-      const holdsRequestController = holdsController({ controllers: action.controllers, id: state.devicesRequest?.controllerId ?? null });
-      const holdsScopeController = holdsController({ controllers: action.controllers, id: (state.scope.kind === "global") ? null : state.scope.controllerId });
-
-      /* A model arrives: catalog, configuredOptions, mode, controllers populated. The staged anchor seeds from the just-loaded options (pre-mutation the
-       * loaded array IS what the host holds). The initial snapshot - the revert target - takes `action.initialOptions` if the dispatcher supplied it (orchestrator
-       * re-shows that detected set-equal options carry the original snapshot forward), otherwise falls back to the loaded options.
+       * The staged anchor seeds from the just-loaded options (pre-mutation the loaded array IS what the host holds). The initial snapshot - the revert target -
+       * takes `action.initialOptions` if the dispatcher supplied it (orchestrator re-shows that detected set-equal options carry the original snapshot forward),
+       * otherwise falls back to the loaded options.
        *
        * Status moves to ready only out of `loading`. A connection error ends on a clean device outcome or on a fresh page cycle and nothing else, so an
        * establishment that declared the page ready would take the frame away from the connection-error view while a plugin's controller card is rendering into it.
@@ -486,30 +652,30 @@ export const reducer = (state, action) => {
        * The write lifecycle returns to idle unconditionally: this load installs a fresh anchor, so whatever that lifecycle held describes an anchor that no longer
        * exists.
        */
-      return {
+      const loaded = {
 
         ...state,
         armedOption: null,
         catalog: action.catalog,
         configuredOptions: action.configuredOptions,
         controllers: action.controllers,
-        devices: holdsDevicesController ? state.devices : [],
-        devicesControllerId: holdsDevicesController ? state.devicesControllerId : null,
-        devicesEmptyMessage: holdsDevicesController ? state.devicesEmptyMessage : null,
-        devicesRequest: holdsRequestController ? state.devicesRequest : null,
         initialOptions: action.initialOptions ?? action.configuredOptions,
         mode: action.mode,
-        scope: holdsScopeController ? state.scope : { kind: "global" },
         stagedAnchor: action.configuredOptions,
         status: (state.status.kind === "loading") ? { kind: "ready" } : state.status,
         write: { kind: "idle" }
       };
+
+      return reconcileControllerFacts(state, loaded, action.rename);
     }
 
     case "controllers:loaded": {
 
-      // Controllers list refreshed without re-loading the model - the facade's `refreshControllers()` path, which the nav view rebuilds the sidebar on.
-      return { ...state, controllers: action.controllers };
+      // A controller list arriving without a model - the facade's `refreshControllers()` path, which the nav view rebuilds the sidebar on. It answers for the facts
+      // that name a controller exactly as a model load does, declared rename included, through the one reconciliation every list arrival shares, so a list
+      // refreshed under a standing page can never leave a selection, a device list, or a pending fetch naming a key no sidebar row carries. Everything else keeps
+      // its reference.
+      return reconcileControllerFacts(state, { ...state, controllers: action.controllers }, action.rename);
     }
 
     case "devices:requested": {

@@ -207,10 +207,16 @@ export const selectedDevice = memoize({
 });
 
 /**
- * Resolve the currently-selected controller by walking the controllers list for the scope's controllerId. Memoized on `(scope, controllers)`.
+ * Resolve the currently-selected controller by walking the controllers list for the scope's controllerId. Memoized on `(catalog, scope, controllers)`.
  *
- * Returns `null` for the global view (no controller in scope), the device-only-mode device view (controllerId is null), or when the controller is not found.
- * Consumers display the controller's name in headers / breadcrumbs and skip the display entirely on null.
+ * Returns `null` for the global view (no controller in scope), the device-only-mode device view (controllerId is null), when the controller is not found, and
+ * for the whole phase before a model loads. That last rule is what keeps a record from being answered out of a list this page has not loaded: a re-entered page
+ * starts from the controller list and selection of the page it replaced, so until its own `model:loaded` installs a list it fetched, the record on hand is the
+ * replaced page's - which, after a write that re-addressed the controller, is the very record the write replaced. Every read of the record that can come before
+ * a model loads goes through here, so this is the one place the rule is stated, and a page that fails before its model loads hands the plugin's connection-error
+ * panel no controller. The shared device fetch looks its controller up in the list on its own and needs no such rule, because every caller of it runs on a page
+ * whose model has loaded: a sidebar click, which the page offers only once it is revealed, and the selection's refetch, which the coordinator runs only over a
+ * loaded model.
  *
  * @param {import("./state.mjs").FeatureOptionsState} state - The current state.
  * @returns {import("./state.mjs").Controller | null} The selected controller, or null.
@@ -221,14 +227,14 @@ export const selectedController = memoize({
 
     const controllerId = selectedControllerId(state);
 
-    if(controllerId === null) {
+    if((controllerId === null) || !modelLoaded(state)) {
 
       return null;
     }
 
     return state.controllers.find((c) => c.serialNumber === controllerId) ?? null;
   },
-  slices: [ (s) => s.scope, (s) => s.controllers ]
+  slices: [ (s) => s.catalog, (s) => s.scope, (s) => s.controllers ]
 });
 
 /**
@@ -392,7 +398,7 @@ export const tablePresentation = memoize({
  * The view projection. One pass over the active option set produces every downstream display decision: status-bar counts, per-category visibility, per-row
  * visibility, per-row dependency-badge state, per-row resolved value for value-centric options, and the resolved list a picker offers with its selection already
  * marked. Memoized on `(catalog, configuredOptions, scope, filter, devices, controllers)` so any dispatch that does not touch those slices returns the cached
- * projection. `controllers` is among them because a choice source is handed the selected controller, which a controllers-only refresh replaces.
+ * projection. `controllers` is among them because a choice source is handed the selected controller, which a controller-list refresh replaces.
  *
  * The active option set is what the gates admit, in order: an option's declared scopes must admit the current view kind, and then the plugin's `validOption` must
  * accept it for the selected device. Everything downstream - the counts, the rows, the DOM - reads from this one set, so an option the current view has no

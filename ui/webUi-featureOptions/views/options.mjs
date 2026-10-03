@@ -7,7 +7,8 @@
 import { applyCategoryStates, captureCategoryStates, createElement } from "../utils.mjs";
 import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, toggleSecretReveal, triStateTransition,
   valueCommitTransition } from "../rendering.mjs";
-import { configIndex, editsHeld, projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
+import { configIndex, editsHeld, modelLoaded, projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
+import { holdsController, renameHonored, settledFactsMoved } from "../state.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { effect } from "../store.mjs";
 import { hasValueContent } from "../../featureOptions.js";
@@ -33,8 +34,10 @@ const DEVICES_NOTICE_CLASS = "fo-devices-notice";
  *      category is missing, so what it derives is always the whole of what that category should be showing.
  *   5. **Visibility updates** on `filter:changed`: the same projection walk, doing the same two jobs - materializing what an open category lacks, then re-deriving
  *      each row, which includes its visibility and the "requires parent" badge.
- *   6. **Controller refresh** on `controllers:loaded`: the same lightweight walk, for the one thing a controllers-only refresh can move - the list a plugin's
- *      choice source derives from the selected controller.
+ *   6. **Controller-list arrival** on `controllers:loaded`: the view's own keyed state follows the list - a rename the lists prove carries the persisted
+ *      category expansion and the mounted view to the new key, and the DOM cache drops every view of a controller the list no longer holds. The surface then
+ *      re-renders as a navigation does when the reducer's reconciliation moved the selection or a device fact, and otherwise takes the same lightweight walk a
+ *      filter change takes, for the one thing such an arrival can still move - the list a plugin's choice source derives from the selected controller.
  *   7. **Busy rendering** through every window in which the table must take no gesture: a controller's device list is in flight, so a write would land at the
  *      wrong scope, or a coordinated configuration write holds the store, so the reducer would refuse the write outright. Whichever it is, the table goes inert -
  *      every write-capable control disabled, the rows dimmed through a marker class. Derived at every row-state application, and re-derived through a projection
@@ -42,7 +45,8 @@ const DEVICES_NOTICE_CLASS = "fo-devices-notice";
  *   8. **Click delegation** for: row clicks (forward to checkbox), checkbox changes (tri-state transition + action dispatch), value-control changes (value-commit
  *      transition + action dispatch). A gesture that leaves `configuredOptions` unchanged - a rejection, or an arm/disarm - restores the row through the shared
  *      applyRowState writer instead of relying on the projection walk.
- *   9. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view.
+ *   9. **Category state persistence**: captures the current view's expand/collapse state on every toggle and on scope-change, restores it when entering a view,
+ *      and carries a renamed controller's entries to its new key on every list-arriving action.
  *
  * The per-device DOM cache lets navigating from device A to device B and back return to A's previously-rendered DOM without re-running the projection or
  * rebuilding the category shells. The cache map's lifetime is the view's lifetime; aborting the signal releases it.
@@ -66,13 +70,31 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
   // `platform` thunk post-sync) rather than at mount - the views mount before the sync resolves.
   let categoryState;
 
-  // Rebuild on model:loaded - construct the category-state store from the freshly-synced platform, then clear any prior content and prepare for the first
-  // scope-render. The actual category shells come from the scope-render path. This effect is registered before the scope-render effect below, so on a model:loaded
-  // dispatch it runs first and `categoryState` is built before that effect reads it.
+  /* Carry the persisted category expansion across a rename the reducer honored: every entry of the old controller key moves to the same view under the new key.
+   * The entries move one at a time through the store's own get, set, and delete, as the legacy migration below moves one, and the new key's own entry gives way
+   * because the renamed controller's state is the user's latest word on that view.
+   */
+  const carryRename = (rename) => {
+
+    for(const key of categoryState.keys()) {
+
+      const renamedKey = renamedViewKey({ key, rename });
+
+      if(renamedKey !== null) {
+
+        categoryState.set(renamedKey, categoryState.get(key));
+        categoryState.delete(key);
+      }
+    }
+  };
+
+  // Rebuild on model:loaded - construct the category-state store from the freshly-synced platform, carry a renamed controller's entries onto its new key, then clear
+  // any prior content and prepare for the first scope-render. The actual category shells come from the scope-render path. This effect is registered before the
+  // scope-render effect below, so on a model:loaded dispatch it runs first and `categoryState` holds the carried entries before that effect reads them.
   effect({
 
     events: ["model:loaded"],
-    fn: () => {
+    fn: (action, previous) => {
 
       if(store.state.status.kind === "loading") {
 
@@ -80,6 +102,14 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
       }
 
       categoryState = new FeatureOptionsCategoryState(platform());
+
+      // Whether the load renamed a controller is the reducer module's own test, asked of the lists and the declaration the reducer was handed. It is asked whatever
+      // the selection, because a renamed controller the user is not looking at keeps its expansion as much as the one they are.
+      if(action && renameHonored({ arriving: action.controllers, rename: action.rename, standing: previous.controllers })) {
+
+        carryRename(action.rename);
+      }
+
       configTable.textContent = "";
       cache.clear();
       mountedKey = undefined;
@@ -88,7 +118,130 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
     store
   });
 
-  // Scope-aware render. Detach the prior view's DOM into the cache (keyed by the prior deviceId); restore the new view's DOM from cache or build fresh.
+  /* Scope-aware render: the navigation between views. Detach the prior view's DOM into the cache under the key it was mounted at, then restore the new view's
+   * DOM from the cache or build it fresh. It is a closure rather than the navigation effect's own body because the controller-list arrival further down runs it
+   * too, and only once it has re-keyed the view's own state.
+   */
+  const renderScope = () => {
+
+    // {@link scopeCacheKey} is the single identifier for "which view is this." Used as both the DOM-cache map key and the category-state localStorage context
+    // key so a navigation and a localStorage lookup observe the same notion of view.
+    const newKey = scopeCacheKey(store.state.scope);
+
+    // What this surface presents is a shared derivation rather than a judgment this view makes for itself, so the table and the search panel that filters it
+    // cannot disagree about whether there is a table at all. The outgoing capture below is unconditional either way: whatever is leaving is captured on its own
+    // terms, and only what arrives depends on the presentation.
+    const presentation = tablePresentation(store.state);
+
+    // Capture the OUTGOING view's category state before detaching its DOM. The capture reads details[data-category] open-state from the live DOM.
+    if(mountedKey !== undefined) {
+
+      if(configTable.querySelector("details[data-category]")) {
+
+        categoryState.set(mountedKey, captureCategoryStates(configTable));
+      }
+
+      // Detach the currently-mounted DOM into the cache. A notice is the one thing that never enters the cache: it is view-mortal, rebuilt from the outcome on
+      // every entry, and caching it would let it come back over a key whose real content is a table - the same-key pass that folds an empty outcome caches the
+      // optimistic bare-controller table under exactly that key, so the notice must not be allowed to displace it on the way out.
+      const detached = [...configTable.children];
+
+      if((detached.length > 0) && !detached[0].matches?.("." + DEVICES_NOTICE_CLASS)) {
+
+        cache.set(mountedKey, detached);
+      }
+
+      for(const child of detached) {
+
+        configTable.removeChild(child);
+      }
+    }
+
+    // Every presentation claims the incoming view as the mounted one, whichever DOM it ends up putting there, so the next pass's outgoing capture keys off the
+    // right view either way. Set once here rather than repeated in each branch below.
+    mountedKey = newKey;
+
+    switch(presentation.kind) {
+
+      case "empty": {
+
+        /* The controller is reachable and has nothing to offer at its own level, so a notice takes the place of the option table. That covers a list which came
+         * back with nothing in it, and a list whose rows include none that the plugin's `isController` names, which leaves the page without a serial its
+         * controller-scope entries could be keyed by. The notice is built fresh on every entry rather than cached, because the outcome that justifies it is
+         * exactly what a refetch can change: a controller that gains its own row, or its first device, stops resting here, and a rebuilt-per-entry notice cannot
+         * outlive that. Table DOM cached under this key stays where it is for the same reason, waiting for the day a refetch answers differently.
+         *
+         * The message is appended as a string child, which the element helper turns into a text node - copy a plugin supplied is text the page displays, never
+         * markup it executes.
+         */
+        configTable.appendChild(createElement("div", { classList: [ DEVICES_NOTICE_CLASS, "text-center", "text-muted", "my-4" ] }, [presentation.message]));
+
+        /* The busy state is derived here as in every other branch rather than cleared outright, because a notice view is not always a settled one: a revisit
+         * refetches while its notice still stands, and that view IS busy. One derivation answers both cases - a settled notice reads false and the marker goes,
+         * a notice over an outstanding fetch reads true and it stays. Deriving rather than recording also leaves the table DOM cached under this key untouched,
+         * so whatever comes back through the options branch takes the window's state as it is then rather than as it was when the notice displaced it.
+         */
+        applyBusyState({ configTable, state: store.state });
+
+        return;
+      }
+
+      case "error": {
+
+        /* The connection-error view has taken the frame and owns the message, so the table stays empty beneath it - the outgoing detach above already emptied
+         * it, and this branch simply declines to put anything back. Rendering the just-selected controller's full table under an error would offer the options
+         * of a controller that never confirmed it could be reached, inviting writes against a scope the page has no settled device list for.
+         *
+         * Nothing is lost by declining. The outgoing pass cached the view being left, and the recovery transition a clean outcome triggers runs this render
+         * again with an `options` presentation, which restores that cached DOM exactly as any other navigation would.
+         */
+        return;
+      }
+
+      case "options": {
+
+        // Attach the cached DOM for the new view, if any. Otherwise build the category shells fresh from the projection.
+        const cached = cache.get(newKey);
+
+        if(cached) {
+
+          for(const child of cached) {
+
+            configTable.appendChild(child);
+          }
+
+          cache.delete(newKey);
+        } else {
+
+          buildCategoryShells({ configTable, state: store.state });
+        }
+
+        // Restore the incoming view's persisted category state, transparently migrating any data still stored under the legacy key shape (see
+        // {@link legacyContextKey}) to the current {@link scopeCacheKey} shape on first read. After a view has been migrated once, its data lives entirely under
+        // the current shape and no further legacy lookup is needed.
+        const savedStates = restoreLegacyMigrated({ categoryState, newKey, scope: store.state.scope });
+
+        if(savedStates) {
+
+          applyCategoryStates(configTable, savedStates);
+        }
+
+        // Apply visibility and per-row state from the current projection.
+        applyProjectionToDom({ configTable, state: store.state });
+
+        return;
+      }
+
+      default: {
+
+        // Exhaustive switch over the TablePresentation DU - unreachable while the switch and the DU stay in sync. A future variant surfaces here as a runtime
+        // throw rather than as a silently blank config table nobody can explain.
+        throw new Error("mountOptionsView: unknown table presentation.");
+      }
+    }
+  };
+
+  // Render the scope on every navigation and on every arrival of a model or a device list, each of which can change what the surface presents.
   effect({
 
     events: [ "model:loaded", "scope:changed", "devices:loaded" ],
@@ -99,121 +252,7 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
         return;
       }
 
-      // {@link scopeCacheKey} is the single identifier for "which view is this." Used as both the DOM-cache map key and the category-state localStorage context
-      // key so a navigation and a localStorage lookup observe the same notion of view.
-      const newKey = scopeCacheKey(store.state.scope);
-
-      // What this surface presents is a shared derivation rather than a judgment this view makes for itself, so the table and the search panel that filters it
-      // cannot disagree about whether there is a table at all. The outgoing capture below is unconditional either way: whatever is leaving is captured on its own
-      // terms, and only what arrives depends on the presentation.
-      const presentation = tablePresentation(store.state);
-
-      // Capture the OUTGOING view's category state before detaching its DOM. The capture reads details[data-category] open-state from the live DOM.
-      if(mountedKey !== undefined) {
-
-        if(configTable.querySelector("details[data-category]")) {
-
-          categoryState.set(mountedKey, captureCategoryStates(configTable));
-        }
-
-        // Detach the currently-mounted DOM into the cache. A notice is the one thing that never enters the cache: it is view-mortal, rebuilt from the outcome on
-        // every entry, and caching it would let it come back over a key whose real content is a table - the same-key pass that folds an empty outcome caches the
-        // optimistic bare-controller table under exactly that key, so the notice must not be allowed to displace it on the way out.
-        const detached = [...configTable.children];
-
-        if((detached.length > 0) && !detached[0].matches?.("." + DEVICES_NOTICE_CLASS)) {
-
-          cache.set(mountedKey, detached);
-        }
-
-        for(const child of detached) {
-
-          configTable.removeChild(child);
-        }
-      }
-
-      // Every presentation claims the incoming view as the mounted one, whichever DOM it ends up putting there, so the next pass's outgoing capture keys off the
-      // right view either way. Set once here rather than repeated in each branch below.
-      mountedKey = newKey;
-
-      switch(presentation.kind) {
-
-        case "empty": {
-
-          /* The controller is reachable and has nothing to offer at its own level, so a notice takes the place of the option table. That covers a list which came
-           * back with nothing in it, and a list whose rows include none that the plugin's `isController` names, which leaves the page without a serial its
-           * controller-scope entries could be keyed by. The notice is built fresh on every entry rather than cached, because the outcome that justifies it is
-           * exactly what a refetch can change: a controller that gains its own row, or its first device, stops resting here, and a rebuilt-per-entry notice cannot
-           * outlive that. Table DOM cached under this key stays where it is for the same reason, waiting for the day a refetch answers differently.
-           *
-           * The message is appended as a string child, which the element helper turns into a text node - copy a plugin supplied is text the page displays, never
-           * markup it executes.
-           */
-          configTable.appendChild(createElement("div", { classList: [ DEVICES_NOTICE_CLASS, "text-center", "text-muted", "my-4" ] }, [presentation.message]));
-
-          /* The busy state is derived here as in every other branch rather than cleared outright, because a notice view is not always a settled one: a revisit
-           * refetches while its notice still stands, and that view IS busy. One derivation answers both cases - a settled notice reads false and the marker goes,
-           * a notice over an outstanding fetch reads true and it stays. Deriving rather than recording also leaves the table DOM cached under this key untouched,
-           * so whatever comes back through the options branch takes the window's state as it is then rather than as it was when the notice displaced it.
-           */
-          applyBusyState({ configTable, state: store.state });
-
-          return;
-        }
-
-        case "error": {
-
-          /* The connection-error view has taken the frame and owns the message, so the table stays empty beneath it - the outgoing detach above already emptied
-           * it, and this branch simply declines to put anything back. Rendering the just-selected controller's full table under an error would offer the options
-           * of a controller that never confirmed it could be reached, inviting writes against a scope the page has no settled device list for.
-           *
-           * Nothing is lost by declining. The outgoing pass cached the view being left, and the recovery transition a clean outcome triggers runs this effect
-           * again with an `options` presentation, which restores that cached DOM exactly as any other navigation would.
-           */
-          return;
-        }
-
-        case "options": {
-
-          // Attach the cached DOM for the new view, if any. Otherwise build the category shells fresh from the projection.
-          const cached = cache.get(newKey);
-
-          if(cached) {
-
-            for(const child of cached) {
-
-              configTable.appendChild(child);
-            }
-
-            cache.delete(newKey);
-          } else {
-
-            buildCategoryShells({ configTable, state: store.state });
-          }
-
-          // Restore the incoming view's persisted category state, transparently migrating any data still stored under the legacy key shape (see
-          // {@link legacyContextKey}) to the current {@link scopeCacheKey} shape on first read. After a view has been migrated once, its data lives entirely under
-          // the current shape and no further legacy lookup is needed.
-          const savedStates = restoreLegacyMigrated({ categoryState, newKey, scope: store.state.scope });
-
-          if(savedStates) {
-
-            applyCategoryStates(configTable, savedStates);
-          }
-
-          // Apply visibility and per-row state from the current projection.
-          applyProjectionToDom({ configTable, state: store.state });
-
-          return;
-        }
-
-        default: {
-
-          // Exhaustive switch over the TablePresentation DU - unreachable while the switch and the DU stay in sync. A future variant surfaces here as a runtime
-          // throw rather than as a silently blank config table nobody can explain.
-          throw new Error("mountOptionsView: unknown table presentation.");
-        }
-      }
+      renderScope();
     },
     signal,
     store
@@ -277,21 +316,58 @@ export const mountOptionsView = ({ configTable, platform, signal, store }) => {
     store
   });
 
-  // Controller refresh. A controllers-only refresh moves no option's value and changes no row's identity, so what the walk answers here is one thing: a choice
-  // source is handed the selected controller, and a refreshed controller may give it a different list to offer. The lightweight shape is deliberate - the
-  // scope-aware render above would detach and reattach every row, blurring whatever control the user has focused and standing down an armed row, for a refresh
-  // that asked for none of that.
+  /* A controller list arriving without a model. The reducer has already reconciled every fact that names a controller against it: a selection the list cannot
+   * place fell back to global, a departed controller's device list emptied, and a rename the lists proved carried the facts naming the old key onto the new one.
+   * What is left for this view is the state it keeps under controller keys of its own, and whatever surface the reconciliation moved, in an order that matters.
+   *
+   * A proven rename re-keys the view's own state first, so the render that follows captures and restores the view under the key it has now. Whether the lists
+   * prove it is the reducer module's own test, asked of the lists and the declaration the reducer was handed, and it is asked whatever the selection, because a
+   * renamed controller the user is not looking at keeps its expansion as much as the one they are. The mounted view's key moves with the entries: the next
+   * render's outgoing pass captures the table under it and caches its DOM there, and a microtask a category toggle scheduled writes under it too, so it has to
+   * name the view the table now shows rather than one no sidebar row carries. A model load has no such key to move, because it unmounts the view outright.
+   *
+   * Then the surface. An arrival that moved a settled fact re-renders it exactly as a navigation does, so a dropped controller's table gives way to the one the
+   * selection fell back to. One that moved none of them moved no option's value and no row's identity, so the lightweight walk answers the one thing left: a
+   * choice source is handed the selected controller, and a refreshed controller may give it a different list to offer. A full render there would detach and
+   * reattach every row, blurring whatever control the user has focused and standing down an armed row, for a refresh that asked for none of that.
+   *
+   * Last, the cache drops every view of a controller the arriving list does not hold, which takes a renamed controller's old key with it. A key that leaves the list
+   * can come back naming a different controller - a plugin that keys controllers by address hands the key to whatever is configured there next - and a table
+   * restored from the cache keeps the categories and rows it was built with, which the projection walk re-derives but never removes, so the returning key would be
+   * served a table built from the departed controller's devices. The drop runs after the render because the render's own outgoing pass may have just cached a
+   * departed view.
+   *
+   * Before a model has loaded, the view has rendered nothing and built no category store, so an arrival then has nothing of this view's to reconcile.
+   */
   effect({
 
     events: ["controllers:loaded"],
-    fn: () => {
+    fn: (action, previous) => {
 
-      if(store.state.status.kind === "loading") {
+      if(!action || !modelLoaded(store.state)) {
 
         return;
       }
 
-      applyProjectionToDom({ configTable, state: store.state });
+      if(renameHonored({ arriving: action.controllers, rename: action.rename, standing: previous.controllers })) {
+
+        carryRename(action.rename);
+
+        if(mountedKey !== undefined) {
+
+          mountedKey = renamedViewKey({ key: mountedKey, rename: action.rename }) ?? mountedKey;
+        }
+      }
+
+      if(settledFactsMoved(previous, store.state)) {
+
+        renderScope();
+      } else {
+
+        applyProjectionToDom({ configTable, state: store.state });
+      }
+
+      dropDepartedViews({ arriving: action.controllers, cache, standing: previous.controllers });
     },
     signal,
     store
@@ -467,6 +543,58 @@ const invalidateCacheForMutation = ({ action, cache, controllers }) => {
   }
 
   // Device-scope mutation: no cache action. The mounted device is not in the cache, and no other cached view inherits from a leaf device.
+};
+
+/* The controller a view key names, or null for a key that names none. It reads the {@link scopeCacheKey} format the prefix match above also reads: a controller
+ * view's key is `controller:` and the serial, and a device view's key carries its controller's serial between `device:` and the first `/`, which the delimiter
+ * contract that format documents keeps out of every serial. An empty controller segment is device-only mode's null controller, and the global key and the legacy
+ * keys a category-state store can still hold name no controller at all.
+ */
+const viewKeyControllerId = (key) => {
+
+  if(key.startsWith("controller:")) {
+
+    return key.slice("controller:".length);
+  }
+
+  const separator = key.indexOf("/");
+
+  return (key.startsWith("device:") && (separator > "device:".length)) ? key.slice("device:".length, separator) : null;
+};
+
+// The key a controller rename carries a view key to: the same view under the new controller key, or null when the key names another controller or none. The
+// controller's serial leads the key in every shape that carries one, so the view keeps everything after it - a device view keeps its device.
+const renamedViewKey = ({ key, rename }) => {
+
+  if(viewKeyControllerId(key) !== rename.from) {
+
+    return null;
+  }
+
+  const prefix = key.startsWith("controller:") ? "controller:" : "device:";
+
+  return prefix + rename.to + key.slice(prefix.length + rename.from.length);
+};
+
+/* Drop every cached view of a controller the arriving list does not hold. A model load empties the cache, and every view cached since names a controller some
+ * list then held, so the cache only ever holds views of controllers the standing list holds or the arriving one does. An arrival that took none of the standing
+ * list's controllers away therefore leaves nothing to drop, and the cache walk runs only when one departed. A view that names no controller - the global view, and
+ * a device view in device-only mode - has nothing a controller list could take away, which the membership test answers by reading a null controller as held.
+ */
+const dropDepartedViews = ({ arriving, cache, standing }) => {
+
+  if(standing.every((controller) => holdsController({ controllers: arriving, id: controller.serialNumber }))) {
+
+    return;
+  }
+
+  for(const key of cache.keys()) {
+
+    if(!holdsController({ controllers: arriving, id: viewKeyControllerId(key) })) {
+
+      cache.delete(key);
+    }
+  }
 };
 
 // Category-state entries may still be stored on disk under an older key shape: `"Global Options"` for the global view, or the bare device serial for a

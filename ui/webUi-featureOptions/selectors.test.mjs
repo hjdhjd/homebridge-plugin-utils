@@ -351,6 +351,22 @@ describe("selectedController", () => {
     assert.equal(selectedController(inDevice), ctrl);
   });
 
+  test("returns null before a model has loaded, even when the starting values a re-entry inherited name a controller their list holds", () => {
+
+    const ctrl = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+    const replaced = reducer(loadedState({ controllers: [ctrl], mode: "controller-based" }),
+      { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
+    const inherited = initialState(replaced);
+
+    assert.equal(selectedController(replaced), ctrl, "precondition: the replaced page answers its selected controller");
+    assert.equal(selectedControllerId(inherited), "ctrl-a", "precondition: the fresh store starts on the same selection, over the same list");
+    assert.equal(selectedController(inherited), null, "but a list this page has not loaded answers no controller record");
+
+    const loaded = reducer(inherited, { catalog: replaced.catalog, configuredOptions: [], controllers: [ctrl], mode: "controller-based", type: "model:loaded" });
+
+    assert.equal(selectedController(loaded), ctrl, "and the record is answered once the page's own model has loaded");
+  });
+
   test("returns null when the device scope has no parent controller (device-only mode)", () => {
 
     const state = loadedState({ devices: [{ firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }] });
@@ -1199,7 +1215,7 @@ describe("projection - resolved choices", () => {
       [{ label: "A", selected: true, unknown: false, value: "a" }], "the very same state recomputes rather than serving a cached failure");
   });
 
-  test("the projection recomputes on a controllers-only refresh, since a source reads the selected controller", () => {
+  test("the projection recomputes on a controller-list refresh, since a source reads the selected controller", () => {
 
     const controllers = [{ name: "old", serialNumber: "ctrl-a" }];
     const state = reducer(pickerState({ controllers }), { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
@@ -1209,6 +1225,6 @@ describe("projection - resolved choices", () => {
     const refreshed = reducer(state, { controllers: [{ name: "new", serialNumber: "ctrl-a" }], type: "controllers:loaded" });
 
     assert.deepEqual(pickerEntry(refreshed, "Named").choices.map((c) => c.value), ["new"],
-      "a controllers-only refresh moves the controllers slice, which the projection memo watches");
+      "a controller-list refresh moves the controllers slice, which the projection memo watches");
   });
 });

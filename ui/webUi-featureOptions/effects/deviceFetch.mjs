@@ -28,9 +28,9 @@ import { scopingControllerId } from "../selectors.mjs";
 /**
  * Record a controller device fetch at the store and fire it, leaving its outcome for {@link settleControllerDevices} to land.
  *
- * The fetch is split into a request and a settle because the boot needs them apart. It fires its first controller's fetch before the feature catalog loads, so
- * the two overlap, and lands the outcome only once the model has loaded, so a device failure meets a page whose controllers and failure surface are already in
- * place. A caller with nothing to overlap runs the request and the settle back to back through {@link fetchControllerDevices}.
+ * The fetch is split into a request and a settle because the boot needs them apart. It fires the fetch of the controller it chose before the feature catalog
+ * loads, so the two overlap, and lands the outcome only once the model has loaded, so a device failure meets a page whose controllers and failure surface are
+ * already in place. A caller with nothing to overlap runs the request and the settle back to back through {@link fetchControllerDevices}.
  *
  * The sequence is minted before the hook is called, so any request made after this one supersedes it at the reducer, however long this one takes to settle. The
  * fetch is marked handled the moment it is fired: a caller that settles it later leaves a window in which a rejection would otherwise meet no handler, and the

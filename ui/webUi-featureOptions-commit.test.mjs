@@ -52,9 +52,10 @@ const makePluginConfig = ({ controllers = [CONTROLLER_A], options = [] } = {}) =
  * `hooks`, whose counters and deferrals let a test hold one call open without touching the others.
  *
  * Returns the fake bridge, the orchestrator, the skeleton's elements, and the recording surfaces - `hooks.controllerCalls`, `hooks.deviceCalls`, `loaded` (the
- * onLoaded count), and `panels` (every bag the device-info hook was handed).
+ * onLoaded count), and `panels` (every bag the device-info hook was handed). `plugin` adds options of the plugin's own on top of these, for a row that needs a
+ * surface the default page leaves unconfigured.
  */
-const makePage = ({ config = makePluginConfig() } = {}) => {
+const makePage = ({ config = makePluginConfig(), plugin = {} } = {}) => {
 
   const skeleton = createSkeletonFeatureOptionsDom();
   const fake = createFakeHomebridge({ config, requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
@@ -86,7 +87,8 @@ const makePage = ({ config = makePluginConfig() } = {}) => {
     },
     infoPanel: (bag) => panels.push(bag),
     onLoaded: () => { state.loaded += 1; },
-    ui: { isController: (device) => !device?.serialNumber?.endsWith("-CAM") }
+    ui: { isController: (device) => !device?.serialNumber?.endsWith("-CAM") },
+    ...plugin
   });
 
   return {
@@ -882,7 +884,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
       "and the sidebar is the one the successor's boot built");
   });
 
-  test("a call from the connection-error frame re-enters show() and answers committed", async () => {
+  test("a call from the connection-error frame re-enters the page and answers committed", async () => {
 
     using dom = createTestDom();
     using page = makePage({ config: makePluginConfig({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }) });
@@ -911,7 +913,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     assert.equal(page.state.loaded, 1, "through a fresh show cycle, which announces once");
   });
 
-  test("a call from a page whose model never loaded writes, saves, and re-enters show()", async () => {
+  test("a call from a page whose model never loaded writes, saves, and re-enters the page", async () => {
 
     using dom = createTestDom();
     using page = makePage();
@@ -950,7 +952,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     assert.equal(page.skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 2, "which comes up on what was written");
   });
 
-  test("a controller fetch that fails after the write re-enters show(), which carries the failure", async () => {
+  test("a controller fetch that fails after the write re-enters the page, whose boot carries the failure", async () => {
 
     using dom = createTestDom();
     using page = makePage();
@@ -968,7 +970,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     assert.match(page.skeleton.headerInfo.textContent, /Unable to retrieve the controller list/, "the boot's own retry view carries the failure");
   });
 
-  test("a wrong-shaped controller answer after the write re-enters show() without a TypeError leaving the call", async () => {
+  test("a wrong-shaped controller answer after the write re-enters the page without a TypeError leaving the call", async () => {
 
     using dom = createTestDom();
     using page = makePage();
@@ -1060,14 +1062,14 @@ describe("webUiFeatureOptions.commitConfig - the selection after an establishmen
 
     assert.equal(page.state.loaded, 0, "the page a consumer is standing on is not a show cycle, so the hook that announces one stays quiet");
 
-    // The same call from a page the boot has to own again - here because the fetch that follows the write fails, which only show() has a surface for. The boot it
-    // re-enters answers normally and announces exactly as any other show cycle does.
+    // The same call from a page the boot has to own again - here because the fetch that follows the write fails, which only the boot has a surface for. The boot
+    // it re-enters answers normally and announces exactly as any other show cycle does.
     page.hooks.onControllers = ({ answer, call }) => (call === 3) ? Promise.reject(new Error("Controller unreachable.")) : answer;
 
     await page.orchestrator.commitConfig(() => ({ controllers: [CONTROLLER_A] }));
     await flush();
 
-    assert.equal(page.state.loaded, 1, "a re-entry announces once, through show()");
+    assert.equal(page.state.loaded, 1, "a re-entry announces once, through the boot");
   });
 });
 
@@ -1345,5 +1347,722 @@ describe("webUiFeatureOptions - the teardown's own edges", () => {
     assert.deepEqual(await pending, { kind: "committed" }, "the write the teardown waited for landed and was saved");
     assert.equal(page.skeleton.sidebar.style.display, "none", "and once it settled the teardown hid the regions");
     assert.equal(page.skeleton.optionsContainer.style.display, "none", "every one of them");
+  });
+});
+
+/* A write that edits a controller's address replaces its sidebar key, because a plugin keys the sidebar by the address it configured. These rows drive the
+ * declaration that carries the page across that replacement on each path a plugin's write reaches the page through: the coordinated write, and the refresh a
+ * plugin that writes through its own path makes afterwards. The controller's hardware serials survive the address edit, which is what the device hook answers.
+ */
+describe("webUiFeatureOptions - a controller rename a write declares", () => {
+
+  const MOVED_A = { address: "10.0.0.9", name: "Hub A", serialNumber: "CTRL-A9" };
+  const RENAME = { from: "CTRL-A", to: "CTRL-A9" };
+
+  // Re-address controller A in a controller list, leaving every other entry where it stands.
+  const moveA = (controllers) => controllers.map((controller) => (controller.serialNumber === CONTROLLER_A.serialNumber) ? MOVED_A : controller);
+
+  // Answer for the re-addressed controller with the devices it always had: an address edit changes how the page reaches a controller, not the hardware behind it.
+  const stableSerials = ({ answer, controller }) => (controller?.serialNumber === MOVED_A.serialNumber) ? { ...answer, devices: devicesOf(CONTROLLER_A) } : answer;
+
+  const activeIn = (container) => container.querySelector(".nav-link.active")?.getAttribute("data-device-serial") ?? null;
+
+  const twoControllerPage = () => makePage({ config: makePluginConfig({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }) });
+
+  test("commitConfig carries the selection and its highlight onto the new key and refetches the devices against it", async () => {
+
+    using dom = createTestDom();
+    using page = twoControllerPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "precondition: the boot selected controller A");
+    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-A", "precondition: and continued onto its own row");
+
+    page.hooks.onDevices = stableSerials;
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
+    const result = await page.orchestrator.commitConfig((platform) => ({ controllers: moveA(platform.controllers) }), { rename: RENAME });
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "committed" });
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A9", "the selection and its highlight followed the controller onto its new key");
+    assert.deepEqual(page.hooks.deviceCalls.slice(fetchesBefore), ["CTRL-A9"], "and the devices were refetched under the new key");
+    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-A", "the controller's own row is still the one selected");
+  });
+
+  test("commitConfig leaves a user who moved to another controller while the write was pending where they went", async () => {
+
+    using dom = createTestDom();
+    using page = twoControllerPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.hooks.onDevices = stableSerials;
+
+    const writes = holdWrites(page.fake);
+    const pending = page.orchestrator.commitConfig((platform) => ({ controllers: moveA(platform.controllers) }), { rename: RENAME });
+
+    await waitFor(() => writes.pending === 1, { message: "the call's write must be at the host" });
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user moved while the write was pending");
+
+    writes.release();
+
+    assert.deepEqual(await pending, { kind: "committed" });
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the user's own choice stands: the rename carries only what still named the old key");
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A9']"), "while the renamed controller is listed under its new key");
+    assert.ok(!page.hooks.deviceCalls.includes("CTRL-A9"), "and nothing was fetched for a controller the user is not looking at");
+  });
+
+  test("refreshControllers carries the selection onto the new key in one notification, leaves a takeover standing, and refetches under the new key", async () => {
+
+    using dom = createTestDom();
+    using page = twoControllerPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    const handle = page.orchestrator.takeover(document.createElement("div"));
+    let releaseDevices;
+
+    // Hold the refetch open, so the only renders counted below are the list arrival's own.
+    page.hooks.onDevices = (args) => new Promise((resolve) => { releaseDevices = () => resolve(stableSerials(args)); });
+
+    // The plugin wrote the address edit through its own path, so the host's configuration already names the controller by its new address.
+    page.fake.config = makePluginConfig({ controllers: [ MOVED_A, CONTROLLER_B ] });
+    page.panels.length = 0;
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
+
+    assert.equal(await page.orchestrator.refreshControllers({ rename: RENAME }), true, "the refresh reports the transition");
+    assert.equal(page.panels.length, 1, "the arrival rendered the plugin's panel once, so no second notification came with it");
+    assert.equal(handle.signal.aborted, false, "and nothing it dispatched ended the plugin's takeover");
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A9", "the selection and its highlight followed the controller onto its new key");
+    assert.deepEqual(page.hooks.deviceCalls.slice(fetchesBefore), ["CTRL-A9"], "and the devices are refetched under the new key");
+
+    releaseDevices();
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-A", "the controller's own row is still the one selected once they land");
+  });
+
+  test("refreshControllers leaves a selection on another controller where it is and fetches nothing", async () => {
+
+    using dom = createTestDom();
+    using page = twoControllerPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user is on controller B");
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
+
+    page.fake.config = makePluginConfig({ controllers: [ MOVED_A, CONTROLLER_B ] });
+    page.panels.length = 0;
+
+    assert.equal(await page.orchestrator.refreshControllers({ rename: RENAME }), true, "the refresh reports the transition");
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the user stays where they are");
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A9']"), "while the renamed controller is listed under its new key");
+    assert.equal(page.hooks.deviceCalls.length, fetchesBefore, "a refresh that moved no selection fetches nothing");
+    assert.equal(page.panels.length, 0, "and moved nothing the device information panel reads, so the panel did not render");
+
+    // A refresh that answers with the very list the page holds, declaring nothing, changes nothing at all.
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the unchanged list still reports the transition");
+
+    await flush();
+
+    assert.equal(page.panels.length, 0, "and the device information panel stays exactly as it was");
+    assert.equal(page.hooks.deviceCalls.length, fetchesBefore, "with nothing fetched");
+  });
+
+  test("a malformed rename rejects commitConfig with a TypeError ahead of the queue, writing nothing", async () => {
+
+    using dom = createTestDom();
+    using page = twoControllerPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    const writesBefore = page.fake.observed.updatedConfigs.length;
+
+    for(const rename of [ null, "CTRL-A9", [], { from: "CTRL-A" }, { from: "CTRL-A", to: 9 } ]) {
+
+      // A sequential await per shape keeps each rejection attributable to the shape that caused it.
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(() => page.orchestrator.commitConfig((platform) => ({ controllers: moveA(platform.controllers) }), { rename }), TypeError,
+        "a rename shaped " + JSON.stringify(rename) + " is a bug in the call itself");
+    }
+
+    assert.equal(page.fake.observed.updatedConfigs.length, writesBefore, "and nothing reached the host");
+  });
+});
+
+/* A write that lands on a frame the boot owns re-enters the page, and so do the connection-error retry and the sidebar refresh. Each re-entry hands the fresh
+ * cycle the controller list and selection of the page it replaces, and the boot lands where its own list leaves that selection - on the same controller, on the
+ * renamed one when the commit declared and the lists prove a rename, and on the first controller when the list cannot place it. A plugin's own show() inherits
+ * nothing, and nothing answers a controller record from inherited values before the fresh cycle's model loads.
+ */
+describe("webUiFeatureOptions - a re-entered page keeps the controller it was on", () => {
+
+  const MOVED_B = { address: "10.0.0.8", name: "Hub B", serialNumber: "CTRL-B8" };
+  const RENAME_B = { from: "CTRL-B", to: "CTRL-B8" };
+  const STORAGE_KEY = "homebridge-TestPlugin-category-states";
+
+  // Re-address controller B in a controller list, leaving every other entry where it stands.
+  const moveB = (controllers) => controllers.map((controller) => (controller.serialNumber === CONTROLLER_B.serialNumber) ? MOVED_B : controller);
+
+  // Answer for the re-addressed controller with the devices it always had: an address edit changes how the page reaches a controller, not the hardware behind it.
+  const stableSerials = ({ answer, controller }) => (controller?.serialNumber === MOVED_B.serialNumber) ? { ...answer, devices: devicesOf(CONTROLLER_B) } : answer;
+
+  const activeIn = (container) => container.querySelector(".nav-link.active")?.getAttribute("data-device-serial") ?? null;
+
+  // A two-controller page whose connection-error panel records the controller it is handed, whose sidebar heading carries a refresh action, and whose retry arms
+  // at once.
+  const reentryPage = () => {
+
+    const errorPanels = [];
+    const page = makePage({
+
+      config: makePluginConfig({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }),
+      plugin: {
+
+        connectionErrorPanel: ({ controller }) => errorPanels.push(controller),
+        sidebar: { refresh: { onRefresh: async () => {} } },
+        ui: { controllerRetryEnableDelayMs: 0, isController: (device) => !device?.serialNumber?.endsWith("-CAM") }
+      }
+    });
+
+    page.errorPanels = errorPanels;
+
+    return page;
+  };
+
+  // Put the loaded page on controller B's error frame, the way a sidebar click whose fetch fails does, then let B answer again.
+  const errorFrameOnB = async (page) => {
+
+    page.hooks.onDevices = () => Promise.reject(new Error("Controller unreachable."));
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await waitFor(() => page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), { message: "the error frame must render" });
+
+    page.hooks.onDevices = null;
+  };
+
+  // Press the connection-error view's retry once it has armed.
+  const pressRetry = async (page) => {
+
+    await waitFor(() => page.skeleton.headerInfo.querySelector("button.btn-warning:not([disabled])"), { message: "the retry must arm" });
+
+    page.skeleton.headerInfo.querySelector("button.btn-warning").click();
+  };
+
+  // Fail the next controller-list fetch, and only that one.
+  const failNextControllerFetch = (page) => {
+
+    const failAt = page.hooks.controllerCalls + 1;
+
+    page.hooks.onControllers = ({ answer, call }) => (call === failAt) ? Promise.reject(new Error("Controller list unreachable.")) : answer;
+  };
+
+  /* Leave a page whose catalog never loaded on its error frame, controller B selected and the two-controller list installed beneath the frame, and hand back the
+   * fake's own request router so the caller decides what the next catalog read meets. The catalog is read once per page and kept once it succeeds, so only a
+   * page that never loaded it has a boot that can fail or wait there. The first boot is answered with controller B alone, so the selection it leaves is not the
+   * first controller of the list the refresh installs, and a landing on it cannot pass for the first-controller fallback.
+   */
+  const catalogErrorFrameOnB = async (page) => {
+
+    const route = page.fake.request;
+
+    page.fake.request = (path) => (path === "/getOptions") ? Promise.reject(new Error("the options route failed")) : route(path);
+    page.hooks.onControllers = ({ answer }) => ({ ...answer, controllers: [CONTROLLER_B] });
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.hooks.onControllers = null;
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to load the feature options/, "precondition: the first boot failed at its catalog");
+    assert.equal(await page.orchestrator.refreshControllers(), true, "precondition: a refresh installs the list beneath the error frame");
+
+    return route;
+  };
+
+  test("a commit with a rename from the error frame of a non-first controller re-enters onto the renamed controller, its expansion under the new key", async () => {
+
+    using dom = createTestDom();
+
+    window.localStorage.clear();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ "device:CTRL-B/CTRL-B": { Audio: false, Motion: true, Network: true } }));
+
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    await errorFrameOnB(page);
+
+    page.hooks.onDevices = stableSerials;
+    page.state.loaded = 0;
+
+    const result = await page.orchestrator.commitConfig((platform) => ({ controllers: moveB(platform.controllers) }), { rename: RENAME_B });
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "committed" });
+    assert.equal(page.state.loaded, 1, "the write re-entered the page through a fresh boot");
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B8", "which came back on the renamed controller rather than the first one");
+    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-B", "and continued onto its own row");
+    assert.equal(page.skeleton.configTable.querySelector("details[data-category='Audio']")?.open, true, "the expansion the user left is restored");
+
+    const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
+
+    assert.ok("device:CTRL-B8/CTRL-B" in persisted, "because it was carried to the controller's new key");
+    assert.ok(!("device:CTRL-B/CTRL-B" in persisted), "and left nothing behind under the old one");
+  });
+
+  test("a commit with no rename from the error frame of a non-first controller re-enters onto that controller", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    await errorFrameOnB(page);
+
+    page.state.loaded = 0;
+
+    assert.deepEqual(await page.orchestrator.commitConfig((platform) => ({ controllers: platform.controllers })), { kind: "committed" });
+
+    await flush();
+
+    assert.equal(page.state.loaded, 1, "the write re-entered the page");
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "onto the controller the user was on");
+    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-B", "and onto its own row");
+  });
+
+  test("a commit whose in-place controller fetch fails re-enters and still honors its rename", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: a ready page on controller B");
+
+    page.hooks.onDevices = stableSerials;
+    failNextControllerFetch(page);
+
+    assert.deepEqual(await page.orchestrator.commitConfig((platform) => ({ controllers: moveB(platform.controllers) }), { rename: RENAME_B }),
+      { kind: "committed" });
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B8", "the re-entry the failed fetch took still carried the selection to the new key");
+  });
+
+  test("a re-entry whose inherited selection the new list cannot place, and one that inherits a global selection, select the first controller", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    await errorFrameOnB(page);
+
+    await page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, { address: "10.0.0.3", name: "Hub C", serialNumber: "CTRL-C" } ] }));
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "a selection whose controller the write removed lands on the first controller");
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-navigation='global']").click();
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), null, "precondition: the user is on the global view");
+
+    page.state.loaded = 0;
+    page.skeleton.controllersContainer.querySelector("button.fo-action").click();
+
+    await waitFor(() => page.state.loaded === 1, { message: "the sidebar refresh must re-enter the page" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "and an inherited global selection lands on the first controller too");
+  });
+
+  test("the connection-error retry re-enters onto the controller that was selected", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    await errorFrameOnB(page);
+
+    page.state.loaded = 0;
+
+    await pressRetry(page);
+    await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the retry came back on the controller that failed");
+    assert.ok(!page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), "which now answers, so the frame has cleared");
+  });
+
+  test("the sidebar refresh re-enters onto the controller that was selected", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await flush();
+
+    page.state.loaded = 0;
+    page.skeleton.controllersContainer.querySelector("button.fo-action").click();
+
+    await waitFor(() => page.state.loaded === 1, { message: "the sidebar refresh must re-enter the page" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the refresh came back on the controller the user was on");
+  });
+
+  test("a plugin's own show() over a standing page selects the first controller", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+    const session = await openTestSession();
+
+    await page.orchestrator.show(session);
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user is on controller B");
+
+    await page.orchestrator.show(session);
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "a show() is not a re-entry, so it inherits nothing and boots onto the first controller");
+  });
+
+  test("a plugin's own show() after a re-entry still selects the first controller", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+    const session = await openTestSession();
+
+    await page.orchestrator.show(session);
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await flush();
+
+    page.state.loaded = 0;
+    page.skeleton.controllersContainer.querySelector("button.fo-action").click();
+
+    await waitFor(() => page.state.loaded === 1, { message: "the sidebar refresh must re-enter the page" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the re-entry came back on controller B");
+
+    await page.orchestrator.show(session);
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A",
+      "the re-entry left nothing for a later show() to inherit, so it boots onto the first controller");
+  });
+
+  test("a re-entered boot that fails before its model loads hands the connection-error panel no controller, at each point it can fail", async () => {
+
+    for(const site of [ "sync", "controllers" ]) {
+
+      using dom = createTestDom();
+      using page = reentryPage();
+
+      // Each site gets a page of its own, so the awaits below run one site at a time.
+      // eslint-disable-next-line no-await-in-loop
+      await page.orchestrator.show(await openTestSession());
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+      // eslint-disable-next-line no-await-in-loop
+      await errorFrameOnB(page);
+
+      assert.deepEqual(page.errorPanels.at(-1), CONTROLLER_B, "precondition: the loaded page's own error frame hands the panel the controller that failed");
+
+      if(site === "sync") {
+
+        const original = page.fake.getPluginConfig;
+        let failed = false;
+
+        page.fake.getPluginConfig = async () => {
+
+          if(!failed) {
+
+            failed = true;
+
+            throw new Error("The Homebridge server is unreachable.");
+          }
+
+          return original();
+        };
+      } else {
+
+        failNextControllerFetch(page);
+      }
+
+      const rendersBefore = page.errorPanels.length;
+
+      // eslint-disable-next-line no-await-in-loop
+      await page.orchestrator.commitConfig((platform) => ({ controllers: moveB(platform.controllers) }), { rename: RENAME_B });
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+
+      assert.ok(page.errorPanels.length > rendersBefore, "the re-entered boot failed at its " + site + " and rendered the error frame");
+      assert.equal(page.errorPanels.at(-1), null, "and handed the panel no controller rather than the record it inherited, at the " + site);
+    }
+  });
+
+  test("a re-entered boot that fails at its catalog hands the connection-error panel no controller, over a list it inherited", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    // The catalog is read once per page and kept once it succeeds, so the one boot that can fail there is one whose page never loaded it: the first boot fails at
+    // the catalog, a refresh installs a list under that error frame, and the retry inherits that list and fails at the catalog again.
+    page.fake.request = (path) => (path === "/getOptions") ? Promise.reject(new Error("the options route failed")) : Promise.resolve(null);
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "precondition: a list stands under the error frame");
+
+    const rendersBefore = page.errorPanels.length;
+
+    await pressRetry(page);
+    await waitFor(() => page.errorPanels.length > rendersBefore, { message: "the retry's boot must fail at its catalog" });
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to load the feature options/, "the retry failed at the catalog");
+    assert.equal(page.errorPanels.at(-1), null, "and handed the panel no controller, though the list it inherited holds the selected one");
+  });
+
+  test("a re-entry that fails before its model loads, then a retry that succeeds, lands on the controller that was selected", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    await errorFrameOnB(page);
+
+    failNextControllerFetch(page);
+    page.state.loaded = 0;
+
+    await page.orchestrator.commitConfig((platform) => ({ controllers: platform.controllers }));
+    await flush();
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to retrieve the controller list/, "precondition: the re-entered boot failed before its model loaded");
+    assert.equal(page.state.loaded, 0, "so no model arrived");
+
+    await pressRetry(page);
+    await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the failed re-entry handed its retry the selection it had inherited");
+  });
+
+  test("a renaming commit whose re-entry fails before its controller list arrives hands its retry no rename, and the retry lands on the first controller", async () => {
+
+    using dom = createTestDom();
+
+    window.localStorage.clear();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ "device:CTRL-B/CTRL-B": { Audio: false, Motion: true, Network: true } }));
+
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    await errorFrameOnB(page);
+
+    page.hooks.onDevices = stableSerials;
+    failNextControllerFetch(page);
+    page.state.loaded = 0;
+
+    assert.deepEqual(await page.orchestrator.commitConfig((platform) => ({ controllers: moveB(platform.controllers) }), { rename: RENAME_B }),
+      { kind: "committed" });
+
+    await flush();
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to retrieve the controller list/, "precondition: the re-entry failed before its list arrived");
+    assert.equal(page.state.loaded, 0, "so no model arrived");
+
+    await pressRetry(page);
+    await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A",
+      "the retry carried no rename, so the selection it inherited still names the old key and lands on the first controller");
+
+    const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
+
+    assert.ok("device:CTRL-B/CTRL-B" in persisted, "the expansion stays under the old key");
+    assert.ok(!("device:CTRL-B8/CTRL-B" in persisted), "because nothing carried it to the new one");
+  });
+
+  test("a renaming commit whose re-entry fails at its catalog hands its retry no rename, and the retry lands on the renamed controller it selected", async () => {
+
+    using dom = createTestDom();
+
+    window.localStorage.clear();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ "device:CTRL-B/CTRL-B": { Audio: false, Motion: true, Network: true } }));
+
+    using page = reentryPage();
+    const route = await catalogErrorFrameOnB(page);
+
+    page.hooks.onDevices = stableSerials;
+
+    assert.deepEqual(await page.orchestrator.commitConfig((platform) => ({ controllers: moveB(platform.controllers) }), { rename: RENAME_B }),
+      { kind: "committed" });
+
+    await flush();
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to load the feature options/, "precondition: the re-entry failed at its catalog");
+    assert.equal(page.hooks.deviceCalls.at(-1), "CTRL-B8", "after its list arrived and it had selected the renamed controller");
+
+    page.fake.request = route;
+
+    await pressRetry(page);
+    await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B8",
+      "the retry inherited the selection the failed boot made, so it lands on the renamed controller");
+
+    const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
+
+    assert.ok("device:CTRL-B/CTRL-B" in persisted, "the expansion stays under the old key");
+    assert.ok(!("device:CTRL-B8/CTRL-B" in persisted), "because the retry carried no rename to move it");
+  });
+
+  test("a refresh with a rename over a page whose model never loaded starts no device fetch and leaves the error frame standing", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    // The catalog read fails, so the boot selects controller A and then stands on the error frame with no model.
+    page.fake.request = (path) => (path === "/getOptions") ? Promise.reject(new Error("the options route failed")) : Promise.resolve(null);
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to load the feature options/, "precondition: the page has no model");
+    assert.equal(await page.orchestrator.refreshControllers(), true, "a refresh installs the list under the error frame");
+
+    page.fake.config = makePluginConfig({ controllers: [ { address: "10.0.0.9", name: "Hub A", serialNumber: "CTRL-A9" }, CONTROLLER_B ] });
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
+
+    assert.equal(await page.orchestrator.refreshControllers({ rename: { from: "CTRL-A", to: "CTRL-A9" } }), true, "and a renaming one reconciles against it");
+
+    await flush();
+
+    assert.equal(page.hooks.deviceCalls.length, fetchesBefore, "the carried selection is not refetched on a page with no model");
+    assert.match(page.skeleton.headerInfo.textContent, /Unable to load the feature options/, "so nothing lifts the error frame over a page with nothing loaded");
+  });
+
+  test("no view paints the inherited list or selection before the re-entered boot's model loads", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await flush();
+
+    // Hold the re-entered boot at its controller fetch, the window in which the fresh store holds nothing but what it inherited.
+    let release = null;
+
+    page.hooks.onControllers = ({ answer }) => new Promise((resolve) => { release = () => resolve(answer); });
+    page.panels.length = 0;
+    page.skeleton.controllersContainer.querySelector("button.fo-action").click();
+
+    await waitFor(() => release !== null, { message: "the re-entered boot must reach its controller fetch" });
+
+    assert.equal(page.skeleton.controllersContainer.querySelectorAll(".nav-link").length, 0, "the sidebar lists no controller");
+    assert.equal(page.skeleton.devicesContainer.querySelectorAll(".nav-link").length, 0, "and no device");
+    assert.equal(page.skeleton.configTable.children.length, 0, "the options table is empty");
+    assert.equal(page.panels.length, 0, "and the device information panel did not render");
+
+    release();
+
+    await waitFor(() => page.state.loaded === 2, { message: "the re-entered boot must finish" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "once the model loads, the page comes up on the controller it was on");
+  });
+
+  test("no view paints the inherited list or the boot's own selection while the re-entered boot waits on its catalog", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+    const route = await catalogErrorFrameOnB(page);
+
+    // Hold the retry's boot at its catalog read. By the time it waits there it has fetched its list, selected the controller it inherited, and fired that
+    // controller's device fetch, so the fresh store holds the inherited list beside a selection the boot dispatched itself, and still no model.
+    let release = null;
+
+    page.fake.request = (path) => (path === "/getOptions") ? new Promise((resolve) => { release = () => resolve(route(path)); }) : route(path);
+    page.panels.length = 0;
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
+
+    await pressRetry(page);
+    await waitFor(() => page.hooks.deviceCalls.length > fetchesBefore, { message: "the retry's boot must select its controller and fire its device fetch" });
+
+    assert.equal(page.hooks.deviceCalls.at(-1), "CTRL-B", "precondition: the boot selected the controller it inherited");
+    assert.notEqual(release, null, "and waits on its catalog read");
+    assert.equal(page.skeleton.controllersContainer.querySelectorAll(".nav-link").length, 0, "the sidebar lists no controller");
+    assert.equal(page.skeleton.devicesContainer.querySelectorAll(".nav-link").length, 0, "and no device");
+    assert.equal(page.skeleton.configTable.children.length, 0, "the options table is empty");
+    assert.equal(page.panels.length, 0, "and the device information panel did not render");
+
+    release();
+
+    await waitFor(() => page.state.loaded === 1, { message: "the re-entered boot must finish" });
+    await flush();
+
+    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "once the model loads, the page comes up on the controller it was on");
   });
 });

@@ -3001,3 +3001,39 @@ describe("statusPanel - the plugin content dock", () => {
     assert.equal(root.contains(staleDock), false, "the prior mount's dock was swept by the wholesale render");
   });
 });
+
+describe("mountStatusPanelView - a controller list arriving without a model", () => {
+
+  test("an arrival that drops the viewed device's controller empties the panel, and one that moves nothing leaves it as it was", () => {
+
+    using dom = createTestDom();
+
+    const { fake, viewRequests } = fakeWithViewCapture();
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    const CONTROLLER = { address: "10.0.0.1", name: "Hub", serialNumber: "ctrl-a" };
+    const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
+
+    store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [CONTROLLER], mode: "controller-based", type: "model:loaded" });
+    store.dispatch({ controllerId: "ctrl-a", type: "devices:requested" });
+    store.dispatch({ controllerId: "ctrl-a", devices: [DEVICE_A], error: "", seq: store.state.devicesRequest.seq, type: "devices:loaded" });
+
+    const { root } = mountPanel({ placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA", "ctrl-a");
+
+    const panel = root.firstElementChild;
+    const requestsBefore = viewRequests.length;
+
+    // The same controller arriving again under the same key moves nothing the panel reads.
+    store.dispatch({ controllers: [{ ...CONTROLLER }], type: "controllers:loaded" });
+
+    assert.ok(root.firstElementChild === panel, "an arrival that moved nothing leaves the panel as it was");
+    assert.equal(viewRequests.length, requestsBefore, "and asks the bridge for nothing");
+
+    store.dispatch({ controllers: [], type: "controllers:loaded" });
+
+    assert.deepEqual(labelsIn(root), [], "a departed controller takes the viewed device's panel with it");
+  });
+});

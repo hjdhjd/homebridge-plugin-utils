@@ -4,9 +4,9 @@
  */
 "use strict";
 
+import { MUTATING_ACTIONS, settledFactsMoved } from "../state.mjs";
 import { createElement, setCategoryExpanded } from "../utils.mjs";
 import { editsHeld, projection, tablePresentation } from "../selectors.mjs";
-import { MUTATING_ACTIONS } from "../state.mjs";
 import { effect } from "../store.mjs";
 
 // Long enough to absorb a fast typist's keystrokes between dispatches, short enough that the filtered table still feels like it is responding to each edit.
@@ -85,14 +85,24 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
     store
   });
 
-  // Counts and visible-toggle pill highlight update on any state change that touches the projection. Reading the projection here hits the memoized cache when
-  // nothing relevant changed (e.g., a devices:loaded outcome that misses the pending request returns state unchanged, so the read hits the cached projection).
+  /* Counts and visible-toggle pill highlight update on any state change that touches the projection. Reading the projection here hits the memoized cache when
+   * nothing relevant changed (e.g., a devices:loaded outcome that misses the pending request returns state unchanged, so the read hits the cached projection).
+   *
+   * A controller list arriving without a model reaches what this panel shows only through the reducer's reconciliation - a selection falling back to global, a
+   * departed controller's device list and notice emptied with it - so the panel follows the arrival when a settled fact moved and costs a few reference
+   * comparisons when none did.
+   */
   effect({
 
-    events: [ "model:loaded", ...MUTATING_ACTIONS, "filter:changed", "scope:changed", "devices:loaded" ],
-    fn: () => {
+    events: [ "model:loaded", ...MUTATING_ACTIONS, "controllers:loaded", "filter:changed", "scope:changed", "devices:loaded" ],
+    fn: (action, previous) => {
 
       if(!refs.total) {
+
+        return;
+      }
+
+      if((action?.type === "controllers:loaded") && !settledFactsMoved(previous, store.state)) {
 
         return;
       }

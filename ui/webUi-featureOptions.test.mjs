@@ -477,7 +477,7 @@ describe("webUiFeatureOptions.show - global options render", () => {
 
 describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO reconciliation)", () => {
 
-  // show() is the single entry chokepoint, so it re-reads the host config through the session before rendering. These tests prove the "every show is fresh"
+  // show() runs the boot every entry runs, so it re-reads the host config through the session before rendering. These tests prove the "every show is fresh"
   // guarantee: an edit made in the Settings tab while the page was hidden is reflected on the next show() rather than rendering against a frozen open()-time snapshot.
 
   test("re-reads the host config on every show() so getControllers and the options render reflect an external edit made while hidden", async () => {
@@ -517,7 +517,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     assert.deepEqual(seenPlatforms.at(-1).options, ["Enable.Audio.Volume.50"], "the first show() must hand getControllers the open()-time config");
 
     // Simulate a Settings-tab edit landing in the host's in-memory config while the page is hidden: reassign to a NEW array (an in-place mutation would be vacuous,
-    // since session.platform aliases the previously-read reference). Then re-enter via show() against the SAME session - exactly the menu/retry re-entry path.
+    // since session.platform aliases the previously-read reference). Then re-enter via show() against the SAME session - exactly the menu's re-entry path.
     fake.config = makePluginConfig({ options: ["Disable.Motion.Detect"] });
 
     await orchestrator.show(session);
@@ -574,7 +574,7 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
     orchestrator.cleanup();
   });
 
-  test("the connection-error retry re-enters show() and recovers once the config read succeeds", async () => {
+  test("the connection-error retry re-enters the page and recovers once the config read succeeds", async () => {
 
     using dom = createTestDom();
 
@@ -604,7 +604,8 @@ describe("webUiFeatureOptions.show - config re-sync on entry (Settings -> FO rec
 
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the connection-error view must render after the failed sync");
 
-    // Restore the config read, wait for the retry button to arm, then click it. The retry re-enters show(), which re-syncs successfully and renders the normal UI.
+    // Restore the config read, wait for the retry button to arm, then click it. The retry re-enters the page through the boot, which re-syncs successfully and
+    // renders the normal UI.
     fake.getPluginConfig = async () => fake.config;
 
     const retryButton = await waitFor(() => {
@@ -4691,10 +4692,11 @@ describe("webUiFeatureOptions - onListEntriesRemoved removal hook", () => {
 
 describe("webUiFeatureOptions.refreshControllers", () => {
 
-  // refreshControllers is the public controllers-only refresh entry point: a consumer calls it after an explicit user action that could have changed the controller
-  // set, and it re-syncs the session then re-invokes getControllers, dispatching controllers:loaded so the nav sidebar repaints. These tests prove its contract - the
-  // re-synced config reaches the hook and a non-empty list transitions the sidebar (resolves true); a null, empty, sync-failure, device-only, or pre-show() call each
-  // leaves the store untouched and resolves false. The caller owns the no-controllers messaging, and a sync failure never tears the working view down as show() does.
+  // refreshControllers is the public controller-list refresh entry point: a consumer calls it after an explicit user action that could have changed the controller
+  // set, and it re-syncs the session then re-invokes getControllers, dispatching controllers:loaded so the nav sidebar repaints and every fact naming a controller is
+  // reconciled against the new list. These tests prove its contract - the re-synced config reaches the hook and a non-empty list transitions the sidebar (resolves
+  // true) and reconciles the selection; a null, empty, sync-failure, device-only, or pre-show() call each leaves the store untouched and resolves false; a malformed
+  // rename rejects. The caller owns the no-controllers messaging, and a sync failure never tears the working view down as show() does.
 
   test("re-syncs the config, re-invokes getControllers, and repaints the sidebar with the new list (resolves true)", async () => {
 
@@ -4935,6 +4937,100 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
     assert.equal(result, false, "the pre-store window must resolve false");
     assert.equal(invoked, false, "the guard must short-circuit before invoking getControllers");
+
+    orchestrator.cleanup();
+  });
+
+  test("a list that no longer holds the selected controller returns the selection to global and takes its devices off the sidebar (resolves true)", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let controllersToReturn = [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ];
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: controllersToReturn, error: "" }),
+      getDevices: (controller) => ({
+
+        devices: [{ firmwareRevision: "1.0", manufacturer: "Acme", model: "Cam", name: "Front Door", serialNumber: controller.serialNumber + "-CAM" }],
+        error: ""
+      })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.controllersContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A",
+      "precondition: the boot selected controller A");
+    assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-CAM']"), "precondition: and its devices are listed");
+
+    // The plugin removed controller A through its own affordance and declares no rename, so the refreshed list reads as exactly that: a departure.
+    controllersToReturn = [{ name: "Hub B", serialNumber: "CTRL-B" }];
+
+    assert.equal(await orchestrator.refreshControllers(), true, "a non-empty list still transitions the sidebar");
+
+    await flush();
+
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
+      "the selection fell back to global rather than naming a controller no row carries");
+    assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-CAM']") === null, "and the departed controller's devices left the sidebar with it");
+
+    orchestrator.cleanup();
+  });
+
+  test("a malformed rename rejects with a TypeError before anything else happens, the pre-store window included", async () => {
+
+    using dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    let calls = 0;
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => {
+
+        calls += 1;
+
+        return { controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "" };
+      }
+    });
+
+    // A page that has never been shown answers a well-formed refresh with false, so a rejection here can only be the shape check.
+    await assert.rejects(() => orchestrator.refreshControllers({ rename: null }), TypeError, "a malformed rename is refused even before the first show()");
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    const callsBefore = calls;
+
+    for(const rename of [ null, "CTRL-B", [], { to: "CTRL-B" }, { from: 1, to: "CTRL-B" } ]) {
+
+      // A sequential await per shape keeps each rejection attributable to the shape that caused it.
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(() => orchestrator.refreshControllers({ rename }), TypeError, "a rename shaped " + JSON.stringify(rename) + " is a bug in the call itself");
+    }
+
+    assert.equal(calls, callsBefore, "the refusal comes before the hook is asked for anything");
 
     orchestrator.cleanup();
   });
@@ -5183,8 +5279,8 @@ describe("webUiFeatureOptions - global-only boot flow", () => {
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "the connection-error view renders its retry button into #headerInfo in global-only mode");
     assert.equal(skeleton.headerInfo.style.display, "", "the connection-error view reveals #headerInfo when it renders the error");
 
-    // Restore the config read, wait for the retry button to arm, then click it. The retry re-enters show(), which syncs successfully and runs the global-only success
-    // path - clearing #headerInfo and leaving it hidden, since the header view never mounts to reclaim it.
+    // Restore the config read, wait for the retry button to arm, then click it. The retry re-enters the page through the boot, which syncs successfully and runs the
+    // global-only success path - clearing #headerInfo and leaving it hidden, since the header view never mounts to reclaim it.
     fake.getPluginConfig = async () => fake.config;
 
     const retryButton = await waitFor(() => {
@@ -6700,7 +6796,8 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
 
   test("fires once on a retry that follows a failed cycle", async () => {
 
-    // The menu relaunch and the retry affordance both reboot the page through show(), so the healed cycle announces exactly as a first successful cycle does.
+    // The menu relaunch calls show() and the retry affordance re-enters the page, each through the same boot, so the healed cycle announces exactly as a first
+    // successful cycle does.
     using dom = createTestDom();
 
     const { homebridgeGuard, skeleton } = arrange({ respond: async (ordinal) => {

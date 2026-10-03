@@ -27,7 +27,9 @@ import { toastError } from "../../webUi-errors.mjs";
  *
  * Subscribes to:
  *
- *   - `controllers:loaded` - rebuild the controllers container (the facade's `refreshControllers()` refresh path).
+ *   - `controllers:loaded` - rebuild the controllers container (the facade's `refreshControllers()` refresh path), and follow whatever the reducer's reconciliation
+ *     moved: the devices container rebuilds when the device list changed, and both containers repaint their highlighting when the selection or the device list's
+ *     owner moved, so a dropped controller's devices and a renamed controller's highlight reach the sidebar on the arrival that changed them.
  *   - `devices:loaded` - rebuild the devices container, and repaint both containers' highlighting: this is the transition that records which controller the loaded
  *     device list belongs to, and the controllers highlight reads that.
  *   - `scope:changed` - repaint both containers' highlighting without rebuilding.
@@ -72,7 +74,7 @@ import { toastError } from "../../webUi-errors.mjs";
 export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance = undefined, getDevices, globalGlyph = undefined, groupOrder = undefined,
   labelControllers, labelDevices, onReenter = undefined, refresh = undefined, rootControllers, rootDevices, signal, store }) => {
 
-  // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - the facade's controllers-only refresh path.
+  // Controllers container rebuilds on model:loaded (initial mode/controllers), plus controllers:loaded - the facade's controller-list refresh path.
   effect({
 
     events: [ "controllers:loaded", "model:loaded" ],
@@ -100,14 +102,19 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
     store
   });
 
-  // Devices container rebuilds on model:loaded (initial structure) and devices:loaded (new controller selected), applying the device highlighting for what it just
-  // built. The separate effect below repaints both containers whenever the state the highlights read moves, without rebuilding either.
+  /* Devices container rebuilds on model:loaded (initial structure) and devices:loaded (new controller selected), applying the device highlighting for what it just
+   * built. The separate effect below repaints both containers whenever the state the highlights read moves, without rebuilding either.
+   *
+   * A controller list arriving without a model rebuilds it only when the reducer's reconciliation replaced the device list - a departed controller's list emptied
+   * with it - and costs one reference comparison otherwise. A rename that carried the list to the controller's new key keeps the list itself, so the rows stay
+   * exactly as built and the effect below repaints their highlighting.
+   */
   effect({
 
-    events: [ "devices:loaded", "model:loaded" ],
-    fn: () => {
+    events: [ "controllers:loaded", "devices:loaded", "model:loaded" ],
+    fn: (action, previous) => {
 
-      if(store.state.status.kind === "loading") {
+      if((store.state.status.kind === "loading") || ((action?.type === "controllers:loaded") && (previous.devices === store.state.devices))) {
 
         return;
       }
@@ -137,11 +144,19 @@ export const mountNavView = ({ deadlineSeconds, deviceContent, failureGuidance =
    * The controllers highlight reads both, which is why `devices:loaded` belongs here and not only on the devices-build effect above. A device fetch that comes back
    * empty moves only the second - the selection stays where it was, and the devices container rebuilds to nothing - so without this subscription nothing would
    * repaint the controller entry that fetch belongs to, and its in-scope outline would never appear.
+   *
+   * A controller list arriving without a model can move each of them through the reducer's reconciliation - a selection falling back to global, a rename
+   * carrying the selection and the list's owner to the new key - so it repaints here when one of them moved, and costs a reference comparison otherwise.
    */
   effect({
 
-    events: [ "devices:loaded", "scope:changed" ],
-    fn: () => {
+    events: [ "controllers:loaded", "devices:loaded", "scope:changed" ],
+    fn: (action, previous) => {
+
+      if((action?.type === "controllers:loaded") && (previous.scope === store.state.scope) && (previous.devicesControllerId === store.state.devicesControllerId)) {
+
+        return;
+      }
 
       applyControllersHighlight(rootControllers, store.state.scope, store.state.devicesControllerId);
       applyDevicesHighlight(rootDevices, store.state.scope);

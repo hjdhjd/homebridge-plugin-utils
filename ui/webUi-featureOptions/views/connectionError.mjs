@@ -28,8 +28,8 @@ import { selectedController } from "../selectors.mjs";
  *     recovering controller.
  *   - A progress bar that fills during the retry-delay window so the user has visual feedback that the retry button is coming alive.
  *
- * The retry button's click invokes the caller-supplied `onRetry` callback (typically the orchestrator's show() re-entry, which itself flushes any pending
- * edit before tearing down and rebuilding the page).
+ * The retry button's click invokes the caller-supplied `onRetry` callback (typically the orchestrator's re-entry, which runs the same boot as `show()` and so
+ * flushes any pending edit before tearing down and rebuilding the page).
  *
  * An optional `connectionErrorPanel` hook docks plugin-owned content beneath that error block - the surface a plugin uses to offer repair or removal for the very
  * controller the page cannot reach. The framework's own affordances stay primary: the retry flow is entirely the framework's, and the hook neither replaces nor
@@ -40,7 +40,8 @@ import { selectedController } from "../selectors.mjs";
  * `signal` are the mount's own identities. The same element arrives on every error render of one mount, so whatever the plugin put inside it survives an error
  * re-render (the framework rebuilds its own error block each time and re-docks the panel after it, never writing into it), and the same AbortSignal arrives too, so a
  * hook that must register a listener exactly once despite being re-invoked per render keys that once-ness on the signal and scopes the registration to it. A retry
- * click reboots the page cycle through `show()`, so a failed retry re-invokes the hook in a fresh mount with a fresh panel and a fresh signal.
+ * click re-enters the page through the boot `show()` runs, coming back on the controller that was selected while the list it fetches still holds it, so a failed
+ * retry re-invokes the hook in a fresh mount with a fresh panel and a fresh signal.
  *
  * @param {Object} args
  * @param {((args: { controller: (import("../state.mjs").Controller | null), panel: HTMLElement, signal: AbortSignal }) => void) | undefined} args.connectionErrorPanel -

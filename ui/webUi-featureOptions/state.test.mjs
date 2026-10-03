@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { connectionFailureCopy, controllerNoticeCopy, initialState, reducer } from "./state.mjs";
+import { connectionFailureCopy, controllerNoticeCopy, initialState, reconciledControllerId, reducer, renameHonored, settledFactsMoved } from "./state.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../featureOptions.js";
@@ -175,104 +175,237 @@ describe("reducer - model:loaded establishes over a standing page", () => {
   });
 });
 
-/* A load over a standing page can carry a controller list that no longer holds the controller the user is looking at. Every fact in state that names one is
- * checked against the arriving list by serial, independently, and answered on its own terms. These rows drive each fact in both directions - a list that dropped
- * the controller and a list that still holds it - because a reconciliation that fired on a held controller would be as wrong as one that missed a departed one.
+/* A list arrival over a standing page can carry a controller list that no longer holds, or renames, the controller the user is looking at. Every action that
+ * installs a list runs the one reconciliation, so every row below runs against each of them from this one table: a row that held for one arrival and failed for
+ * another would be the arms drifting apart. Every fact in state that names a controller is checked against the arriving list by serial, independently, and
+ * answered on its own terms, so these rows drive each fact in both directions - a list that dropped the controller and a list that still holds it - because a
+ * reconciliation that fired on a held controller would be as wrong as one that missed a departed one.
  */
-describe("reducer - model:loaded reconciles the facts that name a controller", () => {
+const CONTROLLER_A = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+const CONTROLLER_B = { address: "10.0.0.2", name: "Controller B", serialNumber: "ctrl-b" };
 
-  const CONTROLLER_A = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+// Controller A after a write edited its address: the plugin keys the sidebar by address, so the same controller arrives under a new key.
+const RENAMED_A = { address: "10.0.0.9", name: "Controller A", serialNumber: "ctrl-a2" };
+const RENAME_A = { from: "ctrl-a", to: "ctrl-a2" };
 
-  const controllerBased = () => loadedState({ controllers: [CONTROLLER_A], mode: "controller-based" });
+const LIST_ARRIVALS = [
 
-  const reload = (state, controllers) => reducer(state, {
+  {
 
-    catalog: CATALOG, configuredOptions: [], controllers, mode: "controller-based", type: "model:loaded"
+    arrive: ({ controllers, rename = undefined, state }) => reducer(state, {
+
+      catalog: CATALOG, configuredOptions: [], controllers, mode: state.mode, rename, type: "model:loaded"
+    }),
+    type: "model:loaded"
+  },
+  {
+
+    arrive: ({ controllers, rename = undefined, state }) => reducer(state, { controllers, rename, type: "controllers:loaded" }),
+    type: "controllers:loaded"
+  }
+];
+
+for(const { arrive, type } of LIST_ARRIVALS) {
+
+  describe("reducer - " + type + " reconciles the facts that name a controller", () => {
+
+    const controllerBased = (controllers = [CONTROLLER_A]) => loadedState({ controllers, mode: "controller-based" });
+
+    const reload = (state, controllers, rename = undefined) => arrive({ controllers, rename, state });
+
+    const select = (state, scope) => reducer(state, { origin: "user", scope, type: "scope:changed" });
+
+    test("a selection naming a departed controller falls back to global, and a held one keeps its reference", () => {
+
+      const controllerScope = select(controllerBased(), { controllerId: "ctrl-a", kind: "controller" });
+      const deviceScope = select(controllerBased(), { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" });
+
+      assert.deepEqual(reload(controllerScope, []).scope, { kind: "global" }, "a controller selection the list cannot place falls back to global");
+      assert.deepEqual(reload(deviceScope, []).scope, { kind: "global" }, "and so does a device selection under that controller");
+      assert.equal(reload(controllerScope, [CONTROLLER_A]).scope, controllerScope.scope, "a held controller keeps the selection by reference");
+      assert.equal(reload(deviceScope, [CONTROLLER_A]).scope, deviceScope.scope, "and so does a device under a held one");
+    });
+
+    test("a device list whose controller is gone is emptied and disowned, and a held one keeps its references", () => {
+
+      const withDevices = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", devices: DEVICES });
+
+      assert.equal(withDevices.devices, DEVICES, "precondition: controller A's devices are loaded");
+
+      const dropped = reload(withDevices, []);
+
+      assert.deepEqual(dropped.devices, [], "the device list is emptied");
+      assert.notEqual(dropped.devices, withDevices.devices, "with a fresh array, not the departed controller's");
+      assert.equal(dropped.devicesControllerId, null, "and nothing owns it any more");
+
+      const kept = reload(withDevices, [CONTROLLER_A]);
+
+      assert.equal(kept.devices, withDevices.devices, "a held controller keeps its device list by reference");
+      assert.equal(kept.devicesControllerId, "ctrl-a", "and goes on owning it");
+    });
+
+    test("the nothing-to-list notice leaves with the controller it described", () => {
+
+      const NOTICE = "This controller has no cameras adopted.";
+      const withNotice = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", emptyMessage: NOTICE });
+
+      assert.equal(withNotice.devicesEmptyMessage, NOTICE, "precondition: the notice is recorded");
+      assert.equal(reload(withNotice, []).devicesEmptyMessage, null, "a departed controller takes its notice with it");
+      assert.equal(reload(withNotice, [CONTROLLER_A]).devicesEmptyMessage, NOTICE, "a held one keeps it");
+    });
+
+    test("a fetch pending against a departed controller is cleared, and its late outcome then drops", () => {
+
+      const pending = reducer(controllerBased(), { controllerId: "ctrl-a", type: "devices:requested" });
+      const seq = pending.devicesRequest.seq;
+      const reloaded = reload(pending, []);
+
+      assert.equal(reloaded.devicesRequest, null, "the pending fetch names a controller the list cannot place, so it is cleared");
+
+      const late = reducer(reloaded, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq, type: "devices:loaded" });
+
+      assert.equal(late, reloaded, "its late outcome falls to the existing sequence rule and returns the state by reference");
+      assert.equal(reload(pending, [CONTROLLER_A]).devicesRequest, pending.devicesRequest, "a held controller keeps the pending fetch by reference");
+    });
+
+    test("device-only state is untouched: a null id names no controller, so there is nothing to take away", () => {
+
+      const deviceOnly = select(requestThenLoad(loadedState(), { controllerId: null, devices: DEVICES }), { controllerId: null, deviceId: "dev-a", kind: "device" });
+
+      assert.equal(deviceOnly.devicesControllerId, null, "precondition: device-only mode owns its list under no controller");
+
+      const reloaded = reload(deviceOnly, []);
+
+      assert.equal(reloaded.devices, deviceOnly.devices, "the device list survives an empty controller list");
+      assert.equal(reloaded.devicesControllerId, null, "and so does its null owner");
+      assert.equal(reloaded.scope, deviceOnly.scope, "the selection keeps its reference, null controllerId and all");
+      assert.equal(reloaded.devicesRequest, deviceOnly.devicesRequest, "and so does the pending slot");
+    });
+
+    test("a proven rename carries a controller selection to the new key, and a device selection with its device intact", () => {
+
+      const controllerScope = select(controllerBased(), { controllerId: "ctrl-a", kind: "controller" });
+      const deviceScope = select(controllerBased(), { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" });
+
+      // The same two lists without the declaration read as a removal plus an addition, which is the case the declaration exists to tell apart.
+      assert.deepEqual(reload(controllerScope, [RENAMED_A]).scope, { kind: "global" }, "precondition: undeclared, the lists drop the selection to global");
+
+      assert.deepEqual(reload(controllerScope, [RENAMED_A], RENAME_A).scope, { controllerId: "ctrl-a2", kind: "controller" },
+        "a controller selection follows its controller onto the new key");
+      assert.deepEqual(reload(deviceScope, [RENAMED_A], RENAME_A).scope, { controllerId: "ctrl-a2", deviceId: "dev-a", kind: "device" },
+        "and a device selection keeps its kind and its device while its controller moves");
+    });
+
+    test("a proven rename hands the old key's device list to the new key, list and notice by reference", () => {
+
+      const NOTICE = "This controller has no cameras adopted.";
+      const withDevices = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", devices: DEVICES });
+      const withNotice = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", emptyMessage: NOTICE });
+      const renamed = reload(withDevices, [RENAMED_A], RENAME_A);
+
+      assert.equal(renamed.devicesControllerId, "ctrl-a2", "the new key owns the loaded list");
+      assert.equal(renamed.devices, withDevices.devices, "and it is the very list the old key owned");
+      assert.equal(reload(withNotice, [RENAMED_A], RENAME_A).devicesEmptyMessage, NOTICE, "a notice the list carried goes with it");
+    });
+
+    test("a proven rename leaves a selection naming another controller, or global, by reference", () => {
+
+      const standing = [ CONTROLLER_A, CONTROLLER_B ];
+      const arriving = [ RENAMED_A, CONTROLLER_B ];
+      const onB = select(controllerBased(standing), { controllerId: "ctrl-b", kind: "controller" });
+      const onGlobal = controllerBased(standing);
+
+      assert.equal(renameHonored({ arriving, rename: RENAME_A, standing }), true, "precondition: the lists prove the rename");
+      assert.equal(reload(onB, arriving, RENAME_A).scope, onB.scope, "a user on another controller stays exactly where they are");
+      assert.equal(reload(onGlobal, arriving, RENAME_A).scope, onGlobal.scope, "and so does one on global");
+    });
+
+    test("a proven rename clears a fetch pending against the old key, and its late outcome then drops", () => {
+
+      const pending = reducer(select(controllerBased(), { controllerId: "ctrl-a", kind: "controller" }), { controllerId: "ctrl-a", type: "devices:requested" });
+      const seq = pending.devicesRequest.seq;
+      const renamed = reload(pending, [RENAMED_A], RENAME_A);
+
+      assert.deepEqual(renamed.scope, { controllerId: "ctrl-a2", kind: "controller" }, "precondition: the selection moved with the rename");
+      assert.equal(renamed.devicesRequest, null, "the fetch was asked of the old identity, so it is cleared rather than carried");
+
+      const late = reducer(renamed, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq, type: "devices:loaded" });
+
+      assert.equal(late, renamed, "its late outcome drops, so nothing fetched from the old address lands under the new key");
+    });
+
+    test("an unproven rename is ignored, and the arrival reconciles exactly as though none were declared", () => {
+
+      const SLICES = [ "devices", "devicesControllerId", "devicesEmptyMessage", "devicesRequest", "scope" ];
+
+      // Each case is a standing state, the arriving list, and the declaration the lists fail to prove. The selection and the device list each name the old key,
+      // so a rename honored by mistake would show in one of them.
+      const onA = (controllers) => requestThenLoad(select(controllerBased(controllers), { controllerId: "ctrl-a", kind: "controller" }),
+        { controllerId: "ctrl-a", devices: DEVICES });
+      const cases = [
+
+        { arriving: [CONTROLLER_B], label: "the new key absent from the arriving list", rename: RENAME_A, state: onA([CONTROLLER_A]) },
+        { arriving: [ CONTROLLER_A, RENAMED_A ], label: "the old key still present in it", rename: RENAME_A, state: onA([CONTROLLER_A]) },
+        { arriving: [CONTROLLER_A], label: "the old key equal to the new one", rename: { from: "ctrl-a", to: "ctrl-a" }, state: onA([CONTROLLER_A]) },
+        { arriving: [RENAMED_A], label: "the new key already in the standing list", rename: RENAME_A, state: onA([ CONTROLLER_A, RENAMED_A ]) },
+        { arriving: [ RENAMED_A, CONTROLLER_B ], label: "the old key absent from the standing list", rename: RENAME_A, state: onA([CONTROLLER_B]) }
+      ];
+
+      for(const { arriving, label, rename, state } of cases) {
+
+        const declared = reload(state, arriving, rename);
+        const undeclared = reload(state, arriving);
+
+        assert.equal(renameHonored({ arriving, rename, standing: state.controllers }), false, label + ": the exported test refuses it");
+
+        for(const slice of SLICES) {
+
+          assert.deepEqual(declared[slice], undeclared[slice], label + ": " + slice + " reconciles as though nothing were declared");
+        }
+
+        assert.notEqual(declared.devicesControllerId, "ctrl-a2", label + ": and nothing was carried to the new key");
+      }
+    });
+
+    test("a proven rename leaves state whose controller ids are null untouched", () => {
+
+      const standing = [CONTROLLER_A];
+      const nullOwned = select(requestThenLoad(controllerBased(standing), { controllerId: null, devices: DEVICES }),
+        { controllerId: null, deviceId: "dev-a", kind: "device" });
+      const renamed = reload(nullOwned, [RENAMED_A], RENAME_A);
+
+      assert.equal(renameHonored({ arriving: [RENAMED_A], rename: RENAME_A, standing }), true, "precondition: the lists prove the rename");
+      assert.equal(renamed.scope, nullOwned.scope, "a selection under no controller keeps its reference");
+      assert.equal(renamed.devices, nullOwned.devices, "and so does the list no controller owns");
+      assert.equal(renamed.devicesControllerId, null, "whose owner is still nobody");
+    });
   });
-
-  test("a selection naming a departed controller falls back to global, and a held one keeps its reference", () => {
-
-    const controllerScope = reducer(controllerBased(), { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" });
-    const deviceScope = reducer(controllerBased(), { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
-
-    assert.deepEqual(reload(controllerScope, []).scope, { kind: "global" }, "a controller selection the list cannot place falls back to global");
-    assert.deepEqual(reload(deviceScope, []).scope, { kind: "global" }, "and so does a device selection under that controller");
-    assert.equal(reload(controllerScope, [CONTROLLER_A]).scope, controllerScope.scope, "a held controller keeps the selection by reference");
-    assert.equal(reload(deviceScope, [CONTROLLER_A]).scope, deviceScope.scope, "and so does a device under a held one");
-  });
-
-  test("a device list whose controller is gone is emptied and disowned, and a held one keeps its references", () => {
-
-    const withDevices = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", devices: DEVICES });
-
-    assert.equal(withDevices.devices, DEVICES, "precondition: controller A's devices are loaded");
-
-    const dropped = reload(withDevices, []);
-
-    assert.deepEqual(dropped.devices, [], "the device list is emptied");
-    assert.notEqual(dropped.devices, withDevices.devices, "with a fresh array, not the departed controller's");
-    assert.equal(dropped.devicesControllerId, null, "and nothing owns it any more");
-
-    const kept = reload(withDevices, [CONTROLLER_A]);
-
-    assert.equal(kept.devices, withDevices.devices, "a held controller keeps its device list by reference");
-    assert.equal(kept.devicesControllerId, "ctrl-a", "and goes on owning it");
-  });
-
-  test("the nothing-to-list notice leaves with the controller it described", () => {
-
-    const NOTICE = "This controller has no cameras adopted.";
-    const withNotice = requestThenLoad(controllerBased(), { controllerId: "ctrl-a", emptyMessage: NOTICE });
-
-    assert.equal(withNotice.devicesEmptyMessage, NOTICE, "precondition: the notice is recorded");
-    assert.equal(reload(withNotice, []).devicesEmptyMessage, null, "a departed controller takes its notice with it");
-    assert.equal(reload(withNotice, [CONTROLLER_A]).devicesEmptyMessage, NOTICE, "a held one keeps it");
-  });
-
-  test("a fetch pending against a departed controller is cleared, and its late outcome then drops", () => {
-
-    const pending = reducer(controllerBased(), { controllerId: "ctrl-a", type: "devices:requested" });
-    const seq = pending.devicesRequest.seq;
-    const reloaded = reload(pending, []);
-
-    assert.equal(reloaded.devicesRequest, null, "the pending fetch names a controller the list cannot place, so it is cleared");
-
-    const late = reducer(reloaded, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq, type: "devices:loaded" });
-
-    assert.equal(late, reloaded, "its late outcome falls to the existing sequence rule and returns the state by reference");
-    assert.equal(reload(pending, [CONTROLLER_A]).devicesRequest, pending.devicesRequest, "a held controller keeps the pending fetch by reference");
-  });
-
-  test("device-only state is untouched: a null id names no controller, so there is nothing to take away", () => {
-
-    const deviceOnly = reducer(requestThenLoad(loadedState(), { controllerId: null, devices: DEVICES }),
-      { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
-
-    assert.equal(deviceOnly.devicesControllerId, null, "precondition: device-only mode owns its list under no controller");
-
-    const reloaded = reducer(deviceOnly, { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" });
-
-    assert.equal(reloaded.devices, deviceOnly.devices, "the device list survives an empty controller list");
-    assert.equal(reloaded.devicesControllerId, null, "and so does its null owner");
-    assert.equal(reloaded.scope, deviceOnly.scope, "the selection keeps its reference, null controllerId and all");
-    assert.equal(reloaded.devicesRequest, deviceOnly.devicesRequest, "and so does the pending slot");
-  });
-});
+}
 
 describe("reducer - controllers:loaded", () => {
 
-  test("replaces only the controllers field without re-loading the model", () => {
+  test("installs the arriving list and, while it holds every controller a fact names, returns every other slice by reference", () => {
 
-    const initial = reducer(initialState(), {
+    const standing = requestThenLoad(reducer(loadedState({ controllers: [CONTROLLER_A], mode: "controller-based" }),
+      { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" }), { controllerId: "ctrl-a", devices: DEVICES });
 
-      catalog: CATALOG, configuredOptions: [], controllers: [], mode: "controller-based", type: "model:loaded"
-    });
-    const refreshed = [{ address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" }];
-    const next = reducer(initial, { controllers: refreshed, type: "controllers:loaded" });
+    // The same controller under the same key with a different display name - the refresh a plugin makes after editing nothing that keys the sidebar.
+    const refreshed = [{ ...CONTROLLER_A, name: "Controller A, renamed in the plugin" }];
+    const next = reducer(standing, { controllers: refreshed, type: "controllers:loaded" });
 
-    assert.equal(next.controllers, refreshed);
-    assert.equal(next.catalog, initial.catalog, "catalog unchanged - reference preserved");
-    assert.equal(next.configuredOptions, initial.configuredOptions, "configuredOptions unchanged");
+    assert.equal(next.controllers, refreshed, "the arriving list is installed by reference");
+
+    // Walking every key is what makes this a contract rather than a claim about the fields this row happened to think of: the model is not loaded again, and a
+    // reconciliation that finds every named controller held moves nothing.
+    for(const field of Object.keys(standing)) {
+
+      if(field === "controllers") {
+
+        continue;
+      }
+
+      assert.equal(next[field], standing[field], field + " comes back by reference");
+    }
   });
 });
 
@@ -1167,19 +1300,24 @@ describe("reducer - commit:started", () => {
 
     // Standing a row down ends a gesture rather than beginning one, navigation and filtering write nothing, and a fetch or a controller refresh is not an edit at
     // all...so each of these reaches its arm and returns a new state rather than the held reference.
-    const held = reducer(loadedState({ controllers: [{ address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" }] }), { type: "commit:started" });
+    const held = reducer(loadedState({ controllers: [CONTROLLER_A] }), { type: "commit:started" });
     const permitted = [
 
       { type: "option:disarmed" },
       { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" },
       { query: "motion", type: "filter:changed" },
       { controllerId: "ctrl-a", type: "devices:requested" },
-      { controllers: [], type: "controllers:loaded" }
+      { controllers: [], type: "controllers:loaded" },
+      { controllers: [ CONTROLLER_A, CONTROLLER_B ], type: "controllers:loaded" },
+      { controllers: [RENAMED_A], rename: RENAME_A, type: "controllers:loaded" }
     ];
 
     for(const action of permitted) {
 
-      assert.notEqual(reducer(held, action), held, action.type + " is not held: it reaches its arm and returns a new state");
+      const next = reducer(held, action);
+
+      assert.notEqual(next, held, action.type + " is not held: it reaches its arm and returns a new state");
+      assert.equal(next.write, held.write, action.type + " leaves the hold standing, so the write that took it still ends it");
     }
   });
 });
@@ -1303,5 +1441,136 @@ describe("reducer - a write the engine refuses", () => {
     assert.equal(next, loaded, "the clear is a no-op rather than a state transition");
     assert.deepEqual(next.configuredOptions, ["Enable.Motion.Detect.Sensitivity"], "the entry the clear would have deleted is still there");
     assert.equal(reported.mock.callCount(), 1, "the refusal is reported once");
+  });
+});
+
+/* A page that re-enters starts its fresh store from the store it replaces: the controller list and the selection, and nothing else. These rows hold that
+ * hand-over to its terms, and hold the boot's question about an inherited selection to the answer the reconciliation itself gives.
+ */
+describe("initialState - a re-entry's starting values", () => {
+
+  // A loaded page on controller A's own device row, with its device list, a pending fetch, a filter and an edit - everything a re-entry must leave behind.
+  const standingPage = () => {
+
+    const onA = reducer(loadedState({ configuredOptions: ["Enable.Motion.Detect"], controllers: [ CONTROLLER_A, CONTROLLER_B ], mode: "controller-based" }),
+      { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "ctrl-a", kind: "device" }, type: "scope:changed" });
+    const listed = requestThenLoad(onA, { controllerId: "ctrl-a", devices: DEVICES });
+
+    return reducer(reducer(listed, { query: "motion", type: "filter:changed" }), { controllerId: "ctrl-b", type: "devices:requested" });
+  };
+
+  test("inherits the controller list and the selection, a device selection as its controller's, and nothing else", () => {
+
+    const replaced = standingPage();
+    const fresh = initialState(replaced);
+    const blank = initialState();
+
+    assert.equal(fresh.controllers, replaced.controllers, "the list is handed over by reference");
+    assert.deepEqual(fresh.scope, { controllerId: "ctrl-a", kind: "controller" }, "a device selection becomes its controller's, since the device list is not inherited");
+
+    for(const field of Object.keys(blank)) {
+
+      if([ "controllers", "scope" ].includes(field)) {
+
+        continue;
+      }
+
+      assert.deepEqual(fresh[field], blank[field], field + " starts where any fresh store starts");
+    }
+  });
+
+  test("inherits a controller selection by reference, and a selection naming no controller as global", () => {
+
+    const onB = reducer(loadedState({ controllers: [ CONTROLLER_A, CONTROLLER_B ], mode: "controller-based" }),
+      { origin: "user", scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
+    const deviceOnly = reducer(loadedState(), { origin: "user", scope: { controllerId: null, deviceId: "dev-a", kind: "device" }, type: "scope:changed" });
+
+    assert.equal(initialState(onB).scope, onB.scope, "a controller selection is handed over as it stood");
+    assert.deepEqual(initialState(deviceOnly).scope, { kind: "global" }, "device-only mode's device selection names no controller");
+    assert.deepEqual(initialState(loadedState()).scope, { kind: "global" }, "and global stays global");
+  });
+
+  test("a store started from inherited values hands over the same values again, before any model has loaded", () => {
+
+    const inherited = initialState(standingPage());
+    const again = initialState(inherited);
+
+    assert.equal(again.controllers, inherited.controllers, "a re-entry that failed before its model loaded passes the same list to its retry");
+    assert.deepEqual(again.scope, inherited.scope, "and the same selection");
+  });
+});
+
+describe("reconciledControllerId - the boot's question about an inherited selection", () => {
+
+  const inheritedOn = (controllerId) => initialState(reducer(loadedState({ controllers: [ CONTROLLER_A, CONTROLLER_B ], mode: "controller-based" }),
+    { origin: "user", scope: { controllerId, kind: "controller" }, type: "scope:changed" }));
+
+  test("answers where the model load is about to leave the selection, for every way a list can arrive", () => {
+
+    const onB = inheritedOn("ctrl-b");
+    const renamedB = { address: "10.0.0.8", name: "Controller B", serialNumber: "ctrl-b2" };
+    const cases = [
+
+      { arriving: [ CONTROLLER_A, CONTROLLER_B ], rename: undefined, state: onB, why: "a list that still holds the selection keeps it" },
+      { arriving: [ CONTROLLER_A, renamedB ], rename: { from: "ctrl-b", to: "ctrl-b2" }, state: onB, why: "a proven rename carries it" },
+      { arriving: [ CONTROLLER_A, renamedB ], rename: undefined, state: onB, why: "a departure without a rename drops it" },
+      { arriving: [ CONTROLLER_A, CONTROLLER_B, renamedB ], rename: { from: "ctrl-b", to: "ctrl-b2" }, state: onB, why: "an unproven rename is ignored" },
+      { arriving: [ CONTROLLER_A, CONTROLLER_B ], rename: undefined, state: initialState(), why: "a fresh store has no selection to keep" }
+    ];
+
+    for(const { arriving, rename, state, why } of cases) {
+
+      const loaded = reducer(state, { catalog: CATALOG, configuredOptions: [], controllers: arriving, mode: "controller-based", rename, type: "model:loaded" });
+      const landed = (loaded.scope.kind === "global") ? null : loaded.scope.controllerId;
+
+      assert.equal(reconciledControllerId({ arriving, rename, state }), landed, why + ", exactly as the load leaves it");
+    }
+
+    assert.equal(reconciledControllerId({ arriving: [ CONTROLLER_A, renamedB ], rename: { from: "ctrl-b", to: "ctrl-b2" }, state: onB }), "ctrl-b2",
+      "and a proven rename lands on the new key");
+  });
+});
+
+describe("settledFactsMoved", () => {
+
+  test("reads false across a list arrival that moved nothing and true across one that moved a settled fact", () => {
+
+    const onA = requestThenLoad(reducer(loadedState({ controllers: [ CONTROLLER_A, CONTROLLER_B ], mode: "controller-based" }),
+      { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), { controllerId: "ctrl-a", devices: DEVICES });
+    const unmoved = reducer(onA, { controllers: [ CONTROLLER_A, CONTROLLER_B ], type: "controllers:loaded" });
+    const departed = reducer(onA, { controllers: [CONTROLLER_B], type: "controllers:loaded" });
+    const pendingOnly = reducer(reducer(onA, { controllerId: "ctrl-b", type: "devices:requested" }), { controllers: [CONTROLLER_A], type: "controllers:loaded" });
+
+    assert.equal(settledFactsMoved(onA, unmoved), false, "an arrival that kept every settled fact moved none");
+    assert.equal(settledFactsMoved(onA, departed), true, "an arrival that dropped the selected controller moved the selection and its list");
+    assert.equal(pendingOnly.devicesRequest, null, "precondition: the arrival cleared only a fetch pending against a departed controller");
+    assert.equal(settledFactsMoved(reducer(onA, { controllerId: "ctrl-b", type: "devices:requested" }), pendingOnly), false,
+      "and a pending fetch is a request rather than a settled fact");
+
+    // The selection alone can move: a user who clicked controller B while A's list was still the loaded one, and a refresh that then drops B.
+    const onB = reducer(onA, { origin: "user", scope: { controllerId: "ctrl-b", kind: "controller" }, type: "scope:changed" });
+    const droppedB = reducer(onB, { controllers: [CONTROLLER_A], type: "controllers:loaded" });
+
+    assert.ok((droppedB.devices === onB.devices) && (droppedB.devicesControllerId === onB.devicesControllerId), "precondition: A's list stayed where it was");
+    assert.equal(settledFactsMoved(onB, droppedB), true, "so an arrival that moved only the selection still reads as moved");
+  });
+
+  test("an arrival that moves nothing allocates no slice: every slice but the list keeps its reference", () => {
+
+    const onA = requestThenLoad(reducer(loadedState({ controllers: [ CONTROLLER_A, CONTROLLER_B ], mode: "controller-based" }),
+      { origin: "user", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), { controllerId: "ctrl-a", devices: DEVICES });
+
+    for(const rename of [ undefined, { from: "ctrl-z", to: "ctrl-y" } ]) {
+
+      const next = reducer(onA, { controllers: [ CONTROLLER_B, CONTROLLER_A ], rename, type: "controllers:loaded" });
+
+      for(const field of Object.keys(onA)) {
+
+        if(field !== "controllers") {
+
+          assert.equal(next[field], onA[field], field + " keeps its reference with " + ((rename === undefined) ? "no rename" : "an unproven rename"));
+        }
+      }
+    }
   });
 });

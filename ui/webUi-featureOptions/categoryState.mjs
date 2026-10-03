@@ -83,6 +83,17 @@ export class FeatureOptionsCategoryState {
   }
 
   /**
+   * List every context key that has persisted state. The list is a snapshot rather than a live view, so a caller can move entries through {@link set} and
+   * {@link delete} while it walks it - which is how a caller re-keys every context a renamed identity owned, one entry at a time.
+   *
+   * @returns {string[]} The context keys with persisted state.
+   */
+  keys() {
+
+    return Object.keys(this.#map);
+  }
+
+  /**
    * Load the persisted snapshot from localStorage into a null-prototype map. Returns an empty map on absent, corrupt, or otherwise unreadable storage so callers
    * always operate against a usable object - persistence failure should never wedge the UI on a bad localStorage entry. The null prototype eliminates the
    * possibility of an own-vs-inherited mismatch on any access path: `get`, `set`, and the `in` check in `delete` see only own keys regardless of what context

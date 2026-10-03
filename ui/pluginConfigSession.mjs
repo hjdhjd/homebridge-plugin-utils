@@ -19,9 +19,10 @@
  * receive their config from here, and nothing else calls the host config endpoints - the read, the stage, and the save alike.
  *
  * Because the host config can change underneath the session while the page is hidden (the Settings tab edits the same in-memory model), the replica is not assumed
- * frozen. The feature-options page re-syncs on every entry ({@link sync} at its `show()` chokepoint), so the replica is re-read against any external Settings-tab
- * edit before the page renders against it. {@link commit} advances the reference transactionally - it moves only after the host write resolves, so a failed write
- * leaves the prior replica intact. This mirrors how Homebridge models its own config: read, edit, save - re-read on the next visit.
+ * frozen. The feature-options page re-syncs on every entry ({@link sync} in the boot that `show()` and each of the page's re-entries run), so the replica is
+ * re-read against any external Settings-tab edit before the page renders against it. {@link commit} advances the reference transactionally - it moves only after
+ * the host write resolves, so a failed write leaves the prior replica intact. This mirrors how Homebridge models its own config: read, edit, save - re-read on the
+ * next visit.
  *
  * @example
  *

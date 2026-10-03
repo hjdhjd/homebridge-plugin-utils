@@ -3,8 +3,8 @@
  * ui/webUi-featureOptions-connection-error.test.mjs: Tests for the connection-error retry display. The path runs when getControllers is provided and
  * getDevices(controller) resolves a non-empty error: the shared device fetch lands it on devices:loaded with the copy table's words, the reducer moves the status
  * to connection-error, and the connection-error view (webUi-featureOptions/views/connectionError.mjs) renders a friendly error block with a retry button that
- * becomes enabled after a configurable delay and, on click, calls show() to attempt a fresh connection. The retry path performs no explicit cleanup(): show()'s
- * internal `await this.hide()` flushes any pending edit and tears down the prior cycle before re-rendering.
+ * becomes enabled after a configurable delay and, on click, re-enters the page through the boot show() runs to attempt a fresh connection. The retry path
+ * performs no explicit cleanup(): the boot's internal `await this.hide()` flushes any pending edit and tears down the prior cycle before re-rendering.
  */
 "use strict";
 
@@ -149,11 +149,11 @@ describe("webUiFeatureOptions - connection-error view", () => {
     }
   });
 
-  test("clicking the enabled retry button re-fetches controllers via show()", async () => {
+  test("clicking the enabled retry button re-fetches controllers through a fresh boot", async () => {
 
-    // The retry flow calls show() alone; show()'s internal await this.hide() flushes and tears down the prior cycle before re-rendering, so no explicit cleanup()
-    // is needed. We verify the loop by counting getControllers calls: show() invokes the callback during its initial render pass, the click triggers a fresh show()
-    // which invokes it again. A second-pass invocation proves the click landed.
+    // The retry flow re-enters through the boot alone; the boot's internal await this.hide() flushes and tears down the prior cycle before re-rendering, so no
+    // explicit cleanup() is needed. We verify the loop by counting getControllers calls: show() invokes the callback during its initial render pass, and the click
+    // starts a fresh boot which invokes it again. A second-pass invocation proves the click landed.
     using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
@@ -211,11 +211,11 @@ describe("webUiFeatureOptions - connection-error view", () => {
       mock.timers.reset();
       retryButton.click();
 
-      // Yield to let the click handler's await this.show() pipeline run.
+      // Yield to let the re-entered boot the click starts run.
       await delay(50);
 
       assert.ok(getControllersCalls > callsBefore,
-        "clicking the enabled retry button must trigger a fresh show() that re-invokes getControllers");
+        "clicking the enabled retry button must start a fresh boot that re-invokes getControllers");
 
       orchestrator.cleanup();
     } finally {
@@ -229,11 +229,10 @@ describe("webUiFeatureOptions - connection-error view", () => {
     // The retry button fires the orchestrator's re-show as `void onRetry()`, so a rejection there would otherwise go unobserved. We drive the first show() into the
     // connection-error state, then make the re-show itself reject: the retry closure's try/catch must surface whatever it threw as an error toast.
     //
-    // The vehicle is a replacement of the instance's own show() that returns a rejected promise, chosen for two reasons. It rejects unconditionally, standing in for
-    // the whole method, so no boot await runs and none of show()'s per-site failure folds can intercept it - the rejection reaches the closure as a rejection, which is
-    // the only shape that exercises the catch. And the closure resolves `this.show` at call time rather than capturing it at mount, so an instance-level replacement is
-    // what the closure actually invokes: that late resolution is itself part of the contract under test, since it is what lets one long-lived retry closure observe
-    // whichever re-show is current.
+    // The vehicle is the plugin's own `onLoaded` hook, which throws on its second call. The first boot calls it cleanly and then lands on the connection-error
+    // frame when its device fetch fails; the retry's boot loads the model again and calls it a second time. Nothing in the boot catches a throw out of that hook -
+    // none of its per-site failure folds wraps the call - so the re-entered boot rejects, which is the only shape that reaches the re-show's catch. Because only the
+    // second call throws, the toast is also proof that the retry ran a fresh boot.
     using dom = createTestDom();
 
     createSkeletonFeatureOptionsDom();
@@ -255,10 +254,22 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
     try {
 
+      // The re-entered boot is what rejects: a plugin hook that throws propagates out of a boot, and only the second boot - the retry's - throws here.
+      let loads = 0;
+
       const orchestrator = new webUiFeatureOptions({
 
         getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
         getDevices: () => devicesResult,
+        onLoaded: () => {
+
+          loads += 1;
+
+          if(loads > 1) {
+
+            throw new Error("the re-show blew up");
+          }
+        },
         ui: { controllerRetryEnableDelayMs: 100 }
       });
 
@@ -275,8 +286,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
 
       assert.equal(retryButton.disabled, false, "retry button must be enabled before the click");
 
-      // Make the re-show reject. Switch to real timers for the re-show's internal awaits before the click.
-      orchestrator.show = () => Promise.reject(new Error("the re-show blew up"));
+      // Switch to real timers for the re-show's internal awaits before the click.
       mock.timers.reset();
 
       retryButton.click();

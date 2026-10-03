@@ -13,7 +13,8 @@ import { selectedDevice } from "../selectors.mjs";
  *
  * Re-renders on every scope change so the stats panel reflects the currently-selected device. The view delegates the actual stats rendering to a caller-supplied
  * `infoPanel` callback - plugins override this to surface plugin-specific device metadata (firmware version, model, status indicators). When no override is
- * supplied, the default callback ({@link defaultInfoPanel}) renders a grid of the device's identity fields.
+ * supplied, the default callback ({@link defaultInfoPanel}) renders a grid of the device's identity fields. A controller list arriving without a model re-renders it
+ * only when the reducer's reconciliation moved the selection or the device list, so a device whose controller left the list leaves the panel with it.
  *
  * The container's content reflects device scope: populated with stats when any device is in scope (controller-as-device or regular device), and cleared to empty
  * when the scope is global (no specific device to show stats for - the global view aggregates options across every device). The container's own visibility is the
@@ -38,12 +39,19 @@ export const mountDeviceInfoView = ({ infoPanel = defaultInfoPanel, root, signal
 
   effect({
 
-    events: [ "scope:changed", "devices:loaded", "model:loaded" ],
-    fn: () => {
+    events: [ "controllers:loaded", "scope:changed", "devices:loaded", "model:loaded" ],
+    fn: (action, previous) => {
 
       // Skip the pre-model mount. The orchestrator mounts every view before model:loaded fires, so this view's immediate-run pass would otherwise render against the
       // loading placeholder - work the model:loaded pass immediately redoes. The sibling views carry the same guard.
       if(store.state.status.kind === "loading") {
+
+        return;
+      }
+
+      // A controller list arriving without a model moves the selected device only by moving the selection or the device list, so an arrival that kept the selection
+      // and the device list has nothing new to hand the renderer.
+      if((action?.type === "controllers:loaded") && (previous.scope === store.state.scope) && (previous.devices === store.state.devices)) {
 
         return;
       }

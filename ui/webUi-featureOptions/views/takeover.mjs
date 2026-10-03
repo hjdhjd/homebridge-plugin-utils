@@ -30,7 +30,7 @@ export const TAKEOVER_REGION_IDS = [ "deviceStatsContainer", "optionsContainer",
  * underneath.
  *
  * Teardown writes no region display, and the reason is the whole of why this view can be torn down by a bare signal. A page cycle ends through `hide()` - a
- * navigate-away, or the teardown a re-show runs first - which has already hidden every region, and whose next show() reveals them together. Removing this mount's
+ * navigate-away, or the teardown a re-show runs first - which has already hidden every region, and whose next boot reveals them together. Removing this mount's
  * own container is safe for the same reason it is necessary: the next cycle mounts a container of its own and never looks for this one.
  *
  * @param {Object} args

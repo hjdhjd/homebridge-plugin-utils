@@ -323,7 +323,7 @@ describe("mountTakeoverView - the page cycle ending", () => {
     assert.equal(handle.signal.aborted, true, "the takeover ends with the page cycle that carried it");
     assert.equal(document.querySelectorAll("[data-fo-takeover]").length, 0, "and the framework element leaves the page with it");
     assert.deepEqual(regionDisplays(), [ "none", "none", "none" ],
-      "the regions are left untouched: the teardown has already hidden them, and the next show() reveals them together");
+      "the regions are left untouched: the teardown has already hidden them, and the next boot reveals them together");
   });
 });
 

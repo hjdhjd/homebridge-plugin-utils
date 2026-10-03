@@ -2,7 +2,9 @@
  *
  * ui/webUi-featureOptions-commit.test.mjs: Integration-level tests for commitConfig, the page's coordinated configuration write. Companion to
  * webUi-featureOptions.test.mjs - that file asserts the show / hide / render / nav lifecycle, this one asserts the write: what reaches the host and in what order,
- * what the page looks like afterwards, and what a plugin is told when the page cycle the call started against is gone by the time it finishes.
+ * what the page looks like afterwards, and what a plugin is told when the page cycle the call started against is gone by the time it finishes. It also covers how
+ * refreshControllers carries a declared controller rename, and which controller a re-entered page lands on - through the connection-error retry and the sidebar
+ * refresh - beside a plugin's own show(), which carries nothing over.
  */
 "use strict";
 
@@ -13,7 +15,8 @@ import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 
-// The catalog every page in this file boots against: two categories, one option each, which is enough for a table edit to have somewhere to land.
+// The catalog every page in this file boots against: one option per category, a value option among them, which gives a table edit and a typed value somewhere to
+// land.
 const FEATURES = {
 
   categories: [
@@ -51,8 +54,8 @@ const makePluginConfig = ({ controllers = [CONTROLLER_A], options = [] } = {}) =
  * so a composer that rewrites `controllers` changes what the next fetch answers, and `getDevices` answers from the list it is asked about. Both are routed through
  * `hooks`, whose counters and deferrals let a test hold one call open without touching the others.
  *
- * Returns the fake bridge, the orchestrator, the skeleton's elements, and the recording surfaces - `hooks.controllerCalls`, `hooks.deviceCalls`, `loaded` (the
- * onLoaded count), and `panels` (every bag the device-info hook was handed). `plugin` adds options of the plugin's own on top of these, for a row that needs a
+ * Returns the fake bridge, the orchestrator, the skeleton's elements, and the recording surfaces - `hooks.controllerCalls`, `hooks.deviceCalls`, `state.loaded`
+ * (the onLoaded count), and `panels` (every bag the device-info hook was handed). `plugin` adds options of the plugin's own on top of these, for a row that needs a
  * surface the default page leaves unconfigured.
  */
 const makePage = ({ config = makePluginConfig(), plugin = {} } = {}) => {
@@ -195,8 +198,12 @@ const flush = async () => {
 // The options array the host last had written to it - what a plugin's own Save would put on disk.
 const lastWritten = (fake) => fake.observed.updatedConfigs.at(-1)?.[0]?.options;
 
-/** Expand a category so its rows materialize under the lazy-rendering contract, and hand back the option's own checkbox.
+/**
+ * Expand a category so its rows materialize under the lazy-rendering contract, and hand back the option's own checkbox.
  *
+ * @param {Object} skeleton - The page skeleton whose option table holds the category.
+ * @param {string} category - The name of the category to expand.
+ * @param {string} option - The option's expanded name, the `<category>.<option>` form its row id carries.
  * @returns {Element | null} The option's checkbox once its category is expanded, or null when the option carries no row in the table.
  */
 const optionRow = (skeleton, category, option) => {
@@ -516,6 +523,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
     await page.orchestrator.show(await openTestSession());
     await flush();
 
+    // Expand the category ahead of the unchanged call so the row exists for the edit made after it, without making that edit yet.
     optionRow(page.skeleton, "Motion", "Motion.Detect");
 
     const before = { controllerCalls: page.hooks.controllerCalls, deviceCalls: page.hooks.deviceCalls.length, loaded: page.state.loaded };
@@ -900,7 +908,8 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
 
     const reshown = page.orchestrator.show(await openTestSession());
 
-    // The teardown waits for that same drain, bounded, and the bound is what elapses here - so the successor boots while the held write is still at the host.
+    // The teardown waits for that same drain, bounded, and the bound is what elapses here - so the successor boots while the held write is still at the host. The
+    // bound is the page's FLUSH_TEARDOWN_TIMEOUT_MS, which the page does not export, so the tick restates it and goes one millisecond past it.
     t.mock.timers.tick(2001);
 
     await waitFor(() => page.state.loaded === 1, { message: "the successor's boot must complete" });
@@ -1033,7 +1042,8 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
 
     page.state.loaded = 0;
 
-    // Hold the call's own controller refetch open. The successor's boot, which is a later call, answers normally.
+    // Hold the call's own controller refetch open. The successor's boot, which is a later call, answers normally. Call 1 was the first boot's fetch, so call 2 is
+    // the write's refetch.
     let releaseControllers;
 
     page.hooks.onControllers = ({ answer, call }) => {
@@ -1159,7 +1169,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     await page.orchestrator.show(await openTestSession());
     await flush();
 
-    // A plugin still on the bare-array contract, which is the shape the guard exists for.
+    // Past the boot's fetch, the hook resolves a bare controller array, the wrong shape the guard exists to name.
     page.hooks.onControllers = ({ answer, call }) => (call === 1) ? answer : answer.controllers;
 
     const result = await page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }));
@@ -1244,7 +1254,8 @@ describe("webUiFeatureOptions.commitConfig - the selection after an establishmen
     assert.equal(page.state.loaded, 0, "the page a consumer is standing on is not a show cycle, so the hook that announces one stays quiet");
 
     // The same call from a page the boot has to own again - here because the fetch that follows the write fails, which only the boot has a surface for. The boot
-    // it re-enters answers normally and announces exactly as any other show cycle does.
+    // it re-enters answers normally and announces exactly as any other show cycle does. Call 1 was the boot's fetch and call 2 the first write's refetch, so call 3
+    // is this write's refetch.
     page.hooks.onControllers = ({ answer, call }) => (call === 3) ? Promise.reject(new Error("Controller unreachable.")) : answer;
 
     await page.orchestrator.commitConfig(() => ({ controllers: [CONTROLLER_A] }));
@@ -1467,7 +1478,8 @@ describe("webUiFeatureOptions.commitConfig - the caller's own bugs and the page'
     await page.orchestrator.show(await openTestSession());
     await flush();
 
-    // The refresh's own hook call is held open; the call's post-write refetch, which comes later, answers normally.
+    // The refresh's own hook call is held open; the call's post-write refetch, which comes later, answers normally. Call 1 was the boot's fetch, so call 2 is the
+    // refresh's.
     let releaseRefresh;
 
     page.hooks.onControllers = ({ answer, call }) => {
@@ -1707,6 +1719,10 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
 
   const MOVED_B = { address: "10.0.0.8", name: "Hub B", serialNumber: "CTRL-B8" };
   const RENAME_B = { from: "CTRL-B", to: "CTRL-B8" };
+
+  // The page's category-expansion persistence, copied rather than imported: the storage key categoryState.mjs builds ("homebridge-" + platform +
+  // "-category-states"), and in the rows below the entry name scopeCacheKey in selectors.mjs gives a device view ("device:" + controller + "/" + device). A change
+  // to the key or to the entry name leaves these rows seeding entries the page never reads.
   const STORAGE_KEY = "homebridge-TestPlugin-category-states";
 
   // Re-address controller B in a controller list, leaving every other entry where it stands.

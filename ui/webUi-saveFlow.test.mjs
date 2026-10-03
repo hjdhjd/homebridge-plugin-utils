@@ -16,7 +16,9 @@ import { setImmediate as flushImmediate } from "node:timers/promises";
 // The platform entry the commit double hands every composer, standing in for the page's live configuration.
 const PLATFORM = Object.freeze({ controllers: [], platform: "TestPlugin" });
 
-// Drain the microtask queue so a press's continuation has run before an assertion reads what it did.
+// Yield a few macrotask turns so a press's continuation has run before an assertion reads what it did. Every double here settles on microtasks - the check, the
+// commit, and the press's own continuation after them - and the whole microtask queue drains before each macrotask turn, so the first turn already carries a press
+// as far as it can go before the row settles something, and the rest are margin.
 const flush = async () => {
 
   for(let i = 0; i < 3; i++) {
@@ -416,7 +418,8 @@ describe("createSaveFlow - a press during a write", () => {
 
     /* The press that passed its check reaches its write with no await between the abort read and the commit call, so there is no turn in which a later press
      * finds neither a retired predecessor nor a write in flight. Each round lands the later press one microtask further past the check's settlement, which walks
-     * it across the whole span where an await before the write would open that window.
+     * it across the whole span where an await before the write would open that window. The round count is several times the microtask depth from the gate's
+     * resolution to the commit call, so the walk still spans the window when an await before the write deepens it.
      */
     for(let ticks = 0; ticks < 12; ticks++) {
 

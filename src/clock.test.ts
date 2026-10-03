@@ -95,8 +95,8 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
   test("delay() resolves after the real elapsed time", async () => {
 
-    // The ONE acceptable real wait in this suite: a fake clock cannot test the REAL clock, so we await a tiny 1ms real delay, mirroring the retry suite's `backoff: () =>
-    // 1` idiom. We assert resolution only, not precise timing, since real-timer scheduling is not exact.
+    // A real wait, kept as small as the real clock allows: a fake clock cannot test the REAL clock, so we await a tiny 1ms real delay, mirroring the retry suite's
+    // `backoff: () => 1` idiom. We assert resolution only, not precise timing, since real-timer scheduling is not exact.
     await systemClock.delay(1);
 
     assert.ok(true, "systemClock.delay() must resolve after the real delay elapses");
@@ -138,8 +138,8 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
   test("systemClock.schedule arms the global timers, so a harness that replaces them observes every timer", (t) => {
 
-    // The per-test enable is auto-restored when the row ends, so the real-time row that follows is never driven by a mock left running. This is the one mock-timer
-    // use this suite keeps, because it is the contract every consumer suite that drives mock timers through an injected clock depends on.
+    // The per-test enable is auto-restored when the row ends, so the real-time row that follows is never driven by a mock left running. This row holds the contract
+    // every consumer suite that drives mock timers through an injected clock depends on.
     t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
 
     // Both arms carry the unref policy, because a mocked timer handle carries `unref` just as the real one does. That is what lets a consumer suite driving mock
@@ -207,7 +207,8 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     /* The process-lifetime property cannot be read from inside this suite, because the runner holds the event loop open on its own account. A child whose entire
      * pending workload is two unreferenced timers is the smallest arrangement that shows it: the child has to reach its own exit while both timers are still an
      * hour from firing. The deadline on the spawn is what makes this a proof - a child that instead held its timers would be killed and answer a null code, which
-     * fails the assertion rather than hanging the suite.
+     * fails the assertion rather than hanging the suite. The deadline is generous enough for a cold type-stripping start on a slow CI host, and short enough that the
+     * kill lands well inside the runner's own per-test timeout.
      */
     await using scratch = await makeScratchRoot();
 
@@ -246,8 +247,8 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
   test("systemClock.timeout answers the platform's deadline signal, aborting with its TimeoutError", async () => {
 
-    // The other acceptable real wait in this suite, for the same reason as the delay() row above: only the real clock can prove the real deadline, so we await a 1ms
-    // platform timeout. The signal's timer is unreferenced, but the test runner holds the process open, so the abort arrives.
+    // A real wait, for the same reason as the delay() row above: only the real clock can prove the real deadline, so we await a 1ms platform timeout. The signal's
+    // timer is unreferenced, but the test runner holds the process open, so the abort arrives.
     const signal = systemClock.timeout(1);
 
     assert.equal(signal.aborted, false, "a freshly armed deadline must not be aborted synchronously");
@@ -312,8 +313,8 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
 
-    // The callback closes over `handle`, declared on the next statement. That is safe by construction: the callback runs inside a later tick, long after this
-    // statement has completed, so it can never observe the binding before it is initialized. Each period is two ticks, a ceiling's worth and then the remainder,
+    // The callback closes over `handle`, the binding its own statement declares. That is safe by construction: the callback runs inside a later tick, long after
+    // that statement has completed, so it can never observe the binding before it is initialized. Each period is two ticks, a ceiling's worth and then the remainder,
     // because the mock times a hop armed inside a callback from the end of the tick that ran the callback, where the platform arms it at the moment of the fire.
     const fired: number[] = [];
     const handle = systemClock.schedule((): void => {

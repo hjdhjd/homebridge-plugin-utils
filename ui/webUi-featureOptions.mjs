@@ -27,10 +27,11 @@ import { registerOptionsSkinEffect } from "./webUi-featureOptions/effects/option
 import { registerStagingEffect } from "./webUi-featureOptions/effects/staging.mjs";
 
 /**
- * Upper bound on how long hide() will block waiting for the navigate-away flush to complete. This is a teardown safety cap, NOT a perf knob: the normal flush
- * completes in well under it, and the only thing it guards against is a host `updatePluginConfig` that never settles. `updatePluginConfig` accepts no `AbortSignal`
- * and is documented un-abortable, so without this cap a stalled write would leave flush() (and thus hide(), and the spinner-wrapped tab switch that awaits it) pending
- * indefinitely. On timeout the in-flight commit continues independently and still lands if the host recovers; we simply stop blocking the UI on it.
+ * Upper bound on each of the teardown's waits: the navigate-away flush of a staged edit, and then a coordinated write's pending commit. The two run one after the
+ * other, so hide() can block for up to twice this value. This is a teardown safety cap, NOT a perf knob: a normal flush or commit completes in well under it, and
+ * the only thing it guards against is a host `updatePluginConfig` that never settles. `updatePluginConfig` accepts no `AbortSignal` and is documented
+ * un-abortable, so without this cap a stalled write would leave flush() (and thus hide(), and the spinner-wrapped tab switch that awaits it) pending indefinitely.
+ * On timeout the in-flight commit continues independently and still lands if the host recovers; we simply stop blocking the UI on it.
  */
 const FLUSH_TEARDOWN_TIMEOUT_MS = 2000;
 
@@ -57,7 +58,8 @@ export const BOOT_AWAIT_DEADLINE_SECONDS = 30;
 const CATALOG_DEADLINE_SECONDS = 5;
 
 // The page's content regions, in alphabetical id order. hide() sets each to display:none during teardown so the user never sees a half-built page; the coordinated
-// end-of-load reveal restores them together. Both the teardown-hide loop and the reveal read this single list so the two can never drift.
+// end-of-load reveal restores them, leaving the main-content regions to the takeover view's restore while a takeover started during the boot stands. Both the
+// teardown-hide loop and the reveal read this single list so the two can never drift.
 //
 // The main-content subset - the regions a plugin's card stands in place of - lives with the view that hides them for the length of a takeover, and this list is
 // composed from it so the two can never come to disagree about which regions those are. It is the same derivation the global-only set below is built on, in the
@@ -183,11 +185,10 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   selection. It receives ONE options bag: `device` is the selection (undefined at global scope, and always undefined under
  *   {@link FeatureOptionsConfig.globalOnly}), `panel` is the `#deviceStatsContainer` element to render into, and `signal` is the mount's lifecycle signal. A hook
  *   written against two positional parameters `(device, panel)` is NOT compatible with this contract - it receives the bag as its first argument and reads undefined
- *   for both names, so it renders nothing rather than failing loudly; this is a documented breaking change to the published hook contract. The hook is re-invoked on
- *   every render of a mount while the bag's `signal` stays one identity for that mount's life, so a hook that registers listeners or subscriptions registers them
- *   once against that signal and they die with the mount.
- *   That signal is the mount's lifetime, so a resource meant to outlive the panel - a poll whose cache survives a navigation - belongs to the page instead and is
- *   registered without it.
+ *   for both names, so it renders nothing rather than failing loudly. The hook is re-invoked on every render of a mount while the bag's `signal` stays one identity
+ *   for that mount's life, so a hook that registers listeners or subscriptions registers them once against that signal and they die with the mount. That signal is
+ *   the mount's lifetime, so a resource meant to outlive the panel - a poll whose cache survives a navigation - belongs to the page instead and is registered
+ *   without it.
  * @property {(removals: readonly [import("./featureOptions.js").RemovedListEntry, ...import("./featureOptions.js").RemovedListEntry[]]) => void}
  *   [onListEntriesRemoved] - Invoked after a mutation removes one or more entries from any `multiple: true` option's configured list - a list editor's chip
  *   removed, a checkbox-group member unchecked, the option disabled or cleared entirely, a bulk options reset, or a model revert - covering a free-form list and
@@ -300,30 +301,33 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 /**
  * webUiFeatureOptions - Lifecycle coordinator for the feature options webUI.
  *
- * Boots the reactive state container, registers this view's own effects (staging, options skin, keyboard) and mounts every view (header, device info, nav, search,
- * options, connection error) once the page becomes active. Tears down the entire system in one operation on cleanup by aborting the page-level signal: every
- * effect's subscription and every view's listener was registered with `{signal}`, so abort cascades through them automatically. Page theming is deliberately not
- * among them - its scope is `:root` and `body`, so it is registered through the page orchestrator's wiring and outlives every cycle this class tears down.
+ * Boots the reactive state container, registers this view's own effects, and mounts every view the page markup provides a region for once the page becomes
+ * active. Tears down the entire system in one operation on cleanup by aborting the page-level signal: every effect's subscription and every view's listener was
+ * registered with `{signal}`, so abort cascades through them automatically. Page theming is deliberately not among them - its scope is `:root` and `body`, so it
+ * is registered through the page orchestrator's wiring and outlives every cycle this class tears down.
  *
- * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
- * action without re-entering the whole show() cycle and reconciles every fact that names a controller against the new list, `commitConfig()` writes a plugin's own
- * configuration change through the page's session, unless its composer answers null for a change already in place or one it refuses, and re-establishes the page
- * on it, in place or through a re-entry - each carrying the selection across a controller rename the caller declares - `takeover()` gives a plugin's own node the
- * page's main-content area until it is released, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
- * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
- * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
- * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract carries the fuller vocabulary of the
- * two, since a controller can be unreachable, populated, or reachable with nothing to list, and only the plugin can tell the last two apart.
+ * Public API: the constructor takes a {@link FeatureOptionsConfig}, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an
+ * explicit user action without re-entering the whole show() cycle and reconciles every fact that names a controller against the new list, `commitConfig()` writes
+ * a plugin's own configuration change through the page's session, unless its composer answers null for a change already in place or one it refuses, and
+ * re-establishes the page on it, in place or through a re-entry - each carrying the selection across a controller rename the caller declares - `takeover()` gives
+ * a plugin's own node the page's main-content area until it is released, `catalog()` answers the plugin's feature-option catalog from one memoized read,
+ * `editedConfig` reads the persisted configuration overlaid with the live, unsaved edits, `hide()` is the navigate-away (it flushes any pending edit, then tears
+ * down), `cleanup()` is immediate destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), and `getHomebridgeDevices()` is the
+ * default device source. Both list contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a
+ * {@link DeviceListResult}, each carrying its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract
+ * carries the fuller vocabulary of the two, since a controller can be unreachable, populated, or reachable with nothing to list, and only the plugin can tell the
+ * last two apart.
  *
  * The page contract is markup the consumer supplies. The framework's own content regions are addressed by id - `deviceStatsContainer`, `headerInfo`,
  * `optionsContainer`, `search`, and `sidebar` - and are hidden at teardown and revealed together at the end of a load; the main-content regions among them also
- * stand aside for the length of a takeover, while a plugin holds that area. A plugin's own chrome joins that rhythm by
- * carrying the `data-fo-region` attribute: such an element hides and reveals with the page in every mode and is never cleared, so a control the plugin builds and owns
- * survives a whole cycle intact while still following the page's visibility.
+ * stand aside for the length of a takeover, while a plugin holds that area. A plugin's own chrome joins that rhythm by carrying the `data-fo-region` attribute:
+ * such an element hides and reveals with the page in every mode and is never cleared, so a control the plugin builds and owns survives a whole cycle intact
+ * while still following the page's visibility.
  *
- * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle boundary that boots and tears them down. What
- * it keeps in its own fields is what must outlive a cycle - the revert-to-saved snapshot, the coordinated write's serialization queue, and the commit a teardown
- * waits for - each of which the store's per-show() reset would otherwise discard; all else flows through the store.
+ * Internally, the store owns per-show state, effects own side effects, views own DOM, and the orchestrator is the lifecycle boundary that boots and tears them
+ * down. The class keeps in its own fields only what must outlive a cycle, which the store's per-show() reset would otherwise discard - the revert-to-saved
+ * snapshot and the coordinated write's queue among them - or what wires a cycle's lifetime, such as its abort controller and flush handle. Every other piece of
+ * per-show state lives in the store.
  *
  * @example
  *
@@ -375,8 +379,9 @@ export class webUiFeatureOptions {
   // returns.
   #config;
 
-  // The staging effect's flush handle, captured when the effect is registered in show(). hide() awaits it (bounded) to drain any debounced-but-unwritten edit to the host
-  // before tearing the page down; the visibilitychange handler fires it best-effort on browser background/close. Recreated on every show(); nulled out on cleanup().
+  // The staging effect's flush handle, captured when the effect is registered in show(). It drains a debounced-but-unwritten edit to the host wherever the page
+  // needs the store clean: the teardown awaits it (bounded) before tearing the page down, the visibilitychange and window blur handlers fire it best-effort at
+  // those boundaries, and commitConfig awaits it unbounded as the drain ahead of its compose. Recreated on every show(); nulled out on cleanup().
   #flushStaging;
 
   // The page-level abort controller. Aborting it tears down every effect and every view in one operation. Recreated on every show(); nulled out on cleanup().
@@ -412,7 +417,7 @@ export class webUiFeatureOptions {
 
   // The reactive state container. Created in show() with empty placeholder state; the loaded catalog and configured options arrive via the model:loaded dispatch, and
   // a fresh instance replaces the prior one on every show() call. Held (not nulled on cleanup) so the editedConfig getter stays queryable after hide() / cleanup(). The
-  // orchestrator never reaches into store state for state management - all reads/writes go through dispatched actions and subscribed events.
+  // orchestrator writes store state only through dispatched actions, and reads `store.state`, directly or through selectors, only to make lifecycle decisions.
   #store;
 
   // This cycle's takeover view - the function that hands a plugin the page's main-content area - or null before the first show(). Reassigned on every show() and
@@ -421,8 +426,9 @@ export class webUiFeatureOptions {
   #takeoverView;
 
   // The configuredOptions array captured at the FIRST show()'s `model:loaded`. Survives subsequent cleanup() / show() cycles so a re-show that loads a set-equal
-  // (possibly reordered) options array preserves the original snapshot for revert-to-saved. The set-equality probe in show() is the boundary where this is decided.
-  // Set on first model:loaded; updated only when the loaded options are NOT set-equal to the stored snapshot.
+  // (possibly reordered) options array preserves the original snapshot for revert-to-saved. Whether it moves is decided by show()'s set-equality probe, which
+  // moves it only when the loaded options are NOT set-equal to the stored snapshot, and a coordinated write's in-place establishment, which moves it only when the
+  // write itself changed the options set, comparing the options before the write with those after it rather than with the snapshot.
   //
   // It holds the loaded array itself rather than a copy of it, because the store seeds `configuredOptions` and `stagedAnchor` from that same array: one
   // reference shared by all three is what lets a revert made before anything is staged land on the anchor by reference, leaving the staging drain nothing to write.
@@ -532,8 +538,8 @@ export class webUiFeatureOptions {
       getControllers,
 
       // The device-only default applies here rather than at the destructure so the guard table above can tell an explicitly-supplied getDevices (which contradicts
-      // globalOnly) from the unset default. An explicit undefined takes the default; an explicit null is preserved and keeps its current fail-at-call-site behavior
-      // (the #devicesFor contract guard trips on it), which is why this is an explicit undefined test and deliberately not `??`.
+      // globalOnly) from the unset default. An explicit undefined takes the default; an explicit null is kept as given and fails at the call site inside
+      // #devicesFor, where calling it throws a TypeError, which is why this is an explicit undefined test and deliberately not `??`.
       getDevices: (getDevices === undefined) ? this.getHomebridgeDevices : getDevices,
       globalOnly,
       groupOrder: sidebar.groupOrder,
@@ -610,8 +616,8 @@ export class webUiFeatureOptions {
    * fixed for a given plugin version: there is no staleness question to answer, and therefore no cache policy to carry.
    *
    * A rejection clears the memo, so the next reader issues a fresh request rather than inheriting a failure that has already been reported and acted on. The read
-   * is bounded at five seconds, and that is the whole of its lifecycle: a caller wanting a tighter bound or a cancellation of its own composes them over the
-   * returned promise rather than passing them in.
+   * is bounded by the catalog deadline, `CATALOG_DEADLINE_SECONDS`, and that is the whole of its lifecycle: a caller wanting a tighter bound or a cancellation of
+   * its own composes them over the returned promise rather than passing them in.
    *
    * @returns {Promise<{ categories: Object[], options: Object }>} The catalog's two members - exactly the pair the catalog index is built from.
    * @throws {Error} Through the returned promise: when the response is not a usable catalog, when the deadline elapses, or when the host call itself fails.
@@ -621,14 +627,14 @@ export class webUiFeatureOptions {
 
     if(this.#catalogPromise === null) {
 
-      // The clear is chained here rather than written at each call site because every reader shares this one promise: whoever asks next has to find the memo
-      // empty, whether or not the reader that saw the failure is still on the page to notice.
-
       /* The memoized promise is marked handled for the page at the moment it is created rather than once per call. The boot starts the read before it can await
        * it - the controllers await sits between the two - and a plugin reader may attach to it later still, so a deadline or shape rejection landing in that
        * window meets no handler and surfaces as an unhandled rejection the page itself caused. Every reader still observes the rejection through its own branch
        * of the same promise, so nothing here swallows a failure a caller was waiting to see, and the mark answers the promise it was handed so the memo keeps
        * one identity.
+       *
+       * The memo's clear on a rejection is chained onto that same promise rather than written at each call site because every reader shares this one promise:
+       * whoever asks next has to find the memo empty, whether or not the reader that saw the failure is still on the page to notice.
        */
       const read = withDeadline({ promise: homebridge.request("/getOptions").then(assertCatalogResponse), seconds: CATALOG_DEADLINE_SECONDS });
 
@@ -739,7 +745,8 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // Fresh page-level abort controller for this show() cycle.
+    // The cycle's page-level abort controller is minted only past the overtaken-entry check above, so an entry that returns there leaves the field to the show()
+    // that overtook it.
     this.#pageAbort = new AbortController();
 
     const signal = this.#pageAbort.signal;
@@ -802,7 +809,8 @@ export class webUiFeatureOptions {
 
     // Staging + keyboard effects: register early so they catch any dispatch from the moment model:loaded fires. The staging effect's reference-equality dirty
     // check skips the immediate-run pass since configuredOptions and stagedAnchor share the same empty-array reference in the initial state. We capture the
-    // staging effect's flush handle so hide() (and the visibilitychange handler below) can drain a debounced-but-unwritten edit before the page tears down.
+    // staging effect's flush handle so every place the page needs the store clean can drain a debounced-but-unwritten edit: the teardown, the visibilitychange
+    // and window blur handlers below, and commitConfig's drain ahead of its compose.
     this.#flushStaging = registerStagingEffect({ host: homebridge, session, signal, store: this.#store })?.flush ?? null;
     registerKeyboardEffect({ signal, store: this.#store });
 
@@ -814,8 +822,8 @@ export class webUiFeatureOptions {
      * A dispatch of one of those types is not by itself an edit, which is why the changed-reference test stands beside the action test. A coordinated
      * configuration write holds the store and answers every one of these actions with the state reference it was handed, and a mutation can reduce to nothing
      * on an unheld store too - clearing an option nothing was configured under is the plain case. The store's own change-detection contract is what reads both:
-     * "the reducer's structural-sharing contract guarantees that unchanged slices retain their reference across dispatches, so subscribers can use reference
-     * equality to detect what changed without a deep comparison." So the slice this hook is about - the configured options - is compared against the state the
+     * "The reducer's structural-sharing contract guarantees that unchanged slices retain their reference across dispatches, so subscribers can use reference
+     * equality (`===`) to detect what changed without a deep comparison." So the slice this hook is about - the configured options - is compared against the state the
      * dispatch replaced, and a dispatch that left it where it was announces nothing.
      *
      * The removal hook reads the same edit, from the same handler, ahead of the edit notification, and the whole of it sits inside the presence guard: a plugin
@@ -896,9 +904,9 @@ export class webUiFeatureOptions {
 
     try {
 
-      // The contract check runs inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A plugin still on the
-      // bare-array contract is the case this exists for, and the alternative - letting the array fall through - is the silent degradation into "no controllers are
-      // configured" that this whole channel exists to prevent.
+      // The contract check runs inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A hook that resolves a
+      // bare controller array is the case this exists for, and the alternative - letting the array fall through - is the silent degradation into "no controllers
+      // are configured" that this whole channel exists to prevent.
       controllerResult = assertControllerListResult(await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal }));
     } catch(err) {
 
@@ -977,8 +985,8 @@ export class webUiFeatureOptions {
       });
     }
 
-    // Wait for the feature catalog. The accessor's own five-second bound is armed once, at the moment the read is first issued, so it is the bound that settles
-    // first on every cycle, whichever cycle started the read; this outer bound is kept for the consistency every host await in show() shares. Build the catalog
+    // Wait for the feature catalog. The accessor's own bound, the catalog deadline, is armed once, at the moment the read is first issued, so it is the bound that
+    // settles first on every cycle, whichever cycle started the read; this outer bound is kept for the consistency every host await in show() shares. Build the catalog
     // (catalog index + validators) and dispatch model:loaded so the store transitions to "ready" and views can mount against a populated state. The configured
     // options come from the session's primary entry - the persisted config the orchestrator already loaded.
     let features;
@@ -1128,7 +1136,7 @@ export class webUiFeatureOptions {
       return;
     }
 
-    /* Complete the selection the pre-fire began. My outcome applied, so the store holds the list it brought, and a controller whose list carries the row its
+    /* Complete the selection the pre-fire began. This boot's outcome applied, so the store holds the list it brought, and a controller whose list carries the row its
      * `isController` names continues to that row - read through the derivation a sidebar click reads, which is what lands both paths on one row.
      *
      * Every other case already rests where a click would leave it: device-only and global-only on global, where the initial state points, and a controller whose
@@ -1177,8 +1185,9 @@ export class webUiFeatureOptions {
    *     asked: a framework-initiated fetch - show()'s boot path, the framework's own navigation fetches - fails to the framework's failure surface, while a
    *     plugin-initiated call reports to its caller. The caller needs no error relay from the framework because it authored the getControllers hook that produced
    *     the failure and can capture the error there.
-   *   - A null, absent, or empty resolved controller list resolves false and leaves the store untouched - the consumer owns the messaging for the no-controllers
-   *     case, exactly as show()-time handles it through a direct message that bypasses the store.
+   *   - An empty resolved controller list, or a page with no getControllers hook, resolves false and leaves the store untouched - the consumer owns the messaging
+   *     for the no-controllers case, exactly as show()-time handles it through a direct message that bypasses the store. A list that is null or absent is a
+   *     wrong-shaped result and rejects with the TypeError described below.
    *   - An outcome that arrives after the session's platform entry has been replaced - by a coordinated write's commit, or by a later sync - resolves false
    *     without dispatching. The entry's identity is the staleness test, because every act that advances the replica replaces that object, so the list this hook
    *     read for is recognizable without any counter of this method's own.
@@ -1330,13 +1339,14 @@ export class webUiFeatureOptions {
    *
    * The composer is a synchronous function of the live platform entry returning the patch to merge onto it: `(platform) => ({ controllers })`. It is a function
    * rather than a finished patch because a call may wait behind another one, and what it composes against must be what that earlier call wrote. It is called
-   * exactly once per call, inside the hold, with nothing awaited between the read it composes against and the write that follows. A composer answers null
-   * instead of a patch when its change is already in place, and also when it refuses the change against the configuration as it stands, a duplicate of an
-   * entry another call wrote ahead of it being the case that needs the composer's view. Whatever the reason, the call writes nothing of the composer's: that
-   * read is the one moment the answer is true of the configuration the write would land on, so the composer is the one place that can give it. The result does
-   * not say which reason applied, because the plugin that wrote the composer knows, and a plugin whose composer can answer null for more than one reason keeps
-   * the reason in a variable the composer sets. A refusal belongs in that null answer and not in a throw: a composer that throws rejects the call with what it
-   * threw - the line {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold is released on the way out.
+   * exactly once per call, inside the hold when the page takes one, with nothing awaited between the read it composes against and the write that follows. A
+   * composer answers null instead of a patch when its change is already in place, and also when it refuses the change against the configuration as it stands, a
+   * duplicate of an entry another call wrote ahead of it being the case that needs the composer's view. Whatever the reason, the call writes nothing of the
+   * composer's: that read is the one moment the answer is true of the configuration the write would land on, so the composer is the one place that can give it.
+   * The result does not say which reason applied, because the plugin that wrote the composer knows, and a plugin whose composer can answer null for more than one
+   * reason keeps the reason in a variable the composer sets. A refusal belongs in that null answer and not in a throw: a composer that throws rejects the call
+   * with what it threw - the line {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold, when one was
+   * taken, is released on the way out.
    *
    * The entry is handed over to be read, and a composer answers with its patch rather than editing what it was given: the page's store holds that entry's options
    * array by reference, as its live edits and as the target a revert returns to, so an edit made in place would rewrite the user's own state underneath them both.
@@ -1470,9 +1480,8 @@ export class webUiFeatureOptions {
      * iteration re-reads the cycle from scratch, so a re-show that landed mid-drain is drained and held in its own right rather than written over.
      *
      * It cannot spin. A refusal after a clean pending read means the reducer found something the read did not name - a dirty store, or a write in flight - and
-     * the next iteration's pending read finds it and drains it, which is a real await every time. The two lifecycles a loaded store can rest at here are idle and
-     * a recorded failure, and the reducer's entry rule accepts both; a staging one cannot survive the flush, which answers its own `staging:started` before it
-     * returns.
+     * the next iteration's pending read finds it and drains it, which is a real await every time. Every lifecycle a loaded store can rest at here is one the
+     * reducer's entry rule accepts; a staging one cannot survive the flush, which answers its own `staging:started` before it returns.
      */
     for(;;) {
 
@@ -1560,7 +1569,8 @@ export class webUiFeatureOptions {
 
     // Issue the write and publish its settlement in the same synchronous turn, before the first await, so a teardown that begins while it is in flight can find
     // it and wait for it. Neither this await nor the save's is bounded, and that is deliberate: a timeout here would release a write that is still running as
-    // though it had finished. What bounds the PAGE instead is the teardown's own wait, and what bounds the CALLER is whatever deadline it puts around the call.
+    // though it had finished. What bounds the PAGE instead is the teardown's own wait. A caller that bounds its own wait must treat the write as still running
+    // past its deadline, and a save-flow card does not bound the commit it injects.
     const commit = session.commit(patch);
 
     this.#pendingCommit = commit.catch(() => undefined);
@@ -1923,10 +1933,12 @@ export class webUiFeatureOptions {
    * The failure value is whatever the await produced: a thrown value, or the message a hook reported on its own result. Both go through {@link errorMessage}, which
    * reads an Error's message and stringifies anything else, so the two arrive at the view as the same kind of thing and neither needs a channel of its own.
    *
-   * This is also the single place the boot affordance yields the frame on a failed boot: every failing await routes here, so clearing it once covers the config sync, the
-   * controller fetch, and the feature catalog alike. The clear goes through the staleness guard beside the dispatch, as one terminal action rather than two, because a
-   * superseded cycle reaches this catch after the cycle that replaced it has installed an affordance of its own. Its own was retired by its abort listener at the moment
-   * it was superseded, so a dead cycle has nothing of its own left to clear here and an unguarded clear would only take the live page's frame away on its behalf.
+   * This is also where the boot affordance yields the frame on a failed boot for every failing await that routes here, so clearing it once covers the config sync,
+   * the controller fetch, and the feature catalog alike. A failed device fetch takes another road: the reducer folds it into the connection-error transition, and
+   * the boot clears the affordance itself at its connection-error terminal. The clear here goes through the staleness guard beside the dispatch, as one
+   * terminal action rather than two, because a superseded cycle reaches this catch after the cycle that replaced it has installed an affordance of its own. Its own
+   * was retired by its abort listener at the moment it was superseded, so a dead cycle has nothing of its own left to clear here and an unguarded clear would only
+   * take the live page's frame away on its behalf.
    *
    * A result that reports its own failure may name it in its own words, and each of those words outranks the table's on its own: the hook's headline or
    * guidance where it supplied one, the configured guidance or the table's wording where it did not. That is the precedence a reported device failure already
@@ -1990,6 +2002,9 @@ export class webUiFeatureOptions {
       createElement("div", {
 
         classList: [ "progress", "mx-auto" ],
+
+        // The 4px height matches the connection-error view's progress block, so the boot's bar reads as the same treatment; the width cap keeps this bar a short
+        // one centered under the message rather than a rule across the whole page.
         style: { height: "4px", maxWidth: "20rem" }
       }, [
 
@@ -2020,18 +2035,19 @@ export class webUiFeatureOptions {
   }
 
   /**
-   * Drain any debounced-but-unwritten edit to the host, bounded so a stalled host write cannot hang teardown. Shared by every flushed-teardown path - currently
-   * `hide()` (navigate-away) and `[Symbol.asyncDispose]` (scope-exit) - because each must flush BEFORE the page signal is aborted: the staging drain guards on it, so
-   * aborting first (as the synchronous `cleanup()` does) would re-introduce the very edit-drop this exists to prevent. Races the flush against a non-rejecting
-   * {@link FLUSH_TEARDOWN_TIMEOUT_MS} timeout - delay(ms) with no signal simply resolves after ms, so the race settles on whichever finishes first without ever
-   * rejecting. On timeout the in-flight commit continues independently and still lands if the host recovers; under that host-stall trade the no-hang guarantee
-   * supersedes same-switch Settings-freshness.
+   * Drain any debounced-but-unwritten edit to the host, bounded so a stalled host write cannot hang teardown. Every flushed-teardown path goes through here -
+   * `hide()` (navigate-away) and `[Symbol.asyncDispose]` (scope-exit) among them - because each must flush BEFORE the page signal is aborted: the staging
+   * drain guards on it, so aborting first (as the synchronous `cleanup()` does) would re-introduce the very edit-drop this exists to prevent. Races the flush
+   * against a non-rejecting {@link FLUSH_TEARDOWN_TIMEOUT_MS} timeout - delay(ms) with no signal simply resolves after ms, so the race settles on whichever
+   * finishes first without ever rejecting. On timeout the in-flight commit continues independently and still lands if the host recovers; under that host-stall
+   * trade the no-hang guarantee supersedes same-switch Settings-freshness.
    *
    * A coordinated write's commit is waited for here too, under the same bound and with the same residual, so both callers of this chokepoint inherit that wait:
    * a write already at the host when the page tears down settles before the teardown reports itself finished, and the next page cycle's config read therefore
    * follows it rather than racing it.
    *
    * @returns {Promise<void>}
+   * @private
    */
   async #flushPending() {
 
@@ -2039,10 +2055,15 @@ export class webUiFeatureOptions {
     await this.#awaitPendingCommit();
   }
 
-  /* Narrow a reveal's region list to what the page's state says should be visible. A plugin can take the content area over from its `onLoaded` hook, which fires
+  /**
+   * Narrow a reveal's region list to what the page's state says should be visible. A plugin can take the content area over from its `onLoaded` hook, which fires
    * while every region is still hidden and before the end-of-load reveal runs, so the reveal shows what the page's state says is visible rather than everything it
    * was handed - the same narrowing global-only mode already applies, for its own reason, one step further along. When that takeover ends, the takeover view's
    * restore is what reveals these regions, so nothing the reveal skipped here is left hidden behind.
+   *
+   * @param {string[]} ids - The region ids the reveal was handed.
+   * @returns {string[]} The ids unchanged when no takeover stands, and without the main-content regions while one does.
+   * @private
    */
   #revealable(ids) {
 
@@ -2054,9 +2075,14 @@ export class webUiFeatureOptions {
     return ids.filter((id) => !TAKEOVER_REGION_IDS.includes(id));
   }
 
-  /* End the boot by revealing the page: hand the frame from the boot affordance to the page, show the regions the page's state says are visible, and record that the
+  /**
+   * End the boot by revealing the page: hand the frame from the boot affordance to the page, show the regions the page's state says are visible, and record that the
    * reveal ran. The record is what hands region visibility from the boot to the views, so it lives with the reveal itself rather than beside each call - a takeover
    * that ends before it leaves its regions for this reveal, and one that ends after it restores them.
+   *
+   * @param {string[]} ids - The mode's region set, before `#revealable` narrows it.
+   * @param {{ warnOnNesting?: boolean }} [options] - Passed through to the reveal; `warnOnNesting` checks each revealed region for a hidden ancestor.
+   * @private
    */
   #revealPage(ids, options) {
 
@@ -2164,6 +2190,8 @@ export class webUiFeatureOptions {
     this.#pageAbort = null;
     this.#flushStaging = null;
 
+    // Empty the search box the torn-down cycle leaves in the page. The query it shows belonged to the store this cycle is done with, so a box left holding it would
+    // display a filter nothing applies; the next show() rebuilds the search panel from its own store's query in any case.
     const searchInput = document.getElementById("searchInput");
 
     if(searchInput) {
@@ -2233,8 +2261,14 @@ export class webUiFeatureOptions {
     return { devices: devices.toSorted((a, b) => (a.name ?? "").toLowerCase().localeCompare((b.name ?? "").toLowerCase())), error: "" };
   }
 
-  // Mount every view against the active store and page DOM. Each view registers its own listeners with the page signal; nothing here references the views after
-  // they are mounted (the store + signal drive their lifecycle).
+  /**
+   * Mount every view against the active store and page DOM. Each view registers its own listeners with the page signal, and the store and that signal drive each
+   * view's lifecycle. A mount result is kept on the instance only where a caller reaches it after mount: the takeover view's function, which `takeover()` calls,
+   * and the status panel's handle, which plugin callers read from the public `statusPanel` field.
+   *
+   * @param {AbortSignal} signal - The page signal of the cycle the views belong to.
+   * @private
+   */
   #mountViews(signal) {
 
     const store = this.#store;
@@ -2328,11 +2362,12 @@ export class webUiFeatureOptions {
     }
   }
 
-  // Resolve a controller's DeviceListResult, injecting the live platform config the plugin's getDevices needs to recover the controller's credentials. This is the
-  // single boundary every device fetch crosses: whichever caller starts a fetch, the plugin's hook is read through this one guard. The config is read fresh from
-  // the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
-  //
-  /* The full rich contract is enforced here with a fail-fast guard: the hook must resolve an object carrying a `devices` array and a string `error`, and each
+  /**
+   * Resolve a controller's DeviceListResult, injecting the live platform config the plugin's getDevices needs to recover the controller's credentials. This is the
+   * single boundary every device fetch crosses: whichever caller starts a fetch, the plugin's hook is read through this one guard. The config is read fresh from
+   * the session on every call, never captured, so a credential change is always reflected. The default device-only getDevices ignores the injected config.
+   *
+   * The full rich contract is enforced here with a fail-fast guard: the hook must resolve an object carrying a `devices` array and a string `error`, and each
    * optional field it may decorate the outcome with must be a string where it is present at all. The string requirement is what guarantees every downstream reader
    * (the connection-error view's DOM construction and the notice block, whose createElement child loops pass a non-string straight to appendChild) receives text.
    * A resolved value that does not match trips a TypeError naming the contract, so a shape mistake surfaces loudly at that boundary rather than as a corrupted
@@ -2340,6 +2375,11 @@ export class webUiFeatureOptions {
    *
    * One message states the whole contract rather than one per field. A plugin reading it wants to see the shape it should have resolved, and a per-field message
    * would show a fragment of that shape and leave the rest to be discovered one failed fetch at a time.
+   *
+   * @param {(Controller|null)} controller - The controller whose devices to fetch, or null when no controller is in scope, as on a device-only page.
+   * @returns {Promise<DeviceListResult>} The hook's result, once it has passed the contract check.
+   * @throws {TypeError} When the hook resolves anything other than a {@link DeviceListResult}.
+   * @private
    */
   async #devicesFor(controller) {
 
@@ -2417,9 +2457,10 @@ const clearContainers = () => {
 };
 
 // Reveal a set of page regions by clearing their inline display, which the hide() path set to none so the user did not see a half-built UI during teardown / rebuild.
-// The success path passes REGION_IDS in the device-bearing modes and the reduced GLOBAL_ONLY_REGION_IDS in global-only mode. When warnOnNesting is set (global-only),
-// each revealed region is checked for a hidden ancestor: a content region nested under the permanently-hidden sidebar or header cannot become visible however its own
-// display is set, so the misnesting is surfaced as a named console warning rather than a silently-invisible panel.
+// The success path passes the mode's region set - REGION_IDS in the device-bearing modes, the reduced GLOBAL_ONLY_REGION_IDS in global-only mode - as narrowed by
+// #revealable, which drops the main-content regions while a takeover stands; the takeover view's restore reveals those when the takeover ends. When warnOnNesting
+// is set (global-only), each revealed region is checked for a hidden ancestor: a content region nested under the permanently-hidden sidebar or header cannot become
+// visible however its own display is set, so the misnesting is surfaced as a named console warning rather than a silently-invisible panel.
 //
 // Every plugin-declared `data-fo-region` element is then revealed too, whichever id set the caller passed: which framework regions a mode shows is the framework's own
 // decision, while a plugin declares only chrome that belongs to this page, so its markup returns in every mode. The nesting diagnostic stays with the framework's ids -
@@ -2474,7 +2515,7 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
  * is held to the same string requirement the device contract holds its copy to, and for the same reason: both reach the connection-error view's DOM construction,
  * which passes each text slot straight to appendChild, so a non-string would surface as a corrupted render rather than as a mistake anyone could locate.
  *
- * The failure this catches is a plugin still on the bare-array shape. Unchecked, its array carries no `error` and no `controllers`, so the page reads it as "this
+ * The failure this catches is a hook that resolves a bare controller array. Unchecked, the array carries no `error` and no `controllers`, so the page reads it as "this
  * plugin has no controllers configured" and says so - advice that sends the user to a settings page which is already correct. Naming the contract instead puts the
  * mistake where it happened rather than three screens later, wearing a message about something else. One message states the whole shape rather than one per field,
  * on the reasoning `#devicesFor` gives: a plugin reading it wants the shape it should have resolved, not a fragment of it.
@@ -2516,7 +2557,8 @@ const assertControllerRename = (rename) => {
 const platformOptions = (session) => Array.isArray(session?.platform?.options) ? session.platform.options : [];
 
 // Set-wise equality on two string arrays. Used to decide whether a re-loaded options array represents a genuine save (different set) or a no-op reorder (same set).
-// O(n) via Set.symmetricDifference; duplicate-insensitive matches buildConfigIndex's first-write-wins semantics for the configured-options array it operates over.
+// The length check short-circuits first, so arrays of different lengths count as different sets even when they hold the same values - one carrying a duplicate
+// the other lacks, for instance. Past it the comparison is O(n) via Set.symmetricDifference and ignores order and duplicates alike.
 const sameOptionsSet = (a, b) => {
 
   if(a === b) {

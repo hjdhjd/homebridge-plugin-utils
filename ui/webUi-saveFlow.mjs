@@ -65,8 +65,8 @@
  */
 
 /**
- * What a check answers: `passed` with the value the write composes with, or `declined` with the reason it refused. Only a passed check writes, and any other
- * answer is a bug in the check that rejects the press.
+ * What a check answers: `passed` with the value the write composes with, or `declined` with the reason it refused. Only a passed check writes. An answer that is
+ * neither passed nor declined is a bug in the check, and it rejects the press while that press is current.
  *
  * A check that delivers its own refusal answers `declined` with a reason the card does not deliver again, and a check that delivers nothing leaves the reason to
  * the card, which delivers it from the result. One refusal is delivered once.
@@ -163,8 +163,8 @@ export const createSaveFlow = ({ commit, control, start, toast }) => {
    *
    * A press rejects only for a bug in the caller's own code: a malformed call, a starter answer without its members, a check that throws or answers something
    * other than passed or declined while its press is current, a Save control whose `disabled` flag throws, and a commit that rejects, which the commit does only
-   * for a composer that throws or a malformed call, before any write starts. The in-flight flag is cleared on every path out of a write, so a rejected press
-   * never leaves the card unable to save.
+   * for a composer that throws, a malformed call, or a page never shown, before any write starts. The in-flight flag is cleared on every path out of a write, so
+   * a rejected press never leaves the card unable to save.
    *
    * @example
    *
@@ -385,6 +385,8 @@ export const createSaveFlow = ({ commit, control, start, toast }) => {
 
       const result = await commit((platform) => compose(platform, value), { rename });
 
+      // The press's own members are spread after the commit's result on purpose, so the result always carries this press's action, delivery, `presented()`, and
+      // value whatever the commit answers.
       return { ...result, action, deliver, presented, value };
     } finally {
 

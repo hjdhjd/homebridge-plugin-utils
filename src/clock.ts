@@ -19,10 +19,11 @@
  * consumer that hands a deadline signal to an abortable call all share a single lever: a scenario spanning a backoff, a heartbeat, and a bounded request is driven
  * by one clock instead of by separate mechanisms stepped in concert.
  *
- * The one place the production clock is more than the primitive it wraps is the platform timer's ceiling. Node arms every timer on a 32-bit signed millisecond count,
- * and its timers documentation sets a delay past 2147483647 ms (a little under 25 days) to one millisecond, with a warning, rather than refusing it - so a token
- * refresh or an expiry armed against a distant boundary would fire at once. The production clock carries such a delay itself, arming at most the ceiling and re-arming
- * for the remainder until the requested moment, and the contract states it, so a consumer states the delay it means and never clamps for the platform.
+ * The one place the production clock is more than the primitive it wraps is the platform timer's ceiling. Node arms every timer on a 32-bit signed millisecond count.
+ * Its callback and promise timers set a delay past 2147483647 ms (a little under 25 days) to one millisecond, with a warning, rather than refusing it, and its
+ * deadline signal does the same up to the 32-bit unsigned range and throws a RangeError beyond it - so a token refresh or an expiry armed against a distant boundary
+ * would fire at once or fail to arm. The production clock carries such a delay itself, arming at most the ceiling and re-arming for the remainder until the requested
+ * moment, and the contract states it, so a consumer states the delay it means and never clamps for the platform.
  *
  * This module imports `node:timers/promises` and is therefore Node-only (not browser-safe), like `util.ts`. A browser-targeted consumer cannot resolve that import.
  *
@@ -100,9 +101,10 @@ export interface Clock {
 }
 
 /**
- * The platform timer's ceiling in milliseconds. Node arms a callback timer, a promise delay, and a deadline signal alike on a 32-bit signed count, and a delay past
- * this value is set to one millisecond with a TimeoutOverflowWarning, while the ceiling itself arms silently. The production clock carries a delay past it as a chain
- * of arms of at most this length, so the value is the hop size as well as the boundary.
+ * The platform timer's ceiling in milliseconds. Node arms a callback timer, a promise delay, and a deadline signal alike on a 32-bit signed count, while the ceiling
+ * itself arms silently. A callback timer or a promise delay past this value is set to one millisecond with a TimeoutOverflowWarning, and a deadline signal past it is
+ * set the same way up to the 32-bit unsigned range and throws a RangeError beyond it. The production clock carries a delay past the ceiling as a chain of arms of at
+ * most this length, so the value is the hop size as well as the boundary.
  *
  * A consumer reads it to state a delay relative to the ceiling rather than restating the platform's number - a test arming a window one past it, or advancing a
  * ceiling's worth of time and asserting nothing has fired yet. A consumer never clamps a delay to it, because a {@link Clock} carries a longer delay itself.
@@ -112,8 +114,10 @@ export interface Clock {
 export const TIMER_DELAY_MAX_MS = 2147483647;
 
 /* Whether `ms` is a finite delay the platform cannot carry in one arm. Anything else - a delay within the ceiling, a non-positive one, `NaN`, or an infinite one - is
- * handed to the platform as it stands, so the platform's own rules for those values hold unchanged: a floor at one millisecond, and an infinite delay set to one
- * millisecond with the overflow warning rather than a chain that never ends and, referenced, never lets the process exit.
+ * handed to each primitive as it stands, under that primitive's own rules. The callback and promise timers set a delay below one millisecond, `NaN`, or an infinite
+ * one to one millisecond, with a warning for a negative, `NaN`, or infinite delay, while `AbortSignal.timeout` throws a RangeError for a non-integer, negative,
+ * `NaN`, or infinite deadline. An infinite delay is handed over rather than carried, because carried it would be a chain that never ends and, referenced, never lets
+ * the process exit.
  */
 function pastCeiling(ms: number): boolean {
 
@@ -140,8 +144,8 @@ function armPlatformTimer(callback: () => void, ms: number, init?: { repeat?: bo
 }
 
 /* Arm `callback` after a delay past the platform's ceiling, as a chain of one-shot arms of at most the ceiling each. Every hop but the last re-arms for what remains;
- * the last runs the callback - and for a repeat, starts the next period's chain BEFORE the callback runs, so a callback that disposes its own handle cancels the fire
- * after it, exactly as a platform interval's re-arm precedes its callback. The remainder counts down by the hop that was armed rather than by a wall-clock read, so
+ * the last runs the callback - and for a repeat, starts the next period's chain BEFORE the callback runs, so a callback that disposes its own handle cancels the next
+ * fire, just as `clearInterval` inside a platform interval's callback does. The remainder counts down by the hop that was armed rather than by a wall-clock read, so
  * the chain means what the platform means by a delay - the callback runs after `ms` of timer time - and a wall-clock step never moves it. Each hop's handle replaces
  * the one before it and the disposer reads whichever hop is live, so a cancel mid-chain clears the hop that is actually armed.
  */

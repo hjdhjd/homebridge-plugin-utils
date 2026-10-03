@@ -160,3 +160,18 @@ once and this clock fires when asked.
 #### See
 
 Clock
+
+***
+
+### TIMER\_DELAY\_MAX\_MS
+
+```ts
+const TIMER_DELAY_MAX_MS: 2147483647 = 2147483647;
+```
+
+The platform timer's ceiling in milliseconds. Node arms a callback timer, a promise delay, and a deadline signal alike on a 32-bit signed count, and a delay past
+this value is set to one millisecond with a TimeoutOverflowWarning, while the ceiling itself arms silently. The production clock carries a delay past it as a chain
+of arms of at most this length, so the value is the hop size as well as the boundary.
+
+A consumer reads it to state a delay relative to the ceiling rather than restating the platform's number - a test arming a window one past it, or advancing a
+ceiling's worth of time and asserting nothing has fired yet. A consumer never clamps a delay to it, because a [Clock](#clock) carries a longer delay itself.

@@ -137,13 +137,15 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 
 /**
  * What became of a {@link webUiFeatureOptions#commitConfig} call: one member per thing a consumer does about it, tagged by `kind` because the members are mutually
- * exclusive answers to one question and two of them carry the failure that explains them.
+ * exclusive answers to one question, and a member that answers for a refusal carries the error that explains it.
  *
  * `committed` and `staged` both mean the configuration changed and the page has been reconciled to it, so a consumer updates its own caches identically for the
  * two and differs only in what it tells the user: `staged` reached the host's memory and failed to reach disk, which the user's own Save still completes.
- * `failed` means nothing changed - a pending option edit never reached the host, or the host refused the write.
+ * `failed` means nothing changed - a pending option edit never reached the host, or the host refused the write. `unchanged` means nothing changed and nothing
+ * was written, because the composer found the configuration already as the caller wants it: the page is neither re-established nor re-entered, a consumer has
+ * no cache to update, and what it tells the user is that there was nothing to save.
  *
- * @typedef {{ kind: "committed" } | { error: *, kind: "staged" } | { error: *, kind: "failed" }} CommitConfigResult
+ * @typedef {{ kind: "committed" } | { error: *, kind: "staged" } | { error: *, kind: "failed" } | { kind: "unchanged" }} CommitConfigResult
  */
 
 /**
@@ -302,9 +304,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
  * action without re-entering the whole show() cycle and reconciles every fact that names a controller against the new list, `commitConfig()` writes a plugin's own
- * configuration change through the page's session and re-establishes the page on it, in place or through a re-entry - each carrying the selection across a
- * controller rename the caller declares - `takeover()` gives a plugin's own node the page's main-content area until it is released, `hide()` is the navigate-away
- * (it flushes any pending edit, then tears down), `cleanup()` is immediate
+ * configuration change through the page's session, unless its composer finds the change already in place, and re-establishes the page on it, in place or through
+ * a re-entry - each carrying the selection across a controller rename the caller declares - `takeover()` gives a plugin's own node the page's main-content area
+ * until it is released, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
  * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
  * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
  * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract carries the fuller vocabulary of the
@@ -1314,19 +1316,21 @@ export class webUiFeatureOptions {
   }
 
   /**
-   * Write a plugin's own configuration change through the page's session, and re-establish the page on what was written.
+   * Write a plugin's own configuration change through the page's session and re-establish the page on what was written, or write nothing when the change is
+   * already in place.
    *
    * A plugin that edits the configuration behind this page - saving or removing a controller, rewriting a credential - hands over a composer rather than doing the
-   * write itself, and the page does the rest: it drains whatever option edits the user has in flight, holds the table so no new ones start, composes against the
-   * configuration as it stands at that moment, writes and saves through the one session the page already owns, and then makes the page agree with what was written.
-   * A plugin that opens a session of its own instead leaves the page's store holding the options array the user loaded, which the next table edit writes back over
-   * everything the plugin just saved.
+   * write itself, and the page does the rest: it drains whatever option edits the user has in flight, holds the table so no new ones start, and composes against
+   * the configuration as it stands at that moment. Unless the composer finds nothing to change, the page then writes and saves through the one session it already
+   * owns and makes the page agree with what was written. A plugin that opens a session of its own instead leaves the page's store holding the options array the
+   * user loaded, which the next table edit writes back over everything the plugin just saved.
    *
    * The composer is a synchronous function of the live platform entry returning the patch to merge onto it: `(platform) => ({ controllers })`. It is a function
    * rather than a finished patch because a call may wait behind another one, and what it composes against must be what that earlier call wrote. It is called
-   * exactly once per call, inside the hold, with nothing awaited between the read it composes against and the write that follows. A composer that throws rejects
-   * the call with what it threw - the line {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold is
-   * released on the way out.
+   * exactly once per call, inside the hold, with nothing awaited between the read it composes against and the write that follows. A composer whose change is
+   * already in place answers null instead of a patch, and the call writes nothing: that read is the one moment the answer is true of the configuration the write
+   * would land on, so the composer is the one place that can give it. A composer that throws rejects the call with what it threw - the line
+   * {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold is released on the way out.
    *
    * The entry is handed over to be read, and a composer answers with its patch rather than editing what it was given: the page's store holds that entry's options
    * array by reference, as its live edits and as the target a revert returns to, so an edit made in place would rewrite the user's own state underneath them both.
@@ -1334,8 +1338,11 @@ export class webUiFeatureOptions {
    * Contract:
    *
    *   - The call resolves a {@link CommitConfigResult}: `committed` (written and saved), `staged` (written into the host's memory with the save to disk refused,
-   *     so the page is reconciled exactly as for `committed` and the consumer renders a warning the user's own Save answers), or `failed` (nothing changed - a
-   *     pending option edit did not reach the host, or the host refused the write).
+   *     so the page is reconciled exactly as for `committed` and the consumer renders a warning the user's own Save answers), `failed` (nothing changed - a
+   *     pending option edit did not reach the host, or the host refused the write), or `unchanged` (the composer answered null, so the call wrote and saved
+   *     nothing of its own and the page was neither re-established nor re-entered). Neither `failed` nor `unchanged` writes the composer's change, and they
+   *     differ in why: `failed` means something refused, which the user is owed, while `unchanged` means the composer found nothing that needed writing. A pending
+   *     option edit the call drained ahead of the composer stays written, so what `unchanged` leaves unwritten is the composer's change alone.
    *   - Calls serialize. Each one waits for the one ahead of it, whatever became of that one, so two plugin actions in the same moment write in the order they
    *     were asked for and the second composes against the first's result.
    *   - A pending option edit is written first, at the page's own drain, and the composer sees it. A value control the user has typed into but not committed is
@@ -1347,11 +1354,11 @@ export class webUiFeatureOptions {
    *     a call whose page is hidden, torn down, or re-shown mid-flight still writes and saves, because that is what the user asked for. This is the deliberate
    *     divergence from `refreshControllers()`, which captures its cycle at entry and drops its outcome: a repaint belongs to the page it was asked of, while a write
    *     belongs to the configuration.
-   *   - The page is re-established in place where it can be - the model reloaded against the written configuration, the controller list refetched, the revert
-   *     target moved only when the write changed the options set - and through a fresh `show()` cycle where it cannot: a controller fetch that fails after the
-   *     write, a page that has no loaded model, and a page standing on the connection-error frame all re-enter, because the boot owns every one of those surfaces
-   *     and a write that changed the configuration those failures came from deserves an honest re-evaluation. A consumer's verdict card mounted on a frame that
-   *     re-enters is cleared by the re-entry, and the page coming up is the visible verdict.
+   *   - A page a write lands on is re-established in place where it can be - the model reloaded against the written configuration, the controller list
+   *     refetched, the revert target moved only when the write changed the options set - and through a fresh `show()` cycle where it cannot: a controller fetch
+   *     that fails after the write, a page that has no loaded model, and a page standing on the connection-error frame all re-enter, because the boot owns every
+   *     one of those surfaces and a write that changed the configuration those failures came from deserves an honest re-evaluation. A consumer's verdict card
+   *     mounted on a frame that re-enters is cleared by the re-entry, and the page coming up is the visible verdict.
    *   - An in-place establishment does not invoke `onLoaded`: that hook announces a show cycle, and this is not one.
    *   - A `rename` declares that the write replaced a controller's sidebar key. It travels with its own call through the queue, and an in-place establishment
    *     carries every settled fact naming the old key onto the new one once the controller lists before and after the write prove the rename: the selection
@@ -1371,8 +1378,9 @@ export class webUiFeatureOptions {
    * composer writes. Closing it would mean serializing every session write behind a write that may never settle, which trades a rare clobber for a permanent
    * wedge, so the page keeps the bound it already chose.
    *
-   * @param {(platform: Object) => Object} compose - Synchronous composer receiving the live primary platform entry and returning the patch to merge onto it. The
-   *                                                 entry is the composer's to read and not to edit: the page's store holds its options array by reference.
+   * @param {(platform: Object) => Object | null} compose - Synchronous composer receiving the live primary platform entry and returning the patch to merge onto
+   *                                                        it, or null when its change is already in place. The entry is the composer's to read and not to
+   *                                                        edit: the page's store holds its options array by reference.
    * @param {Object} [options]
    * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [options.rename] - The controller this call renames, as the sidebar key it had and the key
    *                                                                                        it has now. The page carries every settled fact naming the old key onto
@@ -1412,13 +1420,13 @@ export class webUiFeatureOptions {
   /**
    * One coordinated configuration write, run with the queue's turn already taken.
    *
-   * The sequence is drain, hold, compose, write, save, reconcile. Everything about the page is read live at each step rather than captured at entry, because the
-   * cycle that was live when the call was made need not be the one that is live when it runs; what IS captured, once the drain settles, is the cycle the call
-   * observed, and every later read of the page in this call compares against that rather than against whatever is live at the moment - a successor cycle's fresh
-   * signal would pass a staleness check it should fail.
+   * The sequence is drain, hold, compose, write, save, reconcile, and a composer that answers null ends it at the compose with the hold, when one was taken,
+   * released. Everything about the page is read live at each step rather than captured at entry, because the cycle that was live when the call was made need not
+   * be the one that is live when it runs; what IS captured, once the drain settles, is the cycle the call observed, and every later read of the page in this call
+   * compares against that rather than against whatever is live at the moment - a successor cycle's fresh signal would pass a staleness check it should fail.
    *
    * @param {Object} args
-   * @param {(platform: Object) => Object} args.compose - The caller's composer, already validated.
+   * @param {(platform: Object) => Object | null} args.compose - The caller's composer, already validated, which answers null when its change is already in place.
    * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The caller's rename, already validated, which the establishment carries
    *                                                                                     in place or through the re-entry.
    * @returns {Promise<CommitConfigResult>} What became of the write.
@@ -1528,6 +1536,20 @@ export class webUiFeatureOptions {
       throw err;
     }
 
+    /* A composer that answers null found its change already in place, so the call ends here with nothing written. The decision sits at the compose, in the call's
+     * own turn of the queue and under the page's hold when the page took one, because the composer reads the live entry with nothing awaited between that read
+     * and the write, which makes it the one place that can say nothing would change: a read taken any earlier could see a configuration that a queued call or a
+     * drained edit has since moved. Only null is that answer, and an undefined or empty patch is still a write. The hold is released exactly as a composer that
+     * throws releases it, and nothing else on the page moves - an option edit the drain wrote stays written, and the page is neither re-established nor
+     * re-entered, because the configuration it shows is the one the call found.
+     */
+    if(patch === null) {
+
+      releaseHold();
+
+      return { kind: "unchanged" };
+    }
+
     // Issue the write and publish its settlement in the same synchronous turn, before the first await, so a teardown that begins while it is in flight can find
     // it and wait for it. Neither this await nor the save's is bounded, and that is deliberate: a timeout here would release a write that is still running as
     // though it had finished. What bounds the PAGE instead is the teardown's own wait, and what bounds the CALLER is whatever deadline it puts around the call.
@@ -1610,7 +1632,7 @@ export class webUiFeatureOptions {
    * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The rename the call declared, which the establishment puts on its model
    *                                                                                     load for the reducer to honor once the lists prove it, and hands to the
    *                                                                                     re-entry when the fetch fails.
-   * @param {CommitConfigResult} args.result - What became of the write, which every path here answers with unchanged.
+   * @param {CommitConfigResult} args.result - What became of the write, which every path here hands back exactly as it arrived.
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} args.session - The session the write went through.
    * @returns {Promise<CommitConfigResult>} The result it was handed.
    * @private

@@ -489,6 +489,186 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
       "and the page is reconciled to the new configuration exactly as a committed write reconciles it");
     assert.equal(page.fake.observed.calls.at(-1), "updatePluginConfig", "the host log ends on the stage, with no save behind it");
   });
+
+  test("a composer returning null answers unchanged, and the host records no configuration write and no save", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    const callsBefore = page.fake.observed.calls.length;
+    const result = await page.orchestrator.commitConfig(() => null);
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "unchanged" }, "a composer with nothing to change is answered as such, not as a write");
+    assert.equal(page.fake.observed.updatedConfigs.length, 0, "no configuration write reached the host");
+    assert.deepEqual(page.fake.observed.calls.slice(callsBefore), [], "and neither did a save, nor the configuration read a re-entry would make");
+  });
+
+  test("an unchanged call leaves the page as it was: nothing is refetched, and an option edit afterwards is accepted and staged", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    optionRow(page.skeleton, "Motion", "Motion.Detect");
+
+    const before = { controllerCalls: page.hooks.controllerCalls, deviceCalls: page.hooks.deviceCalls.length, loaded: page.state.loaded };
+
+    assert.deepEqual(await page.orchestrator.commitConfig(() => null), { kind: "unchanged" });
+
+    await flush();
+
+    assert.equal(page.hooks.controllerCalls, before.controllerCalls, "the controller list is not refetched");
+    assert.equal(page.hooks.deviceCalls.length, before.deviceCalls, "and neither are the devices");
+    assert.equal(page.state.loaded, before.loaded, "and no fresh show cycle announced itself");
+    assert.equal(tableHeld(page.skeleton), false, "the hold is released");
+
+    page.skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']").click();
+
+    await waitFor(() => page.fake.observed.updatedConfigs.length === 1, { message: "the edit after an unchanged call must reach the host" });
+
+    assert.ok(lastWritten(page.fake).some((entry) => entry.includes("Motion.Detect")), "the table accepted the edit and staged it");
+  });
+
+  test("a pending edit is drained before a composer that returns null, and stays written", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    optionRow(page.skeleton, "Motion", "Motion.Detect").click();
+
+    assert.equal(page.fake.observed.updatedConfigs.length, 0, "precondition: the edit is still inside the staging debounce");
+
+    const composed = [];
+    const result = await page.orchestrator.commitConfig((platform) => {
+
+      composed.push([...platform.options]);
+
+      return null;
+    });
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "unchanged" });
+    assert.ok(composed[0].some((entry) => entry.includes("Motion.Detect")), "the composer read the configuration the drained edit had already reached");
+    assert.equal(page.fake.observed.updatedConfigs.length, 1, "the one write is the user's own edit, drained ahead of the composer");
+    assert.ok(lastWritten(page.fake).some((entry) => entry.includes("Motion.Detect")), "and the host still holds that edit");
+    assert.ok(page.orchestrator.editedConfig[0].options.some((entry) => entry.includes("Motion.Detect")), "as does the page");
+  });
+
+  test("the call after an unchanged one commits normally", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.deepEqual(await page.orchestrator.commitConfig(() => null), { kind: "unchanged" });
+
+    const result = await page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }));
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "committed" }, "neither the queue nor the hold is left behind");
+    assert.equal(page.skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 2, "and the page is established on what was written");
+  });
+
+  test("a composer returning null on a page whose model never loaded answers unchanged with no write, no save, and no re-entry", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    // The boot's own config re-sync fails, so the page never reaches a loaded model and the call takes no hold.
+    let failSync = false;
+    const original = page.fake.getPluginConfig;
+
+    page.fake.getPluginConfig = async () => {
+
+      if(failSync) {
+
+        failSync = false;
+
+        throw new Error("The Homebridge server is unreachable.");
+      }
+
+      return original();
+    };
+
+    const session = await openTestSession();
+
+    failSync = true;
+
+    await page.orchestrator.show(session);
+    await flush();
+
+    assert.equal(page.state.loaded, 0, "precondition: no model ever loaded");
+
+    const callsBefore = page.fake.observed.calls.length;
+    const result = await page.orchestrator.commitConfig(() => null);
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "unchanged" }, "the answer does not depend on a hold having been taken");
+    assert.deepEqual(page.fake.observed.calls.slice(callsBefore), [], "no write, no save, and no re-entry's configuration read reached the host");
+    assert.equal(page.state.loaded, 0, "and no fresh boot came up");
+  });
+
+  test("a composer returning null on the connection-error frame answers unchanged with no write, no save, and no re-entry", async () => {
+
+    using dom = createTestDom();
+    using page = makePage({ config: makePluginConfig({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }) });
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.state.loaded = 0;
+
+    // A sidebar click whose fetch fails is what puts a loaded page on the error frame.
+    page.hooks.onDevices = () => Promise.reject(new Error("Controller unreachable."));
+
+    page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
+
+    await waitFor(() => page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), { message: "the error frame must render" });
+
+    page.hooks.onDevices = null;
+
+    const callsBefore = page.fake.observed.calls.length;
+    const result = await page.orchestrator.commitConfig(() => null);
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "unchanged" });
+    assert.deepEqual(page.fake.observed.calls.slice(callsBefore), [], "no write, no save, and no re-entry's configuration read reached the host");
+    assert.ok(page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), "the frame stands, since nothing changed to re-evaluate it");
+    assert.equal(page.state.loaded, 0, "and no fresh show cycle announced itself");
+  });
+
+  test("a composer returning undefined still writes and answers committed", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    const result = await page.orchestrator.commitConfig(() => undefined);
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "committed" }, "only null says nothing changed");
+    assert.equal(page.fake.observed.updatedConfigs.length, 1, "the write reached the host");
+    assert.ok(page.fake.observed.calls.includes("savePluginConfig"), "and was saved");
+  });
 });
 
 describe("webUiFeatureOptions.commitConfig - the revert target", () => {

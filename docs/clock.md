@@ -20,10 +20,11 @@ One contract covers every shape of time rather than one contract per shape, so a
 consumer that hands a deadline signal to an abortable call all share a single lever: a scenario spanning a backoff, a heartbeat, and a bounded request is driven
 by one clock instead of by separate mechanisms stepped in concert.
 
-The one place the production clock is more than the primitive it wraps is the platform timer's ceiling. Node arms every timer on a 32-bit signed millisecond count,
-and its timers documentation sets a delay past 2147483647 ms (a little under 25 days) to one millisecond, with a warning, rather than refusing it - so a token
-refresh or an expiry armed against a distant boundary would fire at once. The production clock carries such a delay itself, arming at most the ceiling and re-arming
-for the remainder until the requested moment, and the contract states it, so a consumer states the delay it means and never clamps for the platform.
+The one place the production clock is more than the primitive it wraps is the platform timer's ceiling. Node arms every timer on a 32-bit signed millisecond count.
+Its callback and promise timers set a delay past 2147483647 ms (a little under 25 days) to one millisecond, with a warning, rather than refusing it, and its
+deadline signal does the same up to the 32-bit unsigned range and throws a RangeError beyond it - so a token refresh or an expiry armed against a distant boundary
+would fire at once or fail to arm. The production clock carries such a delay itself, arming at most the ceiling and re-arming for the remainder until the requested
+moment, and the contract states it, so a consumer states the delay it means and never clamps for the platform.
 
 This module imports `node:timers/promises` and is therefore Node-only (not browser-safe), like `util.ts`. A browser-targeted consumer cannot resolve that import.
 
@@ -169,9 +170,10 @@ Clock
 const TIMER_DELAY_MAX_MS: 2147483647 = 2147483647;
 ```
 
-The platform timer's ceiling in milliseconds. Node arms a callback timer, a promise delay, and a deadline signal alike on a 32-bit signed count, and a delay past
-this value is set to one millisecond with a TimeoutOverflowWarning, while the ceiling itself arms silently. The production clock carries a delay past it as a chain
-of arms of at most this length, so the value is the hop size as well as the boundary.
+The platform timer's ceiling in milliseconds. Node arms a callback timer, a promise delay, and a deadline signal alike on a 32-bit signed count, while the ceiling
+itself arms silently. A callback timer or a promise delay past this value is set to one millisecond with a TimeoutOverflowWarning, and a deadline signal past it is
+set the same way up to the 32-bit unsigned range and throws a RangeError beyond it. The production clock carries a delay past the ceiling as a chain of arms of at
+most this length, so the value is the hop size as well as the boundary.
 
 A consumer reads it to state a delay relative to the ceiling rather than restating the platform's number - a test arming a window one past it, or advancing a
 ceiling's worth of time and asserting nothing has fired yet. A consumer never clamps a delay to it, because a [Clock](#clock) carries a longer delay itself.

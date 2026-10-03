@@ -141,9 +141,12 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * `committed` and `staged` both mean the configuration changed and the page has been reconciled to it, so a consumer updates its own caches identically for the
  * two and differs only in what it tells the user: `staged` reached the host's memory and failed to reach disk, which the user's own Save still completes.
- * `failed` means nothing changed - a pending option edit never reached the host, or the host refused the write. `unchanged` means nothing changed and nothing
- * was written, because the composer found the configuration already as the caller wants it: the page is neither re-established nor re-entered, a consumer has
- * no cache to update, and what it tells the user is that there was nothing to save.
+ * `failed` means the composer's change was not written - a pending option edit never reached the host, or the host refused the write. `unchanged` means the
+ * composer answered null, so nothing of the composer's was written. A composer answers null when its change is already in place, and also when it refuses the
+ * change against the configuration as it stands. The result does not say which, because the plugin that wrote the composer knows, and a consumer whose
+ * composer can answer null for more than one reason keeps the reason in a variable the composer sets. Whatever the reason, the page is neither re-established
+ * nor re-entered, a consumer has no cache to update, and what it tells the user is the reason its composer answered null. What `failed` and `unchanged` leave
+ * unwritten is the composer's change alone: a pending option edit the call drained ahead of the composer stays written.
  *
  * @typedef {{ kind: "committed" } | { error: *, kind: "staged" } | { error: *, kind: "failed" } | { kind: "unchanged" }} CommitConfigResult
  */
@@ -304,9 +307,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *
  * Public API: constructor takes the same options shape, `show()` reveals the UI, `refreshControllers()` repaints the controller sidebar after an explicit user
  * action without re-entering the whole show() cycle and reconciles every fact that names a controller against the new list, `commitConfig()` writes a plugin's own
- * configuration change through the page's session, unless its composer finds the change already in place, and re-establishes the page on it, in place or through
- * a re-entry - each carrying the selection across a controller rename the caller declares - `takeover()` gives a plugin's own node the page's main-content area
- * until it is released, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
+ * configuration change through the page's session, unless its composer answers null for a change already in place or one it refuses, and re-establishes the page
+ * on it, in place or through a re-entry - each carrying the selection across a controller rename the caller declares - `takeover()` gives a plugin's own node the
+ * page's main-content area until it is released, `hide()` is the navigate-away (it flushes any pending edit, then tears down), `cleanup()` is immediate
  * destructive teardown (may drop an unsaved debounced edit; for forced/synchronous disposal), `getHomebridgeDevices()` is the default device source. Both list
  * contracts are rich: a `getControllers` hook resolves a {@link ControllerListResult} and a `getDevices` hook resolves a {@link DeviceListResult}, each carrying
  * its list and its connection outcome together, and `getHomebridgeDevices` resolves the device shape. The device contract carries the fuller vocabulary of the
@@ -1316,21 +1319,24 @@ export class webUiFeatureOptions {
   }
 
   /**
-   * Write a plugin's own configuration change through the page's session and re-establish the page on what was written, or write nothing when the change is
-   * already in place.
+   * Write a plugin's own configuration change through the page's session and re-establish the page on what was written, or write none of it when the composer
+   * answers null, for a change already in place or one it refuses.
    *
    * A plugin that edits the configuration behind this page - saving or removing a controller, rewriting a credential - hands over a composer rather than doing the
    * write itself, and the page does the rest: it drains whatever option edits the user has in flight, holds the table so no new ones start, and composes against
-   * the configuration as it stands at that moment. Unless the composer finds nothing to change, the page then writes and saves through the one session it already
+   * the configuration as it stands at that moment. Unless the composer answers null, the page then writes and saves through the one session it already
    * owns and makes the page agree with what was written. A plugin that opens a session of its own instead leaves the page's store holding the options array the
    * user loaded, which the next table edit writes back over everything the plugin just saved.
    *
    * The composer is a synchronous function of the live platform entry returning the patch to merge onto it: `(platform) => ({ controllers })`. It is a function
    * rather than a finished patch because a call may wait behind another one, and what it composes against must be what that earlier call wrote. It is called
-   * exactly once per call, inside the hold, with nothing awaited between the read it composes against and the write that follows. A composer whose change is
-   * already in place answers null instead of a patch, and the call writes nothing: that read is the one moment the answer is true of the configuration the write
-   * would land on, so the composer is the one place that can give it. A composer that throws rejects the call with what it threw - the line
-   * {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold is released on the way out.
+   * exactly once per call, inside the hold, with nothing awaited between the read it composes against and the write that follows. A composer answers null
+   * instead of a patch when its change is already in place, and also when it refuses the change against the configuration as it stands, a duplicate of an
+   * entry another call wrote ahead of it being the case that needs the composer's view. Whatever the reason, the call writes nothing of the composer's: that
+   * read is the one moment the answer is true of the configuration the write would land on, so the composer is the one place that can give it. The result does
+   * not say which reason applied, because the plugin that wrote the composer knows, and a plugin whose composer can answer null for more than one reason keeps
+   * the reason in a variable the composer sets. A refusal belongs in that null answer and not in a throw: a composer that throws rejects the call with what it
+   * threw - the line {@link webUiFeatureOptions#refreshControllers} already draws for a bug in the caller's own code - and the hold is released on the way out.
    *
    * The entry is handed over to be read, and a composer answers with its patch rather than editing what it was given: the page's store holds that entry's options
    * array by reference, as its live edits and as the target a revert returns to, so an edit made in place would rewrite the user's own state underneath them both.
@@ -1338,11 +1344,12 @@ export class webUiFeatureOptions {
    * Contract:
    *
    *   - The call resolves a {@link CommitConfigResult}: `committed` (written and saved), `staged` (written into the host's memory with the save to disk refused,
-   *     so the page is reconciled exactly as for `committed` and the consumer renders a warning the user's own Save answers), `failed` (nothing changed - a
-   *     pending option edit did not reach the host, or the host refused the write), or `unchanged` (the composer answered null, so the call wrote and saved
-   *     nothing of its own and the page was neither re-established nor re-entered). Neither `failed` nor `unchanged` writes the composer's change, and they
-   *     differ in why: `failed` means something refused, which the user is owed, while `unchanged` means the composer found nothing that needed writing. A pending
-   *     option edit the call drained ahead of the composer stays written, so what `unchanged` leaves unwritten is the composer's change alone.
+   *     so the page is reconciled exactly as for `committed` and the consumer renders a warning the user's own Save answers), `failed` (the composer's change
+   *     was not written - a pending option edit did not reach the host, or the host refused the write), or `unchanged` (the composer answered null, so the call
+   *     wrote and saved nothing of its own and the page was neither re-established nor re-entered). Neither `failed` nor `unchanged` writes the composer's
+   *     change, and they differ in why: `failed` means something refused, which the user is owed, while `unchanged` means the composer answered null, because its
+   *     change was already in place or because it refused the change. A pending option edit the call drained ahead of the composer stays written, so what
+   *     `failed` and `unchanged` leave unwritten is the composer's change alone.
    *   - Calls serialize. Each one waits for the one ahead of it, whatever became of that one, so two plugin actions in the same moment write in the order they
    *     were asked for and the second composes against the first's result.
    *   - A pending option edit is written first, at the page's own drain, and the composer sees it. A value control the user has typed into but not committed is
@@ -1379,8 +1386,8 @@ export class webUiFeatureOptions {
    * wedge, so the page keeps the bound it already chose.
    *
    * @param {(platform: Object) => Object | null} compose - Synchronous composer receiving the live primary platform entry and returning the patch to merge onto
-   *                                                        it, or null when its change is already in place. The entry is the composer's to read and not to
-   *                                                        edit: the page's store holds its options array by reference.
+   *                                                        it, or null when its change is already in place or when it refuses the change. The entry is the
+   *                                                        composer's to read and not to edit: the page's store holds its options array by reference.
    * @param {Object} [options]
    * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [options.rename] - The controller this call renames, as the sidebar key it had and the key
    *                                                                                        it has now. The page carries every settled fact naming the old key onto
@@ -1426,7 +1433,8 @@ export class webUiFeatureOptions {
    * compares against that rather than against whatever is live at the moment - a successor cycle's fresh signal would pass a staleness check it should fail.
    *
    * @param {Object} args
-   * @param {(platform: Object) => Object | null} args.compose - The caller's composer, already validated, which answers null when its change is already in place.
+   * @param {(platform: Object) => Object | null} args.compose - The caller's composer, already validated, which answers null when its change is already in place
+   *                                                             or when it refuses the change.
    * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The caller's rename, already validated, which the establishment carries
    *                                                                                     in place or through the re-entry.
    * @returns {Promise<CommitConfigResult>} What became of the write.
@@ -1536,12 +1544,12 @@ export class webUiFeatureOptions {
       throw err;
     }
 
-    /* A composer that answers null found its change already in place, so the call ends here with nothing written. The decision sits at the compose, in the call's
-     * own turn of the queue and under the page's hold when the page took one, because the composer reads the live entry with nothing awaited between that read
-     * and the write, which makes it the one place that can say nothing would change: a read taken any earlier could see a configuration that a queued call or a
-     * drained edit has since moved. Only null is that answer, and an undefined or empty patch is still a write. The hold is released exactly as a composer that
-     * throws releases it, and nothing else on the page moves - an option edit the drain wrote stays written, and the page is neither re-established nor
-     * re-entered, because the configuration it shows is the one the call found.
+    /* A composer that answers null found its change already in place or refused it, so the call ends here with nothing of the composer's written. The decision
+     * sits at the compose, in the call's own turn of the queue and under the page's hold when the page took one, because the composer reads the live entry with
+     * nothing awaited between that read and the write, which makes it the one place that can give that answer: a read taken any earlier could see a
+     * configuration that a queued call or a drained edit has since moved. Only null is that answer, and an undefined or empty patch is still a write. The hold is
+     * released exactly as a composer that throws releases it, and nothing else on the page moves - an option edit the drain wrote stays written, and the page is
+     * neither re-established nor re-entered, because the configuration it shows is the one the call found.
      */
     if(patch === null) {
 

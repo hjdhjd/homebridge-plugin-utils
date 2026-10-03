@@ -503,7 +503,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
 
     await flush();
 
-    assert.deepEqual(result, { kind: "unchanged" }, "a composer with nothing to change is answered as such, not as a write");
+    assert.deepEqual(result, { kind: "unchanged" }, "a composer that answers null is answered unchanged, not as a write");
     assert.equal(page.fake.observed.updatedConfigs.length, 0, "no configuration write reached the host");
     assert.deepEqual(page.fake.observed.calls.slice(callsBefore), [], "and neither did a save, nor the configuration read a re-entry would make");
   });
@@ -649,7 +649,8 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
 
     assert.deepEqual(result, { kind: "unchanged" });
     assert.deepEqual(page.fake.observed.calls.slice(callsBefore), [], "no write, no save, and no re-entry's configuration read reached the host");
-    assert.ok(page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), "the frame stands, since nothing changed to re-evaluate it");
+    assert.ok(page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"),
+      "the frame stands, since an unchanged call neither re-establishes nor re-enters the page");
     assert.equal(page.state.loaded, 0, "and no fresh show cycle announced itself");
   });
 
@@ -665,7 +666,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
 
     await flush();
 
-    assert.deepEqual(result, { kind: "committed" }, "only null says nothing changed");
+    assert.deepEqual(result, { kind: "committed" }, "only null answers unchanged");
     assert.equal(page.fake.observed.updatedConfigs.length, 1, "the write reached the host");
     assert.ok(page.fake.observed.calls.includes("savePluginConfig"), "and was saved");
   });

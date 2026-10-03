@@ -8,18 +8,20 @@
  * one place rather than in a copy composed by hand at every card.
  *
  * A card's Save checks what the user entered, writes it through the page's configuration commit, and reports what became of it. The flow holds every press to
- * the same rules: a press that arrives while a write is in flight starts nothing, a Save whose change is already in place writes nothing and is answered as
- * such, and an outcome the user is owed lands on the card while the card still shows that Save and on a toast otherwise. {@link createSaveFlow} builds one flow
- * per card, and its `save` answers a tagged {@link SaveFlowResult} the card switches on.
+ * the same rules: a press that arrives while a write is in flight starts nothing, a Save whose composer answers null - its change already in place, or refused
+ * against the configuration as it stands - writes nothing of the composer's and is answered as such, and an outcome the user is owed lands on the card while
+ * the card still shows that Save and on a toast otherwise. {@link createSaveFlow} builds one flow per card, and its `save` answers a tagged
+ * {@link SaveFlowResult} the card switches on.
  *
  * The flow owns no guard. A card has one way of beginning an action, which its other actions - a probe, a validation - use too, and a Save must retire them and
  * be retired by them. That holds only when the Save begins through the same starter, so the card injects its starter and the flow never mints a lifetime of its
  * own. What the flow does own is the one fact no single action can hold, whether a write is in flight, and a press that arrives during one is answered `busy`
  * rather than queued behind it or allowed to retire it: a write cannot be recalled once it has started, and a second write is the defect itself.
  *
- * The module holds no DOM, no store, and no plugin knowledge, and imports nothing: the commit, the starter, and the toast all arrive by injection, which is also
- * what lets a consumer's suite drive the real flow with its own doubles. Policy stays with the card - what it checks, what it writes, what a busy press looks
- * like, and the copy and the after-work of a success.
+ * The module reaches for no document, holds no store and no plugin knowledge, and imports nothing: the commit, the starter, the toast, and the card's Save
+ * control all arrive by injection, which is also what lets a consumer's suite drive the real flow with its own doubles. Policy stays with the card - what it
+ * checks, what it writes, what a busy press looks like, and the copy and the after-work of a success. The Save control's disabled state during a write is the
+ * flow's, so a Save that could not be honored is not pressable on any card.
  *
  * @module
  */
@@ -81,8 +83,10 @@
  *     Nothing was written, and nothing is owed, because the action that retired it owns the card.
  *   - `declined`: the check refused, carrying its `reason`, and nothing was written. A card whose check delivered nothing delivers the reason through `deliver`.
  *   - Every other kind is the page's commit result, passed through with its `error` where it has one and with the checked `value` added. A card delivers
- *     `failed` and `unchanged` through `deliver`. Success is left to the card, because its copy and its after-work are plugin policy, and a card that saves
- *     releases its own takeover.
+ *     `failed` and `unchanged` through `deliver`, because the press reached its write and its outcome is owed. `unchanged` means the composer answered null,
+ *     its change already in place or refused against the configuration as it stands, and the result does not say which: the card supplies the words, and a
+ *     card whose composer answers null for more than one reason keeps the reason in a variable its composer sets. Success is left to the card, because its copy and its
+ *     after-work are plugin policy, and a card that saves releases its own takeover.
  *
  * Each member but `busy` and `superseded` carries the press's `action`, `deliver` and `presented`, so a card delivers and releases from the result alone.
  *
@@ -102,9 +106,23 @@
  * `presented()` then decides only where the outcome lands. A press that has reached its write is retired by nothing: the write runs to its result, and that
  * result is owed.
  *
+ * The card's Save control is not pressable for exactly the span in which a press could not be honored, which is the library's default for every card. The span
+ * starts when the commit is called and ends when the commit settles, on every way out, a rejection included. The control is not disabled during the check,
+ * because a newer press retires a check and the user must be able to make one. The busy answer is what guarantees a second write never starts, and the
+ * disabled control is a courtesy on top of it, not the safety mechanism. The option is required and may be null, so a card with no Save control says so on
+ * purpose rather than by leaving it out. The flow asks of the control only its `disabled` flag and restores the state it found, so a control the card had
+ * disabled for its own reason stays disabled. The restore writes over whatever the card set on the control during the write, so a card that manages the
+ * control itself sets it again when it handles the result. A control serves one flow, for that flow's life.
+ *
+ * The flow puts no bound on a write, so the control stays disabled for as long as the write is outstanding, which is the truth of the card's state. The commit a
+ * card injects settles only when the page's commit settles, with no deadline wrapped around it, because a deadline would clear the in-flight flag and
+ * re-enable the control while the write still runs.
+ *
  * @param {Object} options
  * @param {import("./webUi-featureOptions.mjs").webUiFeatureOptions["commitConfig"]} options.commit - The page's configuration commit, which a page passes as a
  *   function calling its feature-options instance's `commitConfig`.
+ * @param {{ disabled: boolean } | null} options.control - The card's Save control, which the flow disables for the span of each write, or null for a card that
+ *   has none. A button element serves, as does any object whose `disabled` flag is a boolean.
  * @param {() => SaveAction} options.start - The card's own way of beginning an action. It retires whatever action the card had in flight, exactly as the card's
  *   other actions do, and answers the new action's signal and `presented()`. A card whose guard is its only press state passes a closure over `guard.start()`;
  *   a card that also blanks its verdict line and captures what it is showing passes the function that does all of that, once it answers `presented` and
@@ -113,8 +131,15 @@
  *   options.toast - The host's toast, which the flow calls only through a press's delivery decision.
  * @returns {{ save: (request: { check: (context: SaveActionContext) => (SaveCheckResult | Promise<SaveCheckResult>), compose: (platform: Object, value: *) =>
  *   Object | null, rename?: import("./webUi-featureOptions/state.mjs").ControllerRename }) => Promise<SaveFlowResult> }} The card's flow: `save` runs one press.
+ * @throws {TypeError} When `control` is neither null nor an object whose `disabled` flag is a boolean, an omitted control included.
  */
-export const createSaveFlow = ({ commit, start, toast }) => {
+export const createSaveFlow = ({ commit, control, start, toast }) => {
+
+  // A card states its Save control at construction or states that it has none, so a missing control is refused here rather than discovered at the first write.
+  if((control !== null) && (typeof control?.disabled !== "boolean")) {
+
+    throw new TypeError("A save flow requires a control, the card's Save control with a boolean disabled flag, or null for a card that has none.");
+  }
 
   // Whether a write is in flight, the flow's whole state across presses. Only the press that starts a write sets it and only that press's finally clears it, so a
   // busy press, which does neither, can never release a write it did not start.
@@ -129,20 +154,29 @@ export const createSaveFlow = ({ commit, start, toast }) => {
    * signal after the check from the write, so that read is the last point a retired press stops; past it, the write runs to its result and the result is owed.
    *
    * The commit is called at most once per press, and the composer only inside it. The composer is where work that must immediately precede the write belongs:
-   * it runs once, after the page's own pending edits are written, under the page's hold when the page took one, and directly before the write. A card that
-   * prepares something there undoes it on every outcome that wrote nothing - `failed`, `unchanged`, and a rejected press - and does not assume the composer ran,
-   * because `failed` can answer before it does. A card that prepared something inside its check undoes it on `superseded` too, since the flow wrote nothing but
-   * cannot know what the check did.
+   * it runs once, after the page's own pending edits are written, under the page's hold when the page took one, and directly before the write. A composer
+   * answers null when its change is already in place, and also to refuse the change against the configuration as it stands, a duplicate of an entry another
+   * call wrote ahead of it being the case that needs the composer's view. It refuses by that answer and never by a throw, because a composer that throws is a
+   * bug in the card's own code and rejects the press. A card that prepares something there undoes it on every outcome that left the composer's change
+   * unwritten - `failed`, `unchanged`, and a rejected press - and does not assume the composer ran, because `failed` can answer before it does. A card that
+   * prepared something inside its check undoes it on `superseded` too, since the flow wrote nothing but cannot know what the check did.
    *
    * A press rejects only for a bug in the caller's own code: a malformed call, a starter answer without its members, a check that throws or answers something
-   * other than passed or declined while its press is current, and a commit that rejects, which the commit does only for a composer that throws or a malformed
-   * call, before any write starts. The in-flight flag is cleared on every path out of a write, so a rejected press never leaves the card unable to save.
+   * other than passed or declined while its press is current, a Save control whose `disabled` flag throws, and a commit that rejects, which the commit does only
+   * for a composer that throws or a malformed call, before any write starts. The in-flight flag is cleared on every path out of a write, so a rejected press
+   * never leaves the card unable to save.
    *
    * @example
    *
    * // One flow per card, built beside the card's guard. The card's starter blanks its verdict line, begins an action on the guard, and answers the action's
-   * // signal, the presented() rule the card keeps, and the takeover the card is mounted in.
-   * const flow = createSaveFlow({ commit: (compose, options) => featureOptions.commitConfig(compose, options), start: card.start, toast: homebridge.toast });
+   * // signal, the presented() rule the card keeps, and the takeover the card is mounted in. The card's Save button is the control the flow disables during a write.
+   * const flow = createSaveFlow({
+   *
+   *   commit: (compose, options) => featureOptions.commitConfig(compose, options),
+   *   control: card.saveButton,
+   *   start: card.start,
+   *   toast: homebridge.toast
+   * });
    *
    * const onSave = async () => {
    *
@@ -182,7 +216,9 @@ export const createSaveFlow = ({ commit, start, toast }) => {
    *
    *     case "unchanged": {
    *
-   *       result.deliver({ channel: "info", paint: () => card.verdict("This controller is already saved."), text: "This controller is already saved." });
+   *       const text = "A controller at this address is already saved.";
+   *
+   *       result.deliver({ channel: "info", paint: () => card.verdict(text), text });
    *
    *       return;
    *     }
@@ -216,7 +252,7 @@ export const createSaveFlow = ({ commit, start, toast }) => {
    * @param {(context: SaveActionContext) => (SaveCheckResult | Promise<SaveCheckResult>)} request.check - Checks what the user entered under the press's action and
    *   answers whether to write. It receives the press's context and may deliver through it.
    * @param {(platform: Object, value: *) => Object | null} request.compose - Composes the patch from the live platform entry and the checked value, answering null
-   *   when the change is already in place.
+   *   when the change is already in place or to refuse it against the configuration as it stands.
    * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [request.rename] - The controller rename the write declares, handed to the commit as given:
    *   the commit owns its shape and refuses a malformed one.
    * @returns {Promise<SaveFlowResult>} What became of the press.
@@ -331,14 +367,34 @@ export const createSaveFlow = ({ commit, start, toast }) => {
     wrote = true;
     writing = true;
 
+    // The control's `disabled` flag as this press found it, and the value the finally restores. It stays undefined when there is no control or when reading the
+    // flag threw, and then the press restores nothing.
+    let found;
+
     try {
+
+      /* The control is disabled in the same turn that makes a later press answer busy, ahead of the commit with no await between, so there is no moment in which
+       * the card offers a Save the flow would refuse. The read and the write sit inside the try because the control belongs to the card: one whose flag throws
+       * rejects the press, and the finally still clears the in-flight flag.
+       */
+      if(control !== null) {
+
+        found = control.disabled;
+        control.disabled = true;
+      }
 
       const result = await commit((platform) => compose(platform, value), { rename });
 
       return { ...result, action, deliver, presented, value };
     } finally {
 
+      // The in-flight flag is cleared before the control is touched, so a restore that throws rejects the press without leaving the card unable to save.
       writing = false;
+
+      if(found !== undefined) {
+
+        control.disabled = found;
+      }
     }
   };
 

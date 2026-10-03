@@ -1,8 +1,9 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ui/webUi-saveFlow.test.mjs: The specification suite for the shared save flow - the check under the card's newest-wins rule, the one write, the commit's result
- * passed through, the busy refusal, and the delivery decision. It runs with no DOM: the card is the real action guard behind a starter whose presented() reads a
- * flag the test holds, the commit is a double whose settlement the test controls, and the toast records what it was asked to raise.
+ * passed through, the busy refusal, the Save control disabled for the span of a write, and the delivery decision. It runs with no DOM: the card is the real
+ * action guard behind a starter whose presented() reads a flag the test holds, the commit is a double whose settlement the test controls, the toast records
+ * what it was asked to raise, and the Save control is a double that records every write to its disabled flag.
  */
 "use strict";
 
@@ -79,13 +80,50 @@ const makeToast = () => {
   return { raised, toast: { error: record("error"), info: record("info"), success: record("success"), warning: record("warning") } };
 };
 
+/* The card's Save control, as a double that records every value written to its `disabled` flag, in order. A row that sets `readFailure` or `writeFailure` makes
+ * each read or each write of the flag throw that error until the row clears it, which is how a row holds the flow to a control that throws.
+ */
+const makeControl = ({ disabled = false } = {}) => {
+
+  let state = disabled;
+
+  const control = {
+
+    get disabled() {
+
+      if(control.readFailure) {
+
+        throw control.readFailure;
+      }
+
+      return state;
+    },
+    set disabled(value) {
+
+      if(control.writeFailure) {
+
+        throw control.writeFailure;
+      }
+
+      control.writes.push(value);
+      state = value;
+    },
+    readFailure: undefined,
+    writeFailure: undefined,
+    writes: []
+  };
+
+  return control;
+};
+
 // One card, its commit, its toast, and the flow over all of them. `hold` leaves every commit call open for the row to settle; otherwise each answers `answer`.
-const makeRig = ({ answer = { kind: "committed" }, hold = false, signal = undefined } = {}) => {
+// `control` is the card's Save control, null unless the row hands the flow a double.
+const makeRig = ({ answer = { kind: "committed" }, control = null, hold = false, signal = undefined } = {}) => {
 
   const card = makeCard({ signal });
   const commit = makeCommit({ answer: hold ? undefined : answer });
   const toast = makeToast();
-  const flow = createSaveFlow({ commit: commit.commit, start: card.start, toast: toast.toast });
+  const flow = createSaveFlow({ commit: commit.commit, control, start: card.start, toast: toast.toast });
 
   return { card, commit, flow, toast };
 };
@@ -222,7 +260,7 @@ describe("createSaveFlow - a press that writes nothing", () => {
       for(const answer of answers) {
 
         const commit = makeCommit({ answer: { kind: "committed" } });
-        const flow = createSaveFlow({ commit: commit.commit, start: () => answer, toast: makeToast().toast });
+        const flow = createSaveFlow({ commit: commit.commit, control: null, start: () => answer, toast: makeToast().toast });
         let checked = 0;
 
         // The check settles at once and counts its calls, so a press that skipped the shape test fails on the count rather than waiting on a check.
@@ -545,7 +583,7 @@ describe("createSaveFlow - a press during a write", () => {
 
     const commit = makeCommit();
     const { toast } = makeToast();
-    const [ one, two ] = [ makeCard(), makeCard() ].map((card) => createSaveFlow({ commit: commit.commit, start: card.start, toast }));
+    const [ one, two ] = [ makeCard(), makeCard() ].map((card) => createSaveFlow({ commit: commit.commit, control: null, start: card.start, toast }));
     const first = one.save({ check: passing(1), compose });
 
     await flush();
@@ -562,6 +600,162 @@ describe("createSaveFlow - a press during a write", () => {
     assert.equal((await first).kind, "committed");
     assert.equal((await second).kind, "committed");
   });
+});
+
+describe("createSaveFlow - the Save control", () => {
+
+  test("a write disables the control before the commit is called and restores it after the commit settles, each exactly once and in that order", async () => {
+
+    const control = makeControl();
+    const { commit, flow } = makeRig({ control, hold: true });
+    const atCommit = [];
+    const press = flow.save({
+
+      check: passing(1),
+      compose: (platform, value) => {
+
+        // The commit double runs the composer in the same turn it is called, so this read is the control as the commit found it.
+        atCommit.push([...control.writes]);
+
+        return compose(platform, value);
+      }
+    });
+
+    await flush();
+
+    assert.deepEqual(atCommit, [[true]], "the control was disabled, once, before the commit was called");
+    assert.deepEqual(control.writes, [true], "and nothing restores it while the write is held");
+    assert.equal(control.disabled, true, "so it stays disabled for the span of the write");
+
+    commit.calls[0].resolve({ kind: "committed" });
+
+    assert.equal((await press).kind, "committed");
+    assert.deepEqual(control.writes, [ true, false ], "the settled write restored it once, after the disable, to the state the press found");
+  });
+
+  test("a commit that rejects still restores the control, and the press rejects with the same error", async () => {
+
+    const control = makeControl();
+    const { commit, flow } = makeRig({ control, hold: true });
+    const failure = new TypeError("commitConfig requires a composer function.");
+    const press = flow.save({ check: passing(1), compose });
+
+    await flush();
+
+    assert.equal(control.disabled, true, "precondition: the write is in flight with the control disabled");
+
+    commit.calls[0].reject(failure);
+
+    await assert.rejects(press, (error) => error === failure, "the commit's rejection is the caller's to hear");
+
+    assert.deepEqual(control.writes, [ true, false ], "and the control was restored on the way out");
+  });
+
+  test("a control the card had disabled before the write is still disabled after it", async () => {
+
+    const control = makeControl({ disabled: true });
+    const { flow } = makeRig({ control });
+
+    assert.equal((await flow.save({ check: passing(1), compose })).kind, "committed");
+    assert.deepEqual(control.writes, [ true, true ], "the restore writes back the state the press found rather than enabling the control");
+    assert.equal(control.disabled, true, "so the card's own reason for disabling it still holds");
+  });
+
+  test("a busy press, a superseded press and a declined check write the control not at all, and the control is not disabled while a check is held", async () => {
+
+    const checking = makeControl();
+    const checkingRig = makeRig({ control: checking });
+    const held = heldCheck();
+    const pending = checkingRig.flow.save({ check: held.check, compose });
+
+    await flush();
+
+    assert.equal(checking.disabled, false, "a press whose check is held leaves the control pressable, so a newer press can retire the check");
+    assert.deepEqual(checking.writes, [], "and writes it not at all");
+
+    checkingRig.card.guard.cancel();
+    held.gate.resolve({ kind: "passed", value: 1 });
+
+    assert.deepEqual(await pending, { kind: "superseded" }, "precondition: the press was retired during its check");
+    assert.deepEqual(checking.writes, [], "a superseded press writes the control not at all");
+
+    const declining = makeControl();
+    const decliningRig = makeRig({ control: declining });
+    const declined = await decliningRig.flow.save({ check: async () => ({ kind: "declined", reason: "The address is not reachable." }), compose });
+
+    assert.equal(declined.kind, "declined", "precondition: the check refused");
+    assert.deepEqual(declining.writes, [], "a declined check writes the control not at all");
+
+    const busy = makeControl();
+    const busyRig = makeRig({ control: busy, hold: true });
+    const first = busyRig.flow.save({ check: passing(1), compose });
+
+    await flush();
+
+    assert.deepEqual(busy.writes, [true], "precondition: the first press's write disabled the control");
+    assert.deepEqual(await busyRig.flow.save({ check: passing(2), compose }), { kind: "busy" }, "precondition: the second press arrived during the write");
+    assert.deepEqual(busy.writes, [true], "a busy press writes the control not at all");
+
+    busyRig.commit.calls[0].resolve({ kind: "committed" });
+
+    await first;
+
+    assert.deepEqual(busy.writes, [ true, false ], "and only the write that disabled the control restores it");
+  });
+
+  test("a control whose disabled setter throws rejects the press with that error, and the next press reaches the commit rather than answering busy", async () => {
+
+    const control = makeControl();
+    const { commit, flow } = makeRig({ control });
+    const failure = new Error("The control refused the write.");
+
+    control.writeFailure = failure;
+
+    await assert.rejects(flow.save({ check: passing(1), compose }), (error) => error === failure, "the control's own error is the caller's to hear");
+
+    assert.equal(commit.calls.length, 0, "and the press stopped before its commit");
+
+    control.writeFailure = undefined;
+
+    assert.equal((await flow.save({ check: passing(2), compose })).kind, "committed", "the next press reached the commit, so the in-flight flag was cleared");
+    assert.equal(commit.calls.length, 1, "and the commit ran once, for that press");
+    assert.deepEqual(control.writes, [ true, false ], "and that press disabled and restored the control");
+  });
+
+  test("a control whose disabled flag throws when read rejects the press with that error, restores nothing, and the next press reaches the commit", async () => {
+
+    const control = makeControl();
+    const { commit, flow } = makeRig({ control });
+    const failure = new Error("The control could not be read.");
+
+    control.readFailure = failure;
+
+    await assert.rejects(flow.save({ check: passing(1), compose }), (error) => error === failure, "the control's own error is the caller's to hear");
+
+    assert.equal(commit.calls.length, 0, "and the press stopped before its commit");
+    assert.deepEqual(control.writes, [], "a press that never read the control's state writes nothing back to it");
+
+    control.readFailure = undefined;
+
+    assert.equal((await flow.save({ check: passing(2), compose })).kind, "committed", "the next press reached the commit, so the in-flight flag was cleared");
+  });
+
+  test("a flow built with no control, a non-object, or an object whose disabled is not a boolean throws the TypeError at construction; null and a control do not",
+    () => {
+
+      const { commit } = makeCommit();
+      const { start } = makeCard();
+      const { toast } = makeToast();
+
+      for(const options of [ {}, { control: "save" }, { control: {} }, { control: { disabled: "true" } } ]) {
+
+        assert.throws(() => createSaveFlow({ commit, start, toast, ...options }), (error) => (error instanceof TypeError) && error.message.includes("requires a control"),
+          "a card names its Save control or states that it has none");
+      }
+
+      assert.equal(typeof createSaveFlow({ commit, control: null, start, toast }).save, "function", "null states that the card has no Save control");
+      assert.equal(typeof createSaveFlow({ commit, control: makeControl(), start, toast }).save, "function", "and an object with a boolean disabled flag is a control");
+    });
 });
 
 describe("createSaveFlow - the delivery decision", () => {

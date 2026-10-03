@@ -99,11 +99,17 @@ export interface Clock {
   timeout(ms: number): AbortSignal;
 }
 
-/* The platform timer's ceiling in milliseconds. Node arms a callback timer, a promise delay, and a deadline signal alike on a 32-bit signed count, and a delay past
- * this value is set to one millisecond with a TimeoutOverflowWarning, while the ceiling itself arms silently. A delay past it is carried as a chain of arms of at most
- * this length, so the value is the hop size as well as the boundary.
+/**
+ * The platform timer's ceiling in milliseconds. Node arms a callback timer, a promise delay, and a deadline signal alike on a 32-bit signed count, and a delay past
+ * this value is set to one millisecond with a TimeoutOverflowWarning, while the ceiling itself arms silently. The production clock carries a delay past it as a chain
+ * of arms of at most this length, so the value is the hop size as well as the boundary.
+ *
+ * A consumer reads it to state a delay relative to the ceiling rather than restating the platform's number - a test arming a window one past it, or advancing a
+ * ceiling's worth of time and asserting nothing has fired yet. A consumer never clamps a delay to it, because a {@link Clock} carries a longer delay itself.
+ *
+ * @category Utilities
  */
-const TIMER_DELAY_MAX_MS = 2147483647;
+export const TIMER_DELAY_MAX_MS = 2147483647;
 
 /* Whether `ms` is a finite delay the platform cannot carry in one arm. Anything else - a delay within the ceiling, a non-positive one, `NaN`, or an infinite one - is
  * handed to the platform as it stands, so the platform's own rules for those values hold unchanged: a floor at one millisecond, and an infinite delay set to one

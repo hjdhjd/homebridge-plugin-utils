@@ -9,6 +9,7 @@
  * timers that share that one timeline with the delays, the deadline signals whose reason a consumer cannot tell apart from the platform's, the unref it accepts
  * and ignores because a virtual timeline has no process to hold open, and the window past the ceiling that is an ordinary entry on a timeline with none).
  */
+import { TIMER_DELAY_MAX_MS, systemClock } from "./clock.ts";
 import { describe, test } from "node:test";
 import { getEventListeners, once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -20,7 +21,6 @@ import { isTimeoutReason } from "./util.ts";
 import { join } from "node:path";
 import { settle } from "./testing/index.ts";
 import { spawn } from "node:child_process";
-import { systemClock } from "./clock.ts";
 import { tmpdir } from "node:os";
 
 // Flush the microtask queue so a delay that became due during a synchronous `advance` has run its `resolve`/`reject` continuation before the test inspects the outcome.
@@ -257,16 +257,23 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     assertTimeoutReason(signal.reason, "systemClock deadline signal");
   });
 
+  test("the exported timer ceiling is the platform's 32-bit signed millisecond maximum", () => {
+
+    // The rows past the ceiling state their windows through the exported constant, so they move with it rather than checking it. This row is the one place the
+    // number is stated independently of the constant.
+    assert.equal(TIMER_DELAY_MAX_MS, (2 ** 31) - 1, "the ceiling is the platform's own number, fixed outside this code");
+  });
+
   test("a one-shot past the platform ceiling is carried as a chain of arms and fires at the requested moment", (t) => {
 
     t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
 
     // One past the platform timer's 32-bit signed millisecond ceiling: the smallest delay the platform would set to one millisecond. The ceiling is the platform's
-    // number, fixed outside this library, so the rows state it rather than reading it from the clock they are proving.
+    // number, fixed outside this library, so the rows read it from the exported constant and a row of its own holds that constant to the platform's number.
     const fired: number[] = [];
-    const handle = systemClock.schedule((): number => fired.push(1), 2147483648);
+    const handle = systemClock.schedule((): number => fired.push(1), TIMER_DELAY_MAX_MS + 1);
 
-    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
 
     assert.deepEqual(fired, [], "a ceiling's worth of time elapsing fires nothing, because the first hop re-arms for the remainder instead of running the callback");
 
@@ -274,7 +281,7 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     assert.deepEqual(fired, [1], "the remainder elapsing runs the callback, at exactly the moment asked for");
 
-    t.mock.timers.tick(2147483648);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS + 1);
 
     assert.deepEqual(fired, [1], "and a chained one-shot fires once");
 
@@ -288,14 +295,14 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     // Two ceilings and a little more, so the chain has three hops; the disposal lands while the second is armed. A disposer that still held the first hop's handle
     // would clear a timer that has already fired and leave the live one to run the chain to its end.
     const fired: number[] = [];
-    const handle = systemClock.schedule((): number => fired.push(1), 4294967299);
+    const handle = systemClock.schedule((): number => fired.push(1), (2 * TIMER_DELAY_MAX_MS) + 5);
 
-    t.mock.timers.tick(2147483649);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS + 2);
     handle[Symbol.dispose]();
 
     // The mock times a hop armed inside a callback from the end of the tick that ran the callback, so the chain's last hop needs a tick of its own to be reachable
     // at all; a disposer that still held the first hop's handle would let the chain run on and fire here.
-    t.mock.timers.tick(4294967299);
+    t.mock.timers.tick((2 * TIMER_DELAY_MAX_MS) + 5);
     t.mock.timers.tick(10);
 
     assert.deepEqual(fired, [], "the chain is cancelled at whichever hop is live, and no later hop fires");
@@ -317,9 +324,9 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
         handle[Symbol.dispose]();
       }
-    }, 2147483648, { repeat: true });
+    }, TIMER_DELAY_MAX_MS + 1, { repeat: true });
 
-    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
 
     assert.deepEqual(fired, [], "a ceiling's worth of time fires nothing: the first hop re-arms for the remainder");
 
@@ -327,12 +334,12 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     assert.deepEqual(fired, [1], "the first period's remainder elapsing fires once");
 
-    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
     t.mock.timers.tick(1);
 
     assert.deepEqual(fired, [ 1, 2 ], "the second period fires once more, and that callback disposes its own handle");
 
-    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
     t.mock.timers.tick(1);
 
     assert.deepEqual(fired, [ 1, 2 ], "the disposal cancelled the period the re-arm had already started, so nothing fires afterwards");
@@ -347,9 +354,9 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
 
-    const signal = systemClock.timeout(2147483648);
+    const signal = systemClock.timeout(TIMER_DELAY_MAX_MS + 1);
 
-    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
 
     assert.equal(signal.aborted, false, "a ceiling's worth of time elapsing leaves the chained deadline armed");
 
@@ -378,12 +385,12 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     try {
 
-      using oneShot = systemClock.schedule((): void => undefined, 2147483648, { unref: true });
-      using repeat = systemClock.schedule((): void => undefined, 2147483648, { repeat: true, unref: true });
+      using oneShot = systemClock.schedule((): void => undefined, TIMER_DELAY_MAX_MS + 1, { unref: true });
+      using repeat = systemClock.schedule((): void => undefined, TIMER_DELAY_MAX_MS + 1, { repeat: true, unref: true });
 
-      const deadline = systemClock.timeout(2147483648);
+      const deadline = systemClock.timeout(TIMER_DELAY_MAX_MS + 1);
       const controller = new AbortController();
-      const waited = systemClock.delay(2147483648, { signal: controller.signal });
+      const waited = systemClock.delay(TIMER_DELAY_MAX_MS + 1, { signal: controller.signal });
 
       await settle();
 
@@ -438,12 +445,12 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     let resolved = false;
 
-    const waited = systemClock.delay(2147483648).then((): void => {
+    const waited = systemClock.delay(TIMER_DELAY_MAX_MS + 1).then((): void => {
 
       resolved = true;
     });
 
-    t.mock.timers.tick(2147483647);
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
     await settle();
 
     assert.equal(resolved, false, "a ceiling's worth of time resolves nothing: the first hop's continuation awaits the remainder");
@@ -1020,14 +1027,14 @@ describe("TestClock - callback timers", () => {
 
     // All three shapes at one past the platform's ceiling, so the double is proven to need no chain of its own: a virtual timeline has no ceiling, and each entry
     // comes due when the clock reaches it, which is the moment the production clock's chain delivers.
-    clock.schedule((): number => fired.push("one-shot"), 2147483648);
+    clock.schedule((): number => fired.push("one-shot"), TIMER_DELAY_MAX_MS + 1);
 
-    const signal = clock.timeout(2147483648);
-    const waited = clock.delay(2147483648);
+    const signal = clock.timeout(TIMER_DELAY_MAX_MS + 1);
+    const waited = clock.delay(TIMER_DELAY_MAX_MS + 1);
 
-    assert.equal(clock.nextDeadline, 2147483648, "the entries come due at the window asked for");
+    assert.equal(clock.nextDeadline, TIMER_DELAY_MAX_MS + 1, "the entries come due at the window asked for");
 
-    clock.advance(2147483647);
+    clock.advance(TIMER_DELAY_MAX_MS);
 
     assert.deepEqual(fired, [], "a ceiling's worth of virtual time fires nothing");
     assert.equal(signal.aborted, false, "and aborts nothing");
@@ -1037,7 +1044,7 @@ describe("TestClock - callback timers", () => {
 
     assert.deepEqual(fired, ["one-shot"], "the remainder fires the timer");
     assert.equal(signal.aborted, true, "aborts the deadline");
-    assert.deepEqual(clock.requested, [ 2147483648, 2147483648, 2147483648 ], "and the ledger records each window as asked");
+    assert.deepEqual(clock.requested, [ TIMER_DELAY_MAX_MS + 1, TIMER_DELAY_MAX_MS + 1, TIMER_DELAY_MAX_MS + 1 ], "and the ledger records each window as asked");
   });
 });
 

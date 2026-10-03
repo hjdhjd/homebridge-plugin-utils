@@ -1846,7 +1846,7 @@ export class webUiFeatureOptions {
    */
   #commitFocusedValue() {
 
-    const control = document.activeElement?.closest?.(".fo-option-value");
+    const control = document.activeElement?.closest(".fo-option-value");
 
     if(control && control.closest("#configTable")) {
 

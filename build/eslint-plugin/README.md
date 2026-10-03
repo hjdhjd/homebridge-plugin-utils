@@ -30,6 +30,11 @@ Among the files the preset lints, test, fixture, and helper files get the `testR
 `*.helpers`, in `.ts` and `.mjs`, wherever they live. Pass `tests` to name a different set, or `tests: []` to opt out. The block pairs every test glob with every
 linted glob, so it never adds a file to the lint, and it sits ahead of `extraConfigs`, so a consumer's own block still has the final word.
 
+Fixture files also get the `fixtureRules` relaxation, which switches `sort-keys` off and nothing else, by the family naming convention `*.fixtures` in `.ts`
+and `.mjs`. A fixture embeds output captured from a device or controller, and its key order is the order the wire delivered, which a test may assert on, while
+test and helper files build their own objects and keep the rule. Pass `fixtures` to name a different set, or `fixtures: []` to opt out. Its block pairs with the
+linted globs the same way, and it sits after the test-file block and ahead of `extraConfigs`.
+
 ## File layout
 
 ```
@@ -74,6 +79,7 @@ reaching into rule internals.
 | `tsRules` | `config.mjs` | TypeScript-specific rule preset. |
 | `jsRules` | `config.mjs` | JavaScript-specific rule preset. |
 | `testRules` | `config.mjs` | Rule preset for test, fixture, and helper files. |
+| `fixtureRules` | `config.mjs` | Rule preset for fixture files, switching `sort-keys` off so captured output keeps its order. |
 | `globalsUi` | `config.mjs` | Browser-environment globals dictionary for webUI files. |
 | `globalsNode` | `config.mjs` | Node-environment globals dictionary, read from the running Node runtime, for files that run under Node. |
 

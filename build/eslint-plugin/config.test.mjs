@@ -3,11 +3,12 @@
  * config.test.mjs: Composition tests for the flat-config builder. Most resolve this package's own `eslint.config.mjs` through ESLint's own configuration
  * machinery and assert the effective rule severities and global vocabularies each file set ends up with: the TypeScript compatibility overlay confined to
  * TypeScript paths, the ESLint-recommended correctness baseline active on JavaScript and browser-UI paths, the browser and Node global vocabularies merging on
- * the test-side UI files that match both blocks, a Node global accepted only where the `node` option reaches, and a test-named file outside every linted glob
- * left unlinted. The rest read the builder's exports directly: the Node globals it reads from the runtime, which blocks its `node` and `tests` options emit, what
- * a Node-only glob resolves to, and where the test-file block sits.
+ * the test-side UI files that match both blocks, a Node global accepted only where the `node` option reaches, key sorting switched off for fixture paths and
+ * kept for test and helper paths, and a test-named file outside every linted glob left unlinted. The rest read the builder's exports directly: the Node globals
+ * it reads from the runtime, which blocks its `node`, `tests`, and `fixtures` options emit, what a Node-only glob resolves to, and where the test-file and
+ * fixture blocks sit.
  */
-import { config as buildConfig, globalsNode, testRules } from "./config.mjs";
+import { config as buildConfig, fixtureRules, globalsNode, testRules } from "./config.mjs";
 import { describe, it } from "node:test";
 import { ESLint } from "eslint";
 import assert from "node:assert/strict";
@@ -43,10 +44,10 @@ async function ruleMessageCount({ filePath = "src/util.ts", rule, source }) {
   return result.messages.filter((message) => message.ruleId === rule).length;
 }
 
-// The blocks of a built config that carry the test-file rule set, found by that rule set rather than by position so a row can assert where the block sits.
-function testBlocks(configs) {
+// The blocks of a built config that carry a given rule set, found by that rule set rather than by position so a row can assert where each block sits.
+function blocksCarrying(configs, rules) {
 
-  return configs.filter((block) => isDeepStrictEqual(block.rules, testRules));
+  return configs.filter((block) => isDeepStrictEqual(block.rules, rules));
 }
 
 describe("flat config composition", () => {
@@ -154,16 +155,16 @@ describe("flat config composition", () => {
   });
 
   // The test-file relaxations follow the family naming convention by default, paired with every linted glob, and sit ahead of a consumer's own blocks, so those
-  // still have the final word.
+  // still have the final word. The pairs are compared as a set, because the order of a block's `files` entries has no effect on which files it matches.
   it("relaxes the family's test files by default, ahead of a consumer's own blocks", () => {
 
     const extra = { files: ["src/**/*.test.ts"], rules: { "@typescript-eslint/no-floating-promises": "warn" } };
     const configs = buildConfig({ extraConfigs: [extra], ts: ["src/**/*.ts"] });
-    const blocks = testBlocks(configs);
+    const blocks = blocksCarrying(configs, testRules);
     const familyGlobs = [ "**/*.test.ts", "**/*.fixtures.ts", "**/*.helpers.ts", "**/*.test.mjs", "**/*.fixtures.mjs", "**/*.helpers.mjs" ];
 
     assert.equal(blocks.length, 1);
-    assert.deepEqual(blocks[0].files, familyGlobs.map((test) => [ "src/**/*.ts", test ]));
+    assert.deepEqual(new Set(blocks[0].files), new Set(familyGlobs.map((test) => [ "src/**/*.ts", test ])));
     assert.ok(configs.indexOf(blocks[0]) < configs.indexOf(extra), "the test-file block must precede the consumer's own blocks.");
   });
 
@@ -178,7 +179,85 @@ describe("flat config composition", () => {
   // An empty list opts out of the relaxations, and a config that lints nothing has nothing to relax.
   it("emits no test-file block for an empty tests list or a config that lints nothing", () => {
 
-    assert.deepEqual(testBlocks(buildConfig({ tests: [], ts: ["src/**/*.ts"] })), []);
-    assert.deepEqual(testBlocks(buildConfig()), []);
+    assert.deepEqual(blocksCarrying(buildConfig({ tests: [], ts: ["src/**/*.ts"] }), testRules), []);
+    assert.deepEqual(blocksCarrying(buildConfig(), testRules), []);
+  });
+
+  // The fixture relaxation follows the family's fixture naming by default, paired with every linted glob the way the test-file block is, and switches off key
+  // sorting alone, so a fixture keeps every other rule. The pairs are compared as a set, as the test-file row compares its own.
+  it("switches key sorting off for the family's fixture files by default", () => {
+
+    const blocks = blocksCarrying(buildConfig({ ts: [ "src/**/*.ts", "test/**/*.ts" ] }), fixtureRules);
+
+    assert.equal(blocks.length, 1);
+    assert.deepEqual(blocks[0].rules, { "sort-keys": "off" });
+    assert.deepEqual(new Set(blocks[0].files), new Set([ [ "src/**/*.ts", "**/*.fixtures.ts" ], [ "src/**/*.ts", "**/*.fixtures.mjs" ],
+      [ "test/**/*.ts", "**/*.fixtures.ts" ], [ "test/**/*.ts", "**/*.fixtures.mjs" ] ]));
+  });
+
+  // A consumer whose fixture files follow a different naming convention passes its own globs through the option, and the block pairs those globs with the
+  // linted ones in place of the default.
+  it("honors a custom fixtures list", () => {
+
+    const blocks = blocksCarrying(buildConfig({ fixtures: ["**/*.capture.ts"], ts: ["src/**/*.ts"] }), fixtureRules);
+
+    assert.equal(blocks.length, 1);
+    assert.deepEqual(blocks[0].files, [[ "src/**/*.ts", "**/*.capture.ts" ]]);
+  });
+
+  // An empty list opts out of the fixture relaxation without touching the test-file block, and a config that lints nothing has nothing to relax.
+  it("emits no fixture block for an empty fixtures list or a config that lints nothing", () => {
+
+    const optedOut = buildConfig({ fixtures: [], ts: ["src/**/*.ts"] });
+
+    assert.deepEqual(blocksCarrying(optedOut, fixtureRules), []);
+    assert.deepEqual(blocksCarrying(optedOut, testRules), blocksCarrying(buildConfig({ ts: ["src/**/*.ts"] }), testRules));
+    assert.deepEqual(blocksCarrying(buildConfig(), fixtureRules), []);
+    assert.deepEqual(blocksCarrying(buildConfig({ fixtures: ["**/*.capture.ts"] }), fixtureRules), []);
+  });
+
+  // The fixture block follows the test-file block, which follows the common block that enables key sorting, so the relaxation takes effect. It sits ahead of a
+  // consumer's own blocks, so a consumer that wants key sorting back for its fixtures still has the final word.
+  it("places the fixture block after the test-file block and ahead of a consumer's own blocks", async () => {
+
+    const extra = { files: ["src/**/*.fixtures.ts"], rules: { "sort-keys": "warn" } };
+    const configs = buildConfig({ extraConfigs: [extra], ts: ["src/**/*.ts"] });
+    const [testBlock] = blocksCarrying(configs, testRules);
+    const [fixtureBlock] = blocksCarrying(configs, fixtureRules);
+    const consumer = new ESLint({ cwd: packageRoot, overrideConfig: configs, overrideConfigFile: true });
+
+    assert.ok(configs.indexOf(testBlock) < configs.indexOf(fixtureBlock), "the fixture block must follow the test-file block.");
+    assert.ok(configs.indexOf(fixtureBlock) < configs.indexOf(extra), "the fixture block must precede the consumer's own blocks.");
+    assert.equal(severityOf(await consumer.calculateConfigForFile("src/owned-connector.fixtures.ts"), "sort-keys"), 1);
+  });
+
+  // The test-file default names the fixture files as well, so a fixture keeps the test relaxation beside its own: every file the fixture block reaches by default is
+  // one the test-file block reaches too.
+  it("keeps every default fixture glob inside the test-file default", () => {
+
+    const configs = buildConfig({ ts: ["src/**/*.ts"] });
+    const [testBlock] = blocksCarrying(configs, testRules);
+    const [fixtureBlock] = blocksCarrying(configs, fixtureRules);
+
+    for(const pair of fixtureBlock.files) {
+
+      assert.ok(testBlock.files.some((testPair) => isDeepStrictEqual(testPair, pair)), pair.join(" and "));
+    }
+  });
+
+  // Through this package's own composed config, a fixture path resolves key sorting off while keeping the test relaxation and the common rules, test and helper
+  // paths keep key sorting on, and a fixture-named file outside every linted glob stays unlinted.
+  it("switches key sorting off for linted fixture paths alone", async () => {
+
+    const fixture = await eslint.calculateConfigForFile("src/owned-connector.fixtures.ts");
+
+    assert.equal(severityOf(fixture, "sort-keys"), 0);
+    assert.equal(severityOf(fixture, "@typescript-eslint/no-floating-promises"), 0);
+    assert.equal(severityOf(fixture, "@hjdhjd/comment-style"), 2);
+    assert.equal(severityOf(await eslint.calculateConfigForFile("ui/webUi.fixtures.mjs"), "sort-keys"), 0);
+    assert.equal(severityOf(await eslint.calculateConfigForFile("src/util.test.ts"), "sort-keys"), 1);
+    assert.equal(severityOf(await eslint.calculateConfigForFile("src/mqtt.helpers.ts"), "sort-keys"), 1);
+    assert.equal(severityOf(await eslint.calculateConfigForFile("ui/ui.helpers.mjs"), "sort-keys"), 1);
+    assert.equal(await eslint.calculateConfigForFile("test/e2e/stray.fixtures.ts"), undefined);
   });
 });

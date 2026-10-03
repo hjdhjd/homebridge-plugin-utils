@@ -226,11 +226,36 @@ const testRules = {
 };
 
 /**
+ * Rule preset for fixture files. A fixture embeds output captured from a device or controller, and its key order is the order the wire delivered, which a test
+ * may assert on as evidence, so `sort-keys` would have the fixture re-key the data it exists to preserve. Test and helper files construct their own objects,
+ * so they keep the rule.
+ *
+ * Spread into the `rules:` slot of a flat config block scoped to fixture files.
+ */
+const fixtureRules = {
+
+  "sort-keys": "off"
+};
+
+// The family's fixture-file naming convention, in `.ts` and `.mjs`, wherever the file lives. It is the `fixtures` default and part of the `tests` default in
+// `config`, so the `fixtures` and `tests` defaults name the same fixture files.
+const fixtureGlobs = [ "**/*.fixtures.ts", "**/*.fixtures.mjs" ];
+
+// Pair every glob in `linted` with every glob in `globs`, in the form where a file must match both. In flat config a block's `files` globs also pick files out of a
+// linted directory, so a relaxation block scoped through this pairing reaches only files the preset already lints and never widens what gets linted. The pairing
+// is empty when `linted` or `globs` is.
+function pairWithLinted({ globs, linted }) {
+
+  return linted.flatMap((glob) => globs.map((scoped) => [ glob, scoped ]));
+}
+
+/**
  * Build a ready-to-use ESLint flat config array. Consumers call this function and export default the result.
  *
- * Every option is optional, and every one but `tests` defaults to an empty array, mirrored by the destructuring defaults in the signature below. `tests` defaults to
- * the family's test-file naming convention wherever the file lives, and an empty array opts out. The JSDoc marks them optional with the bracket form so the emitted
- * declaration types each property as optional, matching how consumers actually call this - passing only the subset they need.
+ * Every option is optional, and every one but `tests` and `fixtures` defaults to an empty array, mirrored by the destructuring defaults in the signature below.
+ * `tests` defaults to the family's naming convention for test, fixture, and helper files wherever the file lives, `fixtures` defaults to the fixture-file part of
+ * that convention, and an empty array for an option opts it out. The JSDoc marks them optional with the bracket form so the emitted declaration types each property
+ * as optional, matching how consumers actually call this - passing only the subset they need.
  *
  * @param {object} [options] - Configuration options.
  * @param {string[]} [options.ts] - Glob patterns for TypeScript files (strict + stylistic type-checked rules).
@@ -238,6 +263,7 @@ const testRules = {
  * @param {string[]} [options.ui] - Glob patterns for browser UI files (adds browser globals).
  * @param {string[]} [options.node] - Glob patterns for files that run under Node (linted, adds Node globals).
  * @param {string[]} [options.tests] - Glob patterns for linted test, fixture, and helper files (adds test rule relaxations). Defaults to the family naming convention.
+ * @param {string[]} [options.fixtures] - Glob patterns for linted fixture files (switches sort-keys off). Defaults to the family naming convention for fixtures.
  * @param {string[]} [options.allowDefaultProject] - Globs passed to parserOptions.projectService.allowDefaultProject.
  * @param {string[]} [options.ignores] - Global ignore patterns (in addition to the hardcoded "dist" ignore on the common block).
  * @param {object[]} [options.extraConfigs] - Additional flat config objects appended to the output.
@@ -246,10 +272,11 @@ const testRules = {
 function config({
   allowDefaultProject = [],
   extraConfigs = [],
+  fixtures = fixtureGlobs,
   ignores = [],
   js = [],
   node = [],
-  tests = [ "**/*.test.ts", "**/*.fixtures.ts", "**/*.helpers.ts", "**/*.test.mjs", "**/*.fixtures.mjs", "**/*.helpers.mjs" ],
+  tests = [ "**/*.test.ts", "**/*.test.mjs", ...fixtureGlobs, "**/*.helpers.ts", "**/*.helpers.mjs" ],
   ts: tsFiles = [],
   ui = []
 } = {}) {
@@ -355,10 +382,9 @@ function config({
     });
   }
 
-  // Test-file relaxations. In flat config a block's `files` globs also pick files out of a linted directory, so this block pairs every linted glob with every test
-  // glob in the form where a file must match both: the relaxation reaches only test files the preset already lints and never widens what gets linted. The pairing
-  // is empty when either list is, and the block sits ahead of the escape hatch so a consumer's own block still has the final word.
-  const testFiles = allFiles.flatMap((glob) => tests.map((test) => [ glob, test ]));
+  // Test-file relaxations, reaching only the test files the preset already lints. The block sits ahead of the escape hatch so a consumer's own block still has the
+  // final word.
+  const testFiles = pairWithLinted({ globs: tests, linted: allFiles });
 
   if(testFiles.length > 0) {
 
@@ -366,6 +392,19 @@ function config({
 
       files: testFiles,
       rules: { ...testRules }
+    });
+  }
+
+  // Fixture-file relaxations, reaching only the fixture files the preset already lints. The block sits after the common block that enables `sort-keys`, so the
+  // relaxation takes effect, and ahead of the escape hatch, so a consumer's own block still has the final word.
+  const fixtureFiles = pairWithLinted({ globs: fixtures, linted: allFiles });
+
+  if(fixtureFiles.length > 0) {
+
+    configs.push({
+
+      files: fixtureFiles,
+      rules: { ...fixtureRules }
     });
   }
 
@@ -378,4 +417,4 @@ function config({
 export default config;
 
 // Named exports for advanced customization or gradual migration.
-export { commonRules, config, globalsNode, globalsUi, jsRules, plugins, testRules, tsRules };
+export { commonRules, config, fixtureRules, globalsNode, globalsUi, jsRules, plugins, testRules, tsRules };

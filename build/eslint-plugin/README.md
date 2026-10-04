@@ -51,6 +51,8 @@ build/eslint-plugin/
     ├── comment-style.test.mjs                      # co-located RuleTester suite
     ├── enforce-node-protocol.mjs                   # @hjdhjd/enforce-node-protocol
     ├── enforce-node-protocol.test.mjs              # co-located RuleTester suite
+    ├── no-boolean-error-predicate.mjs              # @hjdhjd/no-boolean-error-predicate
+    ├── no-boolean-error-predicate.test.mjs         # co-located RuleTester suite
     ├── no-dom-node-equality.mjs                    # @hjdhjd/no-dom-node-equality
     ├── no-dom-node-equality.test.mjs               # co-located RuleTester suite
     ├── no-numeric-separators.mjs                   # @hjdhjd/no-numeric-separators
@@ -94,6 +96,7 @@ Each rule is described in detail by its own file's header comment. One-line summ
 | `@hjdhjd/blank-line-after-open-brace` | Require a blank line after an opening brace when the brace is followed by a newline and the next line carries non-whitespace content. Covers block statements, class bodies, object expressions, and TypeScript interface/type-literal bodies. |
 | `@hjdhjd/comment-style` | Enforce ASCII-first comment style. Substitutes Unicode arrows/comparison glyphs/em-dash with ASCII equivalents, removes decorative banner separators, and strips characters from the Unicode Box Drawing block. |
 | `@hjdhjd/enforce-node-protocol` | Require the `node:` protocol prefix on every reference to a Node.js built-in module. |
+| `@hjdhjd/no-boolean-error-predicate` | Bar a boolean predicate handed to node:assert's `rejects` or `throws`, whose failure reads the same whichever condition failed. Allows a validation function that asserts and returns true, and one identity comparison of the function's own parameter; a predicate passed by name is resolved through scope. |
 | `@hjdhjd/no-dom-node-equality` | Bar node:assert's equality family from comparing DOM nodes, which hang the run rather than failing it when the assertion fails. Type-aware: reports any operand whose resolved type is a DOM node. |
 | `@hjdhjd/no-numeric-separators` | Bar underscore separators from numeric literals, rewriting the literal to its plain digits on fix. Covers every base, both sides of a decimal point, the exponent, and bigints; leaves strings, identifiers, and property keys alone. |
 | `@hjdhjd/paren-comparisons-in-logical` | Require parentheses around any comparison operand that is a direct child of a compound `&&` or `||` expression. |

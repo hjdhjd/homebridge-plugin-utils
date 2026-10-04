@@ -120,6 +120,7 @@ const commonRules = {
   "@hjdhjd/blank-line-after-open-brace": "warn",
   "@hjdhjd/comment-style": "error",
   "@hjdhjd/enforce-node-protocol": "warn",
+  "@hjdhjd/no-boolean-error-predicate": "error",
   "@hjdhjd/no-dom-node-equality": "error",
   "@hjdhjd/no-numeric-separators": "warn",
   "@hjdhjd/paren-comparisons-in-logical": "warn",

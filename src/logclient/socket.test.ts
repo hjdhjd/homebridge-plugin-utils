@@ -913,11 +913,11 @@ describe("LogSocket - bounded stdout queue", () => {
     const factory = new TestWebSocketFactory();
 
     // The socket refuses the value in its own words before it builds the queue, so the sentence a caller reads names the option the caller wrote.
-    const refusal = (error: unknown): boolean => (error instanceof TypeError) && error.message.includes("stdoutHighWater");
+    const refusal = { constructor: TypeError, message: /stdoutHighWater/ };
 
-    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: 0 })), refusal, "a mark of zero is a queue that could never hold a line");
-    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: -1 })), refusal, "a negative mark describes no bound at all");
-    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: 1.5 })), refusal, "a fractional mark is a ceiling no integer depth reaches exactly");
+    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: 0 })), refusal);
+    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: -1 })), refusal);
+    assert.throws(() => new LogSocket(makeInit(factory, { stdoutHighWater: 1.5 })), refusal);
     assert.equal(factory.sockets.length, 0, "a socket refused at construction must not have connected");
   });
 

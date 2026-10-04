@@ -6244,8 +6244,8 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     assert.throws(() => new webUiFeatureOptions({ registerTheming: () => Promise.resolve() }), {
 
-      message: "registerTheming is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
-      name: "TypeError"
+      constructor: TypeError,
+      message: "registerTheming is framework wiring, not a plugin option - pass it in the constructor's second parameter."
     }, "framework wiring in the plugin bag would be silently ignored, so it is named instead");
 
     assert.doesNotThrow(() => new webUiFeatureOptions({}, { registerTheming: () => Promise.resolve() }), "the same value in the wiring parameter is accepted");
@@ -6262,8 +6262,8 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
     assert.throws(() => new webUiFeatureOptions({ resumeDetector: { subscribe: () => {} } }), {
 
-      message: "resumeDetector is framework wiring, not a plugin option - pass it in the constructor's second parameter.",
-      name: "TypeError"
+      constructor: TypeError,
+      message: "resumeDetector is framework wiring, not a plugin option - pass it in the constructor's second parameter."
     }, "framework wiring in the plugin bag would be silently ignored, so it is named instead");
 
     assert.doesNotThrow(() => new webUiFeatureOptions({}, { resumeDetector: { subscribe: () => {} } }), "the same value in the wiring parameter is accepted");

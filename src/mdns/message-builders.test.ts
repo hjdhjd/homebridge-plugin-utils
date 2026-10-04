@@ -71,16 +71,16 @@ describe("the record factories", () => {
 
     for(const [ what, address, message ] of cases) {
 
-      assert.throws(() => makeAaaaRecord({ address, name: "host.local" }), { message, name: "TypeError" }, what + " must be refused at construction");
+      assert.throws(() => makeAaaaRecord({ address, name: "host.local" }), { constructor: TypeError, message }, what + " must be refused at construction");
     }
   });
 
   test("B6: makeARecord refuses anything but four decimal octets with a TypeError naming the reader and the address", () => {
 
-    assert.throws(() => makeARecord({ address: "1.2.3", name: "host.local" }), { message: /^parseIpv4: the address "1\.2\.3" is not four decimal octets\.$/,
-      name: "TypeError" }, "a three-octet address must be refused at construction");
+    assert.throws(() => makeARecord({ address: "1.2.3", name: "host.local" }), { constructor: TypeError,
+      message: /^parseIpv4: the address "1\.2\.3" is not four decimal octets\.$/ }, "a three-octet address must be refused at construction");
     assert.throws(() => makeARecord({ address: "256.1.1.1", name: "host.local" }),
-      { message: /^parseIpv4: the address "256\.1\.1\.1" carries "256", which is not a decimal octet from 0 to 255\.$/, name: "TypeError" },
+      { constructor: TypeError, message: /^parseIpv4: the address "256\.1\.1\.1" carries "256", which is not a decimal octet from 0 to 255\.$/ },
       "an octet over 255 must be refused at construction");
   });
 });
@@ -150,9 +150,9 @@ describe("makeServiceRecords", () => {
     // A zone suffix reaches the AAAA builder and is refused there, and a malformed IPv6 spelling is refused by the IPv6 reader with the message that explains it
     // rather than routed to the A builder and refused as a dotted quad that is not four octets.
     assert.throws(() => makeServiceRecords({ addresses: ["fe80::50%en0"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }),
-      { message: /^parseIpv6: the address "fe80::50%en0" carries "50%en0"/, name: "TypeError" }, "a zone suffix must be refused through the advertisement");
+      { constructor: TypeError, message: /^parseIpv6: the address "fe80::50%en0" carries "50%en0"/ }, "a zone suffix must be refused through the advertisement");
     assert.throws(() => makeServiceRecords({ addresses: ["fe80:::1"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }),
-      { message: /^parseIpv6: the address "fe80:::1" carries ""/, name: "TypeError" }, "a malformed IPv6 spelling must be refused by the IPv6 reader");
+      { constructor: TypeError, message: /^parseIpv6: the address "fe80:::1" carries ""/ }, "a malformed IPv6 spelling must be refused by the IPv6 reader");
   });
 
   test("K3: every address named is an address record of its own, in the order they were given and each of its own address's family", () => {
@@ -178,8 +178,9 @@ describe("makeServiceRecords", () => {
     // The label floor is the rule production enforces at MdnsBrowser's own constructor, through the same shared predicate, so a domain-stripped spelling is
     // refused at the call rather than building a PTR whose name carries no domain at all.
     assert.throws(() => makeServiceRecords({ addresses: [], host: "x", instance: "y", port: 1, serviceType: "_hap._tcp" }),
-      { message: /^makeServiceRecords: `serviceType` must be a DNS-SD service type such as "_esphomelib\._tcp\.local", and "_hap\._tcp" is not\.$/,
-        name: "TypeError" }, "the two-label spelling alone must be refused, with nothing else about the call");
+      { constructor: TypeError,
+        message: /^makeServiceRecords: `serviceType` must be a DNS-SD service type such as "_esphomelib\._tcp\.local", and "_hap\._tcp" is not\.$/ },
+      "the two-label spelling alone must be refused, with nothing else about the call");
   });
 
   test("K6: a subtype-form service type is refused, since the domain labels are read positionally after the transport", () => {
@@ -187,8 +188,9 @@ describe("makeServiceRecords", () => {
     // A subtype form carries five labels and clears the label floor, so nothing but its own guard stops its second label, `_sub`, from being read as the
     // transport and a domain no responder ever advertised from being fabricated. A suite that wants a subtype PTR builds that record by hand instead.
     assert.throws(() => makeServiceRecords({ addresses: [], host: "x", instance: "y", port: 1, serviceType: "_printer._sub._http._tcp.local" }),
-      { message: /^makeServiceRecords: `serviceType` must be a base DNS-SD service type such as "_esphomelib\._tcp\.local" - name, transport, domain, and/,
-        name: "TypeError" }, "the subtype form must be refused, since this fixture builds base-type records only");
+      { constructor: TypeError,
+        message: /^makeServiceRecords: `serviceType` must be a base DNS-SD service type such as "_esphomelib\._tcp\.local" - name, transport, domain, and/ },
+      "the subtype form must be refused, since this fixture builds base-type records only");
   });
 
   test("K6b: a base type whose transport is _udp is accepted and its records built, since the guard admits either transport", () => {
@@ -228,10 +230,10 @@ describe("makeTxtStrings", () => {
   test("K8: refuses the two keys RFC 6763 section 6.4 cannot express, naming the key it was given", () => {
 
     assert.throws(() => makeTxtStrings({ "": "x" }),
-      { message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "" is not\.$/, name: "TypeError" },
+      { constructor: TypeError, message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "" is not\.$/ },
       "an empty key has no way to be written before the equals sign");
     assert.throws(() => makeTxtStrings({ "a=b": "x" }),
-      { message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "a=b" is not\.$/, name: "TypeError" },
+      { constructor: TypeError, message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "a=b" is not\.$/ },
       "a key already carrying an equals sign would be read back as a shorter key and a longer value");
   });
 

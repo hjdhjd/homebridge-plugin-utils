@@ -150,7 +150,13 @@ describe("MqttClient - construction", () => {
     assert.throws(
 
       () => new MqttClient({ brokerUrl: "not-a-valid-url", log: silentLog(), topicPrefix: "test" }),
-      (error: unknown) => (error instanceof Error) && (error.cause instanceof Error)
+      (error: unknown) => {
+
+        assert.ok(error instanceof Error, "an invalid broker URL must fail construction with an Error");
+        assert.ok(error.cause instanceof Error, "the failure must carry the mqtt.js error as its cause");
+
+        return true;
+      }
     );
   });
 });

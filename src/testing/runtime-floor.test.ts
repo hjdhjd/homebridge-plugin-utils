@@ -9,6 +9,7 @@ import { assertRuntimeFloorCompat, composeSunsetCleanup, parseRuntimeFloor, plan
   sweepSourceFiles } from "./runtime-floor.ts";
 import { describe, test } from "node:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { AssertionError } from "node:assert";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -109,7 +110,7 @@ describe("assertRuntimeFloorCompat", () => {
 
     const message = "Complete the sunset: delete src/shim.ts; and delete this file.";
 
-    assert.throws(() => assertRuntimeFloorCompat({ kind: "sunset", message }), { message, name: "AssertionError" },
+    assert.throws(() => assertRuntimeFloorCompat({ kind: "sunset", message }), { constructor: AssertionError, message },
       "the canary must surface the checklist verbatim, since that message IS the cleanup instructions");
   });
 

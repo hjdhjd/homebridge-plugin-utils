@@ -203,11 +203,11 @@ describe("AsyncQueue - the high-water mark", () => {
 
   test("Q9: a high-water mark that is not a positive integer is refused at construction", () => {
 
-    const refusal = (error: unknown): boolean => (error instanceof TypeError) && error.message.includes("highWaterMark");
+    const refusal = { constructor: TypeError, message: /highWaterMark/ };
 
-    assert.throws(() => new AsyncQueue<string>({ highWaterMark: 0 }), refusal, "a mark of zero is a queue that could never hold anything");
-    assert.throws(() => new AsyncQueue<string>({ highWaterMark: -1 }), refusal, "a negative mark describes no bound at all");
-    assert.throws(() => new AsyncQueue<string>({ highWaterMark: 1.5 }), refusal, "a fractional mark is a ceiling no integer depth reaches exactly");
+    assert.throws(() => new AsyncQueue<string>({ highWaterMark: 0 }), refusal);
+    assert.throws(() => new AsyncQueue<string>({ highWaterMark: -1 }), refusal);
+    assert.throws(() => new AsyncQueue<string>({ highWaterMark: 1.5 }), refusal);
     assert.equal(new AsyncQueue<string>({ highWaterMark: 1 }).size, 0, "the smallest positive integer is a mark the queue accepts");
   });
 

@@ -405,7 +405,7 @@ describe("waitFor", () => {
     await assert.rejects(
 
       waitFor(() => false, { timeout: 20 }),
-      (error) => (error instanceof Error) && /waitFor:.*predicate did not become truthy.*within 20ms/.test(error.message)
+      { constructor: Error, message: /waitFor:.*predicate did not become truthy.*within 20ms/ }
     );
   });
 
@@ -416,7 +416,7 @@ describe("waitFor", () => {
     await assert.rejects(
 
       waitFor(() => false, { message: "device row must render", timeout: 20 }),
-      (error) => (error instanceof Error) && /waitFor:.*device row must render.*within 20ms/.test(error.message)
+      { constructor: Error, message: /waitFor:.*device row must render.*within 20ms/ }
     );
   });
 

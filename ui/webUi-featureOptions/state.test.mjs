@@ -698,8 +698,8 @@ describe("connectionFailureCopy", () => {
 
     assert.throws(() => connectionFailureCopy({ expired: false, site: "devcies" }), {
 
-      message: "FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"devcies\".",
-      name: "Error"
+      constructor: Error,
+      message: "FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"devcies\"."
     }, "a copy key typo is a bug at the dispatch site and must surface loudly, the reducer's own unknown-action policy");
   });
 

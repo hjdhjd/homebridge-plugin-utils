@@ -311,7 +311,7 @@ describe("localAddressFor", () => {
      * which is what a caller needs to tell an unreachable host from anything else - and what a probe that ignored its failure would replace with an address meaning
      * nothing.
      */
-    await assert.rejects(localAddressFor("no-such-host.invalid"), (error: unknown) => hasErrorCode(error, "ENOTFOUND"));
+    await assert.rejects(localAddressFor("no-such-host.invalid"), { code: "ENOTFOUND", constructor: Error });
   });
 
   test("the answer is the operating system's own routing rather than an assumed loopback", async (t) => {

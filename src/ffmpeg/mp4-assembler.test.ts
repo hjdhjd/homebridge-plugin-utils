@@ -562,7 +562,11 @@ describe("Mp4SegmentAssembler - source error absorber", () => {
 
     await assert.rejects(assembler.initSegment, (error: unknown) => {
 
-      return isHbpuAbortReason(error, "failed") && (error.cause === boom);
+      assert.ok(error instanceof HbpuAbortError, "the init segment wait must end with the library's abort error");
+      assert.equal(error.name, "failed", "a source error must fail the assembler");
+      assert.equal(error.cause, boom, "the abort must carry the source's own error as its cause");
+
+      return true;
     });
 
     assert.equal(isHbpuAbortReason(assembler.signal.reason, "failed"), true);

@@ -238,7 +238,7 @@ describe("scopeCacheKey", () => {
 
   test("throws on a scope kind outside the union rather than returning a key that could collide", () => {
 
-    assert.throws(() => scopeCacheKey({ kind: "unknown" }), { message: "scopeCacheKey: unknown scope kind.", name: "Error" }, "an unknown kind fails loudly");
+    assert.throws(() => scopeCacheKey({ kind: "unknown" }), { constructor: Error, message: "scopeCacheKey: unknown scope kind." }, "an unknown kind fails loudly");
   });
 });
 

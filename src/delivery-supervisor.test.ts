@@ -568,12 +568,12 @@ describe("DeliverySupervisor", () => {
     assert.throws(() => {
 
       scenario.supervisor.open("w", { deadline: 100, onDeadline: (): void => undefined, onSettle: scenario.onSettle, slots: [] });
-    }, (error: unknown): boolean => (error instanceof TypeError) && error.message.includes("at least one slot"), "an empty slot list names its own defect");
+    }, { constructor: TypeError, message: /at least one slot/ });
 
     assert.throws(() => {
 
       scenario.supervisor.open("w", { deadline: 100, onDeadline: (): void => undefined, onSettle: scenario.onSettle, slots: [ "alpha", "alpha" ] });
-    }, (error: unknown): boolean => (error instanceof TypeError) && error.message.includes("unique"), "a duplicate slot name names its own defect");
+    }, { constructor: TypeError, message: /unique/ });
 
     assert.deepEqual([...scenario.supervisor.windows()], [], "neither refusal filed a window");
     assert.equal(scenario.clock.pending, 0, "nor armed a deadline");

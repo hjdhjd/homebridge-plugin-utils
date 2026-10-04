@@ -199,7 +199,7 @@ describe("parseIpv4 / parseIpv6 - the address grammar", () => {
 
     for(const [ what, read, message ] of cases) {
 
-      assert.throws(read, { message, name: "TypeError" }, what + " must be refused by the reader that read it");
+      assert.throws(read, { constructor: TypeError, message }, what + " must be refused by the reader that read it");
     }
   });
 });

@@ -276,8 +276,7 @@ describe("createSaveFlow - a press that writes nothing", () => {
 
         // Each answer is its own press against its own flow, and each must settle before the next is read.
         // eslint-disable-next-line no-await-in-loop
-        await assert.rejects(flow.save({ check, compose }), (error) => (error instanceof TypeError) && error.message.includes("start must answer"),
-          "a starter that answers the wrong shape is a bug in the card, refused before the check runs");
+        await assert.rejects(flow.save({ check, compose }), { constructor: TypeError, message: /start must answer/ });
 
         assert.equal(checked, 0, "the check never ran");
         assert.equal(commit.calls.length, 0, "and nothing was written");
@@ -292,8 +291,7 @@ describe("createSaveFlow - a press that writes nothing", () => {
 
       // Each answer is its own press against its own flow, and each must settle before the next is read.
       // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(flow.save({ check: async () => answer, compose }), (error) => (error instanceof TypeError) && error.message.includes("check must answer"),
-        "only a passed check writes, and any other answer is a bug in the check");
+      await assert.rejects(flow.save({ check: async () => answer, compose }), { constructor: TypeError, message: /check must answer/ });
 
       assert.equal(commit.calls.length, 0, "and nothing was written");
     }
@@ -405,8 +403,7 @@ describe("createSaveFlow - a press that writes nothing", () => {
 
       // Each request is its own press against its own flow, and each must settle before the next is read.
       // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(flow.save(request), (error) => (error instanceof TypeError) && error.message.includes("requires a check function"),
-        "a malformed call is refused before anything else");
+      await assert.rejects(flow.save(request), { constructor: TypeError, message: /requires a check function/ });
 
       assert.equal(card.actions.length, 0, "and the starter was never called");
     }
@@ -753,8 +750,7 @@ describe("createSaveFlow - the Save control", () => {
 
       for(const options of [ {}, { control: "save" }, { control: {} }, { control: { disabled: "true" } } ]) {
 
-        assert.throws(() => createSaveFlow({ commit, start, toast, ...options }), (error) => (error instanceof TypeError) && error.message.includes("requires a control"),
-          "a card names its Save control or states that it has none");
+        assert.throws(() => createSaveFlow({ commit, start, toast, ...options }), { constructor: TypeError, message: /requires a control/ });
       }
 
       assert.equal(typeof createSaveFlow({ commit, control: null, start, toast }).save, "function", "null states that the card has no Save control");

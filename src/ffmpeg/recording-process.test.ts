@@ -184,8 +184,7 @@ describe("TestRecordingProcess - abort and the pre-init init reject", () => {
 
     proc.abort(new HbpuAbortError("failed"));
 
-    await assert.rejects(() => proc.getInitSegment(), (error: unknown) => isHbpuAbortReason(error, "failed"),
-      "getInitSegment() must reject with the abort signal's reason when abort fired before init");
+    await assert.rejects(() => proc.getInitSegment(), { constructor: HbpuAbortError, name: "failed" });
   });
 });
 

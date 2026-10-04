@@ -50,8 +50,7 @@ describe("TestMdnsBrowser - delivery", () => {
     const browser = new TestMdnsBrowser(options(events));
 
     browser.found(service());
-    assert.throws(() => browser.found(service({ port: 6060 })),
-      (error: unknown) => (error instanceof Error) && error.message.includes("garage door._esphomelib._tcp.local"));
+    assert.throws(() => browser.found(service({ port: 6060 })), { constructor: Error, message: /garage door\._esphomelib\._tcp\.local/ });
     assert.equal(events.length, 1);
   });
 
@@ -73,8 +72,8 @@ describe("TestMdnsBrowser - delivery", () => {
     const events: MdnsBrowserEvent[] = [];
     const browser = new TestMdnsBrowser(options(events));
 
-    assert.throws(() => browser.lost(service().name), (error: unknown) => (error instanceof Error) && error.message.includes("cannot be lost"));
-    assert.throws(() => browser.updated(service()), (error: unknown) => (error instanceof Error) && error.message.includes("cannot be updated"));
+    assert.throws(() => browser.lost(service().name), { constructor: Error, message: /cannot be lost/ });
+    assert.throws(() => browser.updated(service()), { constructor: Error, message: /cannot be updated/ });
 
     // A lost instance carries the last service the double held for it, which is what a consumer projecting a device reads.
     const found = service({ instance: "Shed Door", port: 6054 });
@@ -110,7 +109,7 @@ describe("TestMdnsBrowser - delivery", () => {
       for(const verb of [ (): void => browser.found(service({ instance: "Another" })), (): void => browser.updated(found),
         (): void => browser.lost(found.name) ]) {
 
-        assert.throws(verb, (error: unknown) => (error instanceof HbpuAbortError) && (error.name === "replaced"));
+        assert.throws(verb, { constructor: HbpuAbortError, name: "replaced" });
       }
 
       assert.equal(events.length, 1, "nothing reaches a consumer that has torn down");

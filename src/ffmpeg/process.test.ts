@@ -340,7 +340,7 @@ describe("FfmpegProcess - startup timeout", () => {
     await using proc = new FfmpegProcess(makeOptions(), { args: silentIdle(), startupTimeout: 50 });
 
     // The process never writes to stderr, so ready should never resolve - it should reject with the timeout reason once the watchdog fires.
-    await assert.rejects(proc.ready, (error: unknown) => isHbpuAbortReason(error, "timeout"));
+    await assert.rejects(proc.ready, { constructor: HbpuAbortError, name: "timeout" });
 
     assert.equal(proc.isTimedOut, true);
 
@@ -360,7 +360,7 @@ describe("FfmpegProcess - startup timeout", () => {
 
     clock.advance(50);
 
-    await assert.rejects(proc.ready, (error: unknown) => isHbpuAbortReason(error, "timeout"));
+    await assert.rejects(proc.ready, { constructor: HbpuAbortError, name: "timeout" });
 
     assert.equal(proc.isTimedOut, true, "and the process reports the timeout teardown");
 
@@ -433,8 +433,8 @@ describe("FfmpegProcess - spawn failure", () => {
 
     await using proc = new FfmpegProcess(options, { args: [] });
 
-    await assert.rejects(proc.ready, (error: unknown) => isHbpuAbortReason(error, "failed"));
-    await assert.rejects(proc.exited, (error: unknown) => isHbpuAbortReason(error, "failed"));
+    await assert.rejects(proc.ready, { constructor: HbpuAbortError, name: "failed" });
+    await assert.rejects(proc.exited, { constructor: HbpuAbortError, name: "failed" });
 
     assert.equal(proc.hasError, true);
 

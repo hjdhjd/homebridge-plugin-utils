@@ -228,8 +228,7 @@ describe("MdnsBrowser - construction", () => {
 
     // A second socket of one family would join the same group on the same links and cache every record of it twice. The tuple type refuses an empty list, and
     // a repetition is the one shape it cannot refuse, so the constructor does.
-    assert.throws(() => new MdnsBrowser(baseOptions({ ipFamilies: [ "ipv4", "ipv4" ] })),
-      (error: unknown) => (error instanceof TypeError) && error.message.includes("`ipFamilies`"));
+    assert.throws(() => new MdnsBrowser(baseOptions({ ipFamilies: [ "ipv4", "ipv4" ] })), { constructor: TypeError, message: /`ipFamilies`/ });
 
     for(const browser of browsers) {
 
@@ -240,21 +239,26 @@ describe("MdnsBrowser - construction", () => {
   test("B2: a name that is not a service type, and one the wire cannot carry, are both refused where the option was named", () => {
 
     // A type needs a name, a transport, and a domain. Two labels describe nothing a responder can answer, and the refusal names what it was given.
-    assert.throws(() => new MdnsBrowser(baseOptions({ serviceType: "_esphomelib._tcp" })),
-      (error: unknown) => (error instanceof TypeError) && error.message.includes("_esphomelib._tcp"));
+    assert.throws(() => new MdnsBrowser(baseOptions({ serviceType: "_esphomelib._tcp" })), { constructor: TypeError, message: /_esphomelib\._tcp/ });
 
     // A label the wire cannot carry is the encoder's refusal rather than the browser's, and it arrives at construction rather than inside the first timer.
     const longLabel = "_" + "a".repeat(64);
 
-    assert.throws(() => new MdnsBrowser(baseOptions({ serviceType: longLabel + "._tcp.local" })),
-      (error: unknown) => (error instanceof Error) && !(error instanceof TypeError) && error.message.includes(longLabel));
+    assert.throws(() => new MdnsBrowser(baseOptions({ serviceType: longLabel + "._tcp.local" })), (error: unknown) => {
+
+      assert.ok(error instanceof Error, "the encoder's refusal must be an Error");
+      assert.ok(!(error instanceof TypeError), "the refusal must be the encoder's rather than the browser's own TypeError");
+      assert.ok(error.message.includes(longLabel), "the refusal must name the label the wire cannot carry");
+
+      return true;
+    });
   });
 
   test("B3: a ceiling under the seed interval and a warmup that is not positive are each refused", () => {
 
-    assert.throws(() => new MdnsBrowser(baseOptions({ ceilingMs: 999 })), (error: unknown) => (error instanceof TypeError) && error.message.includes("ceilingMs"));
+    assert.throws(() => new MdnsBrowser(baseOptions({ ceilingMs: 999 })), { constructor: TypeError, message: /ceilingMs/ });
     assert.throws(() => new MdnsBrowser(baseOptions({ ceilingMs: Number.POSITIVE_INFINITY })), TypeError);
-    assert.throws(() => new MdnsBrowser(baseOptions({ warmupMs: 0 })), (error: unknown) => (error instanceof TypeError) && error.message.includes("warmupMs"));
+    assert.throws(() => new MdnsBrowser(baseOptions({ warmupMs: 0 })), { constructor: TypeError, message: /warmupMs/ });
     assert.throws(() => new MdnsBrowser(baseOptions({ warmupMs: Number.NaN })), TypeError);
   });
 });
@@ -1631,13 +1635,7 @@ describe("MdnsBrowser - lifecycle", () => {
       }
 
       assert.deepEqual(rig.sockets.map((socket) => socket.closed), [true], "every socket the browser held is closed");
-      await assert.rejects(settled, (error: unknown) => {
-
-        assert.ok(error instanceof HbpuAbortError, "the wait ends with the library's abort error");
-        assert.equal(error.name, "shutdown", "the shutdown reason is what ended the wait");
-
-        return true;
-      });
+      await assert.rejects(settled, { constructor: HbpuAbortError, name: "shutdown" });
     });
   });
 });

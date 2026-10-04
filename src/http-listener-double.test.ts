@@ -7,10 +7,10 @@
  * meets. The shared type imports are the compile-time half of the same guard.
  */
 import { HTTP_LISTENER_ANY_PATH } from "./http-listener.ts";
+import { HbpuAbortError } from "./util.ts";
 import { TestHttpListener } from "./http-listener-double.ts";
 import assert from "node:assert/strict";
 import { assertNoUnhandledRejections } from "./testing/index.ts";
-import { isHbpuAbortReason } from "./util.ts";
 import test from "node:test";
 
 // One request to hand a handler. The double passes it through untouched, so its contents matter only where an arm reads them back.
@@ -62,7 +62,7 @@ test("a registration is recorded with its handler and its options, and refuses a
   assert.equal(listener.routes.get("/events")?.handler, handler);
   assert.deepEqual(listener.routes.get("/events")?.methods, ["POST"]);
 
-  assert.throws(() => listener.route("/events", handler), (error: unknown) => (error instanceof TypeError) && error.message.includes("/events"));
+  assert.throws(() => listener.route("/events", handler), { constructor: TypeError, message: /\/events/ });
 
   handle[Symbol.dispose]();
 
@@ -99,7 +99,7 @@ test("a delivery meets the matching the real serve path applies", () => {
   /* A handler that throws propagates out of the delivery rather than becoming the 500 the real class logs and writes, because a consumer's test wants its own fault
    * in hand rather than a status standing in for it. That translation belongs to the real class and its suite.
    */
-  assert.throws(() => listener.deliver("/boom", REQUEST), (error: unknown) => (error instanceof Error) && (error.message === "handler fell over"));
+  assert.throws(() => listener.deliver("/boom", REQUEST), { constructor: Error, message: "handler fell over" });
 });
 
 test("an exact route takes precedence over a catch-all, which answers everything else", () => {
@@ -128,5 +128,5 @@ test("a double that ends releases every route and disposes cleanly", async () =>
   assert.equal(listener.aborted, true);
   assert.equal(listener.routes.size, 0, "teardown releases every consumer closure the double was holding");
   assert.equal(listener.deliver("/a", REQUEST).status, 404);
-  assert.throws(() => listener.route("/a", () => ({ status: 200 })), (error: unknown) => isHbpuAbortReason(error, "shutdown"));
+  assert.throws(() => listener.route("/a", () => ({ status: 200 })), { constructor: HbpuAbortError, name: "shutdown" });
 });

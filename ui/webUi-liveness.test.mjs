@@ -223,8 +223,8 @@ describe("withDeadline", () => {
 
       assert.throws(() => withDeadline({ promise: Promise.resolve(), seconds }), {
 
-        message: "withDeadline's seconds must be a finite, positive number of seconds.",
-        name: "TypeError"
+        constructor: TypeError,
+        message: "withDeadline's seconds must be a finite, positive number of seconds."
       }, "a duration of " + String(seconds) + " must be rejected at the call site");
     }
   });
@@ -479,8 +479,8 @@ describe("createRequestWatchdog", () => {
 
       assert.throws(() => createRequestWatchdog({ onTrip: () => {}, signal: new AbortController().signal, timeoutSeconds }), {
 
-        message: "createRequestWatchdog's timeoutSeconds must be a finite, positive number of seconds.",
-        name: "TypeError"
+        constructor: TypeError,
+        message: "createRequestWatchdog's timeoutSeconds must be a finite, positive number of seconds."
       }, "a timeout of " + String(timeoutSeconds) + " must be rejected at the call site");
     }
   });
@@ -695,14 +695,14 @@ describe("createResumeDetector", () => {
 
     assert.throws(() => createResumeDetector({ intervalSeconds: 0 }), {
 
-      message: "createResumeDetector's intervalSeconds must be a finite, positive number of seconds.",
-      name: "TypeError"
+      constructor: TypeError,
+      message: "createResumeDetector's intervalSeconds must be a finite, positive number of seconds."
     });
 
     assert.throws(() => createResumeDetector({ thresholdSeconds: Number.NaN }), {
 
-      message: "createResumeDetector's thresholdSeconds must be a finite, positive number of seconds.",
-      name: "TypeError"
+      constructor: TypeError,
+      message: "createResumeDetector's thresholdSeconds must be a finite, positive number of seconds."
     });
   });
 });

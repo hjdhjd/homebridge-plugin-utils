@@ -208,8 +208,8 @@ describe("BackpressureWriter - highWaterMark", () => {
     // next test. Verifying the reason (not just "rejected with something") keeps the test honest about which abort path actually fired.
     writer.abort();
 
-    await assert.rejects(first, (error: unknown) => isHbpuAbortReason(error, "shutdown"));
-    await assert.rejects(second, (error: unknown) => isHbpuAbortReason(error, "shutdown"));
+    await assert.rejects(first, { constructor: HbpuAbortError, name: "shutdown" });
+    await assert.rejects(second, { constructor: HbpuAbortError, name: "shutdown" });
   });
 });
 
@@ -351,8 +351,22 @@ describe("BackpressureWriter - abort and teardown", () => {
     await assert.rejects(pA, (error: unknown) => error === streamError);
 
     // B and C reject with the signal's reason - the `HbpuAbortError("failed")` that escalated from the stream error. The `cause` chain preserves the original error.
-    await assert.rejects(pB, (error: unknown) => isHbpuAbortReason(error, "failed") && (error.cause === streamError));
-    await assert.rejects(pC, (error: unknown) => isHbpuAbortReason(error, "failed") && (error.cause === streamError));
+    await assert.rejects(pB, (error: unknown) => {
+
+      assert.ok(error instanceof HbpuAbortError, "B must reject with the library's abort error");
+      assert.equal(error.name, "failed", "B must carry the failure reason the stream error escalated to");
+      assert.equal(error.cause, streamError, "B's abort must carry the stream's own error as its cause");
+
+      return true;
+    });
+    await assert.rejects(pC, (error: unknown) => {
+
+      assert.ok(error instanceof HbpuAbortError, "C must reject with the library's abort error");
+      assert.equal(error.name, "failed", "C must carry the failure reason the stream error escalated to");
+      assert.equal(error.cause, streamError, "C's abort must carry the stream's own error as its cause");
+
+      return true;
+    });
 
     // Queue is fully drained; no resolvers are orphaned.
     assert.equal(writer.pending, 0);

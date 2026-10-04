@@ -10,6 +10,7 @@ import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, drai
   loggedAt, present, settle, settleUntil, silentLog, stopListening, waitUntil } from "./index.ts";
 import { createConnection, createServer } from "node:net";
 import { describe, test } from "node:test";
+import { AssertionError } from "node:assert";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { causeChain } from "../util.ts";
@@ -30,11 +31,11 @@ describe("expectAt", () => {
 
     // The contract per the docstring: AssertionError when the indexed slot is undefined. Verify both that the throw fires and that its message names the descriptor
     // and index, since those are the diagnostic affordance for failures in test bodies that walk a collection.
-    assert.throws(() => expectAt([], 0, "missing record"), { message: /missing record at index 0/, name: "AssertionError" },
+    assert.throws(() => expectAt([], 0, "missing record"), { constructor: AssertionError, message: /missing record at index 0/ },
       "out-of-bounds access must throw with the descriptor and the literal index in the message");
 
     // Negative indices are explicitly out of contract per the docstring; they always fail because items[-1] is undefined.
-    assert.throws(() => expectAt(["x"], -1, "negative"), { message: /negative at index -1/, name: "AssertionError" },
+    assert.throws(() => expectAt(["x"], -1, "negative"), { constructor: AssertionError, message: /negative at index -1/ },
       "negative index must throw and surface the negative index in the message");
   });
 
@@ -68,9 +69,9 @@ describe("present", () => {
 
   test("throws an AssertionError naming the description and the value for null and for undefined", () => {
 
-    assert.throws(() => present(undefined, "a missing record"), { message: "expected a missing record, got undefined", name: "AssertionError" },
+    assert.throws(() => present(undefined, "a missing record"), { constructor: AssertionError, message: "expected a missing record, got undefined" },
       "an undefined value must throw naming the lookup and rendering what arrived");
-    assert.throws(() => present(null, "a missing record"), { message: "expected a missing record, got null", name: "AssertionError" },
+    assert.throws(() => present(null, "a missing record"), { constructor: AssertionError, message: "expected a missing record, got null" },
       "a null value must throw naming the lookup and rendering what arrived");
   });
 
@@ -492,7 +493,7 @@ describe("settleUntil", () => {
       reads++;
 
       return false;
-    }, { description: "a condition that never holds", turns: 3 }), { name: "Error" }, "a predicate that never holds must end in the budget's own failure");
+    }, { description: "a condition that never holds", turns: 3 }), { constructor: Error }, "a predicate that never holds must end in the budget's own failure");
 
     /* The predicate is read once before each of the three yields and once more on the turn that throws, so a count of four is exactly three yields crossed. The row
      * above cannot make this claim: its message is built from the `turns` option rather than from anything measured, so it reads the same whether the throw came
@@ -626,7 +627,7 @@ describe("drainClock", () => {
 
     try {
 
-      await assert.rejects(async () => drainClock(clock, 3), { message: "drainClock: the clock still had entries pending after 3 steps.", name: "Error" },
+      await assert.rejects(async () => drainClock(clock, 3), { constructor: Error, message: "drainClock: the clock still had entries pending after 3 steps." },
         "a drain that exceeds its bound must throw naming the limit rather than spinning");
     } finally {
 

@@ -108,7 +108,11 @@ describe("RtpDemuxer - construction and bind", () => {
 
       await assert.rejects(collider.ready, (error: unknown) => {
 
-        return isHbpuAbortReason(error, "failed") && (error.cause instanceof Error);
+        assert.ok(error instanceof HbpuAbortError, "a collided bind must end the demuxer with the library's abort error");
+        assert.equal(error.name, "failed", "a collided bind must fail the demuxer");
+        assert.ok(error.cause instanceof Error, "the abort must carry the bind's own error as its cause");
+
+        return true;
       });
     } finally {
 
@@ -705,10 +709,7 @@ describe("RtpPortAllocator - signal handling", () => {
 
     const allocator = new RtpPortAllocator();
 
-    await assert.rejects(
-      allocator.reserve({ count: 3 as unknown as 1 | 2 }),
-      (error: unknown) => error instanceof RangeError
-    );
+    await assert.rejects(allocator.reserve({ count: 3 as unknown as 1 | 2 }), RangeError);
   });
 
   test("reservedCount is stable across every reachable reserve() failure mode", async () => {

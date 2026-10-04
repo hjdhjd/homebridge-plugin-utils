@@ -915,11 +915,9 @@ describe("retry", () => {
     let calls = 0;
 
     await assert.rejects(retry(async () => "unreachable", { attempts: 1.5 }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "retry: `attempts` must be a positive integer."),
-      "a fractional attempt budget is refused in the library's own words");
+      { constructor: TypeError, message: "retry: `attempts` must be a positive integer." });
     await assert.rejects(retry(async () => "unreachable", { attempts: 0 }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "retry: `attempts` must be a positive integer."),
-      "a zero attempt budget is refused in the same words");
+      { constructor: TypeError, message: "retry: `attempts` must be a positive integer." });
 
     assert.equal(await retry(async () => {
 
@@ -3134,7 +3132,7 @@ describe("formatUrlHost", () => {
     /* `isIP` reads a zoned literal as IPv6 as readily as a bare one, so the zone is tested first. The refusal names the address because the platform's own
      * refusal, raised later inside the URL constructor, says only "Invalid URL".
      */
-    assert.throws(() => formatUrlHost("fe80::1%en0"), { message: /fe80::1%en0/, name: "TypeError" });
+    assert.throws(() => formatUrlHost("fe80::1%en0"), { constructor: TypeError, message: /fe80::1%en0/ });
   });
 
   test("passes a bracketed zoned literal through as the caller's own composition", () => {
@@ -3724,15 +3722,13 @@ describe("assertPositiveInteger", () => {
   test("refuses a fractional value, naming the owner and the option", () => {
 
     assert.throws(() => assertPositiveInteger(1.5, { optionName: "capacity", owner: "RateBudget" }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "RateBudget: `capacity` must be a positive integer."),
-      "a fractional count is a ceiling no integer depth reaches exactly, and the refusal names where the value was written");
+      { constructor: TypeError, message: "RateBudget: `capacity` must be a positive integer." });
   });
 
   test("refuses a value that is not a number at all", () => {
 
     assert.throws(() => assertPositiveInteger(Number.NaN, { optionName: "highWaterMark", owner: "AsyncQueue" }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "AsyncQueue: `highWaterMark` must be a positive integer."),
-      "NaN describes no bound at all");
+      { constructor: TypeError, message: "AsyncQueue: `highWaterMark` must be a positive integer." });
     assert.throws(() => assertPositiveInteger(Number.POSITIVE_INFINITY, { optionName: "highWaterMark", owner: "AsyncQueue" }), TypeError,
       "an infinite count describes no bound at all");
   });
@@ -3740,8 +3736,7 @@ describe("assertPositiveInteger", () => {
   test("refuses zero and a negative count", () => {
 
     assert.throws(() => assertPositiveInteger(0, { optionName: "stdoutHighWater", owner: "LogSocket" }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "LogSocket: `stdoutHighWater` must be a positive integer."),
-      "a bound of zero is a queue that could never hold anything");
+      { constructor: TypeError, message: "LogSocket: `stdoutHighWater` must be a positive integer." });
     assert.throws(() => assertPositiveInteger(-1, { optionName: "stdoutHighWater", owner: "LogSocket" }), TypeError,
       "a negative bound describes no ceiling at all");
   });
@@ -3760,22 +3755,19 @@ describe("assertPositiveFinite", () => {
   test("refuses NaN, naming the owner, the option, and the unit", () => {
 
     assert.throws(() => assertPositiveFinite(Number.NaN, { optionName: "bodyLimit", owner: "HttpListener", unit: "bytes" }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "HttpListener: `bodyLimit` must be a positive, finite number of bytes."),
-      "NaN is no quantity at all, and the refusal names the unit the option is measured in");
+      { constructor: TypeError, message: "HttpListener: `bodyLimit` must be a positive, finite number of bytes." });
   });
 
   test("refuses an infinite value, naming the owner, the option, and the unit", () => {
 
     assert.throws(() => assertPositiveFinite(Number.POSITIVE_INFINITY, { optionName: "warmupMs", owner: "MdnsBrowser", unit: "milliseconds" }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "MdnsBrowser: `warmupMs` must be a positive, finite number of milliseconds."),
-      "an unbounded warmup is a settle that never comes");
+      { constructor: TypeError, message: "MdnsBrowser: `warmupMs` must be a positive, finite number of milliseconds." });
   });
 
   test("refuses zero and a negative quantity", () => {
 
     assert.throws(() => assertPositiveFinite(0, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }),
-      (error: unknown) => (error instanceof TypeError) && (error.message === "RateBudget: `window` must be a positive, finite number of milliseconds."),
-      "a window of zero occupies no slot for any span of time");
+      { constructor: TypeError, message: "RateBudget: `window` must be a positive, finite number of milliseconds." });
     assert.throws(() => assertPositiveFinite(-5, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }), TypeError,
       "a negative duration runs backwards");
   });

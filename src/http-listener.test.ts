@@ -361,8 +361,14 @@ test("a route is refused on a path already taken, and the refusal names the coll
   const handle = listener.route("/taken", () => ({ status: 200 }));
 
   // Two consumers configured against one path would collide here. The message is the catcher's mechanism, so it names which path refused.
-  assert.throws(() => listener.route("/taken", () => ({ status: 200 })),
-    (error: unknown) => (error instanceof TypeError) && error.message.includes("already routes") && error.message.includes("/taken"));
+  assert.throws(() => listener.route("/taken", () => ({ status: 200 })), (error: unknown) => {
+
+    assert.ok(error instanceof TypeError, "a colliding route must be refused with a TypeError");
+    assert.match(error.message, /already routes/, "the refusal must say the path is already routed");
+    assert.match(error.message, /\/taken/, "the refusal must name the path that collided");
+
+    return true;
+  });
 
   handle[Symbol.dispose]();
 
@@ -383,7 +389,7 @@ test("a listener whose lifetime has ended accepts no route", async () => {
   /* The refusal is the lifetime's own reason rather than a shape of the listener's invention, so a consumer configuring itself against a listener that has already
    * gone away learns why it is gone from the throw.
    */
-  assert.throws(() => listener.route("/anything", () => ({ status: 200 })), (error: unknown) => isHbpuAbortReason(error, "shutdown"));
+  assert.throws(() => listener.route("/anything", () => ({ status: 200 })), { constructor: HbpuAbortError, name: "shutdown" });
 });
 
 test("a bind failure that is not a port conflict ends the listener and reports itself once", async (t) => {
@@ -672,8 +678,7 @@ test("a catch-all route answers every path no exact route claims", async () => {
   assert.equal((await request({ body: "{}", path: "/a", port })).body, "exact", "an exact route takes precedence over one claiming everything");
 
   // The catch-all is one route like any other, so claiming it twice collides like any other path, and the refusal says which claim collided.
-  assert.throws(() => listener.route(HTTP_LISTENER_ANY_PATH, () => ({ status: 200 })),
-    (error: unknown) => (error instanceof TypeError) && error.message.includes("every path"));
+  assert.throws(() => listener.route(HTTP_LISTENER_ANY_PATH, () => ({ status: 200 })), { constructor: TypeError, message: /every path/ });
 
   anywhere[Symbol.dispose]();
 
@@ -685,13 +690,11 @@ test("an option that cannot produce a working listener is refused at constructio
   const log = capturingLog();
 
   // Each refusal names the option, so a misconfiguration is diagnosable where it was made rather than as an unexplained failure later.
-  assert.throws(() => new HttpListener({ label: LABEL, log, port: 0, retryMs: 0 }),
-    (error: unknown) => (error instanceof TypeError) && error.message.includes("retryMs"));
-  assert.throws(() => new HttpListener({ bodyLimit: -1, label: LABEL, log, port: 0 }),
-    (error: unknown) => (error instanceof TypeError) && error.message.includes("bodyLimit"));
-  assert.throws(() => new HttpListener({ label: LABEL, log, port: 70000 }), (error: unknown) => (error instanceof TypeError) && error.message.includes("port"));
-  assert.throws(() => new HttpListener({ label: LABEL, log, port: 1.5 }), (error: unknown) => (error instanceof TypeError) && error.message.includes("port"));
-  assert.throws(() => new HttpListener({ label: "", log, port: 0 }), (error: unknown) => (error instanceof TypeError) && error.message.includes("label"));
+  assert.throws(() => new HttpListener({ label: LABEL, log, port: 0, retryMs: 0 }), { constructor: TypeError, message: /retryMs/ });
+  assert.throws(() => new HttpListener({ bodyLimit: -1, label: LABEL, log, port: 0 }), { constructor: TypeError, message: /bodyLimit/ });
+  assert.throws(() => new HttpListener({ label: LABEL, log, port: 70000 }), { constructor: TypeError, message: /port/ });
+  assert.throws(() => new HttpListener({ label: LABEL, log, port: 1.5 }), { constructor: TypeError, message: /port/ });
+  assert.throws(() => new HttpListener({ label: "", log, port: 0 }), { constructor: TypeError, message: /label/ });
 });
 
 test("a route that keeps failing is reported once, replayed at debug, and reported again when it fails differently", async () => {

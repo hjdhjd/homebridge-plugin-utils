@@ -9,7 +9,7 @@
  * its own URL-registered file.
  *
  * **Why the hook exists.** In production, browser-shipped UI files (orchestrator, state, search, renderer, status panel, etc.) import the dual-shipped modules from
- * `./featureOptions.js`, `./webui-status.js`, and the like, and the browser loads the compiled artifacts the build's finalize step placed at `dist/ui/`. In the
+ * `./featureOptions.js`, `./webui/status.js`, and the like, and the browser loads the compiled artifacts the build's finalize step placed at `dist/ui/`. In the
  * test environment there is no corresponding file next to the importer - we run directly from `ui/` without a build step - so the import would fail with
  * `ERR_MODULE_NOT_FOUND`. Rather than drop a permanent shim next to each importer (which would give `ui/<module>.js` two meanings depending on context), we redirect
  * each offending specifier to its `src/<module>.ts` source whenever it originates from a file under `/ui/`, and let Node's `--strip-types` handle the `.ts` extension.
@@ -33,7 +33,7 @@ import { registerHooks } from "node:module";
 // panel, etc.) share one rule.
 const UI_PARENT_FRAGMENT = "/ui/";
 
-// Escape any regex-special characters in a module basename so the assembled alternation matches the name literally rather than as a pattern.
+// Escape any regex-special characters in a list entry so the assembled alternation matches the entry literally rather than as a pattern.
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // The specifier pattern UI files use in production, built from `BROWSER_MODULES`. A dual-shipped module compiles to `dist/ui/<name>.js`; sibling files at `dist/ui/`
@@ -43,7 +43,7 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // unrelated files whose names merely contain a module name would not match.
 const PRODUCTION_SPECIFIER_PATTERN = new RegExp("^(?:\\.\\.?/)+(" + BROWSER_MODULES.map(escapeRegExp).join("|") + ")\\.js$");
 
-// The TypeScript source URL each browser module redirects to, keyed by module basename. `../src/<name>.ts` is the sibling-of-`ui/` TS file that the production
+// The TypeScript source URL each browser module redirects to, keyed by list entry. `../src/<name>.ts` is the sibling-of-`ui/` TS file that the production
 // finalize step would otherwise compile into `dist/ui/<name>.js`. At test time, Node's `--strip-types` handles the `.ts` extension and strips type annotations on
 // load. Resolved once at module load so the resolve hook does no per-call URL work.
 const SOURCE_URLS = new Map(BROWSER_MODULES.map((name) => [ name, new URL("../src/" + name + ".ts", import.meta.url).href ]));

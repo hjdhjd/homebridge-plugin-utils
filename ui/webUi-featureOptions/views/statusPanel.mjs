@@ -4,7 +4,7 @@
  */
 "use strict";
 
-import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "../../webui-status.js";
+import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "../../webui/status.js";
 import { buildRecoveryButton } from "../utils.mjs";
 import { createRequestWatchdog } from "../../webUi-liveness.mjs";
 import { defaultIdentityFields } from "./deviceInfo.mjs";
@@ -12,7 +12,7 @@ import { effect } from "../store.mjs";
 import { selectedDevice } from "../selectors.mjs";
 
 /**
- * One member of a choices row's list. A hand-authored browser-side rendering of `StatusChoice` from `src/webui-status.ts`, the contract owner these typedefs are kept
+ * One member of a choices row's list. A hand-authored browser-side rendering of `StatusChoice` from `src/webui/status.ts`, the contract owner these typedefs are kept
  * in lockstep with.
  *
  * @typedef {Object} StatusChoice
@@ -21,7 +21,7 @@ import { selectedDevice } from "../selectors.mjs";
  */
 
 /**
- * A choices row's static vocabulary. Mirrors `StatusChoicesRowTemplate` from `src/webui-status.ts`. It declares no sizer, because every choice renders at all times
+ * A choices row's static vocabulary. Mirrors `StatusChoicesRowTemplate` from `src/webui/status.ts`. It declares no sizer, because every choice renders at all times
  * and the checkbox glyph is metrically constant, so the rendered list occupies exactly the width it reserves.
  *
  * @typedef {Object} StatusChoicesRowTemplate
@@ -31,13 +31,13 @@ import { selectedDevice } from "../selectors.mjs";
  */
 
 /**
- * One rendered choices row: a {@link StatusChoicesRowTemplate} plus its live list. Mirrors `StatusChoicesRow` from `src/webui-status.ts`.
+ * One rendered choices row: a {@link StatusChoicesRowTemplate} plus its live list. Mirrors `StatusChoicesRow` from `src/webui/status.ts`.
  *
  * @typedef {StatusChoicesRowTemplate & { choices: StatusChoice[] }} StatusChoicesRow
  */
 
 /**
- * A text row's static vocabulary. Mirrors `StatusTextRowTemplate` from `src/webui-status.ts`. Its tag is optional, which makes the text row what an untagged
+ * A text row's static vocabulary. Mirrors `StatusTextRowTemplate` from `src/webui/status.ts`. Its tag is optional, which makes the text row what an untagged
  * composition means.
  *
  * @typedef {Object} StatusTextRowTemplate
@@ -50,41 +50,41 @@ import { selectedDevice } from "../selectors.mjs";
  */
 
 /**
- * One rendered text row: a {@link StatusTextRowTemplate} plus its live value. Mirrors `StatusTextRow` from `src/webui-status.ts`.
+ * One rendered text row: a {@link StatusTextRowTemplate} plus its live value. Mirrors `StatusTextRow` from `src/webui/status.ts`.
  *
  * @typedef {StatusTextRowTemplate & { value: string }} StatusTextRow
  */
 
 /**
- * A status row's static vocabulary in either form, tagged on `kind`. Mirrors `StatusRowTemplate` from `src/webui-status.ts`. A template carrying a kind neither of
+ * A status row's static vocabulary in either form, tagged on `kind`. Mirrors `StatusRowTemplate` from `src/webui/status.ts`. A template carrying a kind neither of
  * these declares renders its label over the placeholder dash, so a row form newer than this panel costs that row's content and nothing else.
  *
  * @typedef {StatusChoicesRowTemplate | StatusTextRowTemplate} StatusRowTemplate
  */
 
 /**
- * One rendered status row in either form. Mirrors `StatusRow` from `src/webui-status.ts`.
+ * One rendered status row in either form. Mirrors `StatusRow` from `src/webui/status.ts`.
  *
  * @typedef {StatusChoicesRow | StatusTextRow} StatusRow
  */
 
 /**
  * The payload a `"row"` event carries: the addressed row's id plus the one thing that changed, stated in that row's own vocabulary. Mirrors `StatusRowUpdate` from
- * `src/webui-status.ts`. The panel reads what an update MEANS from the addressed row's template kind rather than from the payload's own shape, so a payload shaped
+ * `src/webui/status.ts`. The panel reads what an update MEANS from the addressed row's template kind rather than from the payload's own shape, so a payload shaped
  * for the other form leaves the value absent and the row renders the placeholder dash.
  *
  * @typedef {{ choices?: StatusChoice[], id: string, value?: string }} StatusRowUpdate
  */
 
 /**
- * The classified feed-failure reasons. Mirrors `StatusErrorReason` from `src/webui-status.ts`; the component owns default copy for each and merges per-plugin
+ * The classified feed-failure reasons. Mirrors `StatusErrorReason` from `src/webui/status.ts`; the component owns default copy for each and merges per-plugin
  * overrides on top.
  *
  * @typedef {"auth-invalid" | "auth-missing" | "misconfigured" | "not-found" | "not-ready" | "throttled" | "timeout" | "unreachable" | "unsupported"} StatusErrorReason
  */
 
 /**
- * The bridge push event, tagged on `kind`. Mirrors `StatusEvent` from `src/webui-status.ts`; the handler reads it from the host `MessageEvent`'s `data` property.
+ * The bridge push event, tagged on `kind`. Mirrors `StatusEvent` from `src/webui/status.ts`; the handler reads it from the host `MessageEvent`'s `data` property.
  *
  * @typedef {Object} StatusEvent
  * @property {string} kind - The event tag: `"hello"`, `"connecting"`, `"snapshot"`, `"row"`, `"availability"`, or `"error"`.
@@ -135,7 +135,7 @@ import { selectedDevice } from "../selectors.mjs";
  * One device's remembered state: what that device last told the panel, kept whether or not it is the device on screen. The map of these entries is the panel's single
  * source of truth - the push handler reduces every event into the addressed device's entry, and the DOM is a projection of the viewed device's entry - so selecting a
  * device the panel already knows renders at once. Internal mount state rather than wire contract: nothing outside this module produces or consumes it, so unlike the
- * typedefs above it mirrors nothing in `src/webui-status.ts`.
+ * typedefs above it mirrors nothing in `src/webui/status.ts`.
  *
  * @typedef {Object} DeviceStateEntry
  * @property {Map<string, ReturnType<typeof setTimeout>>} latchTimers - The pending clear-back timer per row id. The clock belongs to the device rather than to the

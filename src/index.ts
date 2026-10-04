@@ -28,7 +28,7 @@ export * from "./transport-error.ts";
 export * from "./util.ts";
 export * from "./wakeable-wait.ts";
 export * from "./webui-loader.ts";
-export * from "./webui-status.ts";
 export * from "./ffmpeg/index.ts";
 export * from "./logclient/index.ts";
 export * from "./mdns/index.ts";
+export * from "./webui/index.ts";

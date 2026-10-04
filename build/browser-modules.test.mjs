@@ -10,11 +10,34 @@ import { describe, test } from "node:test";
 import { readFile, stat } from "node:fs/promises";
 import { BROWSER_MODULES } from "./browser-modules.mjs";
 import assert from "node:assert/strict";
+import { posix } from "node:path";
 import ts from "typescript";
 
-// The specifiers a listed module may load at runtime: each of its siblings on the list, spelled as the source spells it. `allowImportingTsExtensions` has the
-// source name the `.ts` file and the emit rewrite turn it into the `.js` the browser fetches, so the source-level form is the one this guard compares against.
-const ALLOWED = new Set(BROWSER_MODULES.map((name) => "./" + name + ".ts"));
+/**
+ * Name the specifiers the listed module `importer` may load at runtime: each module on the list, spelled as the importer's own source spells it.
+ *
+ * An entry is a module's path under `src/`, and the build keeps that path into `dist/ui/`, so a listed module's import of another listed module is written
+ * relative to the importer's directory and reaches the same file in the source and in the shipped copy. A module at the root reaches a nested one as
+ * `./webui/status.ts`, a nested module reaches a root one as `../formatters.ts`, and a nested module reaches a sibling in its own folder by its bare name.
+ * `allowImportingTsExtensions` has the source name the `.ts` file and the emit rewrite turn it into the `.js` the browser fetches, so the source-level form is
+ * the one this guard compares against.
+ *
+ * @param {string} importer - The importing module's list entry.
+ * @param {readonly string[]} [listed] - The list the importer's reachable modules are drawn from: the real one, unless a row supplies its own.
+ *
+ * @returns {Set<string>} Every specifier the importer may name in a runtime import.
+ */
+function allowedFor(importer, listed = BROWSER_MODULES) {
+
+  const from = posix.dirname(importer);
+
+  return new Set(listed.map((name) => {
+
+    const path = posix.relative(from, name);
+
+    return (path.startsWith("../") ? path : ("./" + path)) + ".ts";
+  }));
+}
 
 // The fix every failure below points at, stated once so each message ends the same way.
 const REMEDY = " A module joins the browser bundle only by being added to BROWSER_MODULES in build/browser-modules.mjs, and only if its own imports are " +
@@ -169,6 +192,25 @@ describe("browser-modules runtime-import forms", () => {
   });
 });
 
+describe("browser-modules allowlist per importer", () => {
+
+  // One nested importer over one list holding a module at the root and two in one folder, so each row's subject is the direction of the import rather than the
+  // contents of the list.
+  const allowed = allowedFor("webui/status", [ "formatters", "webui/sibling", "webui/status" ]);
+
+  test("lets a nested module load a listed root module one directory up, and refuses the root-relative spelling", () => {
+
+    assert.deepEqual(unsafeSpecifiers("import { formatBps } from \"../formatters.ts\";\nimport { formatBps as rootRelative } from \"./formatters.ts\";", allowed),
+      ["./formatters.ts"], "a nested module reaches a root module one directory up, and the same name beside it is a file the copy step never ships there");
+  });
+
+  test("lets a nested module load a listed sibling in its own folder, and refuses the root-relative spelling", () => {
+
+    assert.deepEqual(unsafeSpecifiers("import { wire } from \"./sibling.ts\";\nimport { wire as rootRelative } from \"./webui/sibling.ts\";", allowed),
+      ["./webui/sibling.ts"], "a nested module reaches its sibling by its bare name, and a folder of the same name beneath it is a path the copy step never ships");
+  });
+});
+
 describe("browser-modules browser-safe closure", () => {
 
   test("names a source file that exists for every listed module", async () => {
@@ -188,7 +230,7 @@ describe("browser-modules browser-safe closure", () => {
     for(const [ index, source ] of sources.entries()) {
 
       const name = BROWSER_MODULES[index];
-      const unsafe = unsafeSpecifiers(source, ALLOWED);
+      const unsafe = unsafeSpecifiers(source, allowedFor(name));
       const found = unsafe.map((specifier) => (specifier === null) ? "a dynamic import whose specifier is computed" : "\"" + specifier + "\"").join(", ");
 
       assert.deepEqual(unsafe, [], "src/" + name + ".ts loads " + found + " at runtime, which the browser bundle does not carry." + REMEDY);

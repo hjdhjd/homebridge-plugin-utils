@@ -15,7 +15,7 @@
 import { BOOTSTRAP_PROBE_ACCENT, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, installWebUiBoot, seedBootstrapProbeShim,
   waitFor } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
-import { STATUS_VIEW_ROUTE } from "./webui-status.js";
+import { STATUS_VIEW_ROUTE } from "./webui/status.js";
 import assert from "node:assert/strict";
 import { setImmediate as flushPending } from "node:timers/promises";
 import { webUi } from "./webUi.mjs";

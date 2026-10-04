@@ -1,6 +1,6 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webui-status.ts: The wire contract for the live device-status webUI panel.
+ * webui/status.ts: The wire contract for the live device-status webUI panel.
  */
 
 /**
@@ -15,7 +15,7 @@
  *
  * @module
  */
-import type { Nullable } from "./util.ts";
+import type { Nullable } from "../util.ts";
 
 /**
  * The push-event name a plugin's status adapter publishes {@link StatusEvent} payloads under, and the browser panel subscribes to. One owner for the literal, shared

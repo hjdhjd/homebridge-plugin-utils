@@ -254,7 +254,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   disables itself across both halves, so a slow refresh cannot be asked for twice, and a rejection surfaces through the same error toast every other detached
  *   failure uses. A rejected handler does NOT re-enter - a page that failed to refresh must not present as refreshed.
  * @property {Object} [statusPanel] - Live device-status panel for the device-stats region. Mutually exclusive with {@link FeatureOptionsConfig.infoPanel} (both own
- *   that region, so supplying both throws a TypeError at construction). The plugin supplies a server-side status adapter that speaks the `webui-status` protocol plus
+ *   that region, so supplying both throws a TypeError at construction). The plugin supplies a server-side status adapter that speaks the `webui/status` protocol plus
  *   the parts below, and inherits the entire rendered panel.
  * @property {Function} [statusPanel.contentPanel] - Renders plugin-owned content beneath the panel grid for the current selection, on the same
  *   `{ device, panel, signal }` bag contract as {@link FeatureOptionsConfig.infoPanel}. The framework creates the element once per mount, positions it after its own

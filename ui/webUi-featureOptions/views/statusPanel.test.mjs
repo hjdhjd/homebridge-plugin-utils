@@ -2,12 +2,12 @@
  *
  * webUi-featureOptions/views/statusPanel.test.mjs: The parity suite for the live device-status panel. Each test's own title states the behavior it proves, driven
  * against a Happy-DOM window, a real FeatureOptionsStore, and the evented fake homebridge bridge whose emitPush delivers the host's exact MessageEvent-with-data push
- * shape. The component is imported through its production `./statusPanel.mjs` specifier, which in turn imports `../../webui-status.js`; the test loader redirects
+ * shape. The component is imported through its production `./statusPanel.mjs` specifier, which in turn imports `../../webui/status.js`; the test loader redirects
  * that to the TypeScript source, so an unredirected specifier would fail loudly here.
  */
 "use strict";
 
-import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "../../webui-status.js";
+import { STATUS_EVENT, STATUS_VIEW_ROUTE } from "../../webui/status.js";
 import { afterEach, describe, test } from "node:test";
 import { createFakeHomebridge, createTestDom, installHomebridge } from "../../ui.helpers.mjs";
 import { initialState, reducer } from "../state.mjs";

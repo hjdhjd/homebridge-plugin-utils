@@ -1,11 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webui-status.test.ts: Contract tests for the live device-status wire protocol - the protocol constants, the untrusted view-request narrowing matrix, and the
+ * webui/status.test.ts: Contract tests for the live device-status wire protocol - the protocol constants, the untrusted view-request narrowing matrix, and the
  * compile-time shape exercises that hold the event union, the template-versus-row relationship, the two row forms and their tag discipline, the exclusivity of the
  * update arms, the non-empty sizer tuple, and the offline-implies-unencrypted split fixed against a shape regression.
  */
-import { STATUS_EVENT, STATUS_VIEW_ROUTE, narrowStatusViewRequest } from "./webui-status.ts";
-import type { StatusChoice, StatusEvent, StatusRow, StatusRowTemplate, StatusRowUpdate, StatusTextRowTemplate, StatusViewRequest } from "./webui-status.ts";
+import { STATUS_EVENT, STATUS_VIEW_ROUTE, narrowStatusViewRequest } from "./status.ts";
+import type { StatusChoice, StatusEvent, StatusRow, StatusRowTemplate, StatusRowUpdate, StatusTextRowTemplate, StatusViewRequest } from "./status.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -77,7 +77,7 @@ const _rowFormShapeExercises = (): void => {
   const _mixedUpdate = { choices: [{ label: "Away", selected: true }], id: "modes", value: "Away" } satisfies StatusRowUpdate;
 };
 
-describe("webui-status - route constants", () => {
+describe("webui/status - route constants", () => {
 
   test("the push-event name and view-route are the frozen literals", () => {
 

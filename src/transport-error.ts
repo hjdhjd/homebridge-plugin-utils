@@ -50,7 +50,8 @@ const CERTIFICATE_VERIFICATION_CODES: ReadonlySet<string> = new Set([ "CERT_CHAI
 // Everything one descent of a `cause` chain collects, and the whole of what the classification reads afterwards.
 interface CauseWalk {
 
-  // Whether any link is an `Error` whose name marks it a cancellation. The platform's `AbortError` carries no code at all, so its name is the only signal there is.
+  // Whether any link is an `Error` whose name marks it a cancellation. The platform cancels in more than one shape - a `DOMException` whose only code is a legacy number,
+  // and the runtime's own `AbortError` carrying a string code - so the name is the one signal every shape shares.
   abortNamed: boolean;
 
   // The first string-valued `code` found, nearest link first, or `undefined` when no link carried one.

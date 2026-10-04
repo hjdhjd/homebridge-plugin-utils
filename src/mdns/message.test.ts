@@ -183,23 +183,21 @@ describe("parseIpv4 / parseIpv6 - the address grammar", () => {
 
     // The readers are public so the record builders check an address at construction through the grammar the encoder writes from; the refusal names the reader,
     // and a zone suffix and a dotted tail both read as a group that is not hexadecimal.
-    const cases: readonly (readonly [string, () => Buffer, RegExp])[] = [
-      [ "a three-octet address", (): Buffer => parseIpv4("1.2.3"), /^parseIpv4: the address "1\.2\.3" is not four decimal octets\.$/ ],
-      [ "an octet over 255", (): Buffer => parseIpv4("256.1.1.1"),
-        /^parseIpv4: the address "256\.1\.1\.1" carries "256", which is not a decimal octet from 0 to 255\.$/ ],
-      [ "a hexadecimal octet", (): Buffer => parseIpv4("0x1.2.3.4"), /^parseIpv4: the address "0x1\.2\.3\.4" carries "0x1", which is not a decimal octet/ ],
-      [ "a zone suffix", (): Buffer => parseIpv6("fe80::50%en0"), /^parseIpv6: the address "fe80::50%en0" carries "50%en0", which is not a hexadecimal group\.$/ ],
-      [ "a dotted tail", (): Buffer => parseIpv6("::ffff:192.0.2.1"),
-        /^parseIpv6: the address "::ffff:192\.0\.2\.1" carries "192\.0\.2\.1", which is not a hexadecimal group\.$/ ],
-      [ "two abbreviations", (): Buffer => parseIpv6("1::2::3"), /^parseIpv6: the address "1::2::3" carries more than one "::"\.$/ ],
-      [ "too few groups", (): Buffer => parseIpv6("1:2:3"), /^parseIpv6: the address "1:2:3" does not expand to 8 groups\.$/ ],
-      [ "too many groups", (): Buffer => parseIpv6("1:2:3:4:5:6:7:8:9"), /^parseIpv6: the address "1:2:3:4:5:6:7:8:9" does not expand to 8 groups\.$/ ],
-      [ "an abbreviation standing for nothing", (): Buffer => parseIpv6("1:2:3:4::5:6:7:8"), /^parseIpv6: the address "1:2:3:4::5:6:7:8" does not expand to 8 groups\.$/ ]
+    const cases: readonly (readonly [() => Buffer, RegExp])[] = [
+      [ (): Buffer => parseIpv4("1.2.3"), /^parseIpv4: the address "1\.2\.3" is not four decimal octets\.$/ ],
+      [ (): Buffer => parseIpv4("256.1.1.1"), /^parseIpv4: the address "256\.1\.1\.1" carries "256", which is not a decimal octet from 0 to 255\.$/ ],
+      [ (): Buffer => parseIpv4("0x1.2.3.4"), /^parseIpv4: the address "0x1\.2\.3\.4" carries "0x1", which is not a decimal octet/ ],
+      [ (): Buffer => parseIpv6("fe80::50%en0"), /^parseIpv6: the address "fe80::50%en0" carries "50%en0", which is not a hexadecimal group\.$/ ],
+      [ (): Buffer => parseIpv6("::ffff:192.0.2.1"), /^parseIpv6: the address "::ffff:192\.0\.2\.1" carries "192\.0\.2\.1", which is not a hexadecimal group\.$/ ],
+      [ (): Buffer => parseIpv6("1::2::3"), /^parseIpv6: the address "1::2::3" carries more than one "::"\.$/ ],
+      [ (): Buffer => parseIpv6("1:2:3"), /^parseIpv6: the address "1:2:3" does not expand to 8 groups\.$/ ],
+      [ (): Buffer => parseIpv6("1:2:3:4:5:6:7:8:9"), /^parseIpv6: the address "1:2:3:4:5:6:7:8:9" does not expand to 8 groups\.$/ ],
+      [ (): Buffer => parseIpv6("1:2:3:4::5:6:7:8"), /^parseIpv6: the address "1:2:3:4::5:6:7:8" does not expand to 8 groups\.$/ ]
     ];
 
-    for(const [ what, read, message ] of cases) {
+    for(const [ read, message ] of cases) {
 
-      assert.throws(read, { constructor: TypeError, message }, what + " must be refused by the reader that read it");
+      assert.throws(read, { constructor: TypeError, message });
     }
   });
 });
@@ -664,33 +662,31 @@ describe("encodeDnsMessage - rdata", () => {
   test("E6: throws an Error naming the value for anything the wire cannot carry", () => {
 
     const name = "host.local";
-    const cases: readonly (readonly [string, () => Buffer, RegExp])[] = [
+    const cases: readonly (readonly [() => Buffer, RegExp])[] = [
 
-      [ "a 64-byte label", (): Buffer => encodeDnsMessage({ questions: [{ name: [repeat(64)], type: DNS_TYPE_PTR, unicastResponse: false }] }), /64 bytes, over the 63/ ],
-      [ "an empty label", (): Buffer => encodeDnsMessage({ questions: [{ name: [ "", "local" ], type: DNS_TYPE_PTR, unicastResponse: false }] }), /empty label/ ],
-      [ "a 256-byte name", (): Buffer => encodeDnsMessage({ questions: [{ name: [ repeat(63), repeat(63), repeat(63), repeat(62) ], type: DNS_TYPE_PTR,
+      [ (): Buffer => encodeDnsMessage({ questions: [{ name: [repeat(64)], type: DNS_TYPE_PTR, unicastResponse: false }] }), /64 bytes, over the 63/ ],
+      [ (): Buffer => encodeDnsMessage({ questions: [{ name: [ "", "local" ], type: DNS_TYPE_PTR, unicastResponse: false }] }), /empty label/ ],
+      [ (): Buffer => encodeDnsMessage({ questions: [{ name: [ repeat(63), repeat(63), repeat(63), repeat(62) ], type: DNS_TYPE_PTR,
         unicastResponse: false }] }), /256 wire bytes, over the 255/ ],
-      [ "a 256-byte TXT string", (): Buffer => encodeDnsMessage({ answers: [makeTxtRecord({ name, strings: ["b".repeat(256)] })] }), /256 bytes, over the 255/ ],
+      [ (): Buffer => encodeDnsMessage({ answers: [makeTxtRecord({ name, strings: ["b".repeat(256)] })] }), /256 bytes, over the 255/ ],
       // The address rows compose their records literally, so what they prove is the encoder's own reach into the readers: a builder refuses these at construction.
-      [ "a three-octet address", (): Buffer => encodeDnsMessage({ answers: [{ address: "1.2.3", flush: false, kind: "a", name: parseDnsName(name), ttl: 120 }] }),
+      [ (): Buffer => encodeDnsMessage({ answers: [{ address: "1.2.3", flush: false, kind: "a", name: parseDnsName(name), ttl: 120 }] }),
         /"1\.2\.3" is not four decimal octets/ ],
-      [ "an octet over 255", (): Buffer => encodeDnsMessage({ answers: [{ address: "256.1.1.1", flush: false, kind: "a", name: parseDnsName(name), ttl: 120 }] }),
-        /carries "256"/ ],
-      [ "an empty group", (): Buffer => encodeDnsMessage({ answers: [{ address: "fe80:::1", flush: false, kind: "aaaa", name: parseDnsName(name), ttl: 120 }] }),
+      [ (): Buffer => encodeDnsMessage({ answers: [{ address: "256.1.1.1", flush: false, kind: "a", name: parseDnsName(name), ttl: 120 }] }), /carries "256"/ ],
+      [ (): Buffer => encodeDnsMessage({ answers: [{ address: "fe80:::1", flush: false, kind: "aaaa", name: parseDnsName(name), ttl: 120 }] }),
         /"fe80:::1" carries "", which is not a hexadecimal group/ ],
-      [ "a dotted tail", (): Buffer => encodeDnsMessage({ answers: [{ address: "::ffff:192.168.1.1", flush: false, kind: "aaaa", name: parseDnsName(name),
+      [ (): Buffer => encodeDnsMessage({ answers: [{ address: "::ffff:192.168.1.1", flush: false, kind: "aaaa", name: parseDnsName(name),
         ttl: 120 }] }), /carries "192\.168\.1\.1"/ ],
-      [ "two abbreviations", (): Buffer => encodeDnsMessage({ answers: [{ address: "1::2::3", flush: false, kind: "aaaa", name: parseDnsName(name), ttl: 120 }] }),
+      [ (): Buffer => encodeDnsMessage({ answers: [{ address: "1::2::3", flush: false, kind: "aaaa", name: parseDnsName(name), ttl: 120 }] }),
         /"1::2::3" carries more than one/ ],
-      [ "too few groups", (): Buffer => encodeDnsMessage({ answers: [{ address: "1:2:3", flush: false, kind: "aaaa", name: parseDnsName(name), ttl: 120 }] }),
+      [ (): Buffer => encodeDnsMessage({ answers: [{ address: "1:2:3", flush: false, kind: "aaaa", name: parseDnsName(name), ttl: 120 }] }),
         /"1:2:3" does not expand to 8 groups/ ],
-      [ "an other record wearing a modeled type", (): Buffer => encodeDnsMessage({ answers: [makeOtherRecord({ name, rdata: Buffer.alloc(0), type: DNS_TYPE_PTR })] }),
-        /names the type 12/ ]
+      [ (): Buffer => encodeDnsMessage({ answers: [makeOtherRecord({ name, rdata: Buffer.alloc(0), type: DNS_TYPE_PTR })] }), /names the type 12/ ]
     ];
 
-    for(const [ what, encode, message ] of cases) {
+    for(const [ encode, message ] of cases) {
 
-      assert.throws(encode, { message }, what + " must throw an Error naming the value");
+      assert.throws(encode, { message });
     }
   });
 

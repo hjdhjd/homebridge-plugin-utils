@@ -43,9 +43,9 @@ describe("makeBox", () => {
   test("throws when the type code is not exactly 4 characters", () => {
 
     // The contract per the helper: type codes are exactly 4 ASCII characters per ISO BMFF. The assertion guards against typos like "moo" (3 chars) or "moofx" (5).
-    assert.throws(() => makeBox("moo"), { message: /4 ASCII characters/ }, "3-character type must reject");
-    assert.throws(() => makeBox("moofx"), { message: /4 ASCII characters/ }, "5-character type must reject");
-    assert.throws(() => makeBox(""), { message: /4 ASCII characters/ }, "empty type must reject");
+    assert.throws(() => makeBox("moo"), { message: /4 ASCII characters/ });
+    assert.throws(() => makeBox("moofx"), { message: /4 ASCII characters/ });
+    assert.throws(() => makeBox(""), { message: /4 ASCII characters/ });
   });
 });
 

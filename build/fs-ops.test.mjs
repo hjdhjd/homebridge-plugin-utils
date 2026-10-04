@@ -197,7 +197,7 @@ describe("fs-ops publish-docs", () => {
     assert.equal(await readFile(join(root, "docs", "README.md"), "utf8"), "the generated index page.\n", "an existing page must end up carrying the staged bytes");
     assert.equal(await readFile(join(root, "docs", "fresh", "Module.md"), "utf8"), "a page in a directory the published tree does not carry yet.\n",
       "a staged page must land in a directory the published tree gains for it");
-    await assert.rejects(stat(join(root, ".docs-staging")), { code: "ENOENT" }, "the staging directory must be gone once its pages are published");
+    await assert.rejects(stat(join(root, ".docs-staging")), { code: "ENOENT" });
   });
 
   test("prunes a generated page the run did not produce, in the root and in a subdirectory", async () => {

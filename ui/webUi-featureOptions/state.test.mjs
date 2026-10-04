@@ -700,7 +700,7 @@ describe("connectionFailureCopy", () => {
 
       constructor: Error,
       message: "FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"devcies\"."
-    }, "a copy key typo is a bug at the dispatch site and must surface loudly, the reducer's own unknown-action policy");
+    });
   });
 
   test("the controller-failure rows share one guidance, and it names no place the plugin may not have", () => {

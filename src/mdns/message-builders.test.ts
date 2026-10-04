@@ -63,25 +63,24 @@ describe("the record factories", () => {
 
     // The builder reads the address through the encoder's own reader at construction, so the spelling the browser attaches to a link-local address it reports,
     // the RFC 4291 mixed tail, and a malformed group are each refused at the call that supplied them and never reach the encoder.
-    const cases: readonly (readonly [string, string, RegExp])[] = [
-      [ "a zone suffix", "fe80::50%en0", /^parseIpv6: the address "fe80::50%en0" carries "50%en0", which is not a hexadecimal group\.$/ ],
-      [ "a dotted tail", "::ffff:192.0.2.1", /^parseIpv6: the address "::ffff:192\.0\.2\.1" carries "192\.0\.2\.1", which is not a hexadecimal group\.$/ ],
-      [ "an empty group", "fe80:::1", /^parseIpv6: the address "fe80:::1" carries "", which is not a hexadecimal group\.$/ ]
+    const cases: readonly (readonly [string, RegExp])[] = [
+      [ "fe80::50%en0", /^parseIpv6: the address "fe80::50%en0" carries "50%en0", which is not a hexadecimal group\.$/ ],
+      [ "::ffff:192.0.2.1", /^parseIpv6: the address "::ffff:192\.0\.2\.1" carries "192\.0\.2\.1", which is not a hexadecimal group\.$/ ],
+      [ "fe80:::1", /^parseIpv6: the address "fe80:::1" carries "", which is not a hexadecimal group\.$/ ]
     ];
 
-    for(const [ what, address, message ] of cases) {
+    for(const [ address, message ] of cases) {
 
-      assert.throws(() => makeAaaaRecord({ address, name: "host.local" }), { constructor: TypeError, message }, what + " must be refused at construction");
+      assert.throws(() => makeAaaaRecord({ address, name: "host.local" }), { constructor: TypeError, message });
     }
   });
 
   test("B6: makeARecord refuses anything but four decimal octets with a TypeError naming the reader and the address", () => {
 
     assert.throws(() => makeARecord({ address: "1.2.3", name: "host.local" }), { constructor: TypeError,
-      message: /^parseIpv4: the address "1\.2\.3" is not four decimal octets\.$/ }, "a three-octet address must be refused at construction");
+      message: /^parseIpv4: the address "1\.2\.3" is not four decimal octets\.$/ });
     assert.throws(() => makeARecord({ address: "256.1.1.1", name: "host.local" }),
-      { constructor: TypeError, message: /^parseIpv4: the address "256\.1\.1\.1" carries "256", which is not a decimal octet from 0 to 255\.$/ },
-      "an octet over 255 must be refused at construction");
+      { constructor: TypeError, message: /^parseIpv4: the address "256\.1\.1\.1" carries "256", which is not a decimal octet from 0 to 255\.$/ });
   });
 });
 
@@ -150,9 +149,9 @@ describe("makeServiceRecords", () => {
     // A zone suffix reaches the AAAA builder and is refused there, and a malformed IPv6 spelling is refused by the IPv6 reader with the message that explains it
     // rather than routed to the A builder and refused as a dotted quad that is not four octets.
     assert.throws(() => makeServiceRecords({ addresses: ["fe80::50%en0"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }),
-      { constructor: TypeError, message: /^parseIpv6: the address "fe80::50%en0" carries "50%en0"/ }, "a zone suffix must be refused through the advertisement");
+      { constructor: TypeError, message: /^parseIpv6: the address "fe80::50%en0" carries "50%en0"/ });
     assert.throws(() => makeServiceRecords({ addresses: ["fe80:::1"], host: "gdo", instance: "x", port: 1, serviceType: "_hap._tcp.local" }),
-      { constructor: TypeError, message: /^parseIpv6: the address "fe80:::1" carries ""/ }, "a malformed IPv6 spelling must be refused by the IPv6 reader");
+      { constructor: TypeError, message: /^parseIpv6: the address "fe80:::1" carries ""/ });
   });
 
   test("K3: every address named is an address record of its own, in the order they were given and each of its own address's family", () => {
@@ -179,8 +178,7 @@ describe("makeServiceRecords", () => {
     // refused at the call rather than building a PTR whose name carries no domain at all.
     assert.throws(() => makeServiceRecords({ addresses: [], host: "x", instance: "y", port: 1, serviceType: "_hap._tcp" }),
       { constructor: TypeError,
-        message: /^makeServiceRecords: `serviceType` must be a DNS-SD service type such as "_esphomelib\._tcp\.local", and "_hap\._tcp" is not\.$/ },
-      "the two-label spelling alone must be refused, with nothing else about the call");
+        message: /^makeServiceRecords: `serviceType` must be a DNS-SD service type such as "_esphomelib\._tcp\.local", and "_hap\._tcp" is not\.$/ });
   });
 
   test("K6: a subtype-form service type is refused, since the domain labels are read positionally after the transport", () => {
@@ -189,8 +187,7 @@ describe("makeServiceRecords", () => {
     // transport and a domain no responder ever advertised from being fabricated. A suite that wants a subtype PTR builds that record by hand instead.
     assert.throws(() => makeServiceRecords({ addresses: [], host: "x", instance: "y", port: 1, serviceType: "_printer._sub._http._tcp.local" }),
       { constructor: TypeError,
-        message: /^makeServiceRecords: `serviceType` must be a base DNS-SD service type such as "_esphomelib\._tcp\.local" - name, transport, domain, and/ },
-      "the subtype form must be refused, since this fixture builds base-type records only");
+        message: /^makeServiceRecords: `serviceType` must be a base DNS-SD service type such as "_esphomelib\._tcp\.local" - name, transport, domain, and/ });
   });
 
   test("K6b: a base type whose transport is _udp is accepted and its records built, since the guard admits either transport", () => {
@@ -230,11 +227,9 @@ describe("makeTxtStrings", () => {
   test("K8: refuses the two keys RFC 6763 section 6.4 cannot express, naming the key it was given", () => {
 
     assert.throws(() => makeTxtStrings({ "": "x" }),
-      { constructor: TypeError, message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "" is not\.$/ },
-      "an empty key has no way to be written before the equals sign");
+      { constructor: TypeError, message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "" is not\.$/ });
     assert.throws(() => makeTxtStrings({ "a=b": "x" }),
-      { constructor: TypeError, message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "a=b" is not\.$/ },
-      "a key already carrying an equals sign would be read back as a shorter key and a longer value");
+      { constructor: TypeError, message: /^makeTxtStrings: a TXT key must be non-empty and contain no "=", and "a=b" is not\.$/ });
   });
 
   test("K9: a mixed-case key is legitimate wire content, and only the read side folds it", () => {

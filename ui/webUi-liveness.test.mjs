@@ -225,7 +225,7 @@ describe("withDeadline", () => {
 
         constructor: TypeError,
         message: "withDeadline's seconds must be a finite, positive number of seconds."
-      }, "a duration of " + String(seconds) + " must be rejected at the call site");
+      });
     }
   });
 });
@@ -481,7 +481,7 @@ describe("createRequestWatchdog", () => {
 
         constructor: TypeError,
         message: "createRequestWatchdog's timeoutSeconds must be a finite, positive number of seconds."
-      }, "a timeout of " + String(timeoutSeconds) + " must be rejected at the call site");
+      });
     }
   });
 });

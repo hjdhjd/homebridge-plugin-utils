@@ -691,8 +691,7 @@ describe("acquireService - name characteristic management", () => {
     const accessory = makeAccessory();
     const ctor = CharacteristicLessSwitch;
 
-    assert.throws(() => acquireService({ accessory, name: "broken", serviceType: ctor }), { message: /Service has no characteristics/ },
-      "the defensive guard must throw with the documented message when a service arrives without characteristics");
+    assert.throws(() => acquireService({ accessory, name: "broken", serviceType: ctor }), { message: /Service has no characteristics/ });
   });
 });
 

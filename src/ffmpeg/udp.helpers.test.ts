@@ -75,7 +75,7 @@ describe("probePortAvailable", () => {
 
     await using holder = await holdPort(port);
 
-    await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" }, "probe must reject with EADDRINUSE when the port is held by another socket");
+    await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" });
 
     t.diagnostic("verified probePortAvailable surfaces the kernel error for a held port");
   });
@@ -93,7 +93,7 @@ describe("holdPort", () => {
       await using holder = await holdPort(port);
 
       // While held, probing must fail with EADDRINUSE.
-      await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" }, "while holdPort is in scope, the port must be unavailable");
+      await assert.rejects(probePortAvailable(port), { code: "EADDRINUSE" });
     }
 
     // After scope exit, the disposer has run; the port must be free again.
@@ -119,7 +119,7 @@ describe("holdPort", () => {
 
     await using holder = await holdPort(port, "ipv6");
 
-    await assert.rejects(probePortAvailable(port, "ipv6"), { code: "EADDRINUSE" }, "IPv6 hold must produce EADDRINUSE on a same-family probe");
+    await assert.rejects(probePortAvailable(port, "ipv6"), { code: "EADDRINUSE" });
   });
 
   test("holdPort(0) returns a handle whose `port` field carries the kernel-assigned ephemeral port", async () => {
@@ -131,8 +131,7 @@ describe("holdPort", () => {
 
     assert.equal(typeof holder.port, "number", "the `port` field must be a number");
     assert.notEqual(holder.port, 0, "the returned port must be the kernel-assigned ephemeral, not the placeholder zero");
-    await assert.rejects(probePortAvailable(holder.port), { code: "EADDRINUSE" },
-      "the `port` field must identify the port that's actually held - probing it must collide with the holder");
+    await assert.rejects(probePortAvailable(holder.port), { code: "EADDRINUSE" });
   });
 });
 

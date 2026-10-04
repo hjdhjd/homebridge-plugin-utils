@@ -110,8 +110,7 @@ describe("assertRuntimeFloorCompat", () => {
 
     const message = "Complete the sunset: delete src/shim.ts; and delete this file.";
 
-    assert.throws(() => assertRuntimeFloorCompat({ kind: "sunset", message }), { constructor: AssertionError, message },
-      "the canary must surface the checklist verbatim, since that message IS the cleanup instructions");
+    assert.throws(() => assertRuntimeFloorCompat({ kind: "sunset", message }), { constructor: AssertionError, message });
   });
 
   test("does nothing at all while the workaround is still owed", () => {

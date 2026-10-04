@@ -31,19 +31,17 @@ describe("expectAt", () => {
 
     // The contract per the docstring: AssertionError when the indexed slot is undefined. Verify both that the throw fires and that its message names the descriptor
     // and index, since those are the diagnostic affordance for failures in test bodies that walk a collection.
-    assert.throws(() => expectAt([], 0, "missing record"), { constructor: AssertionError, message: /missing record at index 0/ },
-      "out-of-bounds access must throw with the descriptor and the literal index in the message");
+    assert.throws(() => expectAt([], 0, "missing record"), { constructor: AssertionError, message: /missing record at index 0/ });
 
     // Negative indices are explicitly out of contract per the docstring; they always fail because items[-1] is undefined.
-    assert.throws(() => expectAt(["x"], -1, "negative"), { constructor: AssertionError, message: /negative at index -1/ },
-      "negative index must throw and surface the negative index in the message");
+    assert.throws(() => expectAt(["x"], -1, "negative"), { constructor: AssertionError, message: /negative at index -1/ });
   });
 
   test("uses the default \"an item\" descriptor when the caller omits the description", () => {
 
     // Default-argument coverage: the docstring promises `description = "an item"` when omitted, and the failure message must reflect that default exactly so callers
     // who skip the descriptor still get a recognizable diagnostic.
-    assert.throws(() => expectAt([], 0), { message: /an item at index 0/ }, "the default descriptor must appear in the failure message verbatim");
+    assert.throws(() => expectAt([], 0), { message: /an item at index 0/ });
   });
 
   test("narrows readonly arrays the same way as mutable ones", () => {
@@ -69,10 +67,8 @@ describe("present", () => {
 
   test("throws an AssertionError naming the description and the value for null and for undefined", () => {
 
-    assert.throws(() => present(undefined, "a missing record"), { constructor: AssertionError, message: "expected a missing record, got undefined" },
-      "an undefined value must throw naming the lookup and rendering what arrived");
-    assert.throws(() => present(null, "a missing record"), { constructor: AssertionError, message: "expected a missing record, got null" },
-      "a null value must throw naming the lookup and rendering what arrived");
+    assert.throws(() => present(undefined, "a missing record"), { constructor: AssertionError, message: "expected a missing record, got undefined" });
+    assert.throws(() => present(null, "a missing record"), { constructor: AssertionError, message: "expected a missing record, got null" });
   });
 
   test("narrows the result to its present type", () => {
@@ -298,8 +294,7 @@ describe("assertNoUnhandledRejections", () => {
 
     // If the body throws or rejects, that error must propagate - the helper's contract is about UNHANDLED rejections specifically, not about errors the body
     // produces directly. A body-thrown error is a handled rejection (the helper awaits and catches via the throw site) and must surface to the caller.
-    await assert.rejects(async () => assertNoUnhandledRejections(async () => { throw new Error("body-direct"); }), { message: "body-direct" },
-      "errors thrown directly by the body must propagate unchanged");
+    await assert.rejects(async () => assertNoUnhandledRejections(async () => { throw new Error("body-direct"); }), { message: "body-direct" });
   });
 
   test("removes the unhandledRejection listener even when the body throws", async () => {
@@ -355,8 +350,7 @@ describe("waitUntil", () => {
     // The whole point of a deadline over a fixed sleep: it fails loudly, and the message names the state the caller was waiting for rather than the shape of the
     // wait. A reader meeting this line in a CI log should know what did not happen without opening the test.
     await assert.rejects(async () => waitUntil(() => false, { description: "a condition that never holds", pollMs: 1, timeoutMs: 20 }),
-      { message: "waitUntil: a condition that never holds did not hold within 20 ms." },
-      "an expired deadline must throw with the caller's description and the deadline it was given");
+      { message: "waitUntil: a condition that never holds did not hold within 20 ms." });
   });
 });
 
@@ -480,8 +474,7 @@ describe("settleUntil", () => {
   test("throws naming the description and the turn budget when the predicate never holds", async () => {
 
     await assert.rejects(settleUntil(() => false, { description: "a condition that never holds", turns: 3 }),
-      { message: "settleUntil: a condition that never holds did not hold within 3 macrotask turns." },
-      "the failure must name the state that never arrived and the budget it was given");
+      { message: "settleUntil: a condition that never holds did not hold within 3 macrotask turns." });
   });
 
   test("spends exactly the turn budget before it throws", async () => {
@@ -493,7 +486,8 @@ describe("settleUntil", () => {
       reads++;
 
       return false;
-    }, { description: "a condition that never holds", turns: 3 }), { constructor: Error }, "a predicate that never holds must end in the budget's own failure");
+    }, { description: "a condition that never holds", turns: 3 }),
+    { constructor: Error, message: "settleUntil: a condition that never holds did not hold within 3 macrotask turns." });
 
     /* The predicate is read once before each of the three yields and once more on the turn that throws, so a count of four is exactly three yields crossed. The row
      * above cannot make this claim: its message is built from the `turns` option rather than from anything measured, so it reads the same whether the throw came
@@ -627,8 +621,7 @@ describe("drainClock", () => {
 
     try {
 
-      await assert.rejects(async () => drainClock(clock, 3), { constructor: Error, message: "drainClock: the clock still had entries pending after 3 steps." },
-        "a drain that exceeds its bound must throw naming the limit rather than spinning");
+      await assert.rejects(async () => drainClock(clock, 3), { constructor: Error, message: "drainClock: the clock still had entries pending after 3 steps." });
     } finally {
 
       handle[Symbol.dispose]();

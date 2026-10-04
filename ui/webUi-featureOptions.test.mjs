@@ -6246,7 +6246,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
       constructor: TypeError,
       message: "registerTheming is framework wiring, not a plugin option - pass it in the constructor's second parameter."
-    }, "framework wiring in the plugin bag would be silently ignored, so it is named instead");
+    });
 
     assert.doesNotThrow(() => new webUiFeatureOptions({}, { registerTheming: () => Promise.resolve() }), "the same value in the wiring parameter is accepted");
     assert.doesNotThrow(() => new webUiFeatureOptions(), "and the wiring stays entirely optional");
@@ -6264,7 +6264,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
 
       constructor: TypeError,
       message: "resumeDetector is framework wiring, not a plugin option - pass it in the constructor's second parameter."
-    }, "framework wiring in the plugin bag would be silently ignored, so it is named instead");
+    });
 
     assert.doesNotThrow(() => new webUiFeatureOptions({}, { resumeDetector: { subscribe: () => {} } }), "the same value in the wiring parameter is accepted");
     assert.doesNotThrow(() => new webUiFeatureOptions(), "and the wiring stays entirely optional");
@@ -6575,7 +6575,7 @@ describe("webUiFeatureOptions.catalog", () => {
 
     const orchestrator = new webUiFeatureOptions({ ui: { controllerRetryEnableDelayMs: 20 } });
 
-    await assert.rejects(() => orchestrator.catalog(), { message: MALFORMED }, "the accessor refuses a catalog with no categories in it");
+    await assert.rejects(() => orchestrator.catalog(), { message: MALFORMED });
 
     await orchestrator.show(await openTestSession());
     await flush();
@@ -6606,8 +6606,8 @@ describe("webUiFeatureOptions.catalog", () => {
 
     const orchestrator = new webUiFeatureOptions();
 
-    await assert.rejects(() => orchestrator.catalog(), { message: "The bridge is not answering." }, "the first read fails the way the host failed it");
-    assert.deepEqual(await orchestrator.catalog(), CATALOG, "and the next reader gets a fresh read rather than the failure again");
+    await assert.rejects(() => orchestrator.catalog(), { message: "The bridge is not answering." });
+    assert.deepEqual(await orchestrator.catalog(), CATALOG, "the next reader gets a fresh read rather than the failure again");
     assert.equal(calls.length, 2, "which is one request per attempt");
   });
 

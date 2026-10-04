@@ -701,18 +701,23 @@ describe("freePort", () => {
 
     await listening;
 
-    const address = server.address();
+    try {
 
-    assert.ok((address !== null) && (typeof address === "object"), "the rebound server must report the address it took");
+      const address = server.address();
 
-    const bound = address.port;
-    const closed = once(server, "close");
+      assert.ok((address !== null) && (typeof address === "object"), "the rebound server must report the address it took");
 
-    server.close();
+      const bound = address.port;
 
-    await closed;
+      assert.equal(bound, port, "the answered port must bind on the first attempt, which is what proves the helper released its own handle before answering");
+    } finally {
 
-    assert.equal(bound, port, "the answered port must bind on the first attempt, which is what proves the helper released its own handle before answering");
+      const closed = once(server, "close");
+
+      server.close();
+
+      await closed;
+    }
   });
 
   test("answers a different port on a second call while the first is still held", async () => {
@@ -743,16 +748,20 @@ describe("listenOnLoopback and stopListening", () => {
     const server = createServer((socket) => socket.end("served"));
     const port = await listenOnLoopback(server);
 
-    assert.ok(port > 0, "the kernel must have assigned a real port");
+    try {
 
-    const socket = createConnection(port, "127.0.0.1");
-    const served = await new Promise<Buffer>((resolve) => void socket.once("data", (chunk: Buffer) => resolve(chunk)));
+      assert.ok(port > 0, "the kernel must have assigned a real port");
 
-    socket.destroy();
+      const socket = createConnection(port, "127.0.0.1");
+      const served = await new Promise<Buffer>((resolve) => void socket.once("data", (chunk: Buffer) => resolve(chunk)));
 
-    await stopListening(server);
+      socket.destroy();
 
-    assert.equal(String(served), "served", "a real connection to the answered port must reach the handler the server was built with");
+      assert.equal(String(served), "served", "a real connection to the answered port must reach the handler the server was built with");
+    } finally {
+
+      await stopListening(server);
+    }
   });
 
   test("binds the loopback interface rather than the wildcard address", async () => {
@@ -761,12 +770,16 @@ describe("listenOnLoopback and stopListening", () => {
 
     await listenOnLoopback(server);
 
-    const address = server.address();
+    try {
 
-    assert.ok((address !== null) && (typeof address === "object"), "the bound server must report an address object");
-    assert.equal(address.address, "127.0.0.1", "the bind must name the loopback interface rather than the wildcard address a port reservation takes");
+      const address = server.address();
 
-    await stopListening(server);
+      assert.ok((address !== null) && (typeof address === "object"), "the bound server must report an address object");
+      assert.equal(address.address, "127.0.0.1", "the bind must name the loopback interface rather than the wildcard address a port reservation takes");
+    } finally {
+
+      await stopListening(server);
+    }
   });
 
   test("rejects carrying the kernel's error when the port cannot be bound", async () => {
@@ -778,9 +791,14 @@ describe("listenOnLoopback and stopListening", () => {
     /* What this proves is the failure PATH - that a bind failure reaches the caller as the returned promise's rejection rather than as a hang or an unhandled
      * "error" event - and nothing more. It makes no claim about the order the listeners were attached in: `once` settles on "error" whichever order they went on.
      */
-    await assert.rejects(listenOnLoopback(contender, port), { code: "EADDRINUSE" });
+    try {
 
-    await stopListening(holder);
+      await assert.rejects(listenOnLoopback(contender, port), { code: "EADDRINUSE" });
+    } finally {
+
+      await stopListening(contender);
+      await stopListening(holder);
+    }
   });
 
   test("asks the kernel for a free port when none is named", async () => {
@@ -790,12 +808,16 @@ describe("listenOnLoopback and stopListening", () => {
     const firstPort = await listenOnLoopback(first);
     const secondPort = await listenOnLoopback(second);
 
-    assert.ok(firstPort > 0, "a defaulted call must answer a real port");
-    assert.ok(secondPort > 0, "a second defaulted call must answer a real port");
-    assert.notEqual(firstPort, secondPort, "two defaulted calls must not collide, which is what asking the kernel buys over a written-down number");
+    try {
 
-    await stopListening(first);
-    await stopListening(second);
+      assert.ok(firstPort > 0, "a defaulted call must answer a real port");
+      assert.ok(secondPort > 0, "a second defaulted call must answer a real port");
+      assert.notEqual(firstPort, secondPort, "two defaulted calls must not collide, which is what asking the kernel buys over a written-down number");
+    } finally {
+
+      await stopListening(first);
+      await stopListening(second);
+    }
   });
 
   test("binds the port the caller names", async () => {
@@ -809,9 +831,13 @@ describe("listenOnLoopback and stopListening", () => {
     const rebound = await listenOnLoopback(fresh, named);
 
     // This is the case a fixture coming back on the address a client is already reconnecting to needs, and the row that would redden if the parameter were dropped.
-    assert.equal(rebound, named, "a caller-named port must be the port that gets bound");
+    try {
 
-    await stopListening(fresh);
+      assert.equal(rebound, named, "a caller-named port must be the port that gets bound");
+    } finally {
+
+      await stopListening(fresh);
+    }
   });
 
   test("releases the handle, so the port rebinds in a single attempt", async () => {
@@ -825,9 +851,13 @@ describe("listenOnLoopback and stopListening", () => {
     const rebound = createServer();
     const reboundPort = await listenOnLoopback(rebound, port);
 
-    assert.equal(reboundPort, port, "the released port must rebind on the first attempt, which proves the close resolved only once the handle was gone");
+    try {
 
-    await stopListening(rebound);
+      assert.equal(reboundPort, port, "the released port must rebind on the first attempt, which proves the close resolved only once the handle was gone");
+    } finally {
+
+      await stopListening(rebound);
+    }
   });
 
   test("resolves for a server that never listened", async () => {

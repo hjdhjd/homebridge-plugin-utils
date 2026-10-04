@@ -10,9 +10,10 @@ Every piece of shipped test-support surface the library offers, reachable at one
 
 The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
 support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
-finders, the unhandled-rejection assertion, the shared poll-with-deadline and the turn-budgeted poll beside it, the macrotask yield with the two `TestClock` walks
-built on it, and the real-socket family that reserves a port and binds and stops a loopback server - the runtime-floor guard machinery in `runtime-floor.ts` beside
-this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
+finders, the unhandled-rejection assertion, the shared poll-with-deadline and the turn-budgeted poll beside it, the macrotask yield with the `TestClock` walks built on
+it (`advanceThroughSchedule` through a known schedule of waits, `drainClock` until nothing is pending), and the real-socket family that reserves a port and binds and
+stops a loopback server - the runtime-floor guard machinery in `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own
+dependency-inversion boundaries.
 
 The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
 `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its

@@ -106,9 +106,10 @@ async function buildUi() {
   });
 }
 
-// Copy the compiled browser-runnable modules into dist/ui so the browser-side webUI can resolve them as siblings of the orchestrator. Runs after tsc emits the
-// compiled `dist/*.js` files. The set of modules is `BROWSER_MODULES`, the single source of truth for "what the browser bundle needs at runtime"; adding a new
-// browser-side runtime dependency means adding its name to that list and keeping the artifact's own imports browser-safe.
+// Copy the compiled browser-runnable modules into dist/ui, each at its path under src, so the browser-side webUI resolves them as the compiler wrote their imports:
+// a module at the root sits beside the orchestrator, and a module in a folder keeps that folder. Runs after tsc emits the compiled modules under `dist/`. The set
+// of modules is `BROWSER_MODULES`, the single source of truth for "what the browser bundle needs at runtime"; adding a new browser-side runtime dependency means
+// adding its path to that list and keeping the artifact's own imports browser-safe.
 //
 // Each module ships paired with its `.js.map` so browser DevTools can map runtime errors back to the original `.ts` source. The `.d.ts` / `.d.ts.map` artifacts
 // are TypeScript-only and stay in `dist/` for type consumers; the browser never loads them, so they have no place in `dist/ui/`.

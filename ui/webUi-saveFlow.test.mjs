@@ -1,16 +1,17 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ui/webUi-saveFlow.test.mjs: The specification suite for the shared save flow - the check under the card's newest-wins rule, the one write, the commit's result
- * passed through, the busy refusal, the Save control disabled for the span of a write, and the delivery decision. It runs with no DOM: the card is the real
- * action guard behind a starter whose presented() reads a flag the test holds, the commit is a double whose settlement the test controls, the toast records
- * what it was asked to raise, and the Save control is a double that records every write to its disabled flag.
+ * ui/webUi-saveFlow.test.mjs: The specification suite for the shared save flow, src/webui/saveflow.ts - the check under the card's newest-wins rule, the one
+ * write, the commit's result passed through, the busy refusal, the Save control disabled for the span of a write, and the delivery decision. It imports the flow
+ * by the specifier a plugin's page uses, which the test loader redirects to that source. It runs with no DOM: the card is the real action guard behind a starter
+ * whose presented() reads a flag the test holds, the commit is a double whose settlement the test controls, the toast records what it was asked to raise, and the
+ * Save control is a double that records every write to its disabled flag.
  */
 "use strict";
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createActionGuard } from "./webUi-liveness.mjs";
-import { createSaveFlow } from "./webUi-saveFlow.mjs";
+import { createSaveFlow } from "./webui/saveflow.js";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 
 // The platform entry the commit double hands every composer, standing in for the page's live configuration.

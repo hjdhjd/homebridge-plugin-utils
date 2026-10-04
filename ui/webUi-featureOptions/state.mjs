@@ -133,15 +133,9 @@ import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureO
  */
 
 /**
- * ControllerRename - One controller key becoming another. The page keys a controller by the `serialNumber` its plugin's `getControllers` hook supplies, and a
- * plugin that fills it from configuration - the controller's address, above all - replaces the key whenever a write edits that configuration. Nothing in the two
- * lists says the departing key and the arriving one are the same controller, so a write that replaced one declares it, naming the key the controller had and the
- * key it has now.
+ * ControllerRename - One controller key becoming another, declared by the TypeScript module `src/webui/commit.ts`, which the package root exports.
  *
- * The declaration is a claim about the write, and the controller lists on either side of it are the evidence: {@link renameHonored} is the one test of whether
- * they prove it, and a rename they do not prove is ignored.
- *
- * @typedef {{from: string, to: string}} ControllerRename
+ * @typedef {import("../../src/webui/commit.ts").ControllerRename} ControllerRename
  */
 
 /**

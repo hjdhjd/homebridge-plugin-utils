@@ -138,19 +138,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  */
 
 /**
- * What became of a {@link webUiFeatureOptions#commitConfig} call: one member per thing a consumer does about it, tagged by `kind` because the members are mutually
- * exclusive answers to one question, and a member that answers for a refusal carries the error that explains it.
+ * What became of a {@link webUiFeatureOptions#commitConfig} call, declared by the TypeScript module `src/webui/commit.ts`, which the package root exports.
  *
- * `committed` and `staged` both mean the configuration changed and the page has been reconciled to it, so a consumer updates its own caches identically for the
- * two and differs only in what it tells the user: `staged` reached the host's memory and failed to reach disk, which the user's own Save still completes.
- * `failed` means the composer's change was not written - a pending option edit never reached the host, or the host refused the write. `unchanged` means the
- * composer answered null, so nothing of the composer's was written. A composer answers null when its change is already in place, and also when it refuses the
- * change against the configuration as it stands. The result does not say which, because the plugin that wrote the composer knows, and a consumer whose
- * composer can answer null for more than one reason keeps the reason in a variable the composer sets. Whatever the reason, the page is neither re-established
- * nor re-entered, a consumer has no cache to update, and what it tells the user is the reason its composer answered null. What `failed` and `unchanged` leave
- * unwritten is the composer's change alone: a pending option edit the call drained ahead of the composer stays written.
- *
- * @typedef {{ kind: "committed" } | { error: *, kind: "staged" } | { error: *, kind: "failed" } | { kind: "unchanged" }} CommitConfigResult
+ * @typedef {import("../src/webui/commit.ts").CommitConfigResult} CommitConfigResult
  */
 
 /**

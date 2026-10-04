@@ -122,6 +122,13 @@ ruleTester.run("no-boolean-error-predicate", rule, {
       errors: 1
     },
 
+    // An inner `const` that shadows the parameter is a different binding under the same name, so a strict equality with it is not identity of the parameter.
+    {
+
+      code: "assert.throws(() => f(), (error) => {\n  {\n    const error = other;\n\n    return error === reason;\n  }\n});",
+      errors: 1
+    },
+
     // A block body whose one return is a compound.
     {
 
@@ -308,6 +315,9 @@ ruleTester.run("no-boolean-error-predicate", rule, {
 
     // A nested callback's boolean return belongs to that callback, so it never counts against the validation function around it.
     "assert.throws(() => f(), (error) => {\n  assert.ok(causes.some((cause) => {\n    return cause === error.cause;\n  }), \"r\");\n\n  return true;\n});",
+
+    // A computed callee names its method by a value the rule does not evaluate, so `assert[throws]` is left alone whatever the variable `throws` holds.
+    "assert[throws](() => f(), (error) => error instanceof TypeError);",
 
     // An unrelated receiver's own `throws` has its own contract for its arguments.
     "matcher.throws(() => f(), (error) => error instanceof TypeError);"

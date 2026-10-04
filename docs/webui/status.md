@@ -1,10 +1,10 @@
-[**homebridge-plugin-utils**](README.md)
+[**homebridge-plugin-utils**](../README.md)
 
 ***
 
-[Home](README.md) / webui-status
+[Home](../README.md) / webui/status
 
-# webui-status
+# webui/status
 
 The live device-status protocol shared by both sides of the Config UI X bridge.
 
@@ -329,6 +329,6 @@ rather than any plugin's untestable server adapter.
 
 #### Returns
 
-[`Nullable`](util.md#nullable)\<[`StatusViewRequest`](#statusviewrequest)\>
+[`Nullable`](../util.md#nullable)\<[`StatusViewRequest`](#statusviewrequest)\>
 
 The narrowed [StatusViewRequest](#statusviewrequest), or null when the body does not match the contract.

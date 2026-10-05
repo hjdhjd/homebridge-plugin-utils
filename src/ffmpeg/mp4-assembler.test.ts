@@ -103,8 +103,7 @@ describe("Mp4SegmentAssembler - init segment contract", () => {
 
     assembler.abort(reason);
 
-    await assert.rejects(assembler.initSegment, (error: unknown) => error === reason,
-      "initSegment must reject with the exact signal reason that tore the assembler down");
+    await assert.rejects(assembler.initSegment, (error: unknown) => error === reason);
   });
 });
 

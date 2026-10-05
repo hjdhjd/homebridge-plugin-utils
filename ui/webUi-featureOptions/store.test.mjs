@@ -414,7 +414,7 @@ describe("memoize", () => {
       return "computed";
     }, slices: [(s) => s.list] });
 
-    assert.throws(() => selector(slices), TypeError, "the first call surfaces the throw rather than swallowing it");
+    assert.throws(() => selector(slices), TypeError);
     assert.equal(computeCount, 1, "the throwing pass ran once");
 
     assert.equal(selector(slices), "computed", "the next call over the very same slices recomputes rather than serving a poisoned cache");

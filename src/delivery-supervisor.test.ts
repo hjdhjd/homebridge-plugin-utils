@@ -322,7 +322,7 @@ describe("DeliverySupervisor", () => {
     assert.throws(() => {
 
       scenario.supervisor.open("w", { deadline: 100, onDeadline: (): void => undefined, onSettle: scenario.onSettle, slots: ["only"] });
-    }, (error: unknown): boolean => error === reason, "the throw must be the signal's own reason, by identity");
+    }, (error: unknown): boolean => error === reason);
 
     assert.deepEqual([...scenario.supervisor.windows()], [], "and nothing was filed");
   });
@@ -345,7 +345,7 @@ describe("DeliverySupervisor", () => {
     assert.throws(() => {
 
       supervisor.open("w", { deadline: 100, onDeadline: (): void => undefined, onSettle: (): void => undefined, slots: ["only"] });
-    }, (error: unknown): boolean => error === reason, "the throw must be the signal's own reason, by identity");
+    }, (error: unknown): boolean => error === reason);
 
     assert.doesNotThrow(() => supervisor[Symbol.dispose](), "disposing a supervisor that opened nothing answers nobody and throws nothing");
     assert.doesNotThrow(() => supervisor[Symbol.dispose](), "and a second disposal is quiet too");
@@ -436,8 +436,7 @@ describe("DeliverySupervisor", () => {
 
     assert.equal(expectSlot(window, "alpha").settle("confirmed"), true, "the first slot settles and its callback returns");
 
-    assert.throws(() => expectSlot(window, "beta").settle("confirmed"), (error: unknown): boolean => error === boom,
-      "the callback's own throw reaches the caller that settled the slot, by identity, rather than being swallowed here");
+    assert.throws(() => expectSlot(window, "beta").settle("confirmed"), (error: unknown): boolean => error === boom);
 
     // A throw is the path where the disarm and the retirement are easiest to lose, so both sides of the bookkeeping are read: nothing is armed, and nothing stands.
     assert.equal(scenario.clock.pending, 0, "the deadline is disarmed even though the callback threw on the way out");
@@ -474,8 +473,7 @@ describe("DeliverySupervisor", () => {
       slots: [ "alpha", "beta" ]
     });
 
-    assert.throws(() => expectSlot(window, "alpha").settle("confirmed"), (error: unknown): boolean => error === boom,
-      "the throw reaches the caller that settled the slot");
+    assert.throws(() => expectSlot(window, "alpha").settle("confirmed"), (error: unknown): boolean => error === boom);
 
     // The count is what decides when a window is finished, and a throw does not finish one: the second slot is still outstanding, so the deadline is still worth having.
     assert.equal(scenario.clock.pending, 1, "the deadline still stands while a slot is outstanding");
@@ -817,8 +815,7 @@ describe("DeliverySupervisor", () => {
       answers.push({ settlement, slot });
     }, stumble);
 
-    assert.throws(() => supervisor.invalidate(), (error: unknown): boolean => error === alarm,
-      "the fault channel's own throw is not caught, and reaches the caller that invalidated");
+    assert.throws(() => supervisor.invalidate(), (error: unknown): boolean => error === alarm);
     assert.equal(answers.length, 4, "and every slot of both windows had already been answered when it did");
   });
 });

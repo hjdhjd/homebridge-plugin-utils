@@ -2573,7 +2573,7 @@ describe("repeatDemotedLog", () => {
       attemptLog.error("The transport collapsed.");
 
       throw boom;
-    }, () => "timeout"), (error: unknown) => error === boom, "a throw inside `run` must propagate unchanged");
+    }, () => "timeout"), (error: unknown) => error === boom);
 
     failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
 
@@ -2599,7 +2599,7 @@ describe("repeatDemotedLog", () => {
         attemptLog.error("The transport collapsed.");
 
         throw boom;
-      }, () => "timeout"), (error: unknown) => error === boom, "a rejection from `run` must propagate unchanged");
+      }, () => "timeout"), (error: unknown) => error === boom);
 
       failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
 
@@ -2620,7 +2620,7 @@ describe("repeatDemotedLog", () => {
     failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
 
     assert.throws(() => failures.attempt((attemptLog) => attemptLog.error("The classifier is about to fault."), () => { throw boom; }),
-      (error: unknown) => error === boom, "a throw from `reasonOf` must propagate unchanged");
+      (error: unknown) => error === boom);
 
     failures.attempt((attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
 
@@ -2641,7 +2641,7 @@ describe("repeatDemotedLog", () => {
       await failures.attempt(async (attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
 
       await assert.rejects(failures.attempt(async (attemptLog) => attemptLog.error("The classifier is about to fault."), () => { throw boom; }),
-        (error: unknown) => error === boom, "a throw from `reasonOf` on an asynchronous attempt must reject the attempt unchanged");
+        (error: unknown) => error === boom);
 
       await failures.attempt(async (attemptLog) => attemptLog.error("The connection could not be established."), () => "timeout");
 
@@ -3729,16 +3729,18 @@ describe("assertPositiveInteger", () => {
 
     assert.throws(() => assertPositiveInteger(Number.NaN, { optionName: "highWaterMark", owner: "AsyncQueue" }),
       { constructor: TypeError, message: "AsyncQueue: `highWaterMark` must be a positive integer." });
-    assert.throws(() => assertPositiveInteger(Number.POSITIVE_INFINITY, { optionName: "highWaterMark", owner: "AsyncQueue" }), TypeError,
-      "an infinite count describes no bound at all");
+
+    // An infinite count describes no bound at all, so infinity is refused along with a value that is not a number.
+    assert.throws(() => assertPositiveInteger(Number.POSITIVE_INFINITY, { optionName: "highWaterMark", owner: "AsyncQueue" }), TypeError);
   });
 
   test("refuses zero and a negative count", () => {
 
     assert.throws(() => assertPositiveInteger(0, { optionName: "stdoutHighWater", owner: "LogSocket" }),
       { constructor: TypeError, message: "LogSocket: `stdoutHighWater` must be a positive integer." });
-    assert.throws(() => assertPositiveInteger(-1, { optionName: "stdoutHighWater", owner: "LogSocket" }), TypeError,
-      "a negative bound describes no ceiling at all");
+
+    // A negative count is refused as well, because a negative bound describes no ceiling at all.
+    assert.throws(() => assertPositiveInteger(-1, { optionName: "stdoutHighWater", owner: "LogSocket" }), TypeError);
   });
 });
 
@@ -3768,7 +3770,8 @@ describe("assertPositiveFinite", () => {
 
     assert.throws(() => assertPositiveFinite(0, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }),
       { constructor: TypeError, message: "RateBudget: `window` must be a positive, finite number of milliseconds." });
-    assert.throws(() => assertPositiveFinite(-5, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }), TypeError,
-      "a negative duration runs backwards");
+
+    // A negative quantity is refused as well, because a negative duration runs backwards.
+    assert.throws(() => assertPositiveFinite(-5, { optionName: "window", owner: "RateBudget", unit: "milliseconds" }), TypeError);
   });
 });

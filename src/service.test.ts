@@ -522,7 +522,7 @@ describe("acquireService - making room beside subtyped siblings", () => {
     }, { times: 1 });
 
     assert.throws(() => acquireService({ accessory, name: "Plain", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch }),
-      (error: unknown) => error === failure, "the addition's own error must propagate unchanged");
+      (error: unknown) => error === failure);
     assert.equal(invocations, 0, "onServiceCreate must not fire when the addition fails");
     assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), undefined, "the failed service must not be on the accessory");
     assert.equal(accessory.getServiceById(hap.Service.Switch, "first"), first, "the first sibling must be back as the same instance");
@@ -550,12 +550,11 @@ describe("acquireService - making room beside subtyped siblings", () => {
 
         accessory.addService(new hap.Service.Outlet("Fill", "fill-" + index.toString()));
       }
-    }, /Cannot add more than/, "the fixture must reach HAP's service limit");
+    }, /Cannot add more than/);
 
     const carried = [...accessory.services];
 
-    assert.throws(() => acquireService({ accessory, name: "Plain", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch }),
-      /Cannot add more than/, "HAP's service limit must propagate");
+    assert.throws(() => acquireService({ accessory, name: "Plain", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch }), /Cannot add more than/);
     assert.equal(invocations, 0, "onServiceCreate must not fire when the service does not fit");
     assert.equal(findService({ accessory, serviceType: hap.Service.Switch }), undefined, "the new service must not be on the accessory");
     assert.equal(accessory.services.length, carried.length, "the accessory must carry exactly as many services as before");
@@ -1477,7 +1476,7 @@ describe("notResponding", () => {
     let unavailable = true;
     const read = notResponding({ errorClass: StatusError, unavailable: () => unavailable })((): string => "Open");
 
-    assert.throws(read, StatusError, "a device that is away when the characteristic is read refuses");
+    assert.throws(read, StatusError);
 
     unavailable = false;
 
@@ -1487,7 +1486,7 @@ describe("notResponding", () => {
 
     unavailable = true;
 
-    assert.throws(read, StatusError, "and a device that goes away again refuses on the read after that");
+    assert.throws(read, StatusError);
   });
 
   test("binds the class facts once and wraps many readers", () => {
@@ -1506,7 +1505,7 @@ describe("notResponding", () => {
 
     // One factory call holds the class facts for every characteristic a device authors, so the readers it wrapped answer and refuse together rather than each
     // carrying its own copy of the rule.
-    assert.throws(currentPosition, StatusError, "every reader bound by one factory call refuses together");
+    assert.throws(currentPosition, StatusError);
     assert.throws(positionState, StatusError);
     assert.throws(on, StatusError);
   });

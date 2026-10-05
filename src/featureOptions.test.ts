@@ -2602,8 +2602,7 @@ describe("FeatureOptions - pure functional core", () => {
         ])), "group: \"\" names the category's own option, which is a registered option like any other when one is declared");
 
         assert.throws(() => buildCatalogIndex(CATEGORIES, withOptions([{ default: true, description: "The child.", group: "", name: "Mute" }])),
-          /a group naming the parent "Motion", which no option registers, declared on option "Motion\.Mute"/,
-          "and with no category-level option there is nothing for it to name, which is the same mistake a misspelled parent makes");
+          /a group naming the parent "Motion", which no option registers, declared on option "Motion\.Mute"/);
       });
 
       test("a misspelled parent is refused, naming both the child and the parent nothing registers", () => {
@@ -2612,8 +2611,7 @@ describe("FeatureOptions - pure functional core", () => {
 
           { default: true, description: "The parent.", name: "Detect" },
           { default: false, description: "The child.", group: "Detekt", name: "Sensitivity" }
-        ])), /a group naming the parent "Motion\.Detekt", which no option registers, declared on option "Motion\.Sensitivity"/,
-        "the message carries the missing parent's expanded name and the child's, both in the catalog's own casing");
+        ])), /a group naming the parent "Motion\.Detekt", which no option registers, declared on option "Motion\.Sensitivity"/);
       });
 
       test("a parent whose declared casing differs from the child's spelling of it resolves", () => {
@@ -3015,12 +3013,9 @@ describe("FeatureOptions - pure functional core", () => {
       const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
       const before = ["Enable.Motion.Detect.A"];
 
-      assert.throws(() => applyMoveScope({ args: { from: "A", to: "" }, catalog, configuredOptions: before }), /cannot address a scope/,
-        "an empty destination has no spelling in the address grammar");
-      assert.throws(() => applyMoveScope({ args: { from: "A", to: "10.0.0.1" }, catalog, configuredOptions: before }), /cannot address a scope/,
-        "and neither does one carrying a period");
-      assert.throws(() => applyMoveScope({ args: { from: "Nobody", to: "10.0.0.1" }, catalog, configuredOptions: before }), /cannot address a scope/,
-        "raised up front, so a bad destination is refused whether or not the source carries anything");
+      assert.throws(() => applyMoveScope({ args: { from: "A", to: "" }, catalog, configuredOptions: before }), /cannot address a scope/);
+      assert.throws(() => applyMoveScope({ args: { from: "A", to: "10.0.0.1" }, catalog, configuredOptions: before }), /cannot address a scope/);
+      assert.throws(() => applyMoveScope({ args: { from: "Nobody", to: "10.0.0.1" }, catalog, configuredOptions: before }), /cannot address a scope/);
     });
 
     test("a destination the catalog claims as an option in its own right is refused by the write the move composes", () => {
@@ -3040,7 +3035,7 @@ describe("FeatureOptions - pure functional core", () => {
       const before = ["Enable.Video.Stream.A"];
 
       assert.throws(() => applyMoveScope({ args: { from: "A", to: "High" }, catalog: collideCatalog, configuredOptions: before }),
-        /"Video.Stream.High" is a feature option in its own right/, "the move composes a write, so the write's own refusal is the one raised");
+        /"Video.Stream.High" is a feature option in its own right/);
       assert.deepEqual(before, ["Enable.Video.Stream.A"], "and the transform is pure, so a refusal leaves nothing half-applied");
     });
   });
@@ -3942,17 +3937,17 @@ describe("FeatureOptions - scope addressing", () => {
 
     test("refuses either part when it cannot serve as an identifier segment, naming the part it turned away", () => {
 
-      assert.throws(() => composeScopeId("home.263d11d4", "27"), /controller part "home\.263d11d4"/, "a period in the controller part");
-      assert.throws(() => composeScopeId("home-263d11d4", "2.7"), /device part "2\.7"/, "a period in the device part");
-      assert.throws(() => composeScopeId("home-263d11d4", "a=b"), /device part "a=b"/, "the payload delimiter in the device part");
-      assert.throws(() => composeScopeId("", "27"), /controller part ""/, "an empty controller part");
+      assert.throws(() => composeScopeId("home.263d11d4", "27"), /controller part "home\.263d11d4"/);
+      assert.throws(() => composeScopeId("home-263d11d4", "2.7"), /device part "2\.7"/);
+      assert.throws(() => composeScopeId("home-263d11d4", "a=b"), /device part "a=b"/);
+      assert.throws(() => composeScopeId("", "27"), /controller part ""/);
     });
 
     test("names the controller when neither part is usable, the order the parts take in the composed value", () => {
 
       // Both parts are unusable here, so the row asserts which one the single message names. A composer that checked the device first would answer with the device
       // part instead, which is the reading this rules out.
-      assert.throws(() => composeScopeId("", "a=b"), /controller part ""/, "the part that comes first in the composed value is the part the caller hears about");
+      assert.throws(() => composeScopeId("", "a=b"), /controller part ""/);
     });
   });
 

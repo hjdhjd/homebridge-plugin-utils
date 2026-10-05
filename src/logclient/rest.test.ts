@@ -342,7 +342,7 @@ describe("downloadLog - abort", () => {
       controller.abort(new Error("superseded"));
       streamController?.error(new Error("connection reset"));
 
-      await assert.rejects(iterator.next(), /connection reset/, "the original stream error must propagate to the caller");
+      await assert.rejects(iterator.next(), /connection reset/);
     });
   });
 

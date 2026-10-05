@@ -470,7 +470,7 @@ describe("prepareUi - webUI loader stamp", () => {
     await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
 
     assert.ok(await readFile(join(dest, "manifest.json"), "utf8"), "the mirror still produced its manifest");
-    await assert.rejects(async () => readFile(join(scratch.path, "index.html"), "utf8"), "the stamp step creates no index.html when none exists");
+    await assert.rejects(async () => readFile(join(scratch.path, "index.html"), "utf8"), { code: "ENOENT" });
   });
 
   test("an index.html without the loader markers is left byte-untouched", async () => {
@@ -533,7 +533,7 @@ describe("prepareUi - webUI loader stamp", () => {
     const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, dupMarkers);
 
     await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion }),
-      /mirror succeeded but stamping the loader[\s\S]*ambiguous/, "the ambiguous-marker error is framed as a stamp-phase failure over a completed mirror");
+      /mirror succeeded but stamping the loader[\s\S]*ambiguous/);
 
     // The failed stamp writes nothing over the original: the marked region still holds no stamped block.
     assert.doesNotMatch(await readFile(indexPath, "utf8"), /<script type="module">/, "a failed stamp leaves the index.html unstamped");

@@ -125,7 +125,7 @@ describe("PluginConfigSession.commit", () => {
     const host = makeHost({ config: [{ name: "P", options: ["Original"], platform: "MyPlugin" }], reject: true });
     const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
 
-    await assert.rejects(session.commit({ options: ["New"] }), /write failed/, "a failed write must propagate to the caller");
+    await assert.rejects(session.commit({ options: ["New"] }), /write failed/);
 
     assert.deepEqual(session.platform.options, ["Original"], "the held reference must not advance when the write fails");
   });
@@ -170,7 +170,7 @@ describe("PluginConfigSession.persist", () => {
     const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
     const entriesBefore = session.entries;
 
-    await assert.rejects(session.persist(), /save failed/, "a failed save must propagate to the caller");
+    await assert.rejects(session.persist(), /save failed/);
 
     assert.equal(host.saves, 1, "the failed save must still have reached the host");
     assert.equal(session.entries, entriesBefore, "a failed save must not move the held reference");
@@ -227,7 +227,7 @@ describe("PluginConfigSession.sync", () => {
     // state - the page that catches the rejection still has a coherent prior config to fall back on.
     host.rejectReads = true;
 
-    await assert.rejects(session.sync(), /read failed/, "a failed read must propagate to the caller");
+    await assert.rejects(session.sync(), /read failed/);
 
     assert.deepEqual(session.platform.options, ["Original"], "the held reference must not advance when the read fails");
   });

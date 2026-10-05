@@ -168,7 +168,7 @@ describe("spliceJsonStringValue", () => {
       assert.throws(() => {
 
         returned = spliceJsonStringValue(source, "footerDisplay", "stamped");
-      }, refusal, "the splice answered a truncated document rather than refusing an open literal");
+      }, refusal);
       assert.equal(returned, undefined, "the truncated document never comes back to the caller");
     }
   });

@@ -70,7 +70,7 @@ describe("parseRuntimeFloor", () => {
 
     // A hard failure rather than a silent default: a guard that assumed a regime here would be a guard that quietly stopped guarding.
     assert.throws(() => parseRuntimeFloor({ enginesNode: "not-a-version", sunsetMajor: 24 }), /Unable to parse a Node major version/);
-    assert.throws(() => parseRuntimeFloor({ enginesNode: "", sunsetMajor: 24 }), /value: ""\./, "the message quotes the value it could not read");
+    assert.throws(() => parseRuntimeFloor({ enginesNode: "", sunsetMajor: 24 }), /value: ""\./);
   });
 });
 

@@ -431,8 +431,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
 
     const bug = new TypeError("Cannot read properties of undefined");
 
-    await assert.rejects(() => page.orchestrator.commitConfig(() => { throw bug; }), (error) => error === bug,
-      "a bug in the caller's own composer travels to the caller");
+    await assert.rejects(() => page.orchestrator.commitConfig(() => { throw bug; }), (error) => error === bug);
 
     await flush();
 
@@ -1394,8 +1393,7 @@ describe("webUiFeatureOptions.commitConfig - the caller's own bugs and the page'
     using dom = createTestDom();
     using page = makePage();
 
-    await assert.rejects(() => page.orchestrator.commitConfig(() => ({ controllers: [] })), /show\(\)/,
-      "a page that has never been shown has no session to write through, and the message says so");
+    await assert.rejects(() => page.orchestrator.commitConfig(() => ({ controllers: [] })), /show\(\)/);
 
     await page.orchestrator.show(await openTestSession());
     await flush();
@@ -1426,7 +1424,7 @@ describe("webUiFeatureOptions.commitConfig - the caller's own bugs and the page'
     await waitFor(() => writes.pending === 1, { message: "the earlier call's write must be outstanding" });
 
     // The refusal settles while that write is still at the host, which is what "ahead of the queue" means: a caller bug waits for nothing.
-    await assert.rejects(() => page.orchestrator.commitConfig({ controllers: [] }), TypeError, "a patch where a composer belongs is a bug in the call itself");
+    await assert.rejects(() => page.orchestrator.commitConfig({ controllers: [] }), TypeError);
 
     assert.equal(writes.pending, 1, "and the earlier call is still exactly where it was");
 
@@ -1688,7 +1686,7 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
     assert.equal(page.hooks.deviceCalls.length, fetchesBefore, "with nothing fetched");
   });
 
-  test("a malformed rename rejects commitConfig with a TypeError ahead of the queue, writing nothing", async () => {
+  test("a malformed rename rejects commitConfig with a TypeError ahead of the queue, writing nothing", async (t) => {
 
     using dom = createTestDom();
     using page = twoControllerPage();
@@ -1700,10 +1698,12 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
 
     for(const rename of [ null, "CTRL-A9", [], { from: "CTRL-A" }, { from: "CTRL-A", to: 9 } ]) {
 
-      // A sequential await per shape keeps each rejection attributable to the shape that caused it.
+      // A subtest per shape names the shape in a failure's report, and the sequential await keeps each rejection attributable to the shape that caused it.
       // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(() => page.orchestrator.commitConfig((platform) => ({ controllers: moveA(platform.controllers) }), { rename }), TypeError,
-        "a rename shaped " + JSON.stringify(rename) + " is a bug in the call itself");
+      await t.test("a rename shaped " + JSON.stringify(rename) + " is a bug in the call itself", async () => {
+
+        await assert.rejects(() => page.orchestrator.commitConfig((platform) => ({ controllers: moveA(platform.controllers) }), { rename }), TypeError);
+      });
     }
 
     assert.equal(page.fake.observed.updatedConfigs.length, writesBefore, "and nothing reached the host");

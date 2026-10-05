@@ -1189,7 +1189,8 @@ describe("projection - resolved choices", () => {
 
     const state = pickerState({ sources: { types: () => "not a list" } });
 
-    assert.throws(() => projection(state), /The choice source "types" did not return a list\./, "a plugin bug surfaces loudly rather than as an empty control");
+    // A resolver answering in the wrong shape is a plugin bug, so it throws and surfaces loudly rather than rendering as an empty control.
+    assert.throws(() => projection(state), /The choice source "types" did not return a list\./);
   });
 
   test("a resolver returning an illegal choice throws, naming the source and what it did", () => {

@@ -129,7 +129,7 @@ describe("reducer - model:loaded", () => {
     // A mode typo at the one dispatch site must not silently disarm the global-only scope guard, so an unrecognized literal throws at the reducer rather than being
     // adopted, matching the unknown-action policy.
     assert.throws(() => reducer(initialState(), { catalog: CATALOG, configuredOptions: [], controllers: [], mode: "device-onlyy", type: "model:loaded" }),
-      /unknown mode/, "an illegal mode literal throws");
+      /unknown mode/);
   });
 
   test("throws when the dispatch carries no catalog, naming the missing piece", () => {
@@ -138,8 +138,7 @@ describe("reducer - model:loaded", () => {
     // rendered as ready. A dispatch-site bug leaves the field absent or leaves it null, and each has to reach the same loud failure.
     for(const catalog of [ undefined, null ]) {
 
-      assert.throws(() => reducer(initialState(), { catalog, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" }),
-        /carried no catalog/, "a model:loaded without a catalog throws and names the problem");
+      assert.throws(() => reducer(initialState(), { catalog, configuredOptions: [], controllers: [], mode: "device-only", type: "model:loaded" }), /carried no catalog/);
     }
   });
 });
@@ -785,8 +784,8 @@ describe("reducer - scope:changed", () => {
     const deviceScope = { origin: "user", scope: { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" }, type: "scope:changed" };
 
     // Global-only mode holds the scope fixed at global: a controller-kind or device-kind dispatch is a bug at the dispatch site and throws.
-    assert.throws(() => reducer(globalOnly, controllerScope), /not permitted in global-only mode/, "a controller scope throws in global-only mode");
-    assert.throws(() => reducer(globalOnly, deviceScope), /not permitted in global-only mode/, "a device scope throws in global-only mode");
+    assert.throws(() => reducer(globalOnly, controllerScope), /not permitted in global-only mode/);
+    assert.throws(() => reducer(globalOnly, deviceScope), /not permitted in global-only mode/);
 
     // A global scope stays permitted, including in global-only mode.
     assert.equal(reducer(globalOnly, { origin: "user", scope: { kind: "global" }, type: "scope:changed" }).scope.kind, "global",
@@ -803,16 +802,14 @@ describe("reducer - scope:changed", () => {
     // with no error anywhere. The absent field has to reach the same loud failure an illegal one does.
     const held = reducer(loadedState(), { type: "takeover:started" });
 
-    assert.throws(() => reducer(held, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), /unknown origin "undefined"/,
-      "a move with no origin throws");
+    assert.throws(() => reducer(held, { scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), /unknown origin "undefined"/);
   });
 
   test("throws on an origin outside the vocabulary", () => {
 
     const held = reducer(loadedState(), { type: "takeover:started" });
 
-    assert.throws(() => reducer(held, { origin: "User", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), /unknown origin "User"/,
-      "an illegal origin literal throws");
+    assert.throws(() => reducer(held, { origin: "User", scope: { controllerId: "ctrl-a", kind: "controller" }, type: "scope:changed" }), /unknown origin "User"/);
   });
 });
 

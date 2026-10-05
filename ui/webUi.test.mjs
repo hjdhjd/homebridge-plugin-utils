@@ -1189,7 +1189,7 @@ describe("webUi.registerTheming - the page-lifetime theming surface", () => {
 
     const registration = harness.ui.registerTheming();
 
-    await assert.rejects(registration, /the bridge refused the read/, "a caller that awaits still observes the failure");
+    await assert.rejects(registration, /the bridge refused the read/);
     await flush();
 
     assert.equal(registeredSheetText(harness).length, 2, "both sheets are live despite the failed read");
@@ -1251,7 +1251,7 @@ describe("webUi.registerTheming - the page-lifetime theming surface", () => {
       assert.equal(captured.length, 1, "voiding the registration raised nothing further");
 
       // The other half of the posture: the same promise still rejects for a caller that takes its own branch on it.
-      await assert.rejects(harness.ui.registerTheming(), /the bridge refused the read/, "an awaiting caller still observes the failure");
+      await assert.rejects(harness.ui.registerTheming(), /the bridge refused the read/);
       await flush();
 
       assert.equal(captured.length, 1, "and observing it that way raised nothing either");

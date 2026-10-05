@@ -1842,7 +1842,7 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     // The plugin regresses its hook to the bare-array shape between the render and the refresh.
     result = [{ name: "Hub A", serialNumber: "CTRL-A" }];
 
-    await assert.rejects(() => orchestrator.refreshControllers(), TypeError, "a wrong-shaped result must reach the caller as a TypeError, not a false return");
+    await assert.rejects(() => orchestrator.refreshControllers(), TypeError);
     await flush();
 
     assert.ok(skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']"), "the rejected refresh leaves the rendered sidebar as it was");
@@ -4782,7 +4782,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     // array, which the sibling test below covers; conflating the two would let a hook that failed to build its list read as a plugin with nothing configured.
     controllersToReturn = null;
 
-    await assert.rejects(() => orchestrator.refreshControllers(), TypeError, "a null controllers field must reach the caller as a contract violation");
+    await assert.rejects(() => orchestrator.refreshControllers(), TypeError);
 
     await flush();
 
@@ -4988,7 +4988,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     orchestrator.cleanup();
   });
 
-  test("a malformed rename rejects with a TypeError before anything else happens, the pre-store window included", async () => {
+  test("a malformed rename rejects with a TypeError before anything else happens, the pre-store window included", async (t) => {
 
     using dom = createTestDom();
 
@@ -5016,7 +5016,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     });
 
     // A page that has never been shown answers a well-formed refresh with false, so a rejection here can only be the shape check.
-    await assert.rejects(() => orchestrator.refreshControllers({ rename: null }), TypeError, "a malformed rename is refused even before the first show()");
+    await assert.rejects(() => orchestrator.refreshControllers({ rename: null }), TypeError);
 
     await orchestrator.show(await openTestSession());
     await flush();
@@ -5025,9 +5025,12 @@ describe("webUiFeatureOptions.refreshControllers", () => {
 
     for(const rename of [ null, "CTRL-B", [], { to: "CTRL-B" }, { from: 1, to: "CTRL-B" } ]) {
 
-      // A sequential await per shape keeps each rejection attributable to the shape that caused it.
+      // A subtest per shape names the shape in a failure's report, and the sequential await keeps each rejection attributable to the shape that caused it.
       // eslint-disable-next-line no-await-in-loop
-      await assert.rejects(() => orchestrator.refreshControllers({ rename }), TypeError, "a rename shaped " + JSON.stringify(rename) + " is a bug in the call itself");
+      await t.test("a rename shaped " + JSON.stringify(rename) + " is a bug in the call itself", async () => {
+
+        await assert.rejects(() => orchestrator.refreshControllers({ rename }), TypeError);
+      });
     }
 
     assert.equal(calls, callsBefore, "the refusal comes before the hook is asked for anything");
@@ -5049,7 +5052,7 @@ describe("webUiFeatureOptions - status panel selection", () => {
     assert.ok(new webUiFeatureOptions(), "neither panel configured constructs");
     assert.ok(new webUiFeatureOptions({ infoPanel: () => {} }), "infoPanel alone constructs");
     assert.ok(new webUiFeatureOptions({ statusPanel: {} }), "statusPanel alone constructs");
-    assert.throws(() => new webUiFeatureOptions({ infoPanel: () => {}, statusPanel: {} }), TypeError, "both panels together throw a TypeError");
+    assert.throws(() => new webUiFeatureOptions({ infoPanel: () => {}, statusPanel: {} }), TypeError);
   });
 
   test("the public statusPanel field is null before show() and stays null when no statusPanel is configured", async () => {
@@ -5147,14 +5150,12 @@ describe("webUiFeatureOptions - global-only construction contracts", () => {
     assert.ok(new webUiFeatureOptions({ globalOnly: true }), "globalOnly with no getDevices supplied constructs");
 
     // Each device- or controller-facing hook contradicts globalOnly and throws at construction.
-    assert.throws(() => new webUiFeatureOptions({ getControllers: () => ({ controllers: [], error: "" }), globalOnly: true }), TypeError,
-      "globalOnly with getControllers throws");
-    assert.throws(() => new webUiFeatureOptions({ getDevices: () => ({ devices: [], error: "" }), globalOnly: true }), TypeError,
-      "globalOnly with an explicitly supplied getDevices throws");
-    assert.throws(() => new webUiFeatureOptions({ globalOnly: true, statusPanel: {} }), TypeError, "globalOnly with statusPanel throws");
+    assert.throws(() => new webUiFeatureOptions({ getControllers: () => ({ controllers: [], error: "" }), globalOnly: true }), TypeError);
+    assert.throws(() => new webUiFeatureOptions({ getDevices: () => ({ devices: [], error: "" }), globalOnly: true }), TypeError);
+    assert.throws(() => new webUiFeatureOptions({ globalOnly: true, statusPanel: {} }), TypeError);
 
     // The pre-existing infoPanel + statusPanel contradiction still throws through the guard table.
-    assert.throws(() => new webUiFeatureOptions({ infoPanel: () => {}, statusPanel: {} }), TypeError, "infoPanel and statusPanel together still throw");
+    assert.throws(() => new webUiFeatureOptions({ infoPanel: () => {}, statusPanel: {} }), TypeError);
   });
 });
 
@@ -6635,7 +6636,7 @@ describe("webUiFeatureOptions.catalog", () => {
 
     t.mock.timers.tick(5000);
 
-    await assert.rejects(() => pending, DeadlineExpiredError, "the read the boot started expires at the accessor's own five-second bound");
+    await assert.rejects(() => pending, DeadlineExpiredError);
 
     await showPromise;
     await flush();

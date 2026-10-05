@@ -351,8 +351,7 @@ describe("createSaveFlow - a press that writes nothing", () => {
     const current = makeRig();
     const failure = new Error("The probe failed.");
 
-    await assert.rejects(current.flow.save({ check: async () => { throw failure; }, compose }), (error) => error === failure,
-      "a current press's failing check is a bug the caller hears about, carrying the check's own error");
+    await assert.rejects(current.flow.save({ check: async () => { throw failure; }, compose }), (error) => error === failure);
 
     assert.equal(current.commit.calls.length, 0, "and nothing was written");
   });
@@ -533,7 +532,7 @@ describe("createSaveFlow - a press during a write", () => {
 
     commit.calls[0].reject(failure);
 
-    await assert.rejects(first, (error) => error === failure, "the commit's rejection is the caller's to hear");
+    await assert.rejects(first, (error) => error === failure);
 
     const second = flow.save({ check: passing(2), compose });
 
@@ -551,7 +550,7 @@ describe("createSaveFlow - a press during a write", () => {
     const { commit, flow } = makeRig();
     const bug = new TypeError("Cannot read properties of undefined.");
 
-    await assert.rejects(flow.save({ check: passing(1), compose: () => { throw bug; } }), (error) => error === bug, "a bug in the card's composer travels to the card");
+    await assert.rejects(flow.save({ check: passing(1), compose: () => { throw bug; } }), (error) => error === bug);
 
     const result = await flow.save({ check: passing(2), compose });
 
@@ -647,7 +646,7 @@ describe("createSaveFlow - the Save control", () => {
 
     commit.calls[0].reject(failure);
 
-    await assert.rejects(press, (error) => error === failure, "the commit's rejection is the caller's to hear");
+    await assert.rejects(press, (error) => error === failure);
 
     assert.deepEqual(control.writes, [ true, false ], "and the control was restored on the way out");
   });
@@ -712,7 +711,7 @@ describe("createSaveFlow - the Save control", () => {
 
     control.writeFailure = failure;
 
-    await assert.rejects(flow.save({ check: passing(1), compose }), (error) => error === failure, "the control's own error is the caller's to hear");
+    await assert.rejects(flow.save({ check: passing(1), compose }), (error) => error === failure);
 
     assert.equal(commit.calls.length, 0, "and the press stopped before its commit");
 
@@ -731,7 +730,7 @@ describe("createSaveFlow - the Save control", () => {
 
     control.readFailure = failure;
 
-    await assert.rejects(flow.save({ check: passing(1), compose }), (error) => error === failure, "the control's own error is the caller's to hear");
+    await assert.rejects(flow.save({ check: passing(1), compose }), (error) => error === failure);
 
     assert.equal(commit.calls.length, 0, "and the press stopped before its commit");
     assert.deepEqual(control.writes, [], "a press that never read the control's state writes nothing back to it");

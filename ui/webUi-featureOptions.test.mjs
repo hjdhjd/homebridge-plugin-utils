@@ -3701,7 +3701,8 @@ describe("webUiFeatureOptions - per-failure display copy on the device outcome",
 
     seedBootstrapProbeShim();
 
-    // An undecorated failure reads the copy table's device-list row with the plugin's configured guidance beneath it, exactly as a thrown failure does.
+    // An undecorated reported failure reads the copy table's reported device-list row with the plugin's configured guidance beneath it, the row a hook reaches by
+    // returning a controller it could not reach rather than throwing.
     const orchestrator = new webUiFeatureOptions({
 
       getControllers: () => ({ controllers: [{ name: "Hub", serialNumber: "CTRL-1" }], error: "" }),
@@ -4005,7 +4006,8 @@ describe("webUiFeatureOptions - empty-success semantics", () => {
 describe("webUiFeatureOptions - plugin-suppliable controller-failure guidance", () => {
 
   // Where a user repairs an unreachable controller is plugin topology, so the guidance is the plugin's to write and the framework's default names no place. These
-  // tests cover the default, the override reaching every controller-failure route, and the one route it must not reach: a plugin that stopped answering at all.
+  // tests cover the default, the override reaching every route a hook reports a controller failure on, and its absence from the copy for a plugin that stopped
+  // answering at all. The rows for the deadline-bounded awaits below cover a hook that fails on its own, which the override never reaches.
   const PLUGIN_GUIDANCE = "Open the controller editor on this page to correct its address or credentials.";
 
   const arrange = () => {
@@ -5572,6 +5574,7 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     assert.ok(failure, "the expiry must render the connection-error view");
     assert.match(failure, /The plugin stopped responding while retrieving the device list\./, "the devices site's own expiry copy renders");
     assert.doesNotMatch(failure, /Unable to retrieve the device list\./, "a devices expiry must never masquerade as the devices failure wording");
+    assert.doesNotMatch(failure, /The plugin failed while retrieving the device list\./, "nor as the wording for a plugin that failed on its own");
 
     orchestrator.cleanup();
   });
@@ -5659,8 +5662,44 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     const failure = failureTextIn(skeleton);
 
     assert.ok(failure, "a rejecting hook renders the connection-error view");
-    assert.match(failure, /Unable to retrieve the controller list\./, "the controllers site's FAILURE copy renders, not its expiry copy");
+    assert.match(failure, /The plugin failed while retrieving the controller list\./, "the controllers site's plugin-failure copy renders, not its expiry copy");
+    assert.match(failure, /Retry, and if it keeps failing, restart Homebridge and check its log for the reason\./, "with the plugin-failure guidance");
     assert.match(failure, /the controller hook blew up/, "the thrown message reaches the view");
+
+    orchestrator.cleanup();
+  });
+
+  test("a controllers hook that THROWS synchronously lands the connection-error view with the plugin-failure copy", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard, session, skeleton } = await arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    // A hook written without async throws out of the call itself rather than rejecting. The page reads that throw as the rejection it would have been, so show()
+    // completes on the retry view rather than rejecting to its caller, and the plugin's configured controller guidance stays off it as it does for any rejection.
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => {
+
+        throw new Error("the controller hook threw");
+      },
+      ui: { controllerFailureGuidance: "Open the controller editor on this page.", controllerRetryEnableDelayMs: 20 }
+    });
+
+    await orchestrator.show(session);
+    await flush();
+
+    const failure = failureTextIn(skeleton);
+
+    assert.ok(failure, "a throwing hook renders the connection-error view");
+    assert.match(failure, /The plugin failed while retrieving the controller list\./, "under the controllers site's plugin-failure headline");
+    assert.match(failure, /Retry, and if it keeps failing, restart Homebridge and check its log for the reason\./, "with the plugin-failure guidance");
+    assert.doesNotMatch(failure, /Open the controller editor on this page/, "which the configured controller guidance never replaces");
+    assert.match(failure, /the controller hook threw/, "and the thrown message reaches the view");
 
     orchestrator.cleanup();
   });
@@ -5713,7 +5752,8 @@ describe("webUiFeatureOptions - deadline-bounded page awaits", () => {
     const failure = failureTextIn(skeleton);
 
     assert.ok(failure, "a rejecting hook renders the connection-error view");
-    assert.match(failure, /Unable to retrieve the device list\./, "the devices site's FAILURE copy renders, not its expiry copy");
+    assert.match(failure, /The plugin failed while retrieving the device list\./, "the devices site's plugin-failure copy renders, not its expiry copy");
+    assert.match(failure, /Retry, and if it keeps failing, restart Homebridge and check its log for the reason\./, "with the plugin-failure guidance");
     assert.match(failure, /the device hook blew up/, "the thrown message reaches the view");
 
     orchestrator.cleanup();

@@ -641,7 +641,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
     page.state.loaded = 0;
 
     // A sidebar click whose fetch fails is what puts a loaded page on the error frame.
-    page.hooks.onDevices = () => Promise.reject(new Error("Controller unreachable."));
+    page.hooks.onDevices = () => ({ devices: [], error: "Controller unreachable." });
 
     page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
 
@@ -1085,7 +1085,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     page.state.loaded = 0;
 
     // A sidebar click whose fetch fails is what puts a loaded page on the error frame.
-    page.hooks.onDevices = () => Promise.reject(new Error("Controller unreachable."));
+    page.hooks.onDevices = () => ({ devices: [], error: "Controller unreachable." });
 
     page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
 
@@ -1150,7 +1150,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     await page.orchestrator.show(await openTestSession());
     await flush();
 
-    page.hooks.onControllers = ({ call }) => (call === 1) ? { controllers: [CONTROLLER_A], error: "" } : Promise.reject(new Error("Controller unreachable."));
+    page.hooks.onControllers = ({ call }) => (call === 1) ? { controllers: [CONTROLLER_A], error: "" } : { controllers: [], error: "Controller unreachable." };
 
     const result = await page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }));
 
@@ -1340,7 +1340,7 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
     await booted;
     await flush();
 
-    refetch.reject(new Error("Controller unreachable."));
+    refetch.resolve({ devices: [], error: "Controller unreachable." });
     await flush();
 
     assert.match(page.skeleton.headerInfo.textContent, /Unable to retrieve the device list\./, "the refetch's failure renders in the header");
@@ -1354,7 +1354,7 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
 
     const { boot, booted, refetch } = await raceBoot(page);
 
-    refetch.reject(new Error("Controller unreachable."));
+    refetch.resolve({ devices: [], error: "Controller unreachable." });
     await flush();
 
     boot.resolve(boot.answer);
@@ -1381,7 +1381,8 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
     await flush();
 
     assert.equal(page.skeleton.sidebar.style.display, "", "the boot's dropped failure reveals the page as a dropped success does");
-    assert.doesNotMatch(page.skeleton.headerInfo.textContent, /Unable to/, "with no failure shown, because the store holds the refetch's clean outcome");
+    assert.doesNotMatch(page.skeleton.headerInfo.textContent, /The plugin failed while retrieving the device list\./,
+      "with no failure shown, because the store holds the refetch's clean outcome");
     assert.equal(activeDevice(page), "CTRL-A", "and the selection the refetch completed");
   });
 });
@@ -1757,7 +1758,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
   // Put the loaded page on controller B's error frame, the way a sidebar click whose fetch fails does, then let B answer again.
   const errorFrameOnB = async (page) => {
 
-    page.hooks.onDevices = () => Promise.reject(new Error("Controller unreachable."));
+    page.hooks.onDevices = () => ({ devices: [], error: "Controller unreachable." });
     page.skeleton.controllersContainer.querySelector(".nav-link[data-device-serial='CTRL-B']").click();
 
     await waitFor(() => page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), { message: "the error frame must render" });
@@ -1778,7 +1779,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
 
     const failAt = page.hooks.controllerCalls + 1;
 
-    page.hooks.onControllers = ({ answer, call }) => (call === failAt) ? Promise.reject(new Error("Controller list unreachable.")) : answer;
+    page.hooks.onControllers = ({ answer, call }) => (call === failAt) ? { controllers: [], error: "Controller list unreachable." } : answer;
   };
 
   /* Leave a page whose catalog never loaded on its error frame, controller B selected and the two-controller list installed beneath the frame, and hand back the

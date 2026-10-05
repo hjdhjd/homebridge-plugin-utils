@@ -4,12 +4,12 @@
  */
 "use strict";
 
-import { DeadlineExpiredError, createActionGuard, delay, withDeadline } from "./webUi-liveness.mjs";
 import { FeatureOptionsStore, effect } from "./webUi-featureOptions/store.mjs";
-import { MUTATING_ACTIONS, connectionFailureCopy, initialState, reconciledControllerId, reducer } from "./webUi-featureOptions/state.mjs";
+import { MUTATING_ACTIONS, connectionFailureCopy, connectionFailureKind, initialState, reconciledControllerId, reducer } from "./webUi-featureOptions/state.mjs";
 import { TAKEOVER_REGION_IDS, mountTakeoverView, releasedTakeover } from "./webUi-featureOptions/views/takeover.mjs";
 import { buildCatalogIndex, expandOption, removedListEntries } from "./featureOptions.js";
 import { completeControllerSelection, fetchControllerDevices, requestControllerDevices, settleControllerDevices } from "./webUi-featureOptions/effects/deviceFetch.mjs";
+import { createActionGuard, delay, withDeadline } from "./webUi-liveness.mjs";
 import { errorMessage, toastError } from "./webUi-errors.mjs";
 import { modelLoaded, selectedControllerId, selectedDeviceId, stagingPending } from "./webUi-featureOptions/selectors.mjs";
 import { createElement } from "./webUi-featureOptions/utils.mjs";
@@ -111,8 +111,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   otherwise show - the plugin's own `ui.controllerFailureGuidance` where it supplied one, the framework's shared controller wording where it did not - so a
  *   plugin that can tell a bad credential from an unreachable address sends the user after the right thing in each case.
  * @property {string} [headline] - The failure's own headline, read only when `error` is non-empty, replacing the framework's connection-failure wording on the
- *   rendered error view. A rejection thrown out of the hook carries no display copy at all and keeps the framework's, which is what makes a hook that reports its
- *   failure and one that throws read identically until the plugin chooses otherwise.
+ *   rendered error view. A hook reports a controller it could not reach by returning the failure, which reads the framework's controller wording and the plugin's
+ *   own `ui.controllerFailureGuidance` wherever the result names nothing of its own. A hook that rejects, throws, or answers in the wrong shape carries no display
+ *   copy at all and reads as the plugin's own failure.
  */
 
 /**
@@ -133,8 +134,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   otherwise show - the plugin's own `ui.controllerFailureGuidance` where it supplied one, the framework's shared controller wording where it did not - so a
  *   plugin that can tell a bad credential from an unreachable address sends the user after the right thing in each case.
  * @property {string} [headline] - The failure's own headline, read only when `error` is non-empty, replacing the framework's device-list failure headline on the
- *   rendered error view. A rejection thrown out of the hook carries no display copy of its own and reads the framework's headline, which is what makes a hook
- *   that reports its failure without naming one and a hook that throws read identically until the plugin chooses otherwise.
+ *   rendered error view. A hook reports a controller it could not reach by returning the failure, which reads the framework's controller wording and the plugin's
+ *   own `ui.controllerFailureGuidance` wherever the result names nothing of its own. A hook that rejects, throws, or answers in the wrong shape carries no display
+ *   copy of its own and reads as the plugin's own failure.
  */
 
 /**
@@ -278,8 +280,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   controller login supplies copy that names it.
  * @property {string} [ui.controllerFailureGuidance] - The guidance line shown when a controller cannot be reached, replacing the framework's own. The default says
  *   what to verify without naming where to do it, because where a user repairs a controller is plugin topology: a plugin whose controller settings live on this very
- *   page, or behind an affordance of its own, says so here. It reaches every controller-failure surface at once - the controller-list failure, the device-list failure,
- *   and a sidebar click's failure - and deliberately does not reach the plugin-stopped-responding copy, which is not controller trouble.
+ *   page, or behind an affordance of its own, says so here. It reaches a failure a hook reports on its result alone, on every surface at once - the controller list,
+ *   the device list, and a sidebar click - and deliberately does not reach the copy for a plugin that stopped responding, nor the copy for a hook that rejected,
+ *   threw, or answered in the wrong shape, since neither is controller trouble.
  * @property {number} [ui.controllerRetryEnableDelayMs=5000] - Interval before enabling a retry button when connecting to a controller.
  * @property {Function} [ui.isController] - Identifies the controller-as-device row in a device list. The nav view groups the sidebar by it, and the row it names
  *   is the controller's identity on the page: the projection keys controller scope by that row's serial, and a controller selection - a sidebar click and the
@@ -783,8 +786,14 @@ export class webUiFeatureOptions {
     // The catalog comes through the page's own accessor, which is what makes the boot one reader among several rather than the owner of the request: a later cycle
     // and any plugin code asking for the catalog get this same promise, and the read reaches the server once for the page.
     const featuresPromise = this.catalog();
-    const controllersPromise = this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) :
-      Promise.resolve({ controllers: [], error: "" });
+
+    // The controllers hook is called inside a promise executor, which runs it here and synchronously while turning a hook that throws, rather than rejects, into a
+    // rejection of that promise. A synchronous throw then takes the road a rejection takes, to the catch around the bounded await below and onto the retry view,
+    // instead of escaping show() with no retry view to recover from.
+    const controllersPromise = new Promise((resolve) => {
+
+      resolve(this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) : { controllers: [], error: "" });
+    });
 
     /* Register the page's theming through the orchestrator that owns it: the design tokens and the page theme, adopted in that order and held for the page rather
      * than for this cycle, so navigating to Settings or Support keeps the themed canvas the user is looking at. The registration is memoized on the orchestrator's
@@ -915,8 +924,8 @@ export class webUiFeatureOptions {
     // common, and only one of which the user can act on from this page.
     if(controllerResult.error) {
 
-      this.#failConnection({ copy: { guidance: controllerResult.guidance, headline: controllerResult.headline }, err: controllerResult.error, signal,
-        site: "controllers" });
+      this.#failConnection({ copy: { guidance: controllerResult.guidance, headline: controllerResult.headline }, err: controllerResult.error, kind: "reported",
+        signal, site: "controllers" });
 
       return;
     }
@@ -1916,9 +1925,10 @@ export class webUiFeatureOptions {
   /**
    * Route a failed page await into the connection-error view.
    *
-   * The site names which await failed so the copy table can say the honest thing about it, and the {@link DeadlineExpiredError} test is what separates a host that went
-   * quiet from one that answered with an error - two failures a user responds to differently. The dispatch goes through the staleness guard, so a superseded cycle's late
-   * failure never lands on the cycle that replaced it.
+   * The site names which await failed and the kind names how the failure arrived, so the copy table can say the honest thing about it. A thrown failure takes its
+   * kind from {@link connectionFailureKind}, which is what separates a host that went quiet from an await that failed, since a user responds to each differently,
+   * and a failure a result reported is passed in as reported. The dispatch goes through the staleness guard, so a superseded cycle's late failure never lands on the
+   * cycle that replaced it.
    *
    * The failure value is whatever the await produced: a thrown value, or the message a hook reported on its own result. Both go through {@link errorMessage}, which
    * reads an Error's message and stringifies anything else, so the two arrive at the view as the same kind of thing and neither needs a channel of its own.
@@ -1932,22 +1942,25 @@ export class webUiFeatureOptions {
    *
    * A result that reports its own failure may name it in its own words, and each of those words outranks the table's on its own: the hook's headline or
    * guidance where it supplied one, the configured guidance or the table's wording where it did not. That is the precedence a reported device failure already
-   * follows, so a controller the page cannot reach reads the same whichever fetch discovered it. A thrown failure carries no copy at all and keeps the table's.
+   * follows, so a controller the page cannot reach reads the same whichever fetch discovered it. A thrown failure carries no copy at all and reads the table's
+   * expiry or rejected row, which no configured guidance replaces, while a reported one reads the reported row.
    *
    * @param {Object} args
    * @param {{ guidance?: string, headline?: string }} [args.copy] - The failure's own display copy, as the result that reported it supplied it. Absent for a
    *                                                                 thrown failure, and either name may be absent while the other is supplied.
-   * @param {*} args.err - The failure value - thrown or reported - tested for a deadline expiry and rendered as the failure's message.
+   * @param {*} args.err - The failure value - thrown or reported - rendered as the failure's message.
+   * @param {"expired" | "rejected" | "reported"} [args.kind] - How the failure arrived, as the copy table keys it. Absent takes {@link connectionFailureKind}'s
+   *                                                            reading of `err`, which is the kind of every thrown failure; a reported one passes `"reported"`.
    * @param {AbortSignal} args.signal - The signal of the cycle the failure belongs to.
    * @param {string} args.site - The await that failed, as named in the copy table.
    * @private
    */
-  #failConnection({ copy = undefined, err, signal, site }) {
+  #failConnection({ copy = undefined, err, kind = connectionFailureKind(err), signal, site }) {
 
     const { guidance, headline } = connectionFailureCopy({
 
       controllerFailureGuidance: this.#config.controllerFailureGuidance,
-      expired: err instanceof DeadlineExpiredError,
+      kind,
       site
     });
 

@@ -43,8 +43,9 @@ import { toastError } from "../../webUi-errors.mjs";
  * is the pair of decisions around that fetch: the optimistic scope ahead of it, and the selection that continues onto the controller-as-device row behind it.
  *
  * A reported failure may decorate itself with its own headline and guidance, which travel back on the same result and win over the copy table's words field by
- * field - which failure this was is the plugin's knowledge. A rejection has no result to carry copy on, so its outcome reads the copy table's devices row, with this
- * view's configured guidance standing in for the table's, while a deadline expiry carries the table's own words for a plugin that stopped answering.
+ * field - which failure this was is the plugin's knowledge - and where it names no guidance, this view's configured guidance stands in for the table's. A rejection
+ * has no result to carry copy on, so its outcome reads the copy table's own words for how it arrived: a deadline expiry reads as a plugin that stopped answering,
+ * and every other rejection as the plugin's own failure, which the configured guidance never replaces.
  *
  * @param {Object} args
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the click's device fetch. The orchestrator owns the value; the view owns applying it.

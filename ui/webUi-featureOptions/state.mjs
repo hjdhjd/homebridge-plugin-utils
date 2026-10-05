@@ -5,6 +5,7 @@
 "use strict";
 
 import { applyClearOption, applySetOption, buildCatalogIndex } from "../featureOptions.js";
+import { DeadlineExpiredError } from "../webUi-liveness.mjs";
 
 /**
  * State shape, action vocabulary, and reducer for the feature options webUI.
@@ -242,11 +243,19 @@ export const EMPTY_CATALOG = {
 // place would be naming one some consumers do not have. The wording therefore says what to verify and not where to go.
 const CONTROLLER_FAILURE_GUIDANCE = "Verify the controller's connection details are correct, then retry.";
 
-// The connection-error display copy for every bounded await the page makes, the device fetch included, keyed by the site that failed and then by whether the
-// deadline elapsed or the request itself failed. It is the one source of the page's own failure copy: every dispatcher that meets a failure resolves its words
-// here, a result that named its own headline or guidance winning field by field, so the connection-error view and the reducer hold no prose of their own and a
-// failure reads the same whichever dispatcher met it. The expiry variants matter for the same reason: "the plugin stopped answering" and "the plugin answered
-// with an error" call for different next steps, and only the failing site knows which happened.
+// What the user is told to do when the plugin itself failed: its hook rejected, threw, or answered in a shape the page cannot read. That is the plugin's failure and
+// not the controller's, so the guidance sends the user to retry and, when the failure persists, to the Homebridge log, which is where a plugin records why it failed.
+// A plugin's replacement guidance never reaches the rows that read this string, because the resolver replaces only the rows carrying the controller guidance above:
+// the replacement speaks about repairing a controller, and a user whose plugin failed would be sent to check a controller that is working.
+const PLUGIN_FAILURE_GUIDANCE = "Retry, and if it keeps failing, restart Homebridge and check its log for the reason.";
+
+// The connection-error display copy for every bounded await the page makes, the device fetch included, keyed by the site that failed and then by how the failure
+// arrived: `expired` when the deadline elapsed, `rejected` when the await rejected for any other reason, and `reported` when a hook returned a result naming a
+// failure. It is the one source of the page's own failure copy: every dispatcher that meets a failure resolves its words here, a result that named its own headline
+// or guidance winning field by field, so the connection-error view and the reducer hold no prose of their own and a failure reads the same whichever dispatcher met
+// it. The kinds matter for the same reason: an await that went quiet, an await that failed, and a controller a hook could not reach call for different next steps,
+// and only the failing site knows which happened. Only the controllers and devices sites carry a `reported` row, because only their hooks return a result that can
+// name a failure; every failure at the features and sync sites is thrown.
 const CONNECTION_FAILURE_COPY = {
 
   controllers: {
@@ -256,7 +265,12 @@ const CONNECTION_FAILURE_COPY = {
       guidance: "Retry once the plugin is responding again.",
       headline: "The plugin stopped responding while retrieving the controller list."
     },
-    failed: {
+    rejected: {
+
+      guidance: PLUGIN_FAILURE_GUIDANCE,
+      headline: "The plugin failed while retrieving the controller list."
+    },
+    reported: {
 
       guidance: CONTROLLER_FAILURE_GUIDANCE,
       headline: "Unable to retrieve the controller list."
@@ -269,7 +283,12 @@ const CONNECTION_FAILURE_COPY = {
       guidance: "Retry once the plugin is responding again.",
       headline: "The plugin stopped responding while retrieving the device list."
     },
-    failed: {
+    rejected: {
+
+      guidance: PLUGIN_FAILURE_GUIDANCE,
+      headline: "The plugin failed while retrieving the device list."
+    },
+    reported: {
 
       guidance: CONTROLLER_FAILURE_GUIDANCE,
       headline: "Unable to retrieve the device list."
@@ -282,7 +301,7 @@ const CONNECTION_FAILURE_COPY = {
       guidance: "Retry once the plugin is responding again.",
       headline: "The plugin stopped responding while loading the feature options."
     },
-    failed: {
+    rejected: {
 
       guidance: "Retry once the plugin is responding again.",
       headline: "Unable to load the feature options."
@@ -295,7 +314,7 @@ const CONNECTION_FAILURE_COPY = {
       guidance: "Retry once the Homebridge server is reachable again.",
       headline: "The Homebridge server stopped responding."
     },
-    failed: {
+    rejected: {
 
       guidance: "Retry once the Homebridge server is reachable again.",
       headline: "Unable to read the plugin configuration."
@@ -304,22 +323,27 @@ const CONNECTION_FAILURE_COPY = {
 };
 
 /**
- * Resolve the display copy for a failed await. An unregistered site throws, matching the reducer's unknown-action policy: a copy key typo is a bug at the dispatch
- * site, and surfacing it loudly beats rendering a failure banner with two empty text slots.
+ * Resolve the display copy for a failed await. An unregistered site throws, and so does a kind its site does not register, matching the reducer's unknown-action
+ * policy: a copy key typo is a bug at the dispatch site, and surfacing it loudly beats rendering a failure banner with two empty text slots.
  *
  * A plugin's own controller-failure guidance, when it supplies one, replaces the guidance on exactly the rows that speak about the controller. Which rows those are is
- * this table's knowledge and stays here: a row carrying the shared controller-failure guidance is one of them, so a caller passes the plugin's copy without having to
- * know which sites can fail for controller reasons. The expiry rows are deliberately outside that set - a plugin that stopped answering is not controller trouble, and
- * telling the user to check controller details would send them after the wrong thing.
+ * this table's knowledge and stays here: a row is replaced only when it carries the shared controller-failure guidance, so a caller passes the plugin's copy without
+ * having to know which sites and kinds can fail for controller reasons. The expiry and rejected rows carry other guidance and are deliberately outside that set - a
+ * plugin that stopped answering, or that failed on its own, is not controller trouble, and telling the user to check controller details would send them after the
+ * wrong thing.
  *
  * @param {Object} args
  * @param {string} [args.controllerFailureGuidance] - The plugin's replacement guidance for a controller that cannot be reached. Absent leaves the framework's copy.
- * @param {boolean} args.expired - True when the deadline elapsed, false when the request itself failed.
+ * @param {"expired" | "rejected" | "reported"} args.kind - How the failure arrived. `"expired"`: the deadline elapsed, so whatever the await was waiting on stopped
+ *   answering. `"rejected"`: the await rejected for any other reason, which at the controllers and devices sites is the plugin's own hook failing, a wrong-shaped
+ *   answer included. `"reported"`: a hook returned a result naming the failure, which is how a plugin says a controller could not be reached. Every site carries
+ *   `"expired"` and `"rejected"`, and only `"controllers"` and `"devices"` carry `"reported"`, since only their hooks return a result. {@link connectionFailureKind}
+ *   reads the first two from a thrown value.
  * @param {string} args.site - The await that failed: `"controllers"`, `"devices"`, `"features"`, or `"sync"`.
  * @returns {{ guidance: string, headline: string }} The headline and guidance for that failure.
- * @throws {Error} When no copy is registered for the supplied site.
+ * @throws {Error} When no copy is registered for the supplied site, or for the supplied kind at that site.
  */
-export const connectionFailureCopy = ({ controllerFailureGuidance = undefined, expired, site }) => {
+export const connectionFailureCopy = ({ controllerFailureGuidance = undefined, kind, site }) => {
 
   const copy = CONNECTION_FAILURE_COPY[site];
 
@@ -328,7 +352,12 @@ export const connectionFailureCopy = ({ controllerFailureGuidance = undefined, e
     throw new Error("FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"" + site + "\".");
   }
 
-  const resolved = expired ? copy.expired : copy.failed;
+  const resolved = copy[kind];
+
+  if(!resolved) {
+
+    throw new Error("FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the kind \"" + kind + "\" at the site \"" + site + "\".");
+  }
 
   if(controllerFailureGuidance && (resolved.guidance === CONTROLLER_FAILURE_GUIDANCE)) {
 
@@ -337,6 +366,18 @@ export const connectionFailureCopy = ({ controllerFailureGuidance = undefined, e
 
   return resolved;
 };
+
+/**
+ * Read the kind of a thrown failure for {@link connectionFailureCopy}. This is the one place a thrown value becomes a kind, so the device settle and the orchestrator
+ * can never sort one rejection two ways. A {@link DeadlineExpiredError} says the await went quiet, and every other thrown value is a rejection - a hook that threw or
+ * rejected and the contract guard's TypeError for a wrong-shaped answer alike. The class of an Error is no guide here, because a hook with a bug of its own throws a
+ * TypeError too, and that is as much the plugin's failure as an answer in the wrong shape. A failure a hook reports on its own result is never thrown, so its
+ * caller names that kind itself.
+ *
+ * @param {*} err - The value the await rejected with.
+ * @returns {"expired" | "rejected"} The kind the copy table reads that failure under.
+ */
+export const connectionFailureKind = (err) => ((err instanceof DeadlineExpiredError) ? "expired" : "rejected");
 
 /**
  * Resolve the notice a settled controller view shows when the controller has no scoping identity and the plugin supplied no `emptyMessage` of its own. The

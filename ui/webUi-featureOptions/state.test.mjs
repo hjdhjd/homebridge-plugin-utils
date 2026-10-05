@@ -4,8 +4,10 @@
  */
 "use strict";
 
-import { connectionFailureCopy, controllerNoticeCopy, initialState, reconciledControllerId, reducer, renameHonored, settledFactsMoved } from "./state.mjs";
+import { connectionFailureCopy, connectionFailureKind, controllerNoticeCopy, initialState, reconciledControllerId, reducer, renameHonored,
+  settledFactsMoved } from "./state.mjs";
 import { describe, test } from "node:test";
+import { DeadlineExpiredError } from "../webUi-liveness.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../featureOptions.js";
 
@@ -672,40 +674,79 @@ describe("reducer - devices:loaded", () => {
 
 describe("connectionFailureCopy", () => {
 
-  test("every registered site yields distinct copy for a failure and for an expiry", () => {
+  const CONTROLLER_GUIDANCE = "Verify the controller's connection details are correct, then retry.";
+  const PLUGIN_FAILURE_GUIDANCE = "Retry, and if it keeps failing, restart Homebridge and check its log for the reason.";
+
+  // Every (site, kind) pair the table registers, with the words a user reads for it. The words are what the user acts on, so each pair is held to its exact text.
+  const REGISTERED = [
+
+    { guidance: "Retry once the plugin is responding again.", headline: "The plugin stopped responding while retrieving the controller list.", kind: "expired",
+      site: "controllers" },
+    { guidance: PLUGIN_FAILURE_GUIDANCE, headline: "The plugin failed while retrieving the controller list.", kind: "rejected", site: "controllers" },
+    { guidance: CONTROLLER_GUIDANCE, headline: "Unable to retrieve the controller list.", kind: "reported", site: "controllers" },
+    { guidance: "Retry once the plugin is responding again.", headline: "The plugin stopped responding while retrieving the device list.", kind: "expired",
+      site: "devices" },
+    { guidance: PLUGIN_FAILURE_GUIDANCE, headline: "The plugin failed while retrieving the device list.", kind: "rejected", site: "devices" },
+    { guidance: CONTROLLER_GUIDANCE, headline: "Unable to retrieve the device list.", kind: "reported", site: "devices" },
+    { guidance: "Retry once the plugin is responding again.", headline: "The plugin stopped responding while loading the feature options.", kind: "expired",
+      site: "features" },
+    { guidance: "Retry once the plugin is responding again.", headline: "Unable to load the feature options.", kind: "rejected", site: "features" },
+    { guidance: "Retry once the Homebridge server is reachable again.", headline: "The Homebridge server stopped responding.", kind: "expired", site: "sync" },
+    { guidance: "Retry once the Homebridge server is reachable again.", headline: "Unable to read the plugin configuration.", kind: "rejected", site: "sync" }
+  ];
+
+  for(const { guidance, headline, kind, site } of REGISTERED) {
+
+    test("the " + site + " site's " + kind + " row reads its own headline and guidance", () => {
+
+      assert.deepEqual(connectionFailureCopy({ kind, site }), { guidance, headline });
+    });
+  }
+
+  test("every registered site yields distinct copy for each way its failures arrive", () => {
 
     for(const site of [ "controllers", "devices", "features", "sync" ]) {
 
-      const failed = connectionFailureCopy({ expired: false, site });
-      const expired = connectionFailureCopy({ expired: true, site });
+      const rows = REGISTERED.filter((row) => row.site === site).map(({ kind }) => connectionFailureCopy({ kind, site }));
 
-      assert.ok(failed.guidance.length && failed.headline.length, site + " must carry both copy slots for a genuine failure");
-      assert.ok(expired.guidance.length && expired.headline.length, site + " must carry both copy slots for an expiry");
-      assert.notEqual(failed.headline, expired.headline, site + " must read differently when the host went quiet than when it answered with an error");
+      assert.ok(rows.every((row) => row.guidance.length && row.headline.length), site + " must carry a headline and guidance for every kind it registers");
+      assert.equal(new Set(rows.map((row) => row.headline)).size, rows.length, site + " must read differently for each way a failure arrives");
     }
   });
 
-  test("each site's failure headline is distinct from every other site's, so a failure cannot masquerade as a different one", () => {
+  test("every headline in the table is distinct from every other, so a failure cannot masquerade as a different one", () => {
 
-    const sites = [ "controllers", "devices", "features", "sync" ];
-    const headlines = sites.flatMap((site) => [ connectionFailureCopy({ expired: false, site }).headline, connectionFailureCopy({ expired: true, site }).headline ]);
+    const headlines = REGISTERED.map(({ kind, site }) => connectionFailureCopy({ kind, site }).headline);
 
-    assert.equal(new Set(headlines).size, headlines.length, "no two sites, in either failure kind, may share a headline");
+    assert.equal(new Set(headlines).size, headlines.length, "no two registered rows, at any site or of any kind, may share a headline");
   });
 
   test("an unregistered site throws rather than rendering a banner with empty text slots", () => {
 
-    assert.throws(() => connectionFailureCopy({ expired: false, site: "devcies" }), {
+    assert.throws(() => connectionFailureCopy({ kind: "rejected", site: "devcies" }), {
 
       constructor: Error,
       message: "FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the site \"devcies\"."
     });
   });
 
+  test("a kind its site does not register throws rather than rendering a banner with empty text slots", () => {
+
+    // The features and sync sites have no hook result to report a failure on, so neither registers a reported row, and a kind no site registers is refused too.
+    for(const { kind, site } of [ { kind: "reported", site: "features" }, { kind: "reported", site: "sync" }, { kind: "failed", site: "devices" } ]) {
+
+      assert.throws(() => connectionFailureCopy({ kind, site }), {
+
+        constructor: Error,
+        message: "FeatureOptionsState.connectionFailureCopy: no failure copy is registered for the kind \"" + kind + "\" at the site \"" + site + "\"."
+      });
+    }
+  });
+
   test("the controller-failure rows share one guidance, and it names no place the plugin may not have", () => {
 
-    const controllers = connectionFailureCopy({ expired: false, site: "controllers" });
-    const devices = connectionFailureCopy({ expired: false, site: "devices" });
+    const controllers = connectionFailureCopy({ kind: "reported", site: "controllers" });
+    const devices = connectionFailureCopy({ kind: "reported", site: "devices" });
 
     assert.equal(controllers.guidance, "Verify the controller's connection details are correct, then retry.", "the controller-list failure reads the shared guidance");
     assert.equal(devices.guidance, controllers.guidance, "and the device-list failure reads the same one, so the two cannot drift apart");
@@ -717,22 +758,49 @@ describe("connectionFailureCopy", () => {
 
     const plugin = "Open the controller editor below to correct its address or credentials.";
 
-    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: false, site: "controllers" }).guidance, plugin,
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, kind: "reported", site: "controllers" }).guidance, plugin,
       "a controller-list failure takes the plugin's guidance");
-    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: false, site: "devices" }).guidance, plugin,
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, kind: "reported", site: "devices" }).guidance, plugin,
       "and so does a device-list failure, the other way a controller reports trouble");
-    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: true, site: "devices" }).guidance, "Retry once the plugin is responding again.",
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, kind: "expired", site: "devices" }).guidance, "Retry once the plugin is responding again.",
       "an expiry keeps the plugin-stopped-responding guidance - a host that went quiet is not controller trouble");
-    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, expired: false, site: "sync" }).guidance,
+    assert.equal(connectionFailureCopy({ controllerFailureGuidance: plugin, kind: "rejected", site: "sync" }).guidance,
       "Retry once the Homebridge server is reachable again.", "and a config-read failure is untouched, since it says nothing about a controller");
+  });
+
+  test("a plugin's guidance leaves every rejected row alone, since a plugin that failed on its own is not controller trouble", () => {
+
+    const plugin = "Open the controller editor below to correct its address or credentials.";
+
+    for(const site of [ "controllers", "devices", "features", "sync" ]) {
+
+      assert.deepEqual(connectionFailureCopy({ controllerFailureGuidance: plugin, kind: "rejected", site }), connectionFailureCopy({ kind: "rejected", site }));
+    }
   });
 
   test("the headline is never touched by the guidance override", () => {
 
-    const overridden = connectionFailureCopy({ controllerFailureGuidance: "Repair it here.", expired: false, site: "devices" });
+    const overridden = connectionFailureCopy({ controllerFailureGuidance: "Repair it here.", kind: "reported", site: "devices" });
 
-    assert.equal(overridden.headline, connectionFailureCopy({ expired: false, site: "devices" }).headline,
+    assert.equal(overridden.headline, connectionFailureCopy({ kind: "reported", site: "devices" }).headline,
       "what failed is the framework's to say, whoever wrote the remedy");
+  });
+});
+
+describe("connectionFailureKind", () => {
+
+  test("a deadline expiry reads as expired", () => {
+
+    assert.equal(connectionFailureKind(new DeadlineExpiredError(30)), "expired");
+  });
+
+  test("every other thrown value reads as rejected, the contract guard's TypeError among them", () => {
+
+    // A wrong-shaped answer throws a TypeError, a hook with a bug of its own can throw one too, and each is the plugin's failure, so a thrown value's class says
+    // nothing of its kind.
+    const thrown = [ new Error("The bridge went away."), new TypeError("getDevices must resolve to { devices, error }."), { message: "Timed out." }, "kaboom" ];
+
+    assert.deepEqual(thrown.map((err) => connectionFailureKind(err)), [ "rejected", "rejected", "rejected", "rejected" ]);
   });
 });
 

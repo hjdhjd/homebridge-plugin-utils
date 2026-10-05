@@ -484,11 +484,12 @@ describe("mountNavView - click dispatch", () => {
     assert.equal(store.state.status.guidance, "Open the controller editor on this page.", "the configured guidance stands beneath it");
   });
 
-  test("a rejected fetch carries no result copy, so its outcome keeps the configured guidance", async () => {
+  test("a rejected fetch carries no result copy, so its outcome reads the plugin-failure row and never the configured guidance", async () => {
 
     using dom = createTestDom();
 
-    // A rejection has no result to decorate, so the fetch reads the copy table's devices row - the same copy an undecorated reported failure reads.
+    // A rejection has no result to decorate, and it is the plugin's own failure, so the fetch reads the copy table's rejected devices row, whose guidance the view's
+    // configured controller guidance never replaces.
     const getDevices = async () => { throw new Error("Controller unreachable."); };
     const { rootControllers, store } = setup({ failureGuidance: "Open the controller editor on this page.", getDevices });
     const ctrlLink = rootControllers.querySelector(".nav-link[data-device-serial='ctrl-a']");
@@ -496,8 +497,8 @@ describe("mountNavView - click dispatch", () => {
     ctrlLink.click();
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    assert.equal(store.state.status.headline, "Unable to retrieve the device list.", "a thrown failure reads the copy table's device-list headline");
-    assert.equal(store.state.status.guidance, "Open the controller editor on this page.", "and the configured guidance");
+    assert.equal(store.state.status.headline, "The plugin failed while retrieving the device list.", "a thrown failure reads the plugin-failure headline");
+    assert.equal(store.state.status.guidance, "Retry, and if it keeps failing, restart Homebridge and check its log for the reason.", "and the plugin-failure guidance");
   });
 
   test("clicking a controller whose getDevices throws a non-Error routes the stringified value to the connection-error message", async () => {

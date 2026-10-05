@@ -4,11 +4,11 @@
  */
 "use strict";
 
-import { DeadlineExpiredError, withDeadline } from "../../webUi-liveness.mjs";
-import { connectionFailureCopy } from "../state.mjs";
+import { connectionFailureCopy, connectionFailureKind } from "../state.mjs";
 import { errorMessage } from "../../webUi-errors.mjs";
 import { markHandled } from "../../mark-handled.js";
 import { scopingControllerId } from "../selectors.mjs";
+import { withDeadline } from "../../webUi-liveness.mjs";
 
 /**
  * The controller device fetch, and the selection that follows a clean one.
@@ -64,14 +64,16 @@ export const requestControllerDevices = ({ controller, controllerId, getDevices,
  *
  * It never rejects. Every failure is an outcome the reducer already knows how to render: a rejected hook, a hook that answered in the wrong shape, and a deadline
  * that elapsed all arrive as an empty device list beside a message, which is the reducer's one fetch-failure transition. Every failure also carries its display
- * copy, read from the page's copy table for the devices site - the expiry row when the deadline elapsed, because the plugin that stopped answering is not the
- * controller the user would be sent to check, and the failure row otherwise. A result that reports its own failure and names its own headline or guidance wins
- * field by field, the precedence every failing await on the page follows, so a thrown failure and a reported one that names nothing read alike.
+ * copy, read from the page's copy table for the devices site by how the failure arrived. A deadline expiry reads the expiry row, because the plugin that stopped
+ * answering is not the controller the user would be sent to check. Every other rejection, a failed request or a wrong-shaped answer alike, is the plugin's own
+ * failure and reads the rejected row, which no configured guidance replaces. A failure the result reports is how a plugin says its controller could not be
+ * reached, so it reads the reported row with the configured guidance standing in for the table's, and the result's own headline or guidance outranks those words
+ * field by field, the precedence every failing await on the page follows.
  *
  * @param {Object} args
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the fetch, armed when the settle begins.
  * @param {string} [args.failureGuidance] - The plugin's own guidance for a controller that cannot be reached, standing in for the copy table's controller
- *        guidance on a failure's outcome so every controller failure reads the same way. Absent leaves the table's own guidance.
+ *        guidance on a reported failure's outcome alone, so every controller failure reads the same way. Absent leaves the table's own guidance.
  * @param {{ controllerId: (string | null), fetch: Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>, seq: number }} args.request - The fetch
  *        {@link requestControllerDevices} recorded.
  * @param {AbortSignal} args.signal - The signal of the cycle this fetch belongs to. An abort drops the outcome rather than dispatching it into whatever replaced
@@ -97,10 +99,10 @@ export const settleControllerDevices = async ({ deadlineSeconds, failureGuidance
       return false;
     }
 
-    // A reported failure reads the copy table's devices row, and the result's own copy wins over it field by field: the result speaks for the failure that just
-    // happened, while the table and the configured guidance speak for every failure this plugin can have. A clean outcome has no failure to describe, so it
-    // resolves no table copy, and the reducer reads none on a success.
-    const { guidance, headline } = error.length ? connectionFailureCopy({ controllerFailureGuidance: failureGuidance, expired: false, site: "devices" }) : {};
+    // A reported failure reads the copy table's reported devices row, and the result's own copy wins over it field by field: the result speaks for the failure that
+    // just happened, while the table and the configured guidance speak for every controller failure this plugin can report. A clean outcome has no failure to
+    // describe, so it resolves no table copy, and the reducer reads none on a success.
+    const { guidance, headline } = error.length ? connectionFailureCopy({ controllerFailureGuidance: failureGuidance, kind: "reported", site: "devices" }) : {};
 
     store.dispatch({
 
@@ -127,10 +129,10 @@ export const settleControllerDevices = async ({ deadlineSeconds, failureGuidance
 
     /* A rejection has no result to name copy of its own, so it reads the copy table's devices row for its kind. A deadline expiry takes the expiry row: the bound
      * covers the plugin's own hook, so what elapsed says the plugin stopped answering, and sending the user to check controller details would send them after the
-     * wrong thing. Every other rejection - an IPC failure, the contract-guard TypeError - is the controller's as far as anyone here can tell, so it takes the
-     * failure row, with the caller's configured guidance standing in for the table's.
+     * wrong thing. Every other rejection, a failed request or a wrong-shaped answer alike, is the plugin's own failure and takes the rejected row, which no
+     * configured guidance replaces: a plugin reports a controller it could not reach by returning the failure, and the configured guidance speaks to that road alone.
      */
-    const { guidance, headline } = connectionFailureCopy({ controllerFailureGuidance: failureGuidance, expired: err instanceof DeadlineExpiredError, site: "devices" });
+    const { guidance, headline } = connectionFailureCopy({ controllerFailureGuidance: failureGuidance, kind: connectionFailureKind(err), site: "devices" });
 
     store.dispatch({ controllerId, devices: [], error: errorMessage(err), guidance, headline, seq, type: "devices:loaded" });
 
@@ -149,7 +151,7 @@ export const settleControllerDevices = async ({ deadlineSeconds, failureGuidance
  *        single list.
  * @param {number} args.deadlineSeconds - The deadline, in seconds, on the hook's call.
  * @param {string} [args.failureGuidance] - The plugin's own guidance for a controller that cannot be reached, standing in for the copy table's controller
- *        guidance on a failure's outcome so every controller failure reads the same way. Absent leaves the table's own guidance.
+ *        guidance on a reported failure's outcome alone, so every controller failure reads the same way. Absent leaves the table's own guidance.
  * @param {(controller: (Object | null)) => Promise<import("../../webUi-featureOptions.mjs").DeviceListResult>} args.getDevices - The device fetcher.
  * @param {AbortSignal} args.signal - The signal of the cycle this fetch belongs to. An abort drops the outcome rather than dispatching it into whatever replaced
  *        that cycle.

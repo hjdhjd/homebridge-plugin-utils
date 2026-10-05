@@ -331,7 +331,9 @@ describe("webUiFeatureOptions - connection-error view", () => {
     await flush();
 
     assert.equal(fake.observed.toasts.length, 0, "the failure surfaces inline in the retry view, not as a toast");
-    assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the device list\./, "the devices site's own failure headline renders");
+    assert.match(skeleton.headerInfo.textContent, /The plugin failed while retrieving the device list\./, "the devices site's plugin-failure headline renders");
+    assert.match(skeleton.headerInfo.textContent, /Retry, and if it keeps failing, restart Homebridge and check its log for the reason\./,
+      "with the plugin-failure guidance, since an answer in the wrong shape is the plugin's own failure");
     assert.match(skeleton.headerInfo.textContent,
       /getDevices must resolve to \{ devices, error \} with optional string emptyMessage, guidance, and headline\./,
       "the contract guard's own message reaches the user verbatim");
@@ -438,7 +440,9 @@ describe("webUiFeatureOptions - connection-error view", () => {
     assert.match(skeleton.headerInfo.textContent,
       /getControllers must resolve to \{ controllers, error \} with optional string guidance and headline\./,
       "the contract guard's own message reaches the user verbatim");
-    assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the controller list\./, "under the controllers site's own failure headline");
+    assert.match(skeleton.headerInfo.textContent, /The plugin failed while retrieving the controller list\./, "under the controllers site's plugin-failure headline");
+    assert.match(skeleton.headerInfo.textContent, /Retry, and if it keeps failing, restart Homebridge and check its log for the reason\./,
+      "and its plugin-failure guidance");
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "and the retry affordance renders with it");
 
     orchestrator.cleanup();

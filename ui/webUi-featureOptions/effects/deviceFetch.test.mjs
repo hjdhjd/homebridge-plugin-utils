@@ -255,7 +255,7 @@ describe("fetchControllerDevices - failure copy", () => {
     assert.equal(store.state.status.guidance, "Retry once the plugin is responding again.", "the configured controller guidance is deliberately not used here");
   });
 
-  test("a rejection renders the copy table's device-list headline and the configured guidance", async () => {
+  test("a rejection renders the plugin-failure row, which the configured guidance never replaces", async () => {
 
     using dom = createTestDom();
 
@@ -272,9 +272,57 @@ describe("fetchControllerDevices - failure copy", () => {
       store
     });
 
-    assert.match(root.textContent, /Unable to retrieve the device list/, "an ordinary rejection reads the copy table's device-list headline");
-    assert.match(root.textContent, /Open the controller editor on this page/, "with the plugin's own controller guidance beneath it");
-    assert.equal(store.state.status.headline, "Unable to retrieve the device list.");
+    assert.match(root.textContent, /The plugin failed while retrieving the device list/, "an ordinary rejection reads as the plugin's own failure");
+    assert.match(root.textContent, /Retry, and if it keeps failing, restart Homebridge and check its log for the reason/, "with the plugin-failure guidance beneath it");
+    assert.doesNotMatch(root.textContent, /Open the controller editor on this page/, "and never the configured controller guidance");
+    assert.equal(store.state.status.headline, "The plugin failed while retrieving the device list.");
+    assert.equal(store.state.status.guidance, "Retry, and if it keeps failing, restart Homebridge and check its log for the reason.");
+  });
+
+  test("a wrong-shaped answer, which the page's contract guard rejects with a TypeError, reads the plugin-failure row as well", async () => {
+
+    using dom = createTestDom();
+
+    const store = setup();
+    const root = mountError(store);
+    const guard = "getDevices must resolve to { devices, error } with optional string emptyMessage, guidance, and headline.";
+
+    await fetchControllerDevices({
+
+      controllerId: "ctrl-a",
+      deadlineSeconds: 30,
+      failureGuidance: "Open the controller editor on this page.",
+      getDevices: () => Promise.reject(new TypeError(guard)),
+      signal: new AbortController().signal,
+      store
+    });
+
+    assert.equal(store.state.status.headline, "The plugin failed while retrieving the device list.");
+    assert.equal(store.state.status.guidance, "Retry, and if it keeps failing, restart Homebridge and check its log for the reason.");
+    assert.equal(store.state.status.message, guard, "the guard's own message names what the plugin answered wrong");
+    assert.doesNotMatch(root.textContent, /Open the controller editor on this page/, "and the configured controller guidance stays out of it");
+  });
+
+  test("a rejection with a plain object carrying a message renders that message under the plugin-failure row", async () => {
+
+    using dom = createTestDom();
+
+    const store = setup();
+    const root = mountError(store);
+
+    // A hook can reject with any value, and a plain object carrying a message is still a rejection, the plugin's own failure, whose message the user reads.
+    await fetchControllerDevices({
+
+      controllerId: "ctrl-a",
+      deadlineSeconds: 30,
+      getDevices: () => Promise.reject({ message: "The plugin's UI server did not answer." }),
+      signal: new AbortController().signal,
+      store
+    });
+
+    assert.equal(store.state.status.message, "The plugin's UI server did not answer.");
+    assert.equal(store.state.status.headline, "The plugin failed while retrieving the device list.");
+    assert.match(root.textContent, /The plugin's UI server did not answer\./, "the object's message reaches the view rather than its string coercion");
   });
 
   test("a reported failure naming only its own headline keeps the copy table's guidance, which the configured guidance replaces", async () => {

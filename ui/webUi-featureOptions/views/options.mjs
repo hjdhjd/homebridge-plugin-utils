@@ -994,4 +994,3 @@ const handleFocusOut = ({ event, store }) => {
   store.dispatch({ type: "option:disarmed" });
   applyRowState({ entry: context.entry, row: context.row, scopeKind: context.viewScope });
 };
-

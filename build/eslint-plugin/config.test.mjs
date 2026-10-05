@@ -4,9 +4,10 @@
  * machinery and assert the effective rule severities and global vocabularies each file set ends up with: the TypeScript compatibility overlay confined to
  * TypeScript paths, the ESLint-recommended correctness baseline active on JavaScript and browser-UI paths, the browser and Node global vocabularies merging on
  * the test-side UI files that match both blocks, a Node global accepted only where the `node` option reaches, key sorting switched off for fixture paths and
- * kept for test and helper paths, and a test-named file outside every linted glob left unlinted. The rest read the builder's exports directly: the Node globals
- * it reads from the runtime, which blocks its `node`, `tests`, and `fixtures` options emit, what a Node-only glob resolves to, and where the test-file and
- * fixture blocks sit.
+ * kept for test and helper paths, the blank-line rule kept on at warn severity for source, browser-side, test, and fixture paths alike, with no blank line
+ * allowed at a file's start or end and at most one in a row inside it, and a test-named file outside every linted glob left unlinted. The rest read the
+ * builder's exports directly: the Node globals it reads from the runtime, which blocks its `node`, `tests`, and `fixtures` options emit, what a Node-only glob
+ * resolves to, and where the test-file and fixture blocks sit.
  */
 import { config as buildConfig, fixtureRules, globalsNode, testRules } from "./config.mjs";
 import { describe, it } from "node:test";
@@ -122,6 +123,43 @@ describe("flat config composition", () => {
 
     assert.equal(await ruleMessageCount({ filePath: "build/fs-ops.mjs", rule: "no-undef", source }), 0);
     assert.equal(await ruleMessageCount({ filePath: "ui/webUi.mjs", rule: "no-undef", source }), 1);
+  });
+
+  // The final-newline rule requires a newline at a file's end and allows a blank line ahead of it, so the blank-line rule is what refuses that line: a text that
+  // ends in one is reported once, and the same text ending in its newline alone is not.
+  it("reports a blank line at the end of a file", async () => {
+
+    const rule = "@stylistic/no-multiple-empty-lines";
+
+    assert.equal(await ruleMessageCount({ rule, source: "const a = 1;\n\n" }), 1);
+    assert.equal(await ruleMessageCount({ rule, source: "const a = 1;\n" }), 0);
+  });
+
+  // Inside a file the limit is the one blank line in a row the house style puts between statements, so two are reported and one is not.
+  it("reports more than one blank line in a row and admits a single one", async () => {
+
+    const rule = "@stylistic/no-multiple-empty-lines";
+
+    assert.equal(await ruleMessageCount({ rule, source: "const a = 1;\n\n\nconst b = 2;\n" }), 1);
+    assert.equal(await ruleMessageCount({ rule, source: "const a = 1;\n\nconst b = 2;\n" }), 0);
+  });
+
+  // A file opens on its first line of content, so a blank line ahead of it is reported.
+  it("reports a blank line at the start of a file", async () => {
+
+    assert.equal(await ruleMessageCount({ rule: "@stylistic/no-multiple-empty-lines", source: "\nconst a = 1;\n" }), 1);
+  });
+
+  // The blank-line rule sits in the common block at the warn severity the other stylistic rules carry, and neither the test-file relaxation nor the fixture
+  // relaxation names it, so test and fixture paths keep it on just as source and browser-side paths do.
+  it("keeps the blank-line rule at warn severity on source, browser-side, test, and fixture paths", async () => {
+
+    const rule = "@stylistic/no-multiple-empty-lines";
+
+    assert.equal(severityOf(await eslint.calculateConfigForFile("src/util.ts"), rule), 1);
+    assert.equal(severityOf(await eslint.calculateConfigForFile("ui/webUi.mjs"), rule), 1);
+    assert.equal(severityOf(await eslint.calculateConfigForFile("src/util.test.ts"), rule), 1);
+    assert.equal(severityOf(await eslint.calculateConfigForFile("src/owned-connector.fixtures.ts"), rule), 1);
   });
 
   // The Node globals come from the runtime running the linter, so the names Node-run code reaches for most are present without a hand-kept list.

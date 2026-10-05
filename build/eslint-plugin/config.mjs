@@ -138,6 +138,7 @@ const commonRules = {
   "@stylistic/linebreak-style": [ "warn", "unix" ],
   "@stylistic/lines-between-class-members": [ "warn", "always", { "exceptAfterSingleLine": true } ],
   "@stylistic/max-len": [ "warn", 170 ],
+  "@stylistic/no-multiple-empty-lines": [ "warn", { "max": 1, "maxBOF": 0, "maxEOF": 0 } ],
   "@stylistic/no-tabs": "warn",
   "@stylistic/no-trailing-spaces": "warn",
   "@stylistic/operator-linebreak": [ "warn", "after", { "overrides": { ":": "after", "?": "after" } } ],

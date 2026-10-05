@@ -2,13 +2,13 @@
  *
  * ui/webUi.test.mjs: Unit tests for the webUi orchestrator - constructor wiring, show() lifecycle across the feature-options and first-run routing branches, the
  * first-run click flow, chrome listeners over whichever buttons the page carries, the #processHandler function-vs-truthy normalization, the boot-monitor handshake,
- * the deadline-bounded launch race, the entry-point boundary that reports a failure and settles chrome, the liveness surface and its resume detector threaded end
- * to end through a mounted status panel, and the page-lifetime theming registration. The orchestrator's inner webUiFeatureOptions instance is constructed against
- * the real implementation so the constructor's DOM-binding contract is exercised end-to-end. By default the harness stubs the inner instance's `show()` and `hide()`
- * methods so the orchestrator's call ordering is verified without re-exercising the entire feature-options rendering pipeline (which has its own dedicated suite in
- * `webUi-featureOptions.test.mjs`); the tab-switch reconciliation ordering, the real menu-path re-entry walk, the deadline-bounded launch race, and the end-to-end
- * resume-detector suites instead opt into the harness's `unstubbed: true` mode to drive the real pipeline, since a stub's call record cannot express the orderings
- * those suites verify.
+ * the deadline-bounded launch race, the entry-point boundary that reports a failure and settles chrome, the stalled-write notice over the session's watched host,
+ * the liveness surface and its resume detector threaded end to end through a mounted status panel, and the page-lifetime theming registration. The orchestrator's
+ * inner webUiFeatureOptions instance is constructed against the real implementation so the constructor's DOM-binding contract is exercised end-to-end. By default
+ * the harness stubs the inner instance's `show()` and `hide()` methods so the orchestrator's call ordering is verified without re-exercising the entire
+ * feature-options rendering pipeline (which has its own dedicated suite in `webUi-featureOptions.test.mjs`); the tab-switch reconciliation ordering, the real
+ * menu-path re-entry walk, the deadline-bounded launch race, the stalled save through the page's commit, and the end-to-end resume-detector suites instead opt
+ * into the harness's `unstubbed: true` mode to drive the real pipeline, since a stub's call record cannot express the orderings those suites verify.
  */
 "use strict";
 
@@ -1037,6 +1037,252 @@ describe("webUi - the entry-point boundary reports a failure and settles its chr
       "a failed flush surfaces exactly one error toast");
     assert.equal(harness.fake.observed.calls.includes("showSchemaForm"), true, "and the tab the user asked for is painted regardless");
     assert.equal(harness.fake.observed.state.spinnerCount, 0, "and the spinner comes down, so nothing strands the user on it");
+  });
+});
+
+describe("webUi - the stalled-write notice", () => {
+
+  const CONFIG = [{ name: "TestPlatform", platform: "TestPlatform" }];
+
+  // The notice's threshold in milliseconds, mirrored so a row can advance the mock clock to just short of it and then past it.
+  const THRESHOLD_MS = 10000;
+
+  // The mandated copy, and its first sentence, which is the toast the notice raises as it appears.
+  const SUMMARY = "Homebridge has not confirmed a configuration change.";
+  const NOTICE_COPY = SUMMARY + " Recent changes may not be saved. If this message stays, close and reopen the plugin settings, and restart Homebridge if it returns.";
+
+  // The catalog the unstubbed row's real feature-options page pulls.
+  const FEATURES = {
+
+    categories: [{ description: "Motion Options", name: "Motion" }],
+    options: { Motion: [{ default: true, description: "Enable motion detection.", name: "Detect" }] }
+  };
+
+  // Drain the async work a settled await releases, as the entry-point boundary suite does, so a row can assert that something did not happen.
+  const drain = async (turns = 25) => {
+
+    for(let i = 0; i < turns; i++) {
+
+      // eslint-disable-next-line no-await-in-loop
+      await flushPending();
+    }
+  };
+
+  // The notice element, or null while none has been built.
+  const notice = () => document.getElementById("writeStallNotice");
+
+  // Whether the notice is on screen: built, and neither it nor any element above it hidden. The walk up is what lets a row see a notice that a hidden page
+  // region carries, which its own display would still report as shown.
+  const shown = () => {
+
+    let node = notice();
+
+    if(node === null) {
+
+      return false;
+    }
+
+    while(node) {
+
+      if(node.style.display === "none") {
+
+        return false;
+      }
+
+      node = node.parentElement;
+    }
+
+    return true;
+  };
+
+  // The warning toasts the bridge has recorded, the channel the notice's toast goes through.
+  const warnings = (fake) => fake.observed.toasts.filter((toast) => toast.variant === "warning");
+
+  // A first-run hook that commits once per patch it is given, in order, and answers true, so each commit is one host write the row can hold.
+  const committingSubmit = (patches) => async ({ commit }) => {
+
+    for(const patch of patches) {
+
+      // eslint-disable-next-line no-await-in-loop
+      await commit(patch);
+    }
+
+    return true;
+  };
+
+  test("a first-run write the host leaves unanswered shows the notice and one warning toast at the threshold, and its settlement retracts the notice", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true,
+      onSubmit: committingSubmit([ { first: true }, { second: true } ]) } });
+
+    await harness.ui.show();
+
+    // Each write the hook makes is held until the row releases it, in the order the hook makes them.
+    const holds = [];
+
+    harness.fake.updatePluginConfig = () => {
+
+      const held = Promise.withResolvers();
+
+      holds.push(held);
+
+      return held.promise;
+    };
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    assert.equal(holds.length, 1, "precondition: the hook's first write is outstanding");
+
+    t.mock.timers.tick(THRESHOLD_MS - 1);
+
+    assert.ok(notice() === null, "no notice is built while the write is still inside the threshold");
+    assert.deepEqual(warnings(harness.fake), [], "and nothing is toasted");
+
+    t.mock.timers.tick(1);
+
+    assert.equal(shown(), true, "the notice shows once the write has gone unanswered for the threshold");
+    assert.equal(notice().textContent, NOTICE_COPY, "and carries the mandated copy");
+    assert.equal(notice().getAttribute("role"), "status", "as a status region");
+    assert.ok(document.body.firstElementChild === notice(), "prepended to the page's body, outside every page region");
+    assert.deepEqual(warnings(harness.fake), [{ message: SUMMARY, title: "Configuration", variant: "warning" }],
+      "and exactly one warning toast carrying the copy's first sentence is raised as it appears");
+
+    holds[0].resolve();
+    await drain();
+
+    assert.equal(shown(), false, "the write's settlement retracts the notice");
+    assert.equal(warnings(harness.fake).length, 1, "and the retraction toasts nothing");
+    assert.equal(holds.length, 2, "precondition: the hook's second write is outstanding");
+
+    t.mock.timers.tick(THRESHOLD_MS);
+
+    assert.equal(shown(), true, "a later write that stalls shows the notice again");
+    assert.equal(document.querySelectorAll("#writeStallNotice").length, 1, "as the same element rather than a second one");
+    assert.equal(warnings(harness.fake).length, 2, "with a second warning toast for the second episode");
+
+    holds[1].resolve();
+    await drain();
+
+    assert.equal(shown(), false, "and the second write's settlement retracts it");
+    assert.equal(warnings(harness.fake).length, 2, "again without a toast");
+    assert.equal(harness.fake.observed.state.saveButtonEnabled, true, "the first-run flow then completes as it does without a stall");
+  });
+
+  test("a write released before the threshold never builds or shows the notice", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit: committingSubmit([{ prompt: true }]) } });
+
+    await harness.ui.show();
+
+    const held = Promise.withResolvers();
+
+    harness.fake.updatePluginConfig = () => held.promise;
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    t.mock.timers.tick(THRESHOLD_MS - 1);
+    held.resolve();
+    await drain();
+
+    t.mock.timers.tick(6 * THRESHOLD_MS);
+    await drain();
+
+    assert.ok(notice() === null, "a write answered inside the threshold never builds the notice");
+    assert.deepEqual(warnings(harness.fake), [], "and never toasts");
+  });
+
+  test("an unanswered save through the page's commitConfig shows the notice, which a tab switch leaves up and the save's settlement retracts", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using harness = makeWebUiHarness({
+
+      config: [{ name: "TestPlatform", options: [], platform: "TestPlatform" }],
+      firstRun: { isRequired: () => false },
+      requestResponses: new Map([[ "/getOptions", FEATURES ]]),
+      unstubbed: true
+    });
+
+    await harness.ui.show();
+    await waitFor(() => harness.skeleton.configTable.querySelector("details[data-category]"), { message: "the feature-options page did not render" });
+
+    const held = Promise.withResolvers();
+    const receivers = [];
+
+    // The real bridge's methods read `this`, so the held save records its receiver: a host that called the bridge's method detached would hand it no bridge.
+    harness.fake.savePluginConfig = function() {
+
+      receivers.push(this);
+
+      return held.promise;
+    };
+
+    const committed = harness.ui.featureOptions.commitConfig(() => ({ stalledSaveProbe: true }));
+
+    await waitFor(() => receivers.length === 1, { message: "the commit never reached its save" });
+
+    assert.equal(receivers[0], harness.fake, "the save reached the bridge's own method with the bridge as its receiver");
+
+    t.mock.timers.tick(THRESHOLD_MS - 1);
+
+    assert.equal(shown(), false, "no notice while the save is inside the threshold");
+
+    t.mock.timers.tick(1);
+
+    assert.equal(shown(), true, "the notice shows once the save has gone unanswered for the threshold");
+    assert.equal(notice().textContent, NOTICE_COPY, "and carries the mandated copy");
+    assert.equal(notice().getAttribute("role"), "status", "as a status region");
+    assert.deepEqual(warnings(harness.fake), [{ message: SUMMARY, title: "Configuration", variant: "warning" }], "with one warning toast as it appears");
+
+    // The user moves to Settings while the save is still unanswered. The switch hides every page region, so a notice carried by one would go with it.
+    assert.equal(harness.skeleton.pageFeatureOptions.style.display, "block", "precondition: the feature-options page is on screen before the switch");
+
+    harness.skeleton.menuSettings.click();
+    await waitFor(() => harness.fake.observed.calls.includes("showSchemaForm"), { message: "the Settings switch never rendered the schema form" });
+
+    assert.equal(harness.skeleton.pageFeatureOptions.style.display, "none", "precondition: the switch hid the feature-options page");
+    assert.equal(shown(), true, "the notice stays on screen across the tab switch");
+
+    held.resolve();
+
+    assert.equal((await committed).kind, "committed", "the call's own result follows the save's settlement unchanged");
+    assert.equal(shown(), false, "and the save's settlement retracted the notice");
+    assert.equal(warnings(harness.fake).length, 1, "without a further toast");
+  });
+
+  test("a first-run write reaches a bridge method installed after launch, with the bridge as its receiver", async () => {
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit: committingSubmit([{ controllers: [] }]) } });
+
+    await harness.ui.show();
+
+    const receivers = [];
+
+    /* The real bridge's write methods each return the result of a call through `this`, so a host that called them detached from the bridge would throw on every
+     * real launch while passing against a fake whose methods ignore `this`. This stand-in reads `this` the same way, and is installed after the launch, so the
+     * write also proves the session's host looks the method up on the bridge at call time.
+     */
+    harness.fake.updatePluginConfig = function(config) {
+
+      receivers.push(this);
+      this.observed.updatedConfigs.push(config);
+
+      return Promise.resolve();
+    };
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    assert.deepEqual(harness.fake.observed.toasts, [], "the write raised no failure");
+    assert.equal(receivers.length, 1, "the hook's commit reached the method installed after launch");
+    assert.equal(receivers[0], harness.fake, "with the bridge as its receiver");
+    assert.equal(harness.fake.observed.updatedConfigs.length, 1, "and the method's own use of its receiver worked");
   });
 });
 

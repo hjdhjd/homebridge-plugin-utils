@@ -5,7 +5,7 @@
 "use strict";
 
 import { BOOT_AWAIT_DEADLINE_SECONDS, webUiFeatureOptions } from "./webUi-featureOptions.mjs";
-import { DeadlineExpiredError, createResumeDetector, withDeadline } from "./webUi-liveness.mjs";
+import { DeadlineExpiredError, createResumeDetector, createStallWatch, withDeadline } from "./webUi-liveness.mjs";
 import { paintMenuTabs, registerThemeEffect } from "./webUi-theming.mjs";
 import { PluginConfigSession } from "./pluginConfigSession.mjs";
 import { markHandled } from "./mark-handled.js";
@@ -16,6 +16,16 @@ import { toastError } from "./webUi-errors.mjs";
 // only surface available - and the recovery it names has to hold for every plugin whatever menu its markup carries, which reopening the panel does: opening the panel
 // is what runs the launch.
 const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the plugin configuration could not be read. Reopen the settings panel to try again.";
+
+// How long a configuration write may go unanswered before the page says so, in seconds. Long enough that a slow host does not trip it, and the same patience the
+// status panel's link-lost notice and the boot monitor's slow-boot notice give before they show.
+const WRITE_STALL_NOTICE_SECONDS = 10;
+
+// The copy the stalled-write notice carries. Its first sentence stands on its own as the toast raised when the notice appears, so the toast and the notice say
+// the same thing and the toast's message is never a fragment of a sentence.
+const WRITE_STALL_SUMMARY = "Homebridge has not confirmed a configuration change.";
+const WRITE_STALL_NOTICE = WRITE_STALL_SUMMARY + " Recent changes may not be saved. " +
+  "If this message stays, close and reopen the plugin settings, and restart Homebridge if it returns.";
 
 /**
  * @typedef {Object} FirstRunContext
@@ -49,6 +59,12 @@ const LAUNCH_TIMEOUT_MESSAGE = "The Homebridge server did not respond, so the pl
  * The menu surfaces it drives are whichever ones the plugin's markup carries: `menuHome` enters the support view, `menuFeatureOptions` the feature-options view, and
  * `menuSettings` the host's schema form. Each is bound and painted when the page carries it and skipped when it does not, so a plugin declares its menu by markup
  * alone. Painting is shared rather than owned - the feature-options view paints its own active state through the same class-swap helper whenever it shows.
+ *
+ * The page also tells the user when Homebridge leaves a configuration write unanswered. Every write the page makes goes through the one session each launch opens,
+ * and that session's host is a watched object over the bridge: reads pass through, and each write is the bridge's own call under a stall watch from the liveness
+ * module. A write unanswered past the notice threshold raises a notice prepended to the page's body, outside every page region so no tab switch hides it, with one
+ * warning toast as it appears, and the notice is retracted when the last such write settles. The watch releases nothing: every write runs to its own result, and
+ * that result is reported where it always is.
  */
 export class webUi {
 
@@ -89,7 +105,10 @@ export class webUi {
   #name;
   #resumeDetector;
   #session;
+  #sessionHost;
   #themingPromise;
+  #writeStallNotice = null;
+  #writeWatch;
 
   /**
    * Initialize the plugin webUI orchestrator.
@@ -111,6 +130,20 @@ export class webUi {
     // mounted, so it belongs to the object whose lifetime is the page's and is handed down to the feature-options instance as framework wiring rather than as plugin
     // configuration. Its sampling timer is demand-driven, so a page whose views never subscribe pays nothing for holding one.
     this.#resumeDetector = createResumeDetector();
+
+    // One watch over every configuration write the page makes, built once for the page as the resume detector is, so a re-launch after a failed open reuses it.
+    // Those writes all go through the one session the launch opens, and the session takes its host as an injected object, so the launch hands it this host rather
+    // than the bridge: the read passes through, and each write is the bridge's own call under the watch, which returns the call's own promise. Each member calls
+    // the bridge at call time rather than through a captured method, because the real bridge's methods read `this`, and a method installed on the bridge after
+    // launch must be the one that runs.
+    this.#writeWatch = createStallWatch({ onChange: (stalled) => this.#paintWriteStall(stalled), thresholdSeconds: WRITE_STALL_NOTICE_SECONDS });
+
+    this.#sessionHost = {
+
+      getPluginConfig: () => homebridge.getPluginConfig(),
+      savePluginConfig: () => this.#writeWatch.watch(homebridge.savePluginConfig()),
+      updatePluginConfig: (config) => this.#writeWatch.watch(homebridge.updatePluginConfig(config))
+    };
 
     this.featureOptions = new webUiFeatureOptions(featureOptions, {
 
@@ -397,6 +430,43 @@ export class webUi {
   }
 
   /**
+   * Show or retract the stalled-write notice as the write watch reports a change.
+   *
+   * The notice is built on the first stall and prepended to the page's body, outside every page region, because the shell hides and shows its regions on every
+   * tab switch and page swap while a write keeps running across all of them. Later episodes show the same element again rather than building another. Each
+   * appearance also raises one warning toast: the host sizes the frame to the page's full height, so a user scrolled down a long page would not see a notice at
+   * its top, while the host shows a toast wherever the user is. A retraction toasts nothing, because the write's own result follows it.
+   *
+   * @param {boolean} stalled - True when a write has gone unanswered past the threshold, false when the last such write has settled.
+   * @private
+   */
+  #paintWriteStall(stalled) {
+
+    // The watch reports a retraction only after an appearance, so the notice exists whenever this branch runs.
+    if(!stalled) {
+
+      this.#writeStallNotice.style.display = "none";
+
+      return;
+    }
+
+    if(!this.#writeStallNotice) {
+
+      this.#writeStallNotice = document.createElement("div");
+      this.#writeStallNotice.className = "alert alert-warning text-center";
+      this.#writeStallNotice.id = "writeStallNotice";
+      this.#writeStallNotice.setAttribute("role", "status");
+      this.#writeStallNotice.textContent = WRITE_STALL_NOTICE;
+
+      document.body.prepend(this.#writeStallNotice);
+    }
+
+    this.#writeStallNotice.style.display = "block";
+
+    homebridge.toast.warning(WRITE_STALL_SUMMARY, "Configuration");
+  }
+
+  /**
    * Show the main plugin configuration tab.
    *
    * Hides the feature-options view, paints the menu with Settings as the active tab, and asks Homebridge to render its built-in schema-driven settings form. The
@@ -489,7 +559,7 @@ export class webUi {
     //
     // This is the page's FIRST bridge call, and an unbounded one would be the worst place to hang: nothing has rendered, so the user sees a spinner over an empty
     // frame with no diagnostic and no way forward. An expiry surfaces through show()'s toast with the menu left usable for another attempt.
-    this.#session = await withDeadline({ promise: PluginConfigSession.open({ host: homebridge, name: this.#name }), seconds: BOOT_AWAIT_DEADLINE_SECONDS });
+    this.#session = await withDeadline({ promise: PluginConfigSession.open({ host: this.#sessionHost, name: this.#name }), seconds: BOOT_AWAIT_DEADLINE_SECONDS });
 
     // The caller's first-run gate decides routing against the injected platform config. No separate "is there any config?" test is needed: a plugin with a first-run
     // flow returns true on a fresh config (no valid credentials yet), and a plugin without one keeps the default `() => false` gate and lands straight on feature

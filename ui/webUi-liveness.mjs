@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ui/webUi-liveness.mjs: Timing and connection-liveness primitives for plugin webUIs - a signal-aware sleep, request deadlines, an action guard, a trip-signal
- * watchdog, and a page-resume detector.
+ * watchdog, a per-request stall watch, and a page-resume detector.
  */
 
 /**
@@ -20,6 +20,9 @@
  *   - {@link createRequestWatchdog} watches awaits that have NO failure plumbing - fire-and-forget probes whose results arrive over push events rather than the
  *     response. There is no caller to reject, so the evidence is a trip signal instead: one shared timer, armed by the first unanswered request and cancelled by any
  *     settlement, that fires a caller-supplied callback when nothing answers in time.
+ *   - {@link createStallWatch} watches awaits that report their own failure and have NO bound - a configuration write, which a deadline would release while it
+ *     still runs. Nothing is settled early, so the evidence is a change report instead: the consumer hears when any watched request has gone unanswered past a
+ *     threshold, and again when the last such request settles.
  *   - {@link createResumeDetector} covers the case where no request is in flight at all: the page was frozen by an OS app-switch and has just woken, with no way to
  *     know whether the helper process behind the relay survived. Subscribers are notified so each can run its own probe.
  *
@@ -337,6 +340,107 @@ export const createRequestWatchdog = ({ onTrip, signal, timeoutSeconds }) => {
   signal.addEventListener("abort", cancel, { once: true });
 
   return { cancel, watch };
+};
+
+/**
+ * Create a stall watch over requests that report their own failure but carry no bound, telling the consumer when any of them has gone unanswered past a threshold.
+ *
+ * A configuration write is the shape this exists for. Its caller already reports whatever the write answers, success or failure, and the write must not be
+ * bounded, because a deadline would release a write that is still running as though it had finished. What the caller lacks is a word to the user while the answer
+ * is late, and that is all the watch supplies: it never settles, bounds, or cancels what it watches, and `watch` hands back the request's own promise, so the
+ * caller's await sees the request's own outcome and timing. Unlike {@link createRequestWatchdog}, which shares one timer because one answer proves the relay for
+ * every request, each request here arms a timer of its own, because each write is its own question and one write's answer says nothing about another's.
+ *
+ * The consumer hears changes rather than requests: `onChange(true)` when the first watched request becomes overdue, and `onChange(false)` when the last overdue
+ * request resolves or rejects, so one episode of stalled writes is one report each way however many writes it held. A request that settles inside the threshold
+ * reports nothing. Settlement is two-armed, as the watchdog's is, so a rejecting request is consumed on the observing chain and never surfaces there as an
+ * unhandled rejection, while the caller still sees the rejection on its own await. A throw from `onChange` is the consumer's own failure, contained the way the
+ * resume detector contains a subscriber's, so it never rejects the observing chain or escapes a timer callback.
+ *
+ * The watch takes no signal: its lifetime is the page's, as the resume detector's is, and each timer is cleared by its own request's settlement.
+ *
+ * @example
+ *
+ * // Tell the user while a save has gone unanswered past the threshold, and stop telling them when it settles.
+ * const stalls = createStallWatch({ onChange: (stalled) => renderNotice(stalled), thresholdSeconds: 10 });
+ *
+ * await stalls.watch(homebridge.savePluginConfig());
+ *
+ * @param {Object} options
+ * @param {(stalled: boolean) => void} options.onChange - Invoked with true when the first watched request becomes overdue, and with false when the last overdue
+ *                                                        request settles.
+ * @param {number} options.thresholdSeconds - How long a request may go unanswered before it is overdue, in seconds. A non-finite or non-positive value throws a
+ *                                            TypeError at the call site.
+ * @returns {{ watch: (request: (Promise<unknown> | unknown)) => Promise<unknown> }} The watch handle: `watch` observes a request and returns its own promise.
+ * @throws {TypeError} When `thresholdSeconds` is not a finite, positive number.
+ */
+export const createStallWatch = ({ onChange, thresholdSeconds }) => {
+
+  requireDurationSeconds({ label: "createStallWatch's thresholdSeconds", value: thresholdSeconds });
+
+  // How many watched requests are past the threshold and still unanswered. The consumer hears only its moves between zero and one, which is what makes a notice
+  // shown for the first stalled write stay up until the last one settles.
+  let overdue = 0;
+
+  // Hand a change to the consumer, keeping its throw from reaching the timer callback or the settlement chain that called this. console is the browser page's
+  // diagnostic transport, and a consumer's own failure is exactly that.
+  const report = (stalled) => {
+
+    try {
+
+      onChange(stalled);
+    } catch(err) {
+
+      // eslint-disable-next-line no-console
+      console.warn("A stall-watch observer failed.", err);
+    }
+  };
+
+  // Watch one request. The input is normalized through Promise.resolve() so a non-promise or a thenable tracks as a settled or pending promise, and that
+  // normalized promise is what the caller gets back: for a native promise it is the request itself, so the caller's await is unchanged in outcome and in timing.
+  const watch = (request) => {
+
+    const promise = Promise.resolve(request);
+
+    // Whether this request's own timer fired before it settled, which is what tells its settlement whether it has an overdue count to give back.
+    let late = false;
+
+    const timer = setTimeout(() => {
+
+      late = true;
+      overdue += 1;
+
+      if(overdue === 1) {
+
+        report(true);
+      }
+    }, thresholdSeconds * 1000);
+
+    // A resolution or a rejection clears the request's timer, and a request that was overdue gives its place in the count back. The hook is attached here, before the
+    // caller can attach its own, so a notice is retracted in the same turn the request settles and ahead of whatever the caller does with the outcome.
+    const settle = () => {
+
+      clearTimeout(timer);
+
+      if(!late) {
+
+        return;
+      }
+
+      overdue -= 1;
+
+      if(overdue === 0) {
+
+        report(false);
+      }
+    };
+
+    promise.then(settle, settle);
+
+    return promise;
+  };
+
+  return { watch };
 };
 
 /**

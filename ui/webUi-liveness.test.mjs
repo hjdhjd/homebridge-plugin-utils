@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ui/webUi-liveness.test.mjs: The specification suite for the timing and connection-liveness primitives - the signal-aware sleep, the rejecting deadline, the
- * latest-action guard, the shared-timer request watchdog, and the page-resume detector. Every clock in here is a node:test mock, so each test states the exact time
- * it advances and nothing waits on wall-clock duration.
+ * latest-action guard, the shared-timer request watchdog, the per-request stall watch, and the page-resume detector. Every clock in here is a node:test mock, so
+ * each test states the exact time it advances and nothing waits on wall-clock duration.
  */
 "use strict";
 
-import { DeadlineExpiredError, createActionGuard, createRequestWatchdog, createResumeDetector, delay, withDeadline } from "./webUi-liveness.mjs";
+import { DeadlineExpiredError, createActionGuard, createRequestWatchdog, createResumeDetector, createStallWatch, delay, withDeadline } from "./webUi-liveness.mjs";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
@@ -481,6 +481,277 @@ describe("createRequestWatchdog", () => {
 
         constructor: TypeError,
         message: "createRequestWatchdog's timeoutSeconds must be a finite, positive number of seconds."
+      });
+    }
+  });
+});
+
+describe("createStallWatch", () => {
+
+  // The threshold every row uses, in seconds and in the milliseconds the mock clock advances by.
+  const THRESHOLD_SECONDS = 10;
+  const THRESHOLD_MS = THRESHOLD_SECONDS * 1000;
+
+  // Build a watch whose change reports are recorded in the order they land.
+  const buildWatch = () => {
+
+    const changes = [];
+    const stalls = createStallWatch({ onChange: (stalled) => changes.push(stalled), thresholdSeconds: THRESHOLD_SECONDS });
+
+    return { changes, stalls };
+  };
+
+  test("nothing is reported before the threshold, and the first stall is reported at it", (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { changes, stalls } = buildWatch();
+
+    stalls.watch(hangingPromise());
+
+    t.mock.timers.tick(THRESHOLD_MS - 1);
+    assert.deepEqual(changes, [], "a request inside its threshold is not overdue");
+
+    t.mock.timers.tick(1);
+    assert.deepEqual(changes, [true], "the request became overdue at the threshold and the stall was reported once");
+  });
+
+  test("a late resolution and a late rejection each retract the stall when the request settles", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const settlements = [
+
+      { expected: "resolved", settle: (request) => request.resolve("answered") },
+      { expected: "rejected", settle: (request) => request.reject(new Error("The write failed.")) }
+    ];
+
+    for(const { expected, settle } of settlements) {
+
+      const { changes, stalls } = buildWatch();
+      const request = Promise.withResolvers();
+      const watched = stalls.watch(request.promise);
+
+      // The caller's own branch on the outcome, as the session's await is. It handles a rejection as well as a resolution, so the rejecting pass leaves nothing
+      // unhandled here.
+      const outcome = watched.then(() => "resolved", () => "rejected");
+
+      t.mock.timers.tick(THRESHOLD_MS);
+      assert.deepEqual(changes, [true], "precondition: the request is overdue before it is " + expected);
+
+      settle(request);
+
+      // eslint-disable-next-line no-await-in-loop
+      assert.equal(await outcome, expected, "the caller sees the request's own outcome");
+      assert.deepEqual(changes, [ true, false ], "the request being " + expected + " late retracted the stall");
+    }
+  });
+
+  test("a request that settles inside the threshold reports nothing and leaves no timer behind", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { changes, stalls } = buildWatch();
+
+    await stalls.watch(Promise.resolve("prompt"));
+    await assert.rejects(stalls.watch(Promise.reject(new Error("The write failed promptly."))), /failed promptly/);
+
+    // node:test's MockTimers exposes no pending-timer census, so the proof is behavioral: a timer left armed would make its request overdue here and report it.
+    t.mock.timers.tick(60 * THRESHOLD_MS);
+    await flush();
+
+    assert.deepEqual(changes, [], "a prompt resolution and a prompt rejection each cleared its timer, so nothing was ever reported");
+  });
+
+  test("overlapping requests are one episode - one stall reported, retracted only when the last overdue request settles", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { changes, stalls } = buildWatch();
+    const first = Promise.withResolvers();
+    const second = Promise.withResolvers();
+
+    stalls.watch(first.promise);
+    t.mock.timers.tick(THRESHOLD_MS / 2);
+    stalls.watch(second.promise);
+
+    t.mock.timers.tick(THRESHOLD_MS / 2);
+    assert.deepEqual(changes, [true], "the first request became overdue and the stall was reported");
+
+    t.mock.timers.tick(THRESHOLD_MS / 2);
+    assert.deepEqual(changes, [true], "the second request becoming overdue during the same episode reports nothing further");
+
+    first.resolve();
+    await flush();
+    assert.deepEqual(changes, [true], "the earlier request settling leaves the stall up, since a later one is still overdue");
+
+    second.resolve();
+    await flush();
+    assert.deepEqual(changes, [ true, false ], "the last overdue request settling retracts the stall");
+  });
+
+  test("a younger request still inside its threshold when an episode ends opens a new episode when its own timer fires", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { changes, stalls } = buildWatch();
+    const older = Promise.withResolvers();
+    const younger = Promise.withResolvers();
+
+    stalls.watch(older.promise);
+    t.mock.timers.tick(THRESHOLD_MS);
+    stalls.watch(younger.promise);
+
+    older.resolve();
+    await flush();
+    assert.deepEqual(changes, [ true, false ], "the overdue request settled, so its episode ended while the younger request was still inside its threshold");
+
+    t.mock.timers.tick(THRESHOLD_MS);
+    assert.deepEqual(changes, [ true, false, true ], "the younger request's own timer opened a new episode");
+
+    younger.resolve();
+    await flush();
+    assert.deepEqual(changes, [ true, false, true, false ], "and its settlement closed that episode");
+  });
+
+  test("back-to-back episodes each report one stall and one retraction", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { changes, stalls } = buildWatch();
+
+    for(let episode = 1; episode <= 2; episode++) {
+
+      const request = Promise.withResolvers();
+
+      stalls.watch(request.promise);
+      t.mock.timers.tick(THRESHOLD_MS);
+      request.resolve();
+      // eslint-disable-next-line no-await-in-loop
+      await flush();
+    }
+
+    assert.deepEqual(changes, [ true, false, true, false ], "the count came back to zero after the first episode, so the second reported afresh");
+  });
+
+  test("the returned promise is the request's own, carrying its value and its rejection", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { stalls } = buildWatch();
+    const resolving = Promise.resolve("written");
+    const failure = new Error("The host refused the write.");
+
+    assert.equal(stalls.watch(resolving), resolving, "a native promise is handed back itself, so the caller's await is unchanged in timing");
+    assert.equal(await stalls.watch(resolving), "written", "and it resolves with the request's own value");
+    await assert.rejects(stalls.watch(Promise.reject(failure)), (err) => err === failure);
+  });
+
+  test("a non-promise argument is watched as a settled request", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const { changes, stalls } = buildWatch();
+
+    assert.equal(await stalls.watch("not a promise at all"), "not a promise at all", "a plain value normalizes to a promise resolving with it");
+
+    t.mock.timers.tick(60 * THRESHOLD_MS);
+    await flush();
+
+    assert.deepEqual(changes, [], "a plain value is settled at once, so it is never overdue");
+  });
+
+  test("a watched request's rejection raises no unhandled rejection on the observing chain", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const captured = [];
+    const runnerListeners = process.listeners("unhandledRejection");
+    const onUnhandled = (reason) => captured.push(reason);
+
+    // Hold the unhandled-rejection channel for this row, handing it back afterwards. The runner keeps its own listener there and fails any test that trips it,
+    // so a row that asserts on the channel - including the positive control that proves the instrument can see the event - has to hold it while it looks.
+    process.removeAllListeners("unhandledRejection");
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+
+      Promise.reject(new Error("the positive control"));
+      await flush();
+
+      assert.equal(captured.length, 1, "precondition: the capture observes a genuinely unhandled rejection");
+
+      const { changes, stalls } = buildWatch();
+      const request = Promise.withResolvers();
+
+      // The caller attaches nothing, so the watch's own settlement hook is the only handler on the request: a one-armed hook would leave its derived promise to
+      // reject unhandled, and a rejection the watch passed on would surface here.
+      stalls.watch(request.promise);
+      t.mock.timers.tick(THRESHOLD_MS);
+      request.reject(new Error("The write failed after the threshold."));
+      await flush();
+
+      assert.equal(captured.length, 1, "the rejection was consumed on the observing chain");
+      assert.deepEqual(changes, [ true, false ], "and its settlement still retracted the stall");
+    } finally {
+
+      process.off("unhandledRejection", onUnhandled);
+
+      for(const listener of runnerListeners) {
+
+        process.on("unhandledRejection", listener);
+      }
+    }
+  });
+
+  test("a throwing onChange is reported and contained, so neither the timer nor the settlement chain fails", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    const warnings = [];
+
+    // console is the transport the code under test reports an observer's failure on, so the spy has to speak the same channel.
+    // eslint-disable-next-line no-console
+    const realWarn = console.warn;
+
+    // eslint-disable-next-line no-console
+    console.warn = (...args) => warnings.push(args);
+
+    try {
+
+      const broken = () => {
+
+        throw new Error("this observer is broken");
+      };
+
+      const stalls = createStallWatch({ onChange: broken, thresholdSeconds: THRESHOLD_SECONDS });
+      const request = Promise.withResolvers();
+      const watched = stalls.watch(request.promise);
+
+      assert.doesNotThrow(() => t.mock.timers.tick(THRESHOLD_MS), "the throw from the stall report never escaped the timer callback");
+
+      request.resolve("answered");
+
+      assert.equal(await watched, "answered", "the caller's await still sees the request's own value");
+      await flush();
+    } finally {
+
+      // eslint-disable-next-line no-console
+      console.warn = realWarn;
+    }
+
+    assert.equal(warnings.length, 2, "the stall report and the retraction report each failed, and each failure was reported once");
+    assert.equal(warnings[0][0], "A stall-watch observer failed.", "the diagnostic names what happened as a complete sentence");
+  });
+
+  test("a non-finite or non-positive threshold throws a TypeError naming the parameter", () => {
+
+    for(const thresholdSeconds of [ 0, -5, Number.NaN, Number.POSITIVE_INFINITY, undefined ]) {
+
+      assert.throws(() => createStallWatch({ onChange: () => {}, thresholdSeconds }), {
+
+        constructor: TypeError,
+        message: "createStallWatch's thresholdSeconds must be a finite, positive number of seconds."
       });
     }
   });

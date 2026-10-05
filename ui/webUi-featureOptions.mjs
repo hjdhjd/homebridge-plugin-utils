@@ -381,6 +381,13 @@ export class webUiFeatureOptions {
   // those boundaries, and commitConfig awaits it unbounded as the drain ahead of its compose. Recreated on every show(); nulled out on cleanup().
   #flushStaging;
 
+  /* This cycle's model decision: a promise that settles, with no value, once the cycle's boot has loaded its model or ended without one, or once the cycle's
+   * signal aborts. A controller-list refresh captures it beside the cycle's signal and waits on it, so no refresh reads the configuration or calls the plugin's
+   * controllers hook while a boot is out ahead of its model load. Minted beside the page-level abort controller on every show() and nulled out with it on
+   * cleanup(). Only a refresh reads it: the boot settles the resolver it holds for its own cycle, never this field.
+   */
+  #modelDecision;
+
   // The page-level abort controller. Aborting it tears down every effect and every view in one operation. Recreated on every show(); nulled out on cleanup().
   #pageAbort;
 
@@ -562,6 +569,7 @@ export class webUiFeatureOptions {
     this.#catalogPromise = null;
     this.#commitQueue = Promise.resolve();
     this.#flushStaging = null;
+    this.#modelDecision = null;
     this.#pageAbort = null;
     this.#pendingCommit = null;
     this.#registerTheming = registerTheming;
@@ -746,388 +754,413 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // The cycle's page-level abort controller is minted only past the overtaken-entry check above, so an entry that returns there leaves the field to the show()
-    // that overtook it.
+    // The cycle's page-level abort controller and its model decision are minted only past the overtaken-entry check above, so an entry that returns there mints and
+    // settles neither, leaving the fields to the show() that overtook it.
     this.#pageAbort = new AbortController();
 
     const signal = this.#pageAbort.signal;
 
-    // Clear stale DOM from any prior cycle before the views start populating regions.
-    clearContainers();
+    /* The cycle's model decision, which a controller-list refresh waits on when it is called while this boot is out ahead of its model load. The boot holds its
+     * own cycle's resolver in this local and settles nothing else: at its model load below, and in the finally that closes the boot, so a failure's return and a
+     * throw release a waiting refresh as a load does. It never settles through the field, because a superseded boot reaches its finally some turns after the
+     * show() that superseded it has minted, by which point the field holds that successor's decision. The cycle's abort settles it as well, so a cycle that is
+     * superseded or torn down releases its waiters without the boot's help.
+     */
+    const { promise: modelDecision, resolve: settleModelDecision } = Promise.withResolvers();
 
-    // Initialize the store with its starting state. The reducer transitions through loading -> ready once model:loaded dispatches. A re-entry reads the store it
-    // replaces here, as the last thing before that store is let go, so a selection the user made while the teardown flushed is the one handed over, and it hands
-    // over whatever that store holds - a loaded page's list and selection, or the ones it inherited itself when its own boot failed before a model arrived.
-    this.#store = new FeatureOptionsStore({ initialState: initialState(inherit ? this.#store?.state : undefined), reducer });
+    this.#modelDecision = modelDecision;
+    signal.addEventListener("abort", () => settleModelDecision(), { once: true });
 
-    // Mount every view before any data loads. Each view registers its effects against the loading placeholder and yields until model:loaded fires, so mounting
-    // here renders nothing yet - but the connection-error view exists from this point on, so a config-sync failure below renders its retry affordance instead of
-    // stranding a blank frame. Each mount is a no-op if its required page element is missing, so the orchestrator does not need to validate the page skeleton up front.
-    this.#mountViews(signal);
-
-    // Take the emptied frame with the connecting affordance before the first await. Everything above this line is synchronous, and everything below it is a bounded
-    // wait on someone else's I/O - so this is the exact moment the page would otherwise sit blank, for as long as the slowest of them takes. Installing it after the
-    // views mount means every failure from here on has both the error view to render into and an affordance to hand the frame over to.
-    this.#installBootAffordance(signal);
-
-    // Re-read the host config into the session before the page renders against it. This boot is the single entry chokepoint - a plugin's show() on launch, first-run
-    // and the menu, and each of the page's own re-entries, the connection-error retry among them - so re-syncing here makes "every show is fresh" an unconditional
-    // guarantee: an edit made in the Settings tab while this page was hidden is reflected on return rather than rendering against a frozen snapshot. The sync lands
-    // before getControllers reads session.platform and before the options read below, so both derive from the re-read config. A read failure routes into the
-    // already-mounted connection-error view rather than a bare toast: the store and views exist by now, so the page shows the retry affordance instead of stranding
-    // a blank frame.
     try {
 
-      await withDeadline({ promise: this.#session.sync(), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
-    } catch(err) {
+      // Clear stale DOM from any prior cycle before the views start populating regions.
+      clearContainers();
 
-      this.#failConnection({ err, signal, site: "sync" });
+      // Initialize the store with its starting state. The reducer transitions through loading -> ready once model:loaded dispatches. A re-entry reads the store it
+      // replaces here, as the last thing before that store is let go, so a selection the user made while the teardown flushed is the one handed over, and it hands
+      // over whatever that store holds - a loaded page's list and selection, or the ones it inherited itself when its own boot failed before a model arrived.
+      this.#store = new FeatureOptionsStore({ initialState: initialState(inherit ? this.#store?.state : undefined), reducer });
 
-      return;
-    }
+      // Mount every view before any data loads. Each view registers its effects against the loading placeholder and yields until model:loaded fires, so mounting
+      // here renders nothing yet - but the connection-error view exists from this point on, so a config-sync failure below renders its retry affordance instead of
+      // stranding a blank frame. Each mount is a no-op if its required page element is missing, so the orchestrator does not need to validate the page skeleton up front.
+      this.#mountViews(signal);
 
-    // Fire every independent I/O in parallel. The independent sources: controllers (optional), the feature catalog, and - on the one cycle that registers it -
-    // the Homebridge lighting mode the theming registration reads. The plugin config is not fetched here - the session already holds it - so getControllers
-    // receives the injected platform config rather than reaching for it. None depend on each other; firing them concurrently means total wall-clock time is
-    // bounded by the slowest.
-    //
-    // The catalog comes through the page's own accessor, which is what makes the boot one reader among several rather than the owner of the request: a later cycle
-    // and any plugin code asking for the catalog get this same promise, and the read reaches the server once for the page.
-    const featuresPromise = this.catalog();
+      // Take the emptied frame with the connecting affordance before the first await. Everything above this line is synchronous, and everything below it is a bounded
+      // wait on someone else's I/O - so this is the exact moment the page would otherwise sit blank, for as long as the slowest of them takes. Installing it after the
+      // views mount means every failure from here on has both the error view to render into and an affordance to hand the frame over to.
+      this.#installBootAffordance(signal);
 
-    // The controllers hook is called inside a promise executor, which runs it here and synchronously while turning a hook that throws, rather than rejects, into a
-    // rejection of that promise. A synchronous throw then takes the road a rejection takes, to the catch around the bounded await below and onto the retry view,
-    // instead of escaping show() with no retry view to recover from.
-    const controllersPromise = new Promise((resolve) => {
+      // Re-read the host config into the session before the page renders against it. This boot is the single entry chokepoint - a plugin's show() on launch, first-run
+      // and the menu, and each of the page's own re-entries, the connection-error retry among them - so re-syncing here makes "every show is fresh" an unconditional
+      // guarantee: an edit made in the Settings tab while this page was hidden is reflected on return rather than rendering against a frozen snapshot. The sync lands
+      // before getControllers reads session.platform and before the options read below, so both derive from the re-read config. A read failure routes into the
+      // already-mounted connection-error view rather than a bare toast: the store and views exist by now, so the page shows the retry affordance instead of stranding
+      // a blank frame.
+      try {
 
-      resolve(this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) : { controllers: [], error: "" });
-    });
+        await withDeadline({ promise: this.#session.sync(), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+      } catch(err) {
 
-    /* Register the page's theming through the orchestrator that owns it: the design tokens and the page theme, adopted in that order and held for the page rather
-     * than for this cycle, so navigating to Settings or Support keeps the themed canvas the user is looking at. The registration is memoized on the orchestrator's
-     * side, so this call registers on the first cycle and hands back the same promise on every later one. The optional chain is the posture every piece of wiring
-     * takes: a directly-constructed instance carries none and renders unthemed rather than crashing.
-     */
-    const themeInitPromise = this.#registerTheming?.() ?? Promise.resolve();
+        this.#failConnection({ err, signal, site: "sync" });
 
-    // The options-view skin: the layout, sidebar, category, search, and status-grid rules this view owns. Synchronous, and scoped to THIS cycle rather than to the
-    // page - several of its rules restyle Bootstrap classes a custom page may use for something else, so they have to be gone the moment the user navigates away.
-    registerOptionsSkinEffect({ signal });
+        return;
+      }
 
-    // Staging + keyboard effects: register early so they catch any dispatch from the moment model:loaded fires. The staging effect's reference-equality dirty
-    // check skips the immediate-run pass since configuredOptions and stagedAnchor share the same empty-array reference in the initial state. We capture the
-    // staging effect's flush handle so every place the page needs the store clean can drain a debounced-but-unwritten edit: the teardown, the visibilitychange
-    // and window blur handlers below, and commitConfig's drain ahead of its compose.
-    this.#flushStaging = registerStagingEffect({ host: homebridge, session, signal, store: this.#store })?.flush ?? null;
-    registerKeyboardEffect({ signal, store: this.#store });
+      // Fire every independent I/O in parallel. The independent sources: controllers (optional), the feature catalog, and - on the one cycle that registers it -
+      // the Homebridge lighting mode the theming registration reads. The plugin config is not fetched here - the session already holds it - so getControllers
+      // receives the injected platform config rather than reaching for it. None depend on each other; firing them concurrently means total wall-clock time is
+      // bounded by the slowest.
+      //
+      // The catalog comes through the page's own accessor, which is what makes the boot one reader among several rather than the owner of the request: a later cycle
+      // and any plugin code asking for the catalog get this same promise, and the read reaches the server once for the page.
+      const featuresPromise = this.catalog();
 
-    /* Notify the plugin's optional edit hook after any option mutation has transitioned the store, so a consumer reading editedConfig from inside the callback
-     * sees the post-edit state. We subscribe to exactly the mutation events the staging effect stages (see effects/staging.mjs); the two subscriptions
-     * must stay in lockstep, since every mutation the staging effect stages is one the consumer should hear about. The effect() immediate-run pass hands the
-     * body `undefined`, so we notify only on a real dispatch, never at registration before model:loaded. Registered on the page signal so teardown detaches it.
-     *
-     * A dispatch of one of those types is not by itself an edit, which is why the changed-reference test stands beside the action test. A coordinated
-     * configuration write holds the store and answers every one of these actions with the state reference it was handed, and a mutation can reduce to nothing
-     * on an unheld store too - clearing an option nothing was configured under is the plain case. The store's own change-detection contract is what reads both:
-     * "The reducer's structural-sharing contract guarantees that unchanged slices retain their reference across dispatches, so subscribers can use reference
-     * equality (`===`) to detect what changed without a deep comparison." So the slice this hook is about - the configured options - is compared against the state the
-     * dispatch replaced, and a dispatch that left it where it was announces nothing.
-     *
-     * The removal hook reads the same edit, from the same handler, ahead of the edit notification, and the whole of it sits inside the presence guard: a plugin
-     * that has not adopted it pays no list diff on any edit and gains no new place for an edit to fail. Nothing isolates one hook's failure from the other, and
-     * that is the choice rather than an omission - an exception either hook or the diff throws ends this handler before that mutation's onOptionsEdited call,
-     * exactly as a throwing onOptionsEdited already does, and the store's EventTarget reports it as an uncaught error rather than handing it back to the gesture
-     * that dispatched, with listeners registered after this effect still running. A throwing hook is the adopting plugin's own defect and the uncaught error is
-     * the one channel that still surfaces it. A hook body that synchronously causes another option mutation nests that mutation's own hook calls inside its
-     * own, so the outer mutation's onOptionsEdited arrives after the inner pair completes; no reentrancy guard stands against that, because nothing in the page
-     * hands a plugin a synchronous mutation entry point other than driving the DOM itself, and a queue would reorder the hooks away from the state each
-     * describes.
-     */
-    effect({
+      // The controllers hook is called inside a promise executor, which runs it here and synchronously while turning a hook that throws, rather than rejects, into a
+      // rejection of that promise. A synchronous throw then takes the road a rejection takes, to the catch around the bounded await below and onto the retry view,
+      // instead of escaping show() with no retry view to recover from.
+      const controllersPromise = new Promise((resolve) => {
 
-      events: MUTATING_ACTIONS,
-      fn: (action, previous) => {
+        resolve(this.#config.getControllers ? this.#config.getControllers({ config: session.platform }) : { controllers: [], error: "" });
+      });
 
-        if(!action || (previous.configuredOptions === this.#store.state.configuredOptions)) {
+      /* Register the page's theming through the orchestrator that owns it: the design tokens and the page theme, adopted in that order and held for the page rather
+       * than for this cycle, so navigating to Settings or Support keeps the themed canvas the user is looking at. The registration is memoized on the orchestrator's
+       * side, so this call registers on the first cycle and hands back the same promise on every later one. The optional chain is the posture every piece of wiring
+       * takes: a directly-constructed instance carries none and renders unthemed rather than crashing.
+       */
+      const themeInitPromise = this.#registerTheming?.() ?? Promise.resolve();
 
-          return;
-        }
+      // The options-view skin: the layout, sidebar, category, search, and status-grid rules this view owns. Synchronous, and scoped to THIS cycle rather than to the
+      // page - several of its rules restyle Bootstrap classes a custom page may use for something else, so they have to be gone the moment the user navigates away.
+      registerOptionsSkinEffect({ signal });
 
-        if(this.#config.onListEntriesRemoved) {
+      // Staging + keyboard effects: register early so they catch any dispatch from the moment model:loaded fires. The staging effect's reference-equality dirty
+      // check skips the immediate-run pass since configuredOptions and stagedAnchor share the same empty-array reference in the initial state. We capture the
+      // staging effect's flush handle so every place the page needs the store clean can drain a debounced-but-unwritten edit: the teardown, the visibilitychange
+      // and window blur handlers below, and commitConfig's drain ahead of its compose.
+      this.#flushStaging = registerStagingEffect({ host: homebridge, session, signal, store: this.#store })?.flush ?? null;
+      registerKeyboardEffect({ signal, store: this.#store });
 
-          const removals = removedListEntries({
+      /* Notify the plugin's optional edit hook after any option mutation has transitioned the store, so a consumer reading editedConfig from inside the callback
+       * sees the post-edit state. We subscribe to exactly the mutation events the staging effect stages (see effects/staging.mjs); the two subscriptions
+       * must stay in lockstep, since every mutation the staging effect stages is one the consumer should hear about. The effect() immediate-run pass hands the
+       * body `undefined`, so we notify only on a real dispatch, never at registration before model:loaded. Registered on the page signal so teardown detaches it.
+       *
+       * A dispatch of one of those types is not by itself an edit, which is why the changed-reference test stands beside the action test. A coordinated
+       * configuration write holds the store and answers every one of these actions with the state reference it was handed, and a mutation can reduce to nothing
+       * on an unheld store too - clearing an option nothing was configured under is the plain case. The store's own change-detection contract is what reads both:
+       * "The reducer's structural-sharing contract guarantees that unchanged slices retain their reference across dispatches, so subscribers can use reference
+       * equality (`===`) to detect what changed without a deep comparison." So the slice this hook is about - the configured options - is compared against the state the
+       * dispatch replaced, and a dispatch that left it where it was announces nothing.
+       *
+       * The removal hook reads the same edit, from the same handler, ahead of the edit notification, and the whole of it sits inside the presence guard: a plugin
+       * that has not adopted it pays no list diff on any edit and gains no new place for an edit to fail. Nothing isolates one hook's failure from the other, and
+       * that is the choice rather than an omission - an exception either hook or the diff throws ends this handler before that mutation's onOptionsEdited call,
+       * exactly as a throwing onOptionsEdited already does, and the store's EventTarget reports it as an uncaught error rather than handing it back to the gesture
+       * that dispatched, with listeners registered after this effect still running. A throwing hook is the adopting plugin's own defect and the uncaught error is
+       * the one channel that still surfaces it. A hook body that synchronously causes another option mutation nests that mutation's own hook calls inside its
+       * own, so the outer mutation's onOptionsEdited arrives after the inner pair completes; no reentrancy guard stands against that, because nothing in the page
+       * hands a plugin a synchronous mutation entry point other than driving the DOM itself, and a queue would reorder the hooks away from the state each
+       * describes.
+       */
+      effect({
 
-            after: this.#store.state.configuredOptions,
-            before: previous.configuredOptions,
-            catalog: this.#store.state.catalog
-          });
+        events: MUTATING_ACTIONS,
+        fn: (action, previous) => {
 
-          if(removals.length) {
+          if(!action || (previous.configuredOptions === this.#store.state.configuredOptions)) {
 
-            this.#config.onListEntriesRemoved(removals);
+            return;
           }
+
+          if(this.#config.onListEntriesRemoved) {
+
+            const removals = removedListEntries({
+
+              after: this.#store.state.configuredOptions,
+              before: previous.configuredOptions,
+              catalog: this.#store.state.catalog
+            });
+
+            if(removals.length) {
+
+              this.#config.onListEntriesRemoved(removals);
+            }
+          }
+
+          this.#config.onOptionsEdited?.();
+        },
+        signal,
+        store: this.#store
+      });
+
+      // Best-effort browser-exit flush. When the tab is backgrounded or closing while the page is still alive, drain any pending edit so it reaches the host's config
+      // model. This is fire-and-forget (the page is hidden/closing with no user present to see it, so an error toast the staging drain may raise on a failed final
+      // write lands unseen) and page-signal-keyed so it tears down with the cycle. The instant-hard-close residual (an async write cannot be guaranteed to complete
+      // during an immediate unload) is documented and accepted.
+      document.addEventListener("visibilitychange", () => {
+
+        if(document.visibilityState === "hidden") {
+
+          void this.#flushStaging?.();
         }
+      }, { signal });
 
-        this.#config.onOptionsEdited?.();
-      },
-      signal,
-      store: this.#store
-    });
+      /* Commit-and-flush when keyboard focus leaves the page. The page lives in the host's custom-UI iframe, and every host-side control - the Save button above all,
+       * but Close and the restart affordance too - sits in the parent document, so acting on any of them begins by moving focus out of this window. Two edits are in
+       * flight at exactly that moment and neither would otherwise reach the host in time: a value input still holding focus has never fired `change`, because moving
+       * focus to the parent document does not reliably blur the iframe's own active element, and an already-committed edit inside the staging debounce window has not
+       * been written. Either one makes the host's Save write a config that silently omits the user's last edit.
+       *
+       * The window `blur` event is the signal this window receives for that boundary, and it fires on the focus shift - ahead of the click that completes on the
+       * parent's button - so both halves land before the host acts: the focused value input is committed through the same change delegation every commit routes
+       * through, and the staging drain is then driven immediately, skipping its debounce. Element-level blurs never reach this listener (they do not bubble to the
+       * window), so it fires only when focus genuinely leaves the page; a blur with nothing pending costs one no-op flush. The commit targets only a value input
+       * inside the options table - the search field stages nothing and is deliberately outside this rule.
+       */
+      window.addEventListener("blur", () => {
 
-    // Best-effort browser-exit flush. When the tab is backgrounded or closing while the page is still alive, drain any pending edit so it reaches the host's config
-    // model. This is fire-and-forget (the page is hidden/closing with no user present to see it, so an error toast the staging drain may raise on a failed final
-    // write lands unseen) and page-signal-keyed so it tears down with the cycle. The instant-hard-close residual (an async write cannot be guaranteed to complete
-    // during an immediate unload) is documented and accepted.
-    document.addEventListener("visibilitychange", () => {
-
-      if(document.visibilityState === "hidden") {
+        this.#commitFocusedValue();
 
         void this.#flushStaging?.();
-      }
-    }, { signal });
+      }, { signal });
 
-    /* Commit-and-flush when keyboard focus leaves the page. The page lives in the host's custom-UI iframe, and every host-side control - the Save button above all,
-     * but Close and the restart affordance too - sits in the parent document, so acting on any of them begins by moving focus out of this window. Two edits are in
-     * flight at exactly that moment and neither would otherwise reach the host in time: a value input still holding focus has never fired `change`, because moving
-     * focus to the parent document does not reliably blur the iframe's own active element, and an already-committed edit inside the staging debounce window has not
-     * been written. Either one makes the host's Save write a config that silently omits the user's last edit.
-     *
-     * The window `blur` event is the signal this window receives for that boundary, and it fires on the focus shift - ahead of the click that completes on the
-     * parent's button - so both halves land before the host acts: the focused value input is committed through the same change delegation every commit routes
-     * through, and the staging drain is then driven immediately, skipping its debounce. Element-level blurs never reach this listener (they do not bubble to the
-     * window), so it fires only when focus genuinely leaves the page; a blur with nothing pending costs one no-op flush. The commit targets only a value input
-     * inside the options table - the search field stages nothing and is deliberately outside this rule.
-     */
-    window.addEventListener("blur", () => {
-
-      this.#commitFocusedValue();
-
-      void this.#flushStaging?.();
-    }, { signal });
-
-    // Wait for controllers (if configured), bounded so a plugin hook that depends on a dead bridge cannot strand the page. The result carries the list and the connection
-    // outcome together, so the two questions are answered in order: did the fetch reach the controllers at all, and only then, did it find any.
-    let controllerResult;
-
-    try {
-
-      // The contract check runs inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A hook that resolves a
-      // bare controller array is the case this exists for: the array carries neither member the page reads, and naming the contract on the retry view is what
-      // keeps that mistake from being read as some other answer, a plugin with no controller configured yet among them.
-      controllerResult = assertControllerListResult(await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal }));
-    } catch(err) {
-
-      this.#failConnection({ err, signal, site: "controllers" });
-
-      return;
-    }
-
-    if(signal.aborted) {
-
-      return;
-    }
-
-    // A hook that reports a connection failure lands on the same retry view a hook that throws does. Routing it here, ahead of everything the list feeds, is what
-    // keeps "the controllers could not be reached" from loading the page as "no controller is configured yet" - two situations whose remedies have nothing in
-    // common, and only the first of which the retry view answers.
-    if(controllerResult.error) {
-
-      this.#failConnection({ copy: { guidance: controllerResult.guidance, headline: controllerResult.headline }, err: controllerResult.error, kind: "reported",
-        signal, site: "controllers" });
-
-      return;
-    }
-
-    // An empty list goes on like any other: the page loads on its global options, and the sidebar says under its controllers heading that no controller is
-    // configured yet, in the plugin's words where the result carried an `emptyMessage`. A device-only page has no hook and reaches here on the empty stand-in the
-    // fetch resolved.
-    const controllers = controllerResult.controllers;
-
-    /* Choose the controller the boot selects. A fresh page has no selection to keep and lands on the first controller. A re-entered page started from the
-     * selection of the page it replaced, and the model load below reconciles that selection against the list just fetched - but the choice has to be made now,
-     * ahead of that load, so the device fetch can overlap the catalog read. The reducer module's own query answers where that load is about to leave the
-     * selection, rename included, and the boot selects that controller; a selection the list cannot place, and a global one, land on the first controller. A
-     * list with no controller in it leaves nothing to choose, and the page rests on global.
-     */
-    const landedControllerId = reconciledControllerId({ arriving: controllers, rename, state: this.#store.state });
-    const initialController = controllers.find((controller) => controller.serialNumber === landedControllerId) ?? controllers[0] ?? null;
-
-    /* Begin the device request this boot settles once its model has loaded, here and ahead of the catalog read so the two overlap. A controller to select begins
-     * the page's first selection of a controller, the choreography a sidebar click takes. Device-only mode has no controller to select, keeps the global scope the
-     * initial state already holds, and asks for its single list with no controller. A controller-based list with no controller in it fires no request at all,
-     * since there is no controller to ask about, and neither does global-only mode, which fetches no devices.
-     *
-     * One null-controller case survives by design: a catalog or bridge failure landing after this selection but before model:loaded still hands the panel a null
-     * controller, because the controller record is answered only once a model has loaded - before that, the list on hand is at best the one a re-entry inherited.
-     * That failure belongs to the plugin bridge rather than to the controller, so offering no controller-repair surface is the honest rendering of it.
-     */
-    let devicesRequest = null;
-
-    if(initialController !== null) {
-
-      devicesRequest = this.#beginControllerSelection({ controller: initialController, store: this.#store });
-    } else if(!this.#config.globalOnly && !this.#config.getControllers) {
-
-      devicesRequest = requestControllerDevices({ controller: null, controllerId: null, getDevices: (controller) => this.#devicesFor(controller), store: this.#store });
-    }
-
-    // Wait for the feature catalog. The accessor's own bound, the catalog deadline, is armed once, at the moment the read is first issued, so it is the bound that
-    // settles first on every cycle, whichever cycle started the read; this outer bound is kept for the consistency every host await in show() shares. Build the catalog
-    // (catalog index + validators) and dispatch model:loaded so the store transitions to "ready" and views can mount against a populated state. The configured
-    // options come from the session's primary entry - the persisted config the orchestrator already loaded.
-    let features;
-
-    try {
-
-      features = await withDeadline({ promise: featuresPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
-    } catch(err) {
-
-      this.#failConnection({ err, signal, site: "features" });
-
-      return;
-    }
-
-    if(signal.aborted) {
-
-      return;
-    }
-
-    const loadedOptions = platformOptions(session);
-    const catalog = {
-
-      ...buildCatalogIndex(features.categories, features.options),
-
-      choiceSources: this.#config.choiceSources,
-      validators: this.#config.validators
-    };
-
-    assertChoiceSources(catalog);
-
-    // The revert-to-saved snapshot moves only when this load carries a different options set. It is preserved across show() / cleanup() cycles when the re-loaded
-    // options are set-equal to the prior snapshot (the user reordered entries but did not save), so a revert after a re-show restores the original order rather
-    // than the reloaded one. The first show() has no snapshot to preserve and takes the just-loaded array. A commit's re-entry carries its rename onto this load, so
-    // the reconciliation and the views' own carry of a renamed controller's state run here exactly as they do on an establishment in place.
-    this.#establishModel({
-
-      catalog,
-      controllers,
-      controllersEmptyMessage: controllerResult.emptyMessage,
-      moveBoundary: !this.#initialOptions || !sameOptionsSet(this.#initialOptions, loadedOptions),
-      options: loadedOptions,
-      rename
-    });
-
-    /* Announce the loaded model to the plugin. The dispatch above is the one place a cycle crosses from an empty page into a loaded one - every mode reaches it,
-     * the global-only one included, and each cycle reaches it exactly once - so a consumer that needs to act at the moment the page is established has one site to
-     * be told from rather than several places a cycle could be said to have arrived. Everything the announcement promises is true by now: the store carries the
-     * catalog and the controllers, editedConfig answers the live overlay, and the dispatch ran the options view's render synchronously on its way out.
-     *
-     * No staleness guard sits on this call, and its absence is the design rather than an oversight. Nothing awaits between the dispatch and here, and every path a
-     * supersession takes returns before the dispatch, so a superseded cycle can never arrive at this line - a guard here would be a branch that cannot be taken. A
-     * hook that throws propagates to whoever called show().
-     */
-    this.#config.onLoaded?.();
-
-    /* Wait for the theming registration's initial lighting-mode read, so the first paint lands with the mode already applied rather than showing the default and
-     * correcting under the user's eye. Both of the registration's host-signal routes go live synchronously, ahead of that read, so first-paint correctness is the
-     * whole of what this await buys. By this point the promise has almost always already settled - the read ran in parallel with every fetch above.
-     *
-     * This await is the one whose failure is NOT fatal. The lighting-mode read is cosmetic: a page that cannot learn it renders on the theme's own defaults and is
-     * entirely usable, so a read that hangs or fails costs a warning and nothing else. Every other await lands the user on the retry view; making this one do the
-     * same would let a cosmetic detail take down a working page.
-     *
-     * It is spent once per INSTANCE rather than once per cycle, which the memoized registration is what forces: a bridge read that hangs stays hung for the page's
-     * life, so awaiting the same promise on every navigate-in would re-serve one stall as a fresh full-deadline wait each time. A later cycle skips the wait
-     * entirely - by then the mode is either applied already or the followed host signals are the ones that will apply it.
-     */
-    if(!this.#themeAwaited) {
+      // Wait for controllers (if configured), bounded so a plugin hook that depends on a dead bridge cannot strand the page. The result carries the list and the
+      // connection outcome together, so the two questions are answered in order: did the fetch reach the controllers at all, and only then, did it find any.
+      let controllerResult;
 
       try {
 
-        await withDeadline({ promise: themeInitPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
-
-        this.#themeAwaited = true;
+        // The contract check runs inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A hook that resolves a
+        // bare controller array is the case this exists for: the array carries neither member the page reads, and naming the contract on the retry view is what
+        // keeps that mistake from being read as some other answer, a plugin with no controller configured yet among them.
+        controllerResult = assertControllerListResult(await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal }));
       } catch(err) {
 
-        /* The staleness guard's verdict is the flag's too, because they answer the same question: was this cycle still the live one when the wait ended? A cycle
-         * superseded mid-wait was abandoned rather than experienced - the user navigated away instead of waiting - so it neither says anything nor spends this
-         * instance's one bounded wait, and the next cycle awaits again against a read that has usually settled by then. Every other rejection, a host that refused
-         * the read or the deadline elapsing, is a wait this instance genuinely spent, so it warns and sets the flag together.
-         */
-        this.#themeAwaited = this.#unlessStale({ run: () => {
+        this.#failConnection({ err, signal, site: "controllers" });
 
-          // console is the browser page's diagnostic transport, and a theme read that did not answer is exactly a diagnostic - the boot continues on the defaults.
-          // eslint-disable-next-line no-console
-          console.warn("The theme could not read the Homebridge lighting mode, so the page is rendering on its default theme.", err);
-        }, signal });
-      }
-    }
-
-    if(signal.aborted) {
-
-      return;
-    }
-
-    // Global-only mode ends the boot here, before the device machinery below ever runs. First reclaim #headerInfo: in the other modes the header view mounts and
-    // reclaims the container on model:loaded, but global-only never mounts that view, so nothing else would reconcile a connection-error block a failed cycle left
-    // behind (clearContainers deliberately excludes #headerInfo). A live connection error is unreachable at this point in this mode - a sync failure returns from
-    // show() before model:loaded, and no devices:loaded ever dispatches here - so this clear only ever discards a prior cycle's stale block, never a current error.
-    // Then reveal the reduced region set (the sidebar and header stay hidden) with the misnesting diagnostic, and return.
-    if(this.#config.globalOnly) {
-
-      const headerInfo = document.getElementById("headerInfo");
-
-      if(headerInfo) {
-
-        headerInfo.textContent = "";
+        return;
       }
 
-      this.#revealPage(GLOBAL_ONLY_REGION_IDS, { warnOnNesting: true });
+      if(signal.aborted) {
 
-      return;
+        return;
+      }
+
+      // A hook that reports a connection failure lands on the same retry view a hook that throws does. Routing it here, ahead of everything the list feeds, is what
+      // keeps "the controllers could not be reached" from loading the page as "no controller is configured yet" - two situations whose remedies have nothing in
+      // common, and only the first of which the retry view answers.
+      if(controllerResult.error) {
+
+        this.#failConnection({ copy: { guidance: controllerResult.guidance, headline: controllerResult.headline }, err: controllerResult.error, kind: "reported",
+          signal, site: "controllers" });
+
+        return;
+      }
+
+      // An empty list goes on like any other: the page loads on its global options, and the sidebar says under its controllers heading that no controller is
+      // configured yet, in the plugin's words where the result carried an `emptyMessage`. A device-only page has no hook and reaches here on the empty stand-in the
+      // fetch resolved.
+      const controllers = controllerResult.controllers;
+
+      /* Choose the controller the boot selects. A fresh page has no selection to keep and lands on the first controller. A re-entered page started from the
+       * selection of the page it replaced, and the model load below reconciles that selection against the list just fetched - but the choice has to be made now,
+       * ahead of that load, so the device fetch can overlap the catalog read. The reducer module's own query answers where that load is about to leave the
+       * selection, rename included, and the boot selects that controller; a selection the list cannot place, and a global one, land on the first controller. A
+       * list with no controller in it leaves nothing to choose, and the page rests on global.
+       */
+      const landedControllerId = reconciledControllerId({ arriving: controllers, rename, state: this.#store.state });
+      const initialController = controllers.find((controller) => controller.serialNumber === landedControllerId) ?? controllers[0] ?? null;
+
+      /* Begin the device request this boot settles once its model has loaded, here and ahead of the catalog read so the two overlap. A controller to select begins
+       * the page's first selection of a controller, the choreography a sidebar click takes. Device-only mode has no controller to select, keeps the global scope the
+       * initial state already holds, and asks for its single list with no controller. A controller-based list with no controller in it fires no request at all,
+       * since there is no controller to ask about, and neither does global-only mode, which fetches no devices.
+       *
+       * One null-controller case survives by design: a catalog or bridge failure landing after this selection but before model:loaded still hands the panel a null
+       * controller, because the controller record is answered only once a model has loaded - before that, the list on hand is at best the one a re-entry inherited.
+       * That failure belongs to the plugin bridge rather than to the controller, so offering no controller-repair surface is the honest rendering of it.
+       */
+      let devicesRequest = null;
+
+      if(initialController !== null) {
+
+        devicesRequest = this.#beginControllerSelection({ controller: initialController, store: this.#store });
+      } else if(!this.#config.globalOnly && !this.#config.getControllers) {
+
+        devicesRequest = requestControllerDevices({ controller: null, controllerId: null, getDevices: (controller) => this.#devicesFor(controller), store: this.#store });
+      }
+
+      // Wait for the feature catalog. The accessor's own bound, the catalog deadline, is armed once, at the moment the read is first issued, so it is the bound that
+      // settles first on every cycle, whichever cycle started the read; this outer bound is kept for the consistency every host await in show() shares. Build the catalog
+      // (catalog index + validators) and dispatch model:loaded so the store transitions to "ready" and views can mount against a populated state. The configured
+      // options come from the session's primary entry - the persisted config the orchestrator already loaded.
+      let features;
+
+      try {
+
+        features = await withDeadline({ promise: featuresPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+      } catch(err) {
+
+        this.#failConnection({ err, signal, site: "features" });
+
+        return;
+      }
+
+      if(signal.aborted) {
+
+        return;
+      }
+
+      const loadedOptions = platformOptions(session);
+      const catalog = {
+
+        ...buildCatalogIndex(features.categories, features.options),
+
+        choiceSources: this.#config.choiceSources,
+        validators: this.#config.validators
+      };
+
+      assertChoiceSources(catalog);
+
+      // The revert-to-saved snapshot moves only when this load carries a different options set. It is preserved across show() / cleanup() cycles when the re-loaded
+      // options are set-equal to the prior snapshot (the user reordered entries but did not save), so a revert after a re-show restores the original order rather
+      // than the reloaded one. The first show() has no snapshot to preserve and takes the just-loaded array. A commit's re-entry carries its rename onto this load, so
+      // the reconciliation and the views' own carry of a renamed controller's state run here exactly as they do on an establishment in place.
+      this.#establishModel({
+
+        catalog,
+        controllers,
+        controllersEmptyMessage: controllerResult.emptyMessage,
+        moveBoundary: !this.#initialOptions || !sameOptionsSet(this.#initialOptions, loadedOptions),
+        options: loadedOptions,
+        rename
+      });
+
+      /* The model decision settles here, in the dispatch's turn and ahead of onLoaded. The boot holds the window from its mint to this dispatch because the load
+       * installs the list the boot fetched: a list a refresh landed before it would be replaced, and a refresh's config read issued while the boot's is out would
+       * make the session discard the boot's. A refresh called in that window waits for this decision instead, and settling it here rather than at the boot's end
+       * is what lets a refresh awaited from onLoaded return while the boot's device fetch is still out.
+       */
+      settleModelDecision();
+
+      /* Announce the loaded model to the plugin. The dispatch above is the one place a cycle crosses from an empty page into a loaded one - every mode reaches it,
+       * the global-only one included, and each cycle reaches it exactly once - so a consumer that needs to act at the moment the page is established has one site to
+       * be told from rather than several places a cycle could be said to have arrived. Everything the announcement promises is true by now: the store carries the
+       * catalog and the controllers, editedConfig answers the live overlay, and the dispatch ran the options view's render synchronously on its way out.
+       *
+       * No staleness guard sits on this call, and its absence is the design rather than an oversight. Nothing awaits between the dispatch and here, and every path a
+       * supersession takes returns before the dispatch, so a superseded cycle can never arrive at this line - a guard here would be a branch that cannot be taken. A
+       * hook that throws propagates to whoever called show().
+       */
+      this.#config.onLoaded?.();
+
+      /* Wait for the theming registration's initial lighting-mode read, so the first paint lands with the mode already applied rather than showing the default and
+       * correcting under the user's eye. Both of the registration's host-signal routes go live synchronously, ahead of that read, so first-paint correctness is the
+       * whole of what this await buys. By this point the promise has almost always already settled - the read ran in parallel with every fetch above.
+       *
+       * This await is the one whose failure is NOT fatal. The lighting-mode read is cosmetic: a page that cannot learn it renders on the theme's own defaults and is
+       * entirely usable, so a read that hangs or fails costs a warning and nothing else. Every other await lands the user on the retry view; making this one do the
+       * same would let a cosmetic detail take down a working page.
+       *
+       * It is spent once per INSTANCE rather than once per cycle, which the memoized registration is what forces: a bridge read that hangs stays hung for the page's
+       * life, so awaiting the same promise on every navigate-in would re-serve one stall as a fresh full-deadline wait each time. A later cycle skips the wait
+       * entirely - by then the mode is either applied already or the followed host signals are the ones that will apply it.
+       */
+      if(!this.#themeAwaited) {
+
+        try {
+
+          await withDeadline({ promise: themeInitPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+
+          this.#themeAwaited = true;
+        } catch(err) {
+
+          /* The staleness guard's verdict is the flag's too, because they answer the same question: was this cycle still the live one when the wait ended? A cycle
+           * superseded mid-wait was abandoned rather than experienced - the user navigated away instead of waiting - so it neither says anything nor spends this
+           * instance's one bounded wait, and the next cycle awaits again against a read that has usually settled by then. Every other rejection, a host that refused
+           * the read or the deadline elapsing, is a wait this instance genuinely spent, so it warns and sets the flag together.
+           */
+          this.#themeAwaited = this.#unlessStale({ run: () => {
+
+            // console is the browser page's diagnostic transport, and a theme read that did not answer is exactly a diagnostic - the boot continues on the defaults.
+            // eslint-disable-next-line no-console
+            console.warn("The theme could not read the Homebridge lighting mode, so the page is rendering on its default theme.", err);
+          }, signal });
+        }
+      }
+
+      if(signal.aborted) {
+
+        return;
+      }
+
+      // Global-only mode ends the boot here, before the device machinery below ever runs. First reclaim #headerInfo: in the other modes the header view mounts and
+      // reclaims the container on model:loaded, but global-only never mounts that view, so nothing else would reconcile a connection-error block a failed cycle left
+      // behind (clearContainers deliberately excludes #headerInfo). A live connection error is unreachable at this point in this mode - a sync failure returns from
+      // show() before model:loaded, and no devices:loaded ever dispatches here - so this clear only ever discards a prior cycle's stale block, never a current error.
+      // Then reveal the reduced region set (the sidebar and header stay hidden) with the misnesting diagnostic, and return.
+      if(this.#config.globalOnly) {
+
+        const headerInfo = document.getElementById("headerInfo");
+
+        if(headerInfo) {
+
+          headerInfo.textContent = "";
+        }
+
+        this.#revealPage(GLOBAL_ONLY_REGION_IDS, { warnOnNesting: true });
+
+        return;
+      }
+
+      /* Settle the device request the boot began, where it began one, through the same settle a sidebar click and a post-write refetch end on, so a device failure
+       * reads the same whichever of them met it. The bound is armed here, like every other host await, and the outcome lands only once the model has loaded: that is
+       * what puts the controller entry in the store before a failure hands the plugin's connection-error panel its controller, and a boot that ends at an earlier
+       * failure never lands a device outcome over it. A first selection completes inside its own settle, which is equivalent to completing it after the
+       * connection-error check below, since only a clean outcome of its own completes it; device-only mode's single list settles with no selection to complete.
+       *
+       * The verdict is the reducer's: an outcome applied, carrying no failure, only when the sequence it carried is the one the reducer recorded. A fetch that
+       * superseded it, such as the selection refetch a coordinated write issues while the boot is still out, owns the device list and the selection, so the verdict
+       * gates the one follow-up that writes scope. It does not gate the reveal: every view renders from the store whichever fetch filled it, so the page is revealed
+       * into the winning fetch's outcome, and while that fetch is still out the page shows the busy table a sidebar click shows during its own fetch.
+       */
+      if(initialController !== null) {
+
+        await this.#settleControllerSelection({ request: devicesRequest, signal, store: this.#store });
+      } else if(devicesRequest !== null) {
+
+        await settleControllerDevices({ deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS, failureGuidance: this.#config.controllerFailureGuidance, request: devicesRequest,
+          signal, store: this.#store });
+      }
+
+      if(signal.aborted) {
+
+        return;
+      }
+
+      // The store stands on connection-error: a selected controller whose probe reported a failure, carried by this outcome or by a fetch that superseded it. The
+      // failure message travelled back on the DeviceListResult rather than through a separate request, and the reducer folded it into the connection-error transition.
+      // The connection-error view reveals #headerInfo itself when it renders the error block (it is the sole owner of the error display, content and reveal together),
+      // so the orchestrator only returns here. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and the reveal below never
+      // runs on this branch - because the user has no devices to navigate to.
+      if(this.#store.state.status.kind === "connection-error") {
+
+        this.#removeBootAffordance();
+
+        return;
+      }
+
+      // Hand the frame from the boot affordance to the page itself, revealing the full region set the views render into. A controller whose list came back empty
+      // or carries no row its `isController` names rests on its own view, where a notice stands in place of that view's table; the notice lives inside the config
+      // table's region, so it appears with the page rather than ahead of it, and the search panel's bars settled during the outcome's dispatch.
+      this.#revealPage(REGION_IDS);
+    } finally {
+
+      // Every way out of the boot leaves the decision settled: a failure's return and a throw are released here, and after a model load this is a no-op.
+      settleModelDecision();
     }
-
-    /* Settle the device request the boot began, where it began one, through the same settle a sidebar click and a post-write refetch end on, so a device failure
-     * reads the same whichever of them met it. The bound is armed here, like every other host await, and the outcome lands only once the model has loaded: that is
-     * what puts the controller entry in the store before a failure hands the plugin's connection-error panel its controller, and a boot that ends at an earlier
-     * failure never lands a device outcome over it. A first selection completes inside its own settle, which is equivalent to completing it after the
-     * connection-error check below, since only a clean outcome of its own completes it; device-only mode's single list settles with no selection to complete.
-     *
-     * The verdict is the reducer's: an outcome applied, carrying no failure, only when the sequence it carried is the one the reducer recorded. A fetch that
-     * superseded it, such as the selection refetch a coordinated write issues while the boot is still out, owns the device list and the selection, so the verdict
-     * gates the one follow-up that writes scope. It does not gate the reveal: every view renders from the store whichever fetch filled it, so the page is revealed
-     * into the winning fetch's outcome, and while that fetch is still out the page shows the busy table a sidebar click shows during its own fetch.
-     */
-    if(initialController !== null) {
-
-      await this.#settleControllerSelection({ request: devicesRequest, signal, store: this.#store });
-    } else if(devicesRequest !== null) {
-
-      await settleControllerDevices({ deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS, failureGuidance: this.#config.controllerFailureGuidance, request: devicesRequest,
-        signal, store: this.#store });
-    }
-
-    if(signal.aborted) {
-
-      return;
-    }
-
-    // The store stands on connection-error: a selected controller whose probe reported a failure, carried by this outcome or by a fetch that superseded it. The
-    // failure message travelled back on the DeviceListResult rather than through a separate request, and the reducer folded it into the connection-error transition.
-    // The connection-error view reveals #headerInfo itself when it renders the error block (it is the sole owner of the error display, content and reveal together),
-    // so the orchestrator only returns here. The sidebar, search panel, and config table stay hidden - hide() set them so at show() start and the reveal below never
-    // runs on this branch - because the user has no devices to navigate to.
-    if(this.#store.state.status.kind === "connection-error") {
-
-      this.#removeBootAffordance();
-
-      return;
-    }
-
-    // Hand the frame from the boot affordance to the page itself, revealing the full region set the views render into. A controller whose list came back empty
-    // or carries no row its `isController` names rests on its own view, where a notice stands in place of that view's table; the notice lives inside the config
-    // table's region, so it appears with the page rather than ahead of it, and the search panel's bars settled during the outcome's dispatch.
-    this.#revealPage(REGION_IDS);
   }
 
   /**
@@ -1160,6 +1193,9 @@ export class webUiFeatureOptions {
    *   - A call before the first show() has established the session and store resolves false without dispatching - there is no sidebar to refresh yet. The same holds
    *     for a call after teardown, or one whose cycle is superseded mid-flight: the refresh belongs to the cycle it started in, so its outcome is dropped rather than
    *     dispatched into whatever cycle replaced it.
+   *   - A call made while the page is loading waits until the page's model has loaded or its load has failed, and then runs as it would on the page it finds, so
+   *     the list it brings lands after the load's own rather than under it. It must not be awaited from inside the plugin's own getControllers hook, where the
+   *     load would wait on the call that waits on it until the load's deadline fails the page.
    *   - A config re-sync failure resolves false and leaves the rendered view exactly as it was. This is a deliberate divergence from show(), which routes a sync
    *     failure into the connection-error view: an explicit refresh must never tear down a working sidebar over a failed config read. A controller hook that fails or
    *     never answers resolves false on the same reasoning - both awaits are bounded, so neither can leave the caller waiting on a dead bridge.
@@ -1211,10 +1247,24 @@ export class webUiFeatureOptions {
     // Capture the live cycle's signal at entry - the one this refresh belongs to. cleanup() nulls the abort controller while leaving the store queryable, so an absent
     // controller means there is no rendered cycle to refresh into, and an already-aborted one means this refresh's cycle is gone. Capturing rather than re-reading also
     // means a supersession that lands mid-refresh aborts the signal this method is holding, so its awaits settle at once and its outcome is dropped instead of
-    // dispatched into the newer cycle's store.
+    // dispatched into the newer cycle's store. The cycle's model decision is captured beside it, so the wait below belongs to this cycle and to no later one.
     const signal = this.#pageAbort?.signal;
+    const modelDecision = this.#modelDecision;
 
     if(!signal || signal.aborted) {
+
+      return false;
+    }
+
+    /* A cycle whose boot has not yet made its model decision is waited for here, ahead of the config read and the hook. The boot's model load installs the list
+     * the boot fetched, so a list landed before it would be replaced, and a config read issued while the boot's is out makes the session discard the boot's read.
+     * Waiting puts this refresh's read and its list after the boot's, and the method then runs whole against the page the boot left: loaded, or ended without a
+     * model. On a loaded page the decision settled at its boot, so the wait costs one turn. It carries no deadline of its own, because every boot await ahead of
+     * the decision is bounded and the cycle's abort settles it too; a refresh whose cycle ended while it waited stops at the test below, having read nothing.
+     */
+    await modelDecision;
+
+    if(signal.aborted) {
 
       return false;
     }
@@ -1297,9 +1347,9 @@ export class webUiFeatureOptions {
       return false;
     }
 
-    // Only a page whose model has loaded acts on the arrival beyond its sidebar. A page without one has no device view to refresh: a boot still in flight owns its
-    // own device fetch and selection, and a boot that ended before its model loaded owns the frame it left, where a clean outcome would lift a connection error over
-    // a page with nothing loaded under it.
+    // Only a page whose model has loaded acts on the arrival beyond its sidebar. Past the wait above, a page without one is a page whose boot ended or threw before
+    // its model loaded: it has no device view to refresh, and it keeps the frame its boot left, where a clean outcome would lift a connection error over a page with
+    // nothing loaded under it.
     if(!modelLoaded(store.state)) {
 
       return true;
@@ -2254,9 +2304,9 @@ export class webUiFeatureOptions {
    * signal without flushing, so any pending drain that guards on the signal bails. Use {@link hide} for the navigate-away path (it flushes first); cleanup() is for
    * forced/synchronous disposal.
    *
-   * Aborts the page-level signal (cascading through every effect and view's signal-keyed listeners), nulls the abort controller and the flush handle so the next
-   * show() builds fresh ones. Neither the store nor the session is nulled: the `editedConfig` getter remains queryable after hide() / cleanup() so external readers
-   * see the last-loaded state rather than an empty array. The next show() replaces the store with a fresh one before any new mutations.
+   * Aborts the page-level signal (cascading through every effect and view's signal-keyed listeners), nulls the abort controller, the model decision beside it, and
+   * the flush handle so the next show() builds fresh ones. Neither the store nor the session is nulled: the `editedConfig` getter remains queryable after hide() /
+   * cleanup() so external readers see the last-loaded state rather than an empty array. The next show() replaces the store with a fresh one before any new mutations.
    *
    * @public
    */
@@ -2264,6 +2314,7 @@ export class webUiFeatureOptions {
 
     this.#pageAbort?.abort();
     this.#pageAbort = null;
+    this.#modelDecision = null;
     this.#flushStaging = null;
 
     // Empty the search box the torn-down cycle leaves in the page. The query it shows belonged to the store this cycle is done with, so a box left holding it would

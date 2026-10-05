@@ -1905,6 +1905,47 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     assert.ok(!("device:CTRL-B/CTRL-B" in persisted), "and left nothing behind under the old one");
   });
 
+  test("a refresh called while a renaming commit's re-entry is out waits for its model load, which lands on the renamed controller, and keeps it", async () => {
+
+    using dom = createTestDom();
+    using page = reentryPage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    await errorFrameOnB(page);
+
+    page.hooks.onDevices = stableSerials;
+
+    // Hold the commit's re-entered boot at its controller fetch, the deferral a re-entry takes because the catalog is read once per page. A refresh the plugin's
+    // own server pushes can land in this window.
+    const reentryCall = page.hooks.controllerCalls + 1;
+    let release = null;
+
+    page.hooks.onControllers = ({ answer, call }) => (call === reentryCall) ? new Promise((resolve) => { release = () => resolve(answer); }) : answer;
+
+    const commit = page.orchestrator.commitConfig((platform) => ({ controllers: moveB(platform.controllers) }), { rename: RENAME_B });
+
+    await waitFor(() => release !== null, { message: "the commit's re-entered boot must reach its controller fetch" });
+
+    const marker = page.fake.observed.calls.length;
+    const refresh = page.orchestrator.refreshControllers();
+
+    await flush();
+
+    assert.equal(page.hooks.controllerCalls, reentryCall, "the refresh waits while the re-entered boot is out, having called no hook of its own");
+    assert.ok(!page.fake.observed.calls.slice(marker).includes("getPluginConfig"), "and having read no configuration");
+
+    release();
+
+    assert.equal(await refresh, true, "it lands its list once the re-entered boot's model has loaded");
+    assert.deepEqual(await commit, { kind: "committed" });
+
+    await flush();
+
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B8", "the re-entered boot honored the rename, and the refresh kept that selection");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-B", "on the renamed controller's own row");
+  });
+
   test("a commit with no rename from the error frame of a non-first controller re-enters onto that controller", async () => {
 
     using dom = createTestDom();

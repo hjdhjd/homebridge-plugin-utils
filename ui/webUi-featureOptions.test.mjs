@@ -12,6 +12,7 @@ import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptions
   seedBootstrapProbeShim, waitFor } from "./ui.helpers.mjs";
 import { describe, mock, test } from "node:test";
 import { DeadlineExpiredError } from "./webUi-liveness.mjs";
+import { FeatureOptionsStore } from "./webUi-featureOptions/store.mjs";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
@@ -92,6 +93,27 @@ async function settleStaging() {
 
   await new Promise((resolve) => setTimeout(resolve, 400));
   await flush();
+}
+
+// Whether a promise is still unsettled once the work already queued has drained. A promise that has settled by then wins the race against the marker, because it
+// is listed first, so a row can tell a call that is still waiting from one that has answered without awaiting it.
+async function stillPending(promise) {
+
+  const marker = Symbol("pending");
+
+  await flush();
+
+  return (await Promise.race([ promise, marker ])) === marker;
+}
+
+// The serials in the current list of the store that the latest controller-list arrival was dispatched into, read through a spy on the store's dispatch, or null
+// when no arrival was dispatched. A page whose model never loaded paints no controller row in its sidebar, so this is where a row reads the list a refresh
+// landed there.
+function arrivedSerials(dispatches) {
+
+  const arrival = dispatches.mock.calls.findLast((call) => call.arguments[0]?.type === "controllers:loaded");
+
+  return arrival?.this.state.controllers.map((controller) => controller.serialNumber) ?? null;
 }
 
 describe("webUiFeatureOptions.constructor", () => {
@@ -5158,9 +5180,13 @@ describe("webUiFeatureOptions.refreshControllers - a list that brings the first 
 
   const noticeIn = (skeleton) => skeleton.controllersContainer.querySelector(".fo-controllers-notice");
 
+  // The host's configuration reads so far, counted from the fake's ordered call log.
+  const configReads = (page) => page.fake.observed.calls.filter((call) => call === "getPluginConfig").length;
+
   /* A controller-based page whose plugin answers with whatever `listing` holds, so a row changes what the next controller fetch answers by assigning to it. Its
-   * device hook answers a controller with the controller's own row and a camera beneath it, records every controller it is asked about, and defers to
-   * `hooks.onDevices` where a row needs to hold a fetch open. `plugin` adds options of the plugin's own on top.
+   * controller hook counts its calls and defers to `hooks.onControllers`, and its device hook answers a controller with the controller's own row and a camera
+   * beneath it, records every controller it is asked about, and defers to `hooks.onDevices`. A deferral is where a row holds that call open or answers it
+   * another way. `plugin` adds options of the plugin's own on top.
    */
   const arrangeEmptyPage = ({ options = [], plugin = {} } = {}) => {
 
@@ -5170,12 +5196,19 @@ describe("webUiFeatureOptions.refreshControllers - a list that brings the first 
 
     seedBootstrapProbeShim();
 
-    const hooks = { deviceCalls: [], onDevices: null };
+    const hooks = { controllerCalls: 0, deviceCalls: [], onControllers: null, onDevices: null };
     const listing = { controllers: [], emptyMessage: undefined };
     const state = { loaded: 0 };
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: () => ({ controllers: listing.controllers, emptyMessage: listing.emptyMessage, error: "" }),
+      getControllers: () => {
+
+        hooks.controllerCalls += 1;
+
+        const answer = { controllers: listing.controllers, emptyMessage: listing.emptyMessage, error: "" };
+
+        return hooks.onControllers ? hooks.onControllers({ answer, call: hooks.controllerCalls }) : answer;
+      },
       getDevices: (controller) => {
 
         hooks.deviceCalls.push(controller?.serialNumber ?? null);
@@ -5191,6 +5224,35 @@ describe("webUiFeatureOptions.refreshControllers - a list that brings the first 
     });
 
     return { fake, homebridgeGuard, hooks, listing, orchestrator, skeleton, state };
+  };
+
+  /* Start the page's first boot and hold it at its catalog read, the last await before its model load. By the time this resolves the boot has answered its own
+   * list, begun the device fetch for the controller it chose, and waits with no model loaded. The catalog is read once per page, so only a first boot can be
+   * held here, and the catalog's own deadline fails a read held past it, so a row answers `catalog` promptly.
+   */
+  const holdBootAtCatalog = async (page) => {
+
+    const catalog = Promise.withResolvers();
+    let catalogAsked = false;
+
+    page.fake.request = (path) => {
+
+      if(path !== "/getOptions") {
+
+        return Promise.resolve(null);
+      }
+
+      catalogAsked = true;
+
+      return catalog.promise;
+    };
+
+    const showPromise = page.orchestrator.show(await openTestSession());
+
+    await waitFor(() => catalogAsked && bootAffordanceIn(), { message: "the boot must be waiting on its catalog read" });
+    await flush();
+
+    return { catalog, showPromise };
   };
 
   test("moves a loaded page onto the first arriving controller, loads its devices, and gains the header's controller step (resolves true)", async () => {
@@ -5347,7 +5409,7 @@ describe("webUiFeatureOptions.refreshControllers - a list that brings the first 
     page.orchestrator.cleanup();
   });
 
-  test("a refresh inside the boot window lands its list and moves nothing", async () => {
+  test("a refresh called while the boot waits on its catalog calls no hook until the model loads, then moves the page onto the first arriving controller", async () => {
 
     using dom = createTestDom();
 
@@ -5356,38 +5418,428 @@ describe("webUiFeatureOptions.refreshControllers - a list that brings the first 
     using homebridgeInstall = page.homebridgeGuard;
 
     // Hold the catalog read, so the boot has answered its own empty list and is waiting with no model loaded when the refresh arrives.
-    const catalog = Promise.withResolvers();
-    let catalogAsked = false;
-
-    page.fake.request = (path) => {
-
-      if(path !== "/getOptions") {
-
-        return Promise.resolve(null);
-      }
-
-      catalogAsked = true;
-
-      return catalog.promise;
-    };
-
-    const showPromise = page.orchestrator.show(await openTestSession());
-
-    await waitFor(() => catalogAsked && bootAffordanceIn(), { message: "the boot must be waiting on its catalog read" });
-    await flush();
+    const boot = await holdBootAtCatalog(page);
 
     page.listing.controllers = [HUB_A];
 
-    assert.equal(await page.orchestrator.refreshControllers(), true, "the list lands under the boot");
-    assert.deepEqual(page.hooks.deviceCalls, [], "and a page with no model takes no move and fires no device fetch");
+    const readsBefore = configReads(page);
+    const refresh = page.orchestrator.refreshControllers();
 
-    catalog.resolve(FEATURES);
+    assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out");
+    assert.equal(page.hooks.controllerCalls, 1, "and the plugin's controllers hook has been called once, by the boot");
+    assert.equal(configReads(page), readsBefore, "and the refresh has read no configuration since it was called");
+
+    boot.catalog.resolve(FEATURES);
+
+    await boot.showPromise;
+
+    assert.equal(await refresh, true, "the refresh's list lands once the model has loaded");
+
+    await flush();
+
+    assert.equal(page.state.loaded, 1, "the boot finished on its own answer");
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "and the refresh then fetched the first arriving controller's devices");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "so the page stands on that controller");
+    assert.ok(noticeIn(page.skeleton) === null, "with the empty list's notice gone");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh inside the boot window that adds a controller lands the longer list after the model load, and the boot's selection stays", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    // Hold the catalog read, so the boot has landed on its own controller and is waiting with no model loaded when the refresh arrives.
+    page.listing.controllers = [HUB_A];
+
+    const boot = await holdBootAtCatalog(page);
+
+    page.listing.controllers = [ HUB_A, HUB_B ];
+
+    const refresh = page.orchestrator.refreshControllers();
+
+    assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out");
+
+    boot.catalog.resolve(FEATURES);
+
+    assert.equal(await refresh, true, "the longer list lands once the model has loaded");
+
+    await boot.showPromise;
+    await flush();
+
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), "the sidebar lists the controller the refresh added");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "and the boot's selection stays where it landed");
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "with no fetch beyond the boot's own");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh inside the boot window whose list drops the boot's controller leaves the page on global options over the new list", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    // Hold the catalog read and the boot's device fetch, so the refresh's list arrives while the boot's fetch for its own controller is still out.
+    const held = [];
+
+    page.listing.controllers = [HUB_A];
+    page.hooks.onDevices = ({ answer }) => new Promise((resolve) => held.push(() => resolve(answer)));
+
+    const boot = await holdBootAtCatalog(page);
+
+    assert.equal(held.length, 1, "precondition: the boot began its controller's device fetch");
+
+    page.listing.controllers = [HUB_B];
+
+    const refresh = page.orchestrator.refreshControllers();
+
+    assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out");
+
+    boot.catalog.resolve(FEATURES);
+
+    assert.equal(await refresh, true, "the new list lands once the model has loaded");
+
+    held[0]();
+
+    await boot.showPromise;
+    await flush();
+
+    assert.equal(page.skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
+      "the boot's selection falls back to global options, as it does on a loaded page");
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), "over the new list");
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A']") === null, "which does not list the boot's controller");
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "and nothing moves the page onto the new list's first controller");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh inside the boot window that renames the boot's controller carries the selection to the new key and refetches under it", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    // Hold the catalog read, so the boot has landed on its own controller and is waiting with no model loaded when the renaming refresh arrives.
+    page.listing.controllers = [HUB_A];
+
+    const boot = await holdBootAtCatalog(page);
+
+    page.listing.controllers = [{ name: "Hub A", serialNumber: "CTRL-A9" }];
+
+    const refresh = page.orchestrator.refreshControllers({ rename: { from: "CTRL-A", to: "CTRL-A9" } });
+
+    assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out");
+
+    boot.catalog.resolve(FEATURES);
+
+    assert.equal(await refresh, true, "the renamed list lands once the model has loaded");
+
+    await boot.showPromise;
+    await flush();
+
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A9", "the boot's selection is carried to the controller's new key");
+    assert.deepEqual(page.hooks.deviceCalls, [ "CTRL-A", "CTRL-A9" ], "and its devices are refetched under that key after the boot's own fetch");
+
+    page.orchestrator.cleanup();
+  });
+
+  // The answers a refresh reports as no change, each given by the refresh's own hook after the boot's fetch answered a controller.
+  const NO_CHANGE_ANSWERS = [
+
+    { answer: { controllers: [], error: "" }, kind: "an empty list" },
+    { answer: { controllers: [], error: "Controller list unreachable." }, kind: "an error" }
+  ];
+
+  for(const { answer, kind } of NO_CHANGE_ANSWERS) {
+
+    test("a refresh inside the boot window whose hook answers " + kind + " waits like any other, then reports no change", async () => {
+
+      using dom = createTestDom();
+
+      const page = arrangeEmptyPage();
+
+      using homebridgeInstall = page.homebridgeGuard;
+
+      // Hold the catalog read, so the boot has landed on its own controller and is waiting with no model loaded when the refresh arrives.
+      page.listing.controllers = [HUB_A];
+
+      const boot = await holdBootAtCatalog(page);
+
+      page.hooks.onControllers = () => answer;
+
+      const refresh = page.orchestrator.refreshControllers();
+
+      assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out, before its hook could say what it has");
+      assert.equal(page.hooks.controllerCalls, 1, "having called no hook of its own");
+
+      boot.catalog.resolve(FEATURES);
+
+      assert.equal(await refresh, false, "once the model has loaded, it reports that it changed nothing");
+
+      await boot.showPromise;
+      await flush();
+
+      assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "and the page stands on the boot's own list and selection");
+
+      page.orchestrator.cleanup();
+    });
+  }
+
+  /* Each await ahead of the boot's model load, held open so a refresh is called while the boot waits there, then failed. `hold` starts the boot and answers once
+   * it waits at that await, with the failure's trigger and the boot's own promise, and `headline` is what the error frame the failure leaves says.
+   */
+  const BOOT_FAILURES = [
+
+    {
+
+      headline: /Unable to read the plugin configuration/,
+
+      // The boot's config read, held through the fake host: the next read is the boot's own, and every read after it answers as the host does.
+      hold: async (page) => {
+
+        const session = await openTestSession();
+        const hostRead = page.fake.getPluginConfig;
+        const read = Promise.withResolvers();
+        let asked = false;
+
+        page.fake.getPluginConfig = () => {
+
+          asked = true;
+          page.fake.getPluginConfig = hostRead;
+
+          return read.promise;
+        };
+
+        const showPromise = page.orchestrator.show(session);
+
+        await waitFor(() => asked && bootAffordanceIn(), { message: "the boot must be waiting on its config read" });
+
+        return { fail: () => read.reject(new Error("The host did not answer the configuration read.")), showPromise };
+      },
+      site: "config read"
+    },
+    {
+
+      headline: /The plugin failed while retrieving the controller list/,
+
+      // The boot's controllers hook, held on its first call: every later call, the refresh's among them, answers from the listing.
+      hold: async (page) => {
+
+        const fetch = Promise.withResolvers();
+
+        page.hooks.onControllers = ({ answer, call }) => (call === 1) ? fetch.promise : answer;
+
+        const showPromise = page.orchestrator.show(await openTestSession());
+
+        await waitFor(() => (page.hooks.controllerCalls === 1) && bootAffordanceIn(), { message: "the boot must be waiting on its controllers hook" });
+
+        return { fail: () => fetch.reject(new Error("The controller list is unreachable.")), showPromise };
+      },
+      site: "controllers hook"
+    },
+    {
+
+      headline: /Unable to load the feature options/,
+
+      // The boot's catalog read, the page's first.
+      hold: async (page) => {
+
+        const boot = await holdBootAtCatalog(page);
+
+        return { fail: () => boot.catalog.reject(new Error("The options route failed.")), showPromise: boot.showPromise };
+      },
+      site: "catalog read"
+    }
+  ];
+
+  for(const { headline, hold, site } of BOOT_FAILURES) {
+
+    test("a refresh waiting on a boot that fails at its " + site + " is released by the failure and lands its list beneath the error frame", async (t) => {
+
+      using dom = createTestDom();
+
+      const page = arrangeEmptyPage();
+
+      using homebridgeInstall = page.homebridgeGuard;
+
+      // The sidebar of a page whose model never loaded lists no controller, so the list the refresh lands is read from the store its dispatch reached.
+      const dispatches = t.mock.method(FeatureOptionsStore.prototype, "dispatch");
+      const boot = await hold(page);
+
+      page.listing.controllers = [HUB_A];
+
+      const refresh = page.orchestrator.refreshControllers();
+
+      assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out");
+
+      boot.fail();
+
+      // The answer is read while the failed cycle is still the live one, ahead of any teardown, because a teardown's abort would release the refresh as well.
+      assert.equal(await refresh, true, "the failure released the refresh, and with its own read and hook answering, its list lands");
+      assert.deepEqual(arrivedSerials(dispatches), ["CTRL-A"], "the page's store lists the refresh's controller");
+
+      await boot.showPromise;
+      await flush();
+
+      assert.match(page.skeleton.headerInfo.textContent, headline, "and the error frame the boot left stands over it");
+
+      page.orchestrator.cleanup();
+    });
+  }
+
+  test("a refresh waiting on a cycle that a new show() supersedes answers false and reads nothing", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    page.listing.controllers = [HUB_A];
+
+    const boot = await holdBootAtCatalog(page);
+
+    // A plugin's own show() will supersede the cycle the refresh waits on. Its session is opened before the refresh is called, so the count taken here covers
+    // the refresh's whole life, and every read in it is the page's own.
+    const session = await openTestSession();
+    const readsBefore = configReads(page);
+    const refresh = page.orchestrator.refreshControllers();
+
+    assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out");
+
+    const next = page.orchestrator.show(session);
+
+    assert.equal(await refresh, false, "the superseded refresh answers false");
+
+    // The next boot waits on the same catalog read, the page's one read of it.
+    boot.catalog.resolve(FEATURES);
+
+    await Promise.all([ boot.showPromise, next ]);
+    await flush();
+
+    assert.equal(configReads(page) - readsBefore, 1, "the one config read since the refresh was called is the next boot's own, so the refresh read nothing");
+    assert.equal(page.hooks.controllerCalls, 2, "and called no hook: every call was a boot's own");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh called in the window of a boot that superseded another waits for that boot's model load, and its list stands after it", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    // Hold each boot at its controllers hook, since the catalog is read once per page: the first boot's call is never answered, and the successor's is
+    // answered when the row releases it.
+    const held = [];
+
+    page.listing.controllers = [HUB_A];
+    page.hooks.onControllers = ({ answer, call }) => (call > 2) ? answer : new Promise((resolve) => held.push(() => resolve(answer)));
+
+    const first = page.orchestrator.show(await openTestSession());
+
+    await waitFor(() => held.length === 1, { message: "the first boot must reach its controllers hook" });
+
+    // A plugin's own show() supersedes the first boot ahead of its model load, and the refresh is called only once the superseded boot has run its way out.
+    const second = page.orchestrator.show(await openTestSession());
+
+    await first;
+    await waitFor(() => held.length === 2, { message: "the successor's boot must reach its controllers hook" });
+
+    page.listing.controllers = [ HUB_A, HUB_B ];
+
+    const refresh = page.orchestrator.refreshControllers();
+
+    assert.equal(await stillPending(refresh), true, "the refresh waits on the successor's decision, which the superseded boot's exit left alone");
+    assert.equal(page.hooks.controllerCalls, 2, "and has called no hook while the successor is out: every call so far was a boot's own");
+
+    held[1]();
+
+    // The answer is read while the successor's cycle is still the live one, ahead of any teardown, because a teardown's abort would release the refresh as well.
+    assert.equal(await refresh, true, "the refresh lands once the successor's model has loaded");
+
+    await second;
+    await flush();
+
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), "the refresh's list stands after the successor's load");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "with the successor's own selection kept");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("refreshes waiting on one model decision each call the plugin's hook after it, and the later hook call's list is the one that stands", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    // Hold the catalog read, so the boot has answered its own empty list and is waiting with no model loaded when the refreshes arrive.
+    const boot = await holdBootAtCatalog(page);
+
+    // The first hook call after the boot's answers one controller and every call after it answers two, so the list that stands tells which hook call's answer
+    // landed last.
+    page.hooks.onControllers = ({ answer, call }) => ({ ...answer, controllers: (call === 2) ? [HUB_A] : [ HUB_A, HUB_B ] });
+
+    const first = page.orchestrator.refreshControllers();
+    const second = page.orchestrator.refreshControllers();
+
+    assert.equal(await stillPending(first), true, "the earlier refresh waits while the boot is out");
+    assert.equal(await stillPending(second), true, "and so does the later one");
+    assert.equal(page.hooks.controllerCalls, 1, "neither has called the hook");
+
+    boot.catalog.resolve(FEATURES);
+
+    await Promise.all([ first, second, boot.showPromise ]);
+    await flush();
+
+    assert.equal(page.hooks.controllerCalls, 3, "once the model has loaded, each refresh called the hook");
+    assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-B']"), "and the later hook call's list is the one the sidebar shows");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "and the page moved onto the first controller, whichever refresh brought it");
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "fetching its devices once");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh awaited from onLoaded returns while the boot's device fetch is still out", async () => {
+
+    using dom = createTestDom();
+
+    const answers = [];
+    const page = arrangeEmptyPage({ plugin: { onLoaded: async () => { answers.push(await page.orchestrator.refreshControllers()); } } });
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    // Hold the boot's device fetch, the await its boot settles after the model load and onLoaded, so the boot is still out when the refresh answers.
+    const held = [];
+
+    page.listing.controllers = [HUB_A];
+    page.hooks.onDevices = ({ answer }) => new Promise((resolve) => held.push(() => resolve(answer)));
+
+    const showPromise = page.orchestrator.show(await openTestSession());
+
+    await waitFor(() => answers.length === 1, { message: "the refresh awaited from onLoaded must return" });
+
+    assert.equal(answers[0], true, "it returns, because the decision settled before onLoaded ran");
+    assert.equal(held.length, 1, "precondition: the boot's device fetch was issued");
+    assert.ok(bootAffordanceIn(), "and the boot is still waiting on it");
+
+    held[0]();
 
     await showPromise;
     await flush();
-
-    assert.equal(page.state.loaded, 1, "precondition: the boot finished");
-    assert.deepEqual(page.hooks.deviceCalls, [], "and finished on its own answer without a device fetch");
 
     page.orchestrator.cleanup();
   });
@@ -6778,6 +7230,61 @@ describe("webUiFeatureOptions - the declared choice-source check", () => {
 
       return true;
     });
+
+    orchestrator.cleanup();
+  });
+
+  test("a refresh waiting on a boot that throws at the check is released by the throw and lands its list while the cycle is still live", async (t) => {
+
+    using dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({ config: makePluginConfig() });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // The sidebar of a page whose model never loaded lists no controller, so the list the refresh lands is read from the store its dispatch reached.
+    const dispatches = t.mock.method(FeatureOptionsStore.prototype, "dispatch");
+
+    // Hold the catalog read, the boot's last await ahead of the check, so the refresh is called while the boot waits there. The catalog that answers it names a
+    // source no resolver backs, so the check throws once the read lands.
+    const catalog = Promise.withResolvers();
+    const listing = { controllers: [] };
+    let catalogAsked = false;
+
+    fake.request = (path) => {
+
+      if(path !== "/getOptions") {
+
+        return Promise.resolve(null);
+      }
+
+      catalogAsked = true;
+
+      return catalog.promise;
+    };
+
+    const orchestrator = new webUiFeatureOptions({ getControllers: () => ({ controllers: listing.controllers, error: "" }) });
+    const showing = assert.rejects(orchestrator.show(await openTestSession()), TypeError);
+
+    await waitFor(() => catalogAsked, { message: "the boot must be waiting on its catalog read" });
+
+    listing.controllers = [{ name: "Hub A", serialNumber: "CTRL-A" }];
+
+    const refresh = orchestrator.refreshControllers();
+
+    assert.equal(await stillPending(refresh), true, "the refresh waits while the boot is out");
+
+    catalog.resolve(PICKER_FEATURES);
+
+    await showing;
+
+    // The answer is read while the cycle the throw left is still the live one, ahead of any teardown, because a teardown's abort would release the refresh as well.
+    assert.equal(await refresh, true, "the throw released the refresh, which lands its list on the page the boot left");
+    assert.deepEqual(arrivedSerials(dispatches), ["CTRL-A"], "the page's store lists the refresh's controller");
 
     orchestrator.cleanup();
   });

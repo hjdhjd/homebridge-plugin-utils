@@ -93,7 +93,7 @@ describe("TestRecordingProcess - configured init and media segments", () => {
       collected.push(item);
     }
 
-    assert.equal(collected.length, 0, "an abort before iteration ends the stream with nothing yielded, mirroring the real assembler's pre-init behavior");
+    assert.equal(collected.length, 0, "an abort before iteration ends the double's stream with nothing yielded, though its configured init segment is available");
   });
 
   test("bufferedSegments, isTimedOut, and stderrLog report the configured values", () => {

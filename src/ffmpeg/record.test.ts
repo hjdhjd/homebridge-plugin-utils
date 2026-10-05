@@ -136,8 +136,8 @@ function encodeBoxSequence(boxes: Buffer[]): string {
   return Buffer.concat(boxes).toString("base64");
 }
 
-// Build a stand-in script that reads stdin to completion (so the recording class's `-i pipe:0` contract is satisfied even though we never feed it), then emits a
-// deterministic fMP4 byte sequence to stdout, then exits cleanly. The sequence is ftyp + moov (init) followed by N moof/mdat pairs (media segments).
+// Build a stand-in script that writes a line to stderr so the process reads as started, writes a deterministic fMP4 byte sequence to stdout in one write, and exits
+// with status 0 after a short settle window whether or not stdin has ended. The sequence is ftyp + moov (init) followed by N moof/mdat pairs (media segments).
 function buildFMp4EmissionScript(segmentCount: number): string[] {
 
   const boxes: Buffer[] = [ box("ftyp", "isomavc1"), box("moov", "metadata") ];
@@ -293,12 +293,10 @@ describe("FfmpegRecordingProcess - initialization segment and media segments", (
 
 describe("FfmpegRecordingProcess - abort propagation between assembler and process", () => {
 
-  test("isTimedOut is surfaced through the process signal when the assembler's inter-segment watchdog fires", async () => {
+  test("isTimedOut is surfaced through the process signal when the process is aborted with a timeout reason", async () => {
 
-    // The recording subclass wires the assembler with segmentTimeout = HKSV_TIMEOUT (4500 ms), which is too long for a test. Since HKSV_TIMEOUT is a module constant
-    // we cannot override, we instead abort the process directly with a timeout reason to exercise the isTimedOut derivation path - the bridging contract is covered
-    // by the "abort" test above, and this test covers only the derived-state semantics. An integration test against a real FFmpeg binary would exercise the watchdog
-    // end-to-end with a genuinely stalled input.
+    // This row aborts the process directly with a timeout reason and covers only how isTimedOut derives from the process signal. The watchdog firing on its own is the
+    // next row's subject, which drives the full HKSV window on a clock carried on the options, and the assembler-to-process bridge has its own block below.
     await using proc = new FfmpegRecordingProcess(makeOptions(), {
 
       args: buildInitOnlyIdleScript(),
@@ -436,12 +434,11 @@ describe("FfmpegLivestreamProcess - init segment and media segments", () => {
 
   test("segmentLength is applied at construction as -frag_duration in microseconds", async () => {
 
-    // The `args` field we pass here replaces the default command line - the subclass still spawns with whatever `init.args` specifies. To verify segmentLength is
-    // applied when args are NOT overridden, we construct with no args and observe the command-log output the base class emits, which includes the full arg vector.
+    // An `init.args` vector would replace the built command line, so this row passes none: the subclass builds its own from `segmentLength`, and the row reads the full
+    // arg vector from the command log the base class emits at construction.
     const logger = capturingLog();
 
-    // Use a script that exits immediately so we do not leak a child across tests. The args the subclass builds include the real fMP4 pipeline command line; the
-    // stand-in binary just exits on seeing any args.
+    // No script is passed, so Node, standing in for FFmpeg, receives the built FFmpeg arguments, rejects them, and exits, and no child outlives the row.
     await using proc = new FfmpegLivestreamProcess(makeOptions(logger), {
 
       livestream: { url: "rtsp://test/stream" },
@@ -1144,8 +1141,8 @@ describe("FfmpegRecordingProcess - resolveRecordingOptions hardware-decoding gat
     return { captures, decoderCaptures, options };
   }
 
-  // Return the first captured call's options. Every test in this block constructs exactly one recording process, so there is only ever one capture and the assertion
-  // reads unambiguously.
+  // Return the first captured call's options. Each spy belongs to one recording process - a row that builds more than one gives each its own spy - so every capture
+  // array holds exactly one entry and the assertion reads unambiguously.
   function firstCapture(captures: SpyRecordEncoderOptions[]): SpyRecordEncoderOptions {
 
     assert.equal(captures.length, 1, "exactly one recordEncoder invocation must have occurred");
@@ -1370,9 +1367,8 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
 
     assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
 
-    // The assertion above already establishes, at runtime, that signal.reason is a failed HbpuAbortError; the assembler classification described above attaches
-    // the synthetic stream error as its cause. signal.reason itself stays typed unknown at the AbortSignal boundary, so this cast narrows only for the type
-    // checker, not for a fact TypeScript could otherwise see.
+    // The assertion above establishes, at runtime, that signal.reason is a failed HbpuAbortError; the assembler classification described above attaches the synthetic
+    // stream error as its cause. The platform types signal.reason as `any`, so this cast gives the assertion below a checked shape to read `cause` through.
     const reason = proc.signal.reason as { cause?: unknown };
 
     assert.equal(reason.cause, sourceError,

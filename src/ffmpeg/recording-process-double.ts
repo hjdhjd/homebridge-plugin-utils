@@ -50,11 +50,12 @@ export interface TestRecordingProcessInit {
  * it spawns no child and yields caller-supplied bytes deterministically.
  *
  * Fidelity to the real contract: `abort()` aborts a genuine {@link AbortSignal} with a real {@link HbpuAbortError} reason (defaulting to `"shutdown"` exactly as
- * {@link ffmpeg/process!FfmpegProcess.abort | FfmpegProcess.abort} does), so a consumer's `isHbpuAbortReason` / timeout derivations stay meaningful; `getInitSegment()`
- * rejects with `signal.reason` after a pre-init abort, mirroring the real assembler's init-reject contract; and `segments()` terminates on EITHER its own signal or the
- * passed per-call signal, mirroring how
- * the real assembler composes the two. The `stdin` sink records every written chunk and stays writable across abort, so a consumer driving a `BackpressureWriter` over it
- * can assert the segment feed regardless of abort ordering.
+ * {@link ffmpeg/process!FfmpegProcess.abort | FfmpegProcess.abort} does), so a consumer's `isHbpuAbortReason` / timeout derivations stay meaningful, and `segments()`
+ * composes its own signal with the passed per-call signal as the real assembler composes the two. Where it departs from the real process: `getInitSegment()` rejects
+ * with `signal.reason` after any abort, where the real init wait stays resolved when the init segment arrived before the abort; and `segments()` returns at the first
+ * item after either signal aborts, dropping the configured segments it has not yet yielded, where the real read hands over every segment already assembled before it
+ * returns. The `stdin` sink records every written chunk and stays writable across abort, so a consumer driving a `BackpressureWriter` over it can assert the segment
+ * feed regardless of abort ordering.
  *
  * @see RecordingProcess
  * @see TestRecordingProcessFactory
@@ -63,8 +64,8 @@ export interface TestRecordingProcessInit {
  */
 export class TestRecordingProcess implements RecordingProcess {
 
-  // The reasons every `abort(reason?)` call was invoked with, in order, for assertions. A no-argument call records the defaulted `HbpuAbortError("shutdown")` so the
-  // recorded reason matches `signal.reason`.
+  // The reasons every `abort(reason?)` call was invoked with, in order, for assertions, a no-argument call recording the defaulted `HbpuAbortError("shutdown")`. Every
+  // call is recorded, a repeat included, while `signal.reason` keeps the first call's reason, so the first entry is the one that matches it.
   public readonly abortCalls: unknown[] = [];
 
   // Every chunk written to `stdin`, in order, so a consumer feeding the recording-write path can assert exactly what it fed.
@@ -131,8 +132,9 @@ export class TestRecordingProcess implements RecordingProcess {
   }
 
   /**
-   * Resolve with the configured init segment. Rejects with `signal.reason` if `abort()` fired before init was requested, mirroring the real
-   * `FfmpegFMp4Process.getInitSegment` -> `Mp4SegmentAssembler.initSegment` reject-on-pre-init-abort contract.
+   * Resolve with the configured init segment. Rejects with `signal.reason` if `abort()` fired before init was requested. The real
+   * `FfmpegFMp4Process.getInitSegment` rejects only when the process ends before the init segment arrives and stays resolved when the abort follows it, while this
+   * double rejects after any abort.
    *
    * @returns A promise resolving to the configured init segment bytes.
    */
@@ -155,8 +157,9 @@ export class TestRecordingProcess implements RecordingProcess {
   }
 
   /**
-   * Yield the configured media segments in order. Terminates (returns) when EITHER this process's own signal aborts OR the passed `init.signal` aborts - composing both,
-   * mirroring how the real `Mp4SegmentAssembler.segments` honors the process signal and the per-call signal together.
+   * Yield the configured media segments in order. Composes this process's own signal with the passed `init.signal`, as the real `Mp4SegmentAssembler.segments`
+   * composes the process signal with the per-call signal, and returns at the first item after either has aborted. The real read hands over every segment already
+   * assembled before it returns; this double drops the configured segments it has not yet yielded.
    *
    * This double does NOT gate media delivery on init-first the way the real assembler does. The real HKSV consumer always awaits `getInitSegment()` before iterating, so
    * the simplification is invisible to it; a future `segments()`-first consumer must not assume an ordering this double does not enforce.
@@ -167,8 +170,8 @@ export class TestRecordingProcess implements RecordingProcess {
    */
   public async *segments(init: { signal?: AbortSignal } = {}): AsyncGenerator<Buffer> {
 
-    // Compose the per-call signal with our own signal upfront so a single check governs both cancellation sources, mirroring the real assembler. The composed signal is
-    // checked before each yield so an abort that fires mid-iteration terminates the generator without yielding the remaining configured segments.
+    // Compose the per-call signal with our own signal upfront, as the real assembler composes the two, so a single check governs both cancellation sources. The
+    // composed signal is checked before each yield, so an abort that fires mid-iteration terminates the generator without yielding the remaining configured segments.
     const composed = composeSignals(this.#controller.signal, init.signal);
 
     for(const segment of this.#segments) {
@@ -183,7 +186,8 @@ export class TestRecordingProcess implements RecordingProcess {
   }
 
   /**
-   * The composed abort signal representing this process's lifetime. Aborts exactly once, when `abort()` is called; `signal.reason` carries the recorded reason.
+   * The abort signal representing this process's lifetime: the double's own controller's signal, with no parent signal composed into it. Aborts exactly once, at the
+   * first `abort()` call; `signal.reason` carries that call's reason.
    */
   public get signal(): AbortSignal {
 
@@ -200,8 +204,9 @@ export class TestRecordingProcess implements RecordingProcess {
 
   /**
    * Yield the whole segment stream as a kind-tagged sequence: one {@link Mp4Segment} of kind `"init"` carrying the configured init segment, then one of kind `"media"`
-   * per configured media segment, in order. Terminates on this process's own signal or the passed `init.signal` the same way {@link TestRecordingProcess.segments} does;
-   * an abort before the init item is yielded ends the stream with nothing yielded, mirroring the real `Mp4SegmentAssembler.stream` return-on-pre-init-abort behavior.
+   * per configured media segment, in order. Terminates on this process's own signal or the passed `init.signal` the same way {@link TestRecordingProcess.segments} does,
+   * so an abort before the init item is yielded ends the stream with nothing yielded. The real `Mp4SegmentAssembler.stream` returns empty only when its init segment
+   * never resolved, and hands over one that resolved before the abort; this double's configured init segment is always available, and an abort still yields nothing.
    *
    * @param init - Optional init options. `signal` composes with this process's own signal; aborting either terminates this generator call.
    *
@@ -209,11 +214,11 @@ export class TestRecordingProcess implements RecordingProcess {
    */
   public async *stream(init: { signal?: AbortSignal } = {}): AsyncGenerator<Mp4Segment> {
 
-    // Compose the per-call signal with our own so one check governs both cancellation sources, mirroring the real assembler.
+    // Compose the per-call signal with our own, as the real assembler composes the two, so one check governs both cancellation sources.
     const composed = composeSignals(this.#controller.signal, init.signal);
 
-    // The init item leads, then each configured media segment, all tagged by kind. One abort check per item - before every yield - mirrors segments(): an abort before
-    // the init item ends the stream with nothing yielded, matching the real assembler's return-on-pre-init-abort behavior.
+    // The init item leads, then each configured media segment, all tagged by kind. One abort check per item - before every yield - mirrors segments(), so an abort
+    // before the init item ends the stream with nothing yielded even though the configured init segment is available.
     const items: Mp4Segment[] = [ { bytes: this.#initSegment, kind: "init" }, ...this.#segments.map((bytes): Mp4Segment => ({ bytes, kind: "media" })) ];
 
     for(const item of items) {

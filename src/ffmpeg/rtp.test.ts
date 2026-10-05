@@ -492,8 +492,8 @@ describe("RtpDemuxer - socket errors", () => {
       assert.equal(collider.aborted, true, "collider must have aborted after failing to bind to a port held by another demuxer");
       assert.throws(() => collider.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
 
-      // The assertion above already establishes, at runtime, that signal.reason is a failed HbpuAbortError carrying the kernel error as its cause. signal.reason
-      // itself stays typed unknown at the AbortSignal boundary, so this cast narrows only for the type checker, not for a fact TypeScript could otherwise see.
+      // The assertion above establishes, at runtime, that signal.reason is a failed HbpuAbortError by its class and name, and its cause is asserted after this cast.
+      // The platform types signal.reason as `any`, so the cast gives that assertion a checked shape to read `cause` through.
       const reason = collider.signal.reason as { cause?: unknown };
 
       assert.ok(reason.cause instanceof Error, "the underlying kernel error must be attached to `cause` so operators can see the root failure");
